@@ -453,6 +453,7 @@ pub async fn write_file(
     parent: &str,
     name: &str,
     data_base64: &str,
+    overwrite: bool,
 ) -> Result<(), String> {
     let parent = validate_path(parent)?;
     let name = validate_name(name)?;
@@ -473,8 +474,17 @@ pub async fn write_file(
         ));
     }
     let session = registry.session(session_id)?;
+    let remote_path = join_path(&parent, &name);
+    if session
+        .try_exists(remote_path.clone())
+        .await
+        .map_err(|error| error.to_string())?
+        && !overwrite
+    {
+        return Err("The remote file already exists; confirm overwrite first.".to_string());
+    }
     let mut file = session
-        .create(join_path(&parent, &name))
+        .create(remote_path)
         .await
         .map_err(|error| error.to_string())?;
     file.write_all(&bytes)

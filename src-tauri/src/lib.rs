@@ -412,9 +412,18 @@ async fn sftp_write_file(
     parent: String,
     name: String,
     data: String,
+    overwrite: bool,
     registry: State<'_, Arc<SftpRegistry>>,
 ) -> Result<(), String> {
-    crate::sftp::write_file(registry.inner(), &session_id, &parent, &name, &data).await
+    crate::sftp::write_file(
+        registry.inner(),
+        &session_id,
+        &parent,
+        &name,
+        &data,
+        overwrite,
+    )
+    .await
 }
 
 #[tauri::command]

@@ -83,6 +83,7 @@ async fn trusted_session_completes_a_remote_file_lifecycle() {
         &folder_path,
         "original.txt",
         &base64::engine::general_purpose::STANDARD.encode(payload),
+        false,
     )
     .await
     .unwrap();
@@ -94,6 +95,17 @@ async fn trusted_session_completes_a_remote_file_lifecycle() {
     assert_eq!(listing.entries[0].name, "original.txt");
 
     let original = format!("{folder_path}/original.txt");
+    let refused = write_file(
+        &registry,
+        &session.session_id,
+        &folder_path,
+        "original.txt",
+        &base64::engine::general_purpose::STANDARD.encode(b"unexpected"),
+        false,
+    )
+    .await;
+    assert!(refused.is_err(), "an unconfirmed overwrite must be refused");
+
     rename(&registry, &session.session_id, &original, "renamed.txt")
         .await
         .unwrap();
