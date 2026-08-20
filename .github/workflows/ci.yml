@@ -38,7 +38,7 @@ jobs:
         if: startsWith(matrix.platform, 'ubuntu-')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -51,10 +51,18 @@ jobs:
         with:
           components: clippy,rustfmt
 
+      - name: Configure Linux bindgen
+        if: startsWith(matrix.platform, 'ubuntu-')
+        shell: bash
+        run: echo "BINDGEN_EXTRA_CLANG_ARGS=-I$(gcc -print-file-name=include)" >> "$GITHUB_ENV"
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri -> target
+          workspaces: |
+            src-tauri -> target
+            crates/lattice-remote -> target
+            crates/lattice-rdp -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -63,13 +71,22 @@ jobs:
         run: npm run check
 
       - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+          cargo fmt --manifest-path crates/lattice-remote/Cargo.toml --check
+          cargo fmt --manifest-path crates/lattice-rdp/Cargo.toml --check
 
       - name: Test Rust
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml
+          cargo test --manifest-path crates/lattice-remote/Cargo.toml --features agent
+          cargo test --manifest-path crates/lattice-rdp/Cargo.toml
 
       - name: Lint Rust
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        run: |
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/lattice-remote/Cargo.toml --features agent --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/lattice-rdp/Cargo.toml --all-targets -- -D warnings
 
       - name: Build Tauri application
         run: npm run tauri build -- --no-bundle
