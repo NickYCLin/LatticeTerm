@@ -206,7 +206,11 @@ fn ssh_forget_host(host: String, port: u16, trust: State<'_, TrustState>) -> Res
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        // The updater stays unregistered until a release signing key exists:
+        // the plugin refuses to initialise without `plugins.updater.pubkey`,
+        // and a placeholder key would let the app start while silently failing
+        // every signature check. Re-enable this line together with the pubkey
+        // once `npm run tauri signer generate` has produced a key pair.
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Connection data belongs beside the app's other data, not next to

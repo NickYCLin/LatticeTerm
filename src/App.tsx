@@ -13,7 +13,7 @@ import {
   type ViewId,
 } from "./app/navigation";
 import { usePreferences, type PreferencesValue } from "./app/preferences";
-import { findTheme, oppositeTheme, themeCatalog } from "./app/themes";
+import { findTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
 import { useStorageStatus } from "./app/useStorageStatus";
 import { useSshSessions } from "./app/useSshSessions";
@@ -284,12 +284,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
 
   return (
     <div className="app">
-      <NavRail
-        current={view}
-        onSelect={setView}
-        activeTheme={activeTheme}
-        onToggleTheme={() => update({ theme: oppositeTheme(activeTheme) })}
-      />
+      <NavRail current={view} onSelect={setView} />
 
       {showSidebar && (
         <ResourceSidebar
