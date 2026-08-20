@@ -13,6 +13,7 @@ import type {
 } from "../app/preferences";
 import { themeCatalog } from "../app/themes";
 import type { RuntimeState } from "../app/useRuntimeSummary";
+import type { StorageState } from "../app/useStorageStatus";
 import { localeCatalog, useI18n, type Locale } from "../i18n";
 import type { MessageKey } from "../i18n";
 import { Chip } from "../components/common/Badge";
@@ -96,10 +97,12 @@ export function SettingsView({
   preferences,
   onChange,
   runtime,
+  storage,
 }: {
   preferences: Preferences;
   onChange: (patch: Partial<Preferences>) => void;
   runtime: RuntimeState;
+  storage: StorageState;
 }) {
   const { t } = useI18n();
   const { summary, host } = runtime;
@@ -184,6 +187,49 @@ export function SettingsView({
             onChange={(motion) => onChange({ motion })}
           />
         </div>
+      </section>
+
+      <section className="panel glass glass--sheen">
+        <header className="panel__head">
+          <div>
+            <h2 className="panel__title">{t("settings.storage")}</h2>
+            <p className="panel__hint">{t("settings.storageHint")}</p>
+          </div>
+        </header>
+
+        {storage.status?.recoveredReason && (
+          <Callout tone="warn" title={t("settings.storage.recovered.title")}>
+            {t("settings.storage.recovered.body", {
+              path: storage.status.recoveredBackupPath ?? "",
+              reason: storage.status.recoveredReason,
+            })}
+          </Callout>
+        )}
+
+        <dl className="field-list">
+          <div className="field-row">
+            <dt className="field-row__label">
+              {t("settings.storage.location")}
+            </dt>
+            <dd className="field-row__value mono">
+              {storage.mode === "persistent"
+                ? storage.status?.path
+                : storage.mode === "browser"
+                  ? t("settings.storage.browser")
+                  : t("common.detecting")}
+            </dd>
+          </div>
+          {storage.mode === "persistent" && (
+            <div className="field-row">
+              <dt className="field-row__label">{t("nav.connections")}</dt>
+              <dd className="field-row__value">
+                {t("settings.storage.saved", {
+                  count: storage.status?.profileCount ?? 0,
+                })}
+              </dd>
+            </div>
+          )}
+        </dl>
       </section>
 
       <section className="panel glass glass--sheen">

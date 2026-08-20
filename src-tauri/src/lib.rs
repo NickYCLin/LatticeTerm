@@ -2,12 +2,12 @@ pub mod domain;
 pub mod storage;
 
 use crate::domain::ConnectionProfile;
-use crate::storage::{InMemoryStorage, Storage};
+use crate::storage::{FileStorage, Storage};
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{Manager, State};
 
-type AppStorage = Mutex<InMemoryStorage>;
+type AppStorage = Mutex<FileStorage>;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +26,31 @@ fn runtime_summary() -> RuntimeSummary {
         supported_protocols: ["ssh", "sftp", "rdp", "vnc"],
         credential_storage_ready: false,
     }
+}
+
+/// Where connection data lives, and whether anything had to be rescued on the
+/// way in. Surfaced in Settings so the file is never a mystery to the user.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageStatus {
+    path: String,
+    profile_count: usize,
+    /// Present only when an unreadable file was set aside at startup.
+    recovered_reason: Option<String>,
+    recovered_backup_path: Option<String>,
+}
+
+#[tauri::command]
+fn storage_status(storage: State<'_, AppStorage>) -> Result<StorageStatus, String> {
+    let guard = storage.lock().map_err(|e| e.to_string())?;
+    let recovery = guard.recovery();
+
+    Ok(StorageStatus {
+        path: guard.path().display().to_string(),
+        profile_count: guard.list_profiles().map_err(|e| e.to_string())?.len(),
+        recovered_reason: recovery.map(|r| r.reason.clone()),
+        recovered_backup_path: recovery.map(|r| r.backup_path.display().to_string()),
+    })
 }
 
 #[tauri::command]
@@ -54,9 +79,18 @@ fn delete_connection_profile(id: String, storage: State<'_, AppStorage>) -> Resu
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(Mutex::new(InMemoryStorage::new()))
+        .setup(|app| {
+            // Connection data belongs beside the app's other data, not next to
+            // the executable, so it survives an update and follows the user
+            // profile on a shared machine.
+            let dir = app.path().app_data_dir()?;
+            let storage = FileStorage::open(&dir)?;
+            app.manage(Mutex::new(storage));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             runtime_summary,
+            storage_status,
             list_connection_profiles,
             save_connection_profile,
             delete_connection_profile

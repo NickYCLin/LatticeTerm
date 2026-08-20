@@ -15,6 +15,7 @@ import {
 import { usePreferences, type PreferencesValue } from "./app/preferences";
 import { findTheme, oppositeTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
+import { useStorageStatus } from "./app/useStorageStatus";
 import { useWindowTheme } from "./app/useWindowTheme";
 import { useWorkspace } from "./app/useWorkspace";
 import type { ConnectionDraft } from "./domain/connection";
@@ -64,6 +65,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const { t } = useI18n();
   const workspace = useWorkspace();
   const runtime = useRuntimeSummary();
+  const storage = useStorageStatus();
 
   useWindowTheme(findTheme(activeTheme).isDark);
 
@@ -337,6 +339,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 preferences={preferences}
                 onChange={update}
                 runtime={runtime}
+                storage={storage}
               />
             )}
           </div>
@@ -358,6 +361,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           filterActive={filterActive}
           vaultReady={runtime.summary?.credentialStorageReady ?? false}
           version={runtime.summary?.version ?? "0.1.0"}
+          storage={storage}
         />
       </main>
 

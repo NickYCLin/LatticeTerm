@@ -244,7 +244,7 @@ export const en: Messages = {
     "These are still in development, so the plan is described rather than offered as a half-built switch.",
   "settings.security.title": "Nothing secret is stored today",
   "settings.security.body":
-    "This build keeps connection details in memory, asks for no credentials, and writes nothing to disk apart from the appearance preferences above.",
+    "Only connection details and appearance preferences are kept on this machine. Nothing asks you for a password, key or passphrase, and no credential is ever stored.",
   "settings.security.autoLock": "Auto-lock the vault",
   "settings.security.autoLockDetail":
     "Lock after a period of inactivity, and when the app loses focus.",
@@ -316,6 +316,18 @@ export const en: Messages = {
   "status.vault.locked": "Not built yet",
   "status.vault.ready": "Unlocked",
   "status.palette": "Command palette",
+
+  "status.savedLocally": "Connections are saved on this machine",
+  "status.notSaved": "In memory only, cleared when you close the app",
+  "settings.storage": "Where data is kept",
+  "settings.storageHint": "Connection details only — never any credentials.",
+  "settings.storage.location": "File location",
+  "settings.storage.browser":
+    "A browser preview has no backend, so a reload clears everything",
+  "settings.storage.saved": "{count} connections saved",
+  "settings.storage.recovered.title": "The previous file could not be read",
+  "settings.storage.recovered.body":
+    "Nothing was deleted — the original is kept at {path}. The list starts empty for now. Reason: {reason}",
 
   // Planned areas ---------------------------------------------------------
   "planned.badge": "In development",

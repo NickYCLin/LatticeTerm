@@ -232,7 +232,7 @@ export const zhTW = {
   "settings.securityHint": "以下項目還在開發，所以先說明規劃，不提供半成品開關。",
   "settings.security.title": "目前不會儲存任何機密資料",
   "settings.security.body":
-    "這個版本只把連線設定放在記憶體，不會向你要任何認證資料，除了上面的外觀偏好之外不寫入任何檔案。",
+    "本機只存連線設定與外觀偏好，不會向你要密碼、金鑰或通行碼，也不會儲存任何認證資料。",
   "settings.security.autoLock": "自動鎖定保管庫",
   "settings.security.autoLockDetail": "閒置一段時間或切換到其他程式時自動上鎖。",
   "settings.security.hostKey": "主機金鑰驗證原則",
@@ -300,6 +300,17 @@ export const zhTW = {
   "status.vault.locked": "尚未建立",
   "status.vault.ready": "已解鎖",
   "status.palette": "命令面板",
+
+  "status.savedLocally": "連線設定已存在本機",
+  "status.notSaved": "資料只在記憶體，關閉即消失",
+  "settings.storage": "資料存放",
+  "settings.storageHint": "只存連線設定，不含任何認證資料。",
+  "settings.storage.location": "檔案位置",
+  "settings.storage.browser": "瀏覽器預覽沒有後端，重新整理就會清空",
+  "settings.storage.saved": "已儲存 {count} 筆連線設定",
+  "settings.storage.recovered.title": "上次的設定檔讀不到",
+  "settings.storage.recovered.body":
+    "原始檔案沒有被刪除，已保留在 {path}。目前從空白清單重新開始。原因：{reason}",
 
   // 規劃中的區域 ----------------------------------------------------------
   "planned.badge": "開發中",

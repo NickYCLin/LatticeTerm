@@ -9,6 +9,7 @@
 import { useI18n } from "../../i18n";
 import { Kbd } from "../common/Callout";
 import { ShieldIcon, VaultIcon } from "../icons";
+import type { StorageState } from "../../app/useStorageStatus";
 
 export function StatusBar({
   profileCount,
@@ -16,12 +17,14 @@ export function StatusBar({
   filterActive,
   vaultReady,
   version,
+  storage,
 }: {
   profileCount: number;
   visibleCount: number;
   filterActive: boolean;
   vaultReady: boolean;
   version: string;
+  storage: StorageState;
 }) {
   const { t } = useI18n();
 
@@ -36,9 +39,14 @@ export function StatusBar({
           : t("status.connections", { count: profileCount })}
       </span>
 
-      <span className="statusbar__item statusbar__item--quiet">
+      <span
+        className="statusbar__item statusbar__item--quiet"
+        title={storage.status?.path}
+      >
         <ShieldIcon size={12} />
-        {t("status.inMemory")}
+        {storage.mode === "persistent"
+          ? t("status.savedLocally")
+          : t("status.notSaved")}
       </span>
 
       <span className="statusbar__item statusbar__item--quiet">

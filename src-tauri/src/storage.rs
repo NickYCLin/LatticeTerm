@@ -1,10 +1,25 @@
-//! Storage trait and in-memory baseline for LatticeTerm.
+//! Storage for connection profiles.
 //!
-//! Provides a safe boundary for connection profile storage, separating
-//! metadata persistence from secret storage (Stronghold / OS Keychain).
+//! Two implementations share one trait: an in-memory store used by tests, and
+//! a file-backed store used by the running application.
+//!
+//! Strictly non-secret. `ConnectionProfile` has no field for a password, key
+//! or passphrase, so this file can be opened, backed up or attached to a bug
+//! report without leaking anything. Secrets belong to the OS credential store,
+//! which is a separate subsystem and deliberately not written here.
 
 use crate::domain::ConnectionProfile;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+/// Bumped only when the on-disk shape changes in a way older builds cannot read.
+pub const STORE_VERSION: u32 = 1;
+
+const STORE_FILE: &str = "connections.json";
+const TEMP_FILE: &str = "connections.json.tmp";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageError {
@@ -46,11 +61,15 @@ impl InMemoryStorage {
     }
 }
 
+fn sorted(profiles: &HashMap<String, ConnectionProfile>) -> Vec<ConnectionProfile> {
+    let mut list: Vec<ConnectionProfile> = profiles.values().cloned().collect();
+    list.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+    list
+}
+
 impl Storage for InMemoryStorage {
     fn list_profiles(&self) -> Result<Vec<ConnectionProfile>, StorageError> {
-        let mut list: Vec<ConnectionProfile> = self.profiles.values().cloned().collect();
-        list.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(list)
+        Ok(sorted(&self.profiles))
     }
 
     fn get_profile(&self, id: &str) -> Result<Option<ConnectionProfile>, StorageError> {
@@ -72,5 +91,343 @@ impl Storage for InMemoryStorage {
 
     fn delete_profile(&mut self, id: &str) -> Result<bool, StorageError> {
         Ok(self.profiles.remove(id).is_some())
+    }
+}
+
+/// The on-disk shape. `version` lets a future build recognise a file it cannot
+/// read instead of silently misinterpreting it.
+#[derive(Debug, Serialize, Deserialize)]
+struct StoreFile {
+    version: u32,
+    profiles: Vec<ConnectionProfile>,
+}
+
+/// Why the previous file was set aside, when that happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recovery {
+    pub reason: String,
+    pub backup_path: PathBuf,
+}
+
+/// Connection profiles persisted as JSON in the application data directory.
+///
+/// Every mutation writes the whole file: the data is small, and a full rewrite
+/// keeps the file consistent without a journal. Writes go to a temporary file
+/// and are then renamed over the target, so an interrupted write leaves the
+/// previous file intact rather than a half-written one.
+#[derive(Debug)]
+pub struct FileStorage {
+    path: PathBuf,
+    profiles: HashMap<String, ConnectionProfile>,
+    recovery: Option<Recovery>,
+}
+
+impl FileStorage {
+    /// Opens the store in `dir`, creating the directory if needed.
+    ///
+    /// A missing file is a first run, not an error. A file that cannot be read
+    /// is moved aside rather than deleted, so nothing the user wrote is lost
+    /// even when this build cannot understand it.
+    pub fn open(dir: &Path) -> Result<Self, StorageError> {
+        fs::create_dir_all(dir).map_err(|e| StorageError::Internal(e.to_string()))?;
+
+        let path = dir.join(STORE_FILE);
+        let mut store = Self {
+            path,
+            profiles: HashMap::new(),
+            recovery: None,
+        };
+
+        let raw = match fs::read_to_string(&store.path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(store),
+            Err(error) => return Err(StorageError::Internal(error.to_string())),
+        };
+
+        match serde_json::from_str::<StoreFile>(&raw) {
+            Ok(file) if file.version <= STORE_VERSION => {
+                for profile in file.profiles {
+                    store.profiles.insert(profile.id.clone(), profile);
+                }
+            }
+            Ok(file) => {
+                let reason = format!(
+                    "file was written by a newer version (found {}, supported {})",
+                    file.version, STORE_VERSION
+                );
+                store.recovery = Some(store.set_aside(&reason)?);
+            }
+            Err(error) => {
+                let reason = format!("file could not be read: {error}");
+                store.recovery = Some(store.set_aside(&reason)?);
+            }
+        }
+
+        Ok(store)
+    }
+
+    /// Renames the unreadable file out of the way and reports where it went.
+    fn set_aside(&self, reason: &str) -> Result<Recovery, StorageError> {
+        let mut backup = self.path.clone();
+        backup.set_extension("json.unreadable");
+
+        // Never overwrite an earlier rescue; keep numbering until one is free.
+        let mut attempt = 1;
+        while backup.exists() {
+            backup = self.path.clone();
+            backup.set_extension(format!("json.unreadable.{attempt}"));
+            attempt += 1;
+        }
+
+        fs::rename(&self.path, &backup).map_err(|e| StorageError::Internal(e.to_string()))?;
+
+        Ok(Recovery {
+            reason: reason.to_string(),
+            backup_path: backup,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn recovery(&self) -> Option<&Recovery> {
+        self.recovery.as_ref()
+    }
+
+    fn persist(&self) -> Result<(), StorageError> {
+        let file = StoreFile {
+            version: STORE_VERSION,
+            profiles: sorted(&self.profiles),
+        };
+
+        let json = serde_json::to_string_pretty(&file)
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+        let dir = self
+            .path
+            .parent()
+            .ok_or_else(|| StorageError::Internal("store path has no directory".into()))?;
+        let temp = dir.join(TEMP_FILE);
+
+        {
+            let mut handle =
+                fs::File::create(&temp).map_err(|e| StorageError::Internal(e.to_string()))?;
+            handle
+                .write_all(json.as_bytes())
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+            // Flush before the rename, so the swap cannot publish a short file.
+            handle
+                .sync_all()
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+        }
+
+        fs::rename(&temp, &self.path).map_err(|e| StorageError::Internal(e.to_string()))
+    }
+}
+
+impl Storage for FileStorage {
+    fn list_profiles(&self) -> Result<Vec<ConnectionProfile>, StorageError> {
+        Ok(sorted(&self.profiles))
+    }
+
+    fn get_profile(&self, id: &str) -> Result<Option<ConnectionProfile>, StorageError> {
+        Ok(self.profiles.get(id).cloned())
+    }
+
+    fn insert_profile(&mut self, profile: ConnectionProfile) -> Result<(), StorageError> {
+        self.profiles.insert(profile.id.clone(), profile);
+        self.persist()
+    }
+
+    fn update_profile(&mut self, profile: ConnectionProfile) -> Result<(), StorageError> {
+        if !self.profiles.contains_key(&profile.id) {
+            return Err(StorageError::NotFound(profile.id));
+        }
+        self.profiles.insert(profile.id.clone(), profile);
+        self.persist()
+    }
+
+    fn delete_profile(&mut self, id: &str) -> Result<bool, StorageError> {
+        let removed = self.profiles.remove(id).is_some();
+        if removed {
+            self.persist()?;
+        }
+        Ok(removed)
+    }
+}
+
+#[cfg(test)]
+mod file_storage_tests {
+    use super::*;
+    use crate::domain::{Environment, Protocol};
+
+    /// A unique directory per test, so cases cannot disturb each other.
+    fn temp_dir(label: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("latticeterm-{label}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn profile(id: &str, name: &str) -> ConnectionProfile {
+        ConnectionProfile {
+            id: id.to_string(),
+            name: name.to_string(),
+            protocol: Protocol::Ssh,
+            hostname: "gateway.example.com".to_string(),
+            username: "operator".to_string(),
+            port: 22,
+            environment: Environment::Production,
+            group: "Core platform".to_string(),
+            tags: vec!["edge".to_string()],
+            favorite: true,
+        }
+    }
+
+    #[test]
+    fn a_missing_file_is_a_first_run_not_an_error() {
+        let dir = temp_dir("first-run");
+        let store = FileStorage::open(&dir).unwrap();
+
+        assert!(store.list_profiles().unwrap().is_empty());
+        assert!(store.recovery().is_none());
+        // Nothing is written until there is something to write.
+        assert!(!store.path().exists());
+    }
+
+    #[test]
+    fn profiles_survive_reopening() {
+        let dir = temp_dir("round-trip");
+
+        let mut store = FileStorage::open(&dir).unwrap();
+        store
+            .insert_profile(profile("p-1", "Edge gateway"))
+            .unwrap();
+        store.insert_profile(profile("p-2", "App node")).unwrap();
+
+        let reopened = FileStorage::open(&dir).unwrap();
+        let names: Vec<String> = reopened
+            .list_profiles()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+
+        assert_eq!(names, vec!["App node", "Edge gateway"]);
+    }
+
+    #[test]
+    fn deletions_survive_reopening() {
+        let dir = temp_dir("delete");
+
+        let mut store = FileStorage::open(&dir).unwrap();
+        store
+            .insert_profile(profile("p-1", "Edge gateway"))
+            .unwrap();
+        store.insert_profile(profile("p-2", "App node")).unwrap();
+        assert!(store.delete_profile("p-1").unwrap());
+        assert!(!store.delete_profile("p-1").unwrap());
+
+        let reopened = FileStorage::open(&dir).unwrap();
+        assert_eq!(reopened.list_profiles().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_written_file_carries_a_version_and_no_secret_fields() {
+        let dir = temp_dir("shape");
+        let mut store = FileStorage::open(&dir).unwrap();
+        store
+            .insert_profile(profile("p-1", "Edge gateway"))
+            .unwrap();
+
+        let raw = fs::read_to_string(store.path()).unwrap();
+
+        assert!(raw.contains("\"version\": 1"));
+        assert!(raw.contains("gateway.example.com"));
+        for secret in ["password", "passphrase", "privateKey", "secret", "token"] {
+            assert!(
+                !raw.contains(secret),
+                "unexpected {secret} in the store file"
+            );
+        }
+    }
+
+    #[test]
+    fn writing_leaves_no_temporary_file_behind() {
+        let dir = temp_dir("atomic");
+        let mut store = FileStorage::open(&dir).unwrap();
+        store
+            .insert_profile(profile("p-1", "Edge gateway"))
+            .unwrap();
+
+        assert!(!dir.join(TEMP_FILE).exists());
+    }
+
+    #[test]
+    fn an_unreadable_file_is_set_aside_rather_than_lost() {
+        let dir = temp_dir("corrupt");
+        let path = dir.join(STORE_FILE);
+        fs::write(&path, "{ this is not json").unwrap();
+
+        let store = FileStorage::open(&dir).unwrap();
+        let recovery = store.recovery().expect("recovery should be reported");
+
+        assert!(recovery.reason.contains("could not be read"));
+        assert!(store.list_profiles().unwrap().is_empty());
+        // The original bytes are still on disk under the backup name.
+        assert_eq!(
+            fs::read_to_string(&recovery.backup_path).unwrap(),
+            "{ this is not json"
+        );
+    }
+
+    #[test]
+    fn a_file_from_a_newer_version_is_set_aside_rather_than_misread() {
+        let dir = temp_dir("newer");
+        let path = dir.join(STORE_FILE);
+        fs::write(&path, r#"{"version":99,"profiles":[]}"#).unwrap();
+
+        let store = FileStorage::open(&dir).unwrap();
+        let recovery = store.recovery().expect("recovery should be reported");
+
+        assert!(recovery.reason.contains("newer version"));
+        assert!(recovery.backup_path.exists());
+    }
+
+    #[test]
+    fn a_second_rescue_does_not_overwrite_the_first() {
+        let dir = temp_dir("twice");
+        let path = dir.join(STORE_FILE);
+
+        fs::write(&path, "first broken file").unwrap();
+        let first = FileStorage::open(&dir).unwrap().recovery().unwrap().clone();
+
+        fs::write(&path, "second broken file").unwrap();
+        let second = FileStorage::open(&dir).unwrap().recovery().unwrap().clone();
+
+        assert_ne!(first.backup_path, second.backup_path);
+        assert_eq!(
+            fs::read_to_string(&first.backup_path).unwrap(),
+            "first broken file"
+        );
+        assert_eq!(
+            fs::read_to_string(&second.backup_path).unwrap(),
+            "second broken file"
+        );
+    }
+
+    #[test]
+    fn updating_a_missing_profile_is_reported_and_writes_nothing() {
+        let dir = temp_dir("update-missing");
+        let mut store = FileStorage::open(&dir).unwrap();
+
+        let error = store.update_profile(profile("ghost", "Ghost")).unwrap_err();
+
+        assert_eq!(error, StorageError::NotFound("ghost".to_string()));
+        assert!(!store.path().exists());
     }
 }
