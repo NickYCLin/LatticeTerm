@@ -68,8 +68,17 @@ impl FileAgentPlanStore {
             Ok(file)
                 if file.version <= STORE_VERSION && file.plans.len() <= MAX_SAVED_AGENT_PLANS =>
             {
-                store.workspace_name = file.workspace_name;
-                store.plans = file.plans;
+                match normalize_stored_workspace_name(&file.workspace_name) {
+                    Ok(name) => {
+                        store.workspace_name = name;
+                        store.plans = file.plans;
+                    }
+                    Err(error) => {
+                        store.recovery = Some(store.set_aside(format!(
+                            "file contains an invalid workspace name: {error}"
+                        ))?);
+                    }
+                }
             }
             Ok(file) if file.version > STORE_VERSION => {
                 store.recovery = Some(store.set_aside(format!(
@@ -240,6 +249,14 @@ fn normalize_workspace_name(value: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
+fn normalize_stored_workspace_name(value: &str) -> Result<String, String> {
+    if value.is_empty() {
+        Ok(String::new())
+    } else {
+        normalize_workspace_name(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +392,24 @@ mod tests {
             fs::read_to_string(recovery.backup_path).unwrap(),
             "{ broken json"
         );
+    }
+
+    #[test]
+    fn invalid_stored_workspace_names_are_preserved_for_recovery() {
+        let directory = temp_dir("invalid-stored-name");
+        let path = directory.join(STORE_FILE);
+        let raw = serde_json::json!({
+            "version": STORE_VERSION,
+            "workspaceName": "bad\nname",
+            "plans": []
+        })
+        .to_string();
+        fs::write(&path, &raw).unwrap();
+
+        let store = FileAgentPlanStore::open(&directory).unwrap();
+        let recovery = store.snapshot().recovery.expect("recovery details");
+        assert!(recovery.reason.contains("invalid workspace name"));
+        assert_eq!(fs::read_to_string(recovery.backup_path).unwrap(), raw);
     }
 
     #[test]
