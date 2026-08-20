@@ -201,11 +201,17 @@ export function useSshSessions(): SshApi {
   );
 
   const disconnect = useCallback(async (sessionId: string) => {
-    const { invoke } = await core();
-    await invoke("ssh_disconnect", { sessionId });
-    setSessions((current) =>
-      current.filter((session) => session.sessionId !== sessionId),
-    );
+    try {
+      const { invoke } = await core();
+      await invoke("ssh_disconnect", { sessionId });
+    } finally {
+      // Even if the backend refused, the session is over as far as this
+      // window is concerned; leaving the tab would strand the user with
+      // something they cannot close.
+      setSessions((current) =>
+        current.filter((session) => session.sessionId !== sessionId),
+      );
+    }
   }, []);
 
   const trustHost = useCallback(

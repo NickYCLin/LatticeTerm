@@ -12,6 +12,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { SshApi } from "../../app/useSshSessions";
+import { useI18n } from "../../i18n";
 import type { ThemeId } from "../../app/themes";
 
 /** Reads the current theme's colours so the terminal matches the app. */
@@ -52,6 +53,7 @@ export function TerminalPane({
   theme: ThemeId;
   onClosed: (reason: string) => void;
 }) {
+  const { t } = useI18n();
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -62,6 +64,8 @@ export function TerminalPane({
   sshRef.current = ssh;
   const closedRef = useRef(onClosed);
   closedRef.current = onClosed;
+  const messageRef = useRef("");
+  messageRef.current = t("terminal.inputFailed");
 
   useEffect(() => {
     const host = hostRef.current;
@@ -85,10 +89,16 @@ export function TerminalPane({
     termRef.current = terminal;
     fitRef.current = fit;
 
+    // Silence here is what made a broken session look like a dead keyboard:
+    // say so once, in the terminal itself, rather than dropping keystrokes.
+    let inputReported = false;
     const typed = terminal.onData((data) => {
       void sshRef.current.send(sessionId, data).catch(() => {
-        // A send that fails means the session is already gone; the closed
-        // event that follows is what tells the user.
+        if (inputReported) return;
+        inputReported = true;
+        terminal.write(`
+[31m${messageRef.current}[0m
+`);
       });
     });
 

@@ -383,6 +383,7 @@ export const zhTW = {
   "terminal.disconnect": "中斷連線",
   "terminal.backToList": "回到連線清單",
   "terminal.closed": "工作階段已結束（{reason}）",
+  "terminal.inputFailed": "這個工作階段已經結束，輸入送不出去。請關閉分頁後重新連線。",
   "terminal.reconnect": "重新連線",
   "terminal.empty.title": "目前沒有進行中的工作階段",
   "terminal.empty.body": "在連線清單挑一台主機按「連線」，就會在這裡開啟終端機。",

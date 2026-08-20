@@ -410,6 +410,8 @@ export const en: Messages = {
   "terminal.disconnect": "Disconnect",
   "terminal.backToList": "Back to connections",
   "terminal.closed": "Session ended ({reason})",
+  "terminal.inputFailed":
+    "This session has ended, so input is going nowhere. Close the tab and connect again.",
   "terminal.reconnect": "Reconnect",
   "terminal.empty.title": "No session is open",
   "terminal.empty.body":

@@ -63,7 +63,11 @@ pub struct HostKeyRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "status")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "status"
+)]
 pub enum TrustVerdict {
     /// Same host, same key as last time.
     Trusted { record: HostKeyRecord },

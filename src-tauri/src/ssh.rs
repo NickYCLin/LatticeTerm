@@ -38,13 +38,17 @@ pub struct EventSink(pub AppHandle);
 
 impl SessionSink for EventSink {
     fn data(&self, session_id: &str, bytes: &[u8]) {
-        let _ = self.0.emit(
+        let result = self.0.emit(
             EVENT_DATA,
             SessionData {
                 session_id: session_id.to_string(),
                 base64: encode(bytes),
             },
         );
+        if let Err(error) = result {
+            // Losing a chunk of output silently would look like a hung shell.
+            eprintln!("failed to deliver session output: {error}");
+        }
     }
 
     fn closed(&self, session_id: &str, reason: &str) {
@@ -79,7 +83,11 @@ fn decode(text: &str) -> Result<Vec<u8>, String> {
 /// dropped as soon as authentication finishes. It is never written to the
 /// connection store, the trust store, or any log line.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum AuthMethod {
     Password { password: String },
 }
@@ -101,7 +109,11 @@ pub struct ConnectRequest {
 /// normal outcome here rather than an error string, because each case needs a
 /// different response from the user.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "outcome")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "outcome"
+)]
 pub enum ConnectOutcome {
     Connected {
         session_id: String,
@@ -507,6 +519,92 @@ pub fn known_record(store: &HostTrustStore, host: &str, port: u16) -> Option<Hos
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The interface reads these payloads by field name, and a mismatch fails
+    /// silently: a session whose id arrives as `session_id` is simply never
+    /// found, so output goes nowhere and input is dropped. Pin the wire shape.
+    #[test]
+    fn connect_outcomes_use_the_field_names_the_interface_reads() {
+        let connected = serde_json::to_value(ConnectOutcome::Connected {
+            session_id: "session-1".into(),
+        })
+        .unwrap();
+
+        assert_eq!(connected["outcome"], "connected");
+        assert_eq!(connected["sessionId"], "session-1");
+        assert!(connected.get("session_id").is_none());
+
+        let changed = serde_json::to_value(ConnectOutcome::HostChanged {
+            host: "gateway.example.com".into(),
+            port: 22,
+            algorithm: "ssh-ed25519".into(),
+            received_fingerprint: "SHA256:new".into(),
+            expected: HostKeyRecord {
+                host: "gateway.example.com".into(),
+                port: 22,
+                algorithm: "ssh-ed25519".into(),
+                fingerprint: "SHA256:old".into(),
+                first_trusted_at: 1,
+                last_seen_at: 2,
+            },
+        })
+        .unwrap();
+
+        assert_eq!(changed["outcome"], "hostChanged");
+        assert_eq!(changed["receivedFingerprint"], "SHA256:new");
+        assert_eq!(changed["expected"]["firstTrustedAt"], 1);
+        assert!(changed.get("received_fingerprint").is_none());
+
+        let unknown = serde_json::to_value(ConnectOutcome::HostUnknown {
+            host: "gateway.example.com".into(),
+            port: 22,
+            algorithm: "ssh-ed25519".into(),
+            fingerprint: "SHA256:abc".into(),
+        })
+        .unwrap();
+        assert_eq!(unknown["outcome"], "hostUnknown");
+
+        let failed = serde_json::to_value(ConnectOutcome::Failed {
+            stage: "connect",
+            detail: "refused".into(),
+        })
+        .unwrap();
+        assert_eq!(failed["outcome"], "failed");
+        assert_eq!(failed["stage"], "connect");
+
+        assert_eq!(
+            serde_json::to_value(ConnectOutcome::AuthFailed).unwrap()["outcome"],
+            "authFailed"
+        );
+    }
+
+    #[test]
+    fn session_events_use_the_field_names_the_interface_reads() {
+        let data = serde_json::to_value(SessionData {
+            session_id: "session-1".into(),
+            base64: "aGk=".into(),
+        })
+        .unwrap();
+        assert_eq!(data["sessionId"], "session-1");
+
+        let closed = serde_json::to_value(SessionClosed {
+            session_id: "session-1".into(),
+            reason: "disconnected".into(),
+        })
+        .unwrap();
+        assert_eq!(closed["sessionId"], "session-1");
+
+        let summary = serde_json::to_value(SessionSummary {
+            session_id: "session-1".into(),
+            profile_id: "p-1".into(),
+            host: "gateway.example.com".into(),
+            port: 22,
+            username: "operator".into(),
+        })
+        .unwrap();
+        assert_eq!(summary["sessionId"], "session-1");
+        assert_eq!(summary["profileId"], "p-1");
+    }
 
     #[test]
     fn payloads_survive_bytes_that_are_not_text() {
