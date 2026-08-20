@@ -8,4 +8,6 @@
 @import "./shell.css";
 @import "./controls.css";
 @import "./connections.css";
+@import "./vault.css";
+@import "./remote.css";
 @import "./overlays.css";

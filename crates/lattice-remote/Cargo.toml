@@ -1,0 +1,23 @@
+[package]
+name = "lattice-remote"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Encrypted direct-connect protocol and agent for Lattice Remote"
+
+[features]
+default = []
+agent = ["dep:image", "dep:xcap"]
+
+[dependencies]
+sha2 = "0.11.0"
+snow = "0.10.0"
+thiserror = "2"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+image = { version = "0.25", default-features = false, features = ["jpeg"], optional = true }
+xcap = { version = "0.9.8", optional = true }
+
+[[bin]]
+name = "lattice-agent"
+path = "src/bin/lattice-agent.rs"
+required-features = ["agent"]

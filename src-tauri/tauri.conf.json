@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "io.github.nickyclin.latticeterm",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:rdp && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:rdp:release && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -35,7 +35,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "externalBin": ["binaries/lattice-rdp-engine"]
   },
   "plugins": {
     "updater": {

@@ -38,6 +38,12 @@ export const protocolCatalog = [
     defaultPort: 5900,
     milestone: 5,
   },
+  {
+    id: "lattice",
+    acronym: "REMOTE",
+    defaultPort: 44900,
+    milestone: 2,
+  },
 ] as const;
 
 export type Protocol = (typeof protocolCatalog)[number]["id"];

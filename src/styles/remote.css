@@ -1,0 +1,180 @@
+/* Lattice Remote view-only session. */
+
+.remote-code-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.remote-code-field > svg {
+  position: absolute;
+  left: var(--space-4);
+  z-index: 1;
+  color: var(--ok);
+  pointer-events: none;
+}
+
+.remote-code-field .input {
+  padding-left: 2.5rem;
+  letter-spacing: 0.16em;
+  font-size: var(--text-md);
+}
+
+.remote-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 0 var(--radius-md) var(--radius-md) var(--radius-md);
+  background: #080a0d;
+  overflow: hidden;
+}
+
+.remote-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.5rem;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-solid);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.remote-toolbar__identity,
+.remote-toolbar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.remote-toolbar__identity {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.remote-toolbar__status {
+  margin-left: auto;
+  color: var(--ok);
+}
+
+.remote-toolbar__resolution {
+  color: var(--text-faint);
+}
+
+.remote-canvas {
+  display: grid;
+  place-items: center;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.04), transparent 50%),
+    #080a0d;
+}
+
+.remote-canvas img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  pointer-events: none;
+}
+
+.remote-canvas__waiting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 28rem;
+  padding: var(--space-7);
+  color: var(--text-muted);
+  text-align: center;
+  font-size: var(--text-sm);
+}
+
+.remote-canvas__waiting strong {
+  color: var(--text);
+  font-size: var(--text-md);
+}
+
+.remote-canvas__pulse {
+  display: grid;
+  place-items: center;
+  width: 4rem;
+  height: 4rem;
+  margin-bottom: var(--space-2);
+  border: 1px solid var(--ok);
+  border-radius: 50%;
+  background: var(--ok-soft);
+  color: var(--ok);
+  animation: remote-pulse 1.8s ease-in-out infinite;
+}
+
+.rdp-canvas {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  outline: 0;
+  cursor: default;
+}
+
+.rdp-canvas:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.rdp-pane .remote-canvas {
+  position: relative;
+}
+
+.rdp-pane .remote-canvas__waiting {
+  position: absolute;
+  inset: 0;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.rdp-certificate {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.rdp-certificate code {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.rdp-certificate small {
+  color: var(--text-faint);
+}
+
+.rdp-certificate .button {
+  justify-self: start;
+}
+
+@keyframes remote-pulse {
+  50% {
+    transform: scale(1.04);
+    box-shadow: 0 0 0 0.5rem transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .remote-canvas__pulse {
+    animation: none;
+  }
+}
+
+@media (max-width: 48rem) {
+  .remote-toolbar__status,
+  .remote-toolbar__resolution {
+    display: none;
+  }
+}

@@ -8,7 +8,8 @@ LatticeTerm 是一套現代、安全且跨平台的遠端連線工作空間，�
 ## 主要特色
 
 - **現代化桌面工作空間**：整合全域導覽列、資源側欄、工作區與即時狀態列。
-- **安全的連線管理**：支援 SSH、SFTP、RDP、VNC 連線設定，介面絕不處理或儲存明文密碼與私鑰。
+- **安全的連線管理**：支援 SSH、SFTP、RDP、VNC 連線設定，介面絕不持久化明文密碼與私鑰。
+- **真實主機信任管理**：Key Vault 直接讀寫桌面核心的 `known_hosts.json`，可搜尋、複製、新增及移除已驗證的 SHA-256 指紋。
 - **非機密設定安全匯出與匯入**：支援以標準 JSON 格式安全備份與移轉連線清單，自動過濾任何機密資訊。
 - **強大的組織與檢索**：支援全域關鍵字搜尋、多層群組、環境標籤（Production / Staging / Development）與常用釘選。
 - **鍵盤優先與命令面板**：內建全功能命令面板（`Ctrl` + `K`），支援各項快捷操作與頁面切換。
@@ -16,7 +17,9 @@ LatticeTerm 是一套現代、安全且跨平台的遠端連線工作空間，�
 - **六種主題**：深色、淺色、午夜藍、石墨黑、暖砂與高對比，另可跟隨系統；切換時原生標題列會一起換色。
 - **主機資源檢視**：連線詳細面板保留「主機狀態」分頁，用來顯示 CPU、記憶體與磁碟用量。
 - **本機持久化**：連線設定會存在本機的應用程式資料目錄，關閉再開仍在；檔案只含主機資訊，不含任何認證資料。
-- **SSH 連線（開發中）**：以純 Rust 的 russh 實作，可建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼只用於當次連線，不會儲存。
+- **SSH 連線**：以純 Rust 的 russh 實作，可建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼只用於當次連線，不會儲存。
+- **Lattice Remote（唯讀 v1）**：自建 Agent 擷取完整主螢幕，以 Noise XXpsk3 與一次性八位數配對碼建立端對端加密直連；目前不注入鍵盤或滑鼠。
+- **Web RDP Canvas**：IronRDP 原生 engine 以 TLS/NLA 連到 Windows，畫面繪入內嵌 Canvas，並支援滑鼠、滾輪與鍵盤。密碼只經本機 stdin 傳給隔離 engine。
 - **跨平台支援**：支援 Windows、Linux 與 macOS。
 
 ## 📥 下載與安裝 (Downloads)
@@ -37,18 +40,19 @@ LatticeTerm 是一套現代、安全且跨平台的遠端連線工作空間，�
 介面必須讓使用者一眼分辨「已經可用」與「還在開發」：
 
 - 尚未實作的功能標示為「即將推出」，不使用看起來可按、實際上停用的假按鈕。
-- 連線卡片上的「連線 · 即將推出」是狀態標示，不是按鈕，因為協定引擎還不存在。
-- 主機資源分頁在未連線時直接說明「要連線成功後才有資料」，不顯示假的 CPU 或記憶體數字。
-- 新增連線表單沒有任何密碼、金鑰或通行碼欄位，因為安全儲存區尚未完成。
+- SSH、Lattice Remote 與 Web RDP 會啟動真正的工作階段；SFTP 與 VNC 仍明確標示開發狀態。
+- 主機資源分頁在監控資料尚未接入前直接說明原因，不顯示假的 CPU 或記憶體數字。
+- SSH 密碼只在連線對話框中用於當次驗證，不會寫入設定檔；私鑰與認證保存仍未開放。
+- Key Vault 的主機信任分頁顯示真正的本機資料；認證分頁則明確標示「即將推出」。
 - 狀態列持續顯示資料存放狀態，以及認證儲存區尚未建立。
 
 ## 開發藍圖
 
-1. 以純 Rust 的 SSH 實作（russh）建立終端機工作階段，桌面與行動版共用同一套連線核心
-2. 以作業系統金鑰鏈保存機密，並嚴格驗證 `known_hosts`
-3. SFTP 檔案瀏覽與安全傳輸佇列
-4. SSH Tunnel 連接埠轉送與 RDP 連線啟動
-5. 內嵌式 RDP 與 VNC 遠端桌面工作階段
+1. 以純 Rust 的 SSH 實作（russh）建立終端機工作階段（已可用，持續強化）
+2. 嚴格驗證並管理 `known_hosts`（已可用）；以作業系統金鑰鏈保存機密（尚未完成）
+3. Lattice Remote 唯讀加密主螢幕（已可用，後續增加顯式授權的輸入控制）
+4. 內嵌 Web RDP Canvas（已可用，持續強化封裝與憑證管理）
+5. SFTP 檔案瀏覽、安全傳輸佇列、SSH Tunnel 與 VNC
 6. 跨平台安裝檔打包與自動更新機制
 7. Android 與 iOS 版本（連線核心不依賴系統 ssh 執行檔，因此可沿用）
 
@@ -82,13 +86,26 @@ npm run dev
 
 ```sh
 npm install
+npm run build:rdp
 npm run tauri dev
 ```
+
+### 執行 Lattice Remote Agent
+
+被控端會分享完整主螢幕；預設只監聽 loopback。若要從同一個區網連入，必須明確指定該機器的 LAN 位址：
+
+```sh
+cargo run --manifest-path crates/lattice-remote/Cargo.toml --features agent --bin lattice-agent -- --bind 192.168.1.20:44900
+```
+
+Agent 顯示的八位數配對碼五分鐘後失效，連續五次失敗就會停止；一次成功工作階段結束後程序也會退出。v1 僅傳畫面，不接受遠端輸入。
 
 ### 專案驗證
 
 ```sh
 npm run check
+cargo test --manifest-path crates/lattice-remote/Cargo.toml
+cargo test --manifest-path crates/lattice-rdp/Cargo.toml
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

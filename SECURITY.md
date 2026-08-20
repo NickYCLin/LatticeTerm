@@ -23,9 +23,14 @@ LatticeTerm has not published a stable release. Security fixes currently target 
 
 ## Current security boundaries
 
-- The foundation UI stores connection profiles only in memory.
-- Password storage, private-key import, SSH host verification, and protocol engines are not implemented.
-- The Tauri application exposes only core permissions and a read-only runtime summary command.
+- Connection profiles persist in the operating system's per-user application-data directory and contain no passwords, private keys, passphrases, or tokens.
+- SSH terminal sessions use the Rust `russh` engine. Passwords are held only for the active connection and are never written to disk.
+- SSH host keys are checked strictly against `known_hosts.json`. Unknown keys require an explicit comparison, changed keys are blocked, and the Key Vault view manages the same real trust store.
+- Lattice Remote Agent captures the primary display only after an eight-digit pairing code is shown locally. The stream uses Noise XXpsk3 with ChaChaPoly and BLAKE2s; version 1 is view-only and the Agent binds to loopback unless a LAN address is explicitly supplied.
+- Web RDP runs IronRDP in an isolated child process. The password is sent once over stdin, never appears in process arguments or persistent state, and the browser surface receives display frames rather than network credentials.
+- Web RDP enforces TLS certificate validation. A self-signed certificate is rejected first; the UI may retry only with the exact SHA-256 certificate fingerprint explicitly approved for that attempt. NLA/CredSSP is required and legacy graphical TLS login is disabled.
+- Credential persistence, private-key import, Stronghold integration, OS keychain integration, SFTP, and VNC are not implemented.
+- Tauri IPC exposes scoped profile-storage, SSH-session, Lattice Remote, Web RDP input/session, trusted-host, runtime-summary, and updater operations; it does not expose arbitrary filesystem access.
 - Logs and screenshots must not contain secrets or private infrastructure details.
 
 These statements describe the current source tree, not a security audit or certification.

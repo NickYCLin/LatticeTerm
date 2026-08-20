@@ -17,6 +17,8 @@ import { findTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
 import { useStorageStatus } from "./app/useStorageStatus";
 import { useSshSessions } from "./app/useSshSessions";
+import { useRemoteSessions } from "./app/useRemoteSessions";
+import { useRdpSessions } from "./app/useRdpSessions";
 import { useWindowTheme } from "./app/useWindowTheme";
 import { useWorkspace } from "./app/useWorkspace";
 import type { ConnectionDraft, ConnectionProfile } from "./domain/connection";
@@ -33,8 +35,10 @@ import {
 import { ConfirmDialog } from "./components/overlays/ConfirmDialog";
 import { ConnectionDrawer } from "./components/overlays/ConnectionDrawer";
 import { ConnectionsView } from "./views/ConnectionsView";
-import { TerminalView } from "./views/TerminalView";
+import { SessionsView } from "./views/SessionsView";
 import { ConnectFlow } from "./components/terminal/ConnectFlow";
+import { RemoteConnectFlow } from "./components/remote/RemoteConnectFlow";
+import { RdpConnectFlow } from "./components/rdp/RdpConnectFlow";
 import { ActivityView } from "./views/ActivityView";
 import { VaultView } from "./views/VaultView";
 import { PlannedView, type PlannedArea } from "./views/PlannedView";
@@ -70,6 +74,8 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const runtime = useRuntimeSummary();
   const storage = useStorageStatus();
   const ssh = useSshSessions();
+  const remote = useRemoteSessions();
+  const rdp = useRdpSessions();
 
   useWindowTheme(findTheme(activeTheme).isDark);
 
@@ -336,8 +342,10 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
               />
             )}
             {view === "terminal" && (
-              <TerminalView
+              <SessionsView
                 ssh={ssh}
+                remote={remote}
+                rdp={rdp}
                 activeSessionId={activeSessionId}
                 onSelect={setActiveSessionId}
                 theme={activeTheme}
@@ -401,10 +409,36 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       )}
 
-      {connectTarget && (
+      {connectTarget?.protocol === "ssh" && (
         <ConnectFlow
           profile={connectTarget}
           ssh={ssh}
+          onConnected={(sessionId) => {
+            setConnectTarget(null);
+            setActiveSessionId(sessionId);
+            setView("terminal");
+          }}
+          onCancel={() => setConnectTarget(null)}
+        />
+      )}
+
+      {connectTarget?.protocol === "lattice" && (
+        <RemoteConnectFlow
+          profile={connectTarget}
+          remote={remote}
+          onConnected={(sessionId) => {
+            setConnectTarget(null);
+            setActiveSessionId(sessionId);
+            setView("terminal");
+          }}
+          onCancel={() => setConnectTarget(null)}
+        />
+      )}
+
+      {connectTarget?.protocol === "rdp" && (
+        <RdpConnectFlow
+          profile={connectTarget}
+          rdp={rdp}
           onConnected={(sessionId) => {
             setConnectTarget(null);
             setActiveSessionId(sessionId);

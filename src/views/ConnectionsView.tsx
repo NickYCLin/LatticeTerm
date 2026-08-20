@@ -310,7 +310,9 @@ export function ConnectionsView({
                     onDelete={() => onDelete(profile.id)}
                     onToggleFavorite={() => toggleFavorite(profile.id)}
                     onConnect={
-                      profile.protocol === "ssh"
+                      profile.protocol === "ssh" ||
+                      profile.protocol === "lattice" ||
+                      profile.protocol === "rdp"
                         ? () => onConnect(profile)
                         : undefined
                     }

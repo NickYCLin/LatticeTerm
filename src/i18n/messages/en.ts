@@ -26,6 +26,7 @@ export const en: Messages = {
   "common.none": "None",
   "common.optional": "Optional",
   "common.comingSoon": "Coming soon",
+  "common.available": "Available",
   "common.copy": "Copy",
   "common.copied": "Copied",
   "common.detecting": "Detecting…",
@@ -241,10 +242,10 @@ export const en: Messages = {
   "settings.motion.reduced": "Reduce motion",
   "settings.security": "Security",
   "settings.securityHint":
-    "These are still in development, so the plan is described rather than offered as a half-built switch.",
-  "settings.security.title": "Nothing secret is stored today",
+    "Strict host-key verification is active. Credential storage, auto-lock, and encrypted backup are still in development.",
+  "settings.security.title": "Credentials are never persisted",
   "settings.security.body":
-    "Only connection details and appearance preferences are kept on this machine. Nothing asks you for a password, key or passphrase, and no credential is ever stored.",
+    "An SSH password lives only for the active connection. Persistent local data contains connection settings, appearance preferences, and public host fingerprints only.",
   "settings.security.autoLock": "Auto-lock the vault",
   "settings.security.autoLockDetail":
     "Lock after a period of inactivity, and when the app loses focus.",
@@ -328,9 +329,9 @@ export const en: Messages = {
   "status.connections": "{count} connections",
   "status.connectionsFiltered": "{visible} of {total} connections",
   "status.inMemory": "In memory only, cleared when you close the app",
-  "status.vault": "Vault: {state}",
+  "status.vault": "Credential store: {state}",
   "status.vault.locked": "Not built yet",
-  "status.vault.ready": "Unlocked",
+  "status.vault.ready": "Available",
   "status.palette": "Command palette",
 
   "status.savedLocally": "Connections are saved on this machine",
@@ -405,8 +406,8 @@ export const en: Messages = {
   "connect.trusted": "Key remembered. Reconnecting…",
 
   // Terminal --------------------------------------------------------------
-  "terminal.title": "Terminal",
-  "terminal.desc": "Sessions that are currently open",
+  "terminal.title": "Sessions",
+  "terminal.desc": "Open SSH, Lattice Remote, and Web RDP connections",
   "terminal.disconnect": "Disconnect",
   "terminal.backToList": "Back to connections",
   "terminal.closed": "Session ended ({reason})",
@@ -415,7 +416,136 @@ export const en: Messages = {
   "terminal.reconnect": "Reconnect",
   "terminal.empty.title": "No session is open",
   "terminal.empty.body":
-    "Pick a host in the connection list and press Connect to open a terminal here.",
+    "Pick a host and press Connect to open its terminal or remote display here.",
+
+  // Lattice Remote ---------------------------------------------------------
+  "remote.connect.title": "Connect to {name}",
+  "remote.connect.securityTitle": "One-time encrypted pairing",
+  "remote.connect.securityBody":
+    "The code is used only for this Noise handshake and is not saved. Version 1 is view-only and cannot send keyboard or mouse input.",
+  "remote.connect.code": "Agent pairing code",
+  "remote.connect.codeHint":
+    "Enter the eight-digit code shown by lattice-agent on the remote device.",
+  "remote.connect.codeInvalid": "The pairing code must contain eight digits.",
+  "remote.connect.submit": "Start view-only session",
+  "remote.connect.connecting": "Pairing securely…",
+  "remote.connect.failedTitle": "Lattice Remote could not connect",
+  "remote.connect.failedBody": "Stage: {stage}. {detail}",
+  "remote.session.encrypted": "Encrypted direct link",
+  "remote.session.viewOnly": "View only",
+  "remote.session.frameAlt": "Live remote display from {name}",
+  "remote.session.waitingTitle": "Waiting for the first frame",
+  "remote.session.waitingBody":
+    "Pairing succeeded. The Agent is capturing and encoding its primary display.",
+
+  // Web RDP ----------------------------------------------------------------
+  "rdp.connect.title": "RDP connect to {name}",
+  "rdp.connect.securityTitle": "Native RDP with strict TLS verification",
+  "rdp.connect.securityBody":
+    "The password is sent only to the isolated local RDP engine over stdin. It is never saved or placed in process arguments. Invalid certificates are rejected by default.",
+  "rdp.connect.password": "Windows password",
+  "rdp.connect.domain": "Domain (optional)",
+  "rdp.connect.domainPlaceholder": "For example, CONTOSO",
+  "rdp.connect.noUsername": "This RDP profile has no Windows username.",
+  "rdp.connect.submit": "Open Web RDP",
+  "rdp.connect.connecting": "Verifying and connecting…",
+  "rdp.connect.failedTitle": "Web RDP could not connect",
+  "rdp.connect.failedBody": "Stage: {stage}. {detail}",
+  "rdp.connect.certificateTitle": "The RDP host certificate is not system-trusted",
+  "rdp.connect.certificateBody":
+    "Compare this SHA-256 fingerprint over another trusted channel. Approval applies only to this connection attempt.",
+  "rdp.connect.trustOnce": "Trust this fingerprint and retry",
+  "rdp.session.secure": "TLS / NLA encrypted",
+  "rdp.session.interactive": "Interactive",
+  "rdp.session.canvasLabel": "Interactive RDP display for {host}",
+  "rdp.session.waitingTitle": "Waiting for the RDP display",
+  "rdp.session.waitingBody": "Login is established; the remote desktop is preparing its first Canvas frame.",
+
+  // Key Vault -------------------------------------------------------------
+  "vault.title": "Host trust and credential vault",
+  "vault.status.ready": "Host trust active",
+  "vault.status.loading": "Loading",
+  "vault.status.browser": "Desktop required",
+  "vault.status.error": "Unavailable",
+  "vault.summary.ready":
+    "{count} public host fingerprints loaded from the local security boundary. Credential storage is still in development.",
+  "vault.summary.loading": "Reading real host-trust data from the desktop core.",
+  "vault.summary.browser":
+    "The browser preview has no desktop security store, so it does not display or invent trust data.",
+  "vault.summary.error":
+    "Trust data could not be read safely. SSH connections remain blocked as well.",
+  "vault.tabs.label": "Key Vault sections",
+  "vault.tabs.hosts": "Trusted hosts ({count})",
+  "vault.tabs.credentials": "Credentials",
+  "vault.searchPlaceholder": "Search hosts, algorithms or fingerprints",
+  "vault.add": "Add host fingerprint",
+  "vault.loading.title": "Loading trusted hosts",
+  "vault.loading.body": "Entries come directly from the desktop core, never sample fingerprints.",
+  "vault.browser.title": "Manage host trust in the LatticeTerm desktop app",
+  "vault.browser.body":
+    "The browser preview has no Tauri backend and no known_hosts.json. This area stays empty so demonstration data cannot be mistaken for a real trust decision.",
+  "vault.loadError.title": "Trusted hosts could not be read",
+  "vault.loadError.body":
+    "The app will not replace broken trust data with an empty list, because that could make a known host look new. Reason: {error}",
+  "vault.retry": "Try again",
+  "vault.empty.title": "No hosts have been trusted yet",
+  "vault.empty.body":
+    "Compare and remember a fingerprint on first SSH connection, or add one here after verifying it through another channel.",
+  "vault.noResults.title": "No trusted host matches",
+  "vault.noResults.body": "The trust data is still here; nothing matches the current search.",
+  "vault.table.target": "Host and port",
+  "vault.table.algorithm": "Algorithm",
+  "vault.table.fingerprint": "SHA-256 fingerprint",
+  "vault.table.trustedAt": "First trusted",
+  "vault.table.actions": "Actions",
+  "vault.copy": "Copy fingerprint",
+  "vault.copyFor": "Copy the fingerprint for {target}",
+  "vault.remove": "Remove trust",
+  "vault.removeFor": "Remove trusted-host data for {target}",
+  "vault.add.title": "Add a trusted host fingerprint",
+  "vault.add.securityTitle": "Verify it through another trusted channel first",
+  "vault.add.securityBody":
+    "Save this only after confirming the fingerprint with the host administrator, the host console, or ssh-keygen output.",
+  "vault.form.host": "Host address",
+  "vault.form.hostPlaceholder": "e.g. server.example.com",
+  "vault.form.port": "Port",
+  "vault.form.algorithm": "Key algorithm",
+  "vault.form.recommended": "Recommended",
+  "vault.form.fingerprint": "SHA-256 fingerprint",
+  "vault.form.fingerprintHint":
+    "Enter the complete OpenSSH SHA256: fingerprint, not public- or private-key material.",
+  "vault.validation.title": "The entry cannot be saved",
+  "vault.validation.hostRequired": "Enter a hostname or IP address.",
+  "vault.validation.hostInvalid":
+    "Use only a hostname or IP address, without ssh://, an account, a path, or spaces.",
+  "vault.validation.portInvalid": "Port must be an integer from 1 to 65535.",
+  "vault.validation.fingerprintInvalid":
+    "Fingerprint must use the complete OpenSSH SHA256: format.",
+  "vault.validation.duplicate":
+    "{target} already has trusted-host data. If its key really changed, remove the old entry before adding the new one.",
+  "vault.save": "Save host trust",
+  "vault.saving": "Saving…",
+  "vault.remove.title": "Remove trust for {target}?",
+  "vault.remove.body":
+    "This does not end an open session, but the next connection will require a fresh fingerprint comparison.",
+  "vault.remove.confirm": "Remove host trust",
+  "vault.removing": "Removing…",
+  "vault.actionFailed.title": "Trusted-host data was not changed",
+  "vault.actionFailed.body": "The desktop core refused the operation: {error}",
+  "vault.activity.added": "Trusted host added for {target}",
+  "vault.activity.removed": "Trusted host removed for {target}",
+  "vault.credentials.title": "Credential storage is still in development",
+  "vault.credentials.body":
+    "SSH passwords currently live only for the active connection and are never saved. This tab does not use sample keys or a fake unlocked state to impersonate a finished vault.",
+  "vault.credentials.systemStore": "Operating-system credential store",
+  "vault.credentials.systemStoreDetail":
+    "Wrap the master key with Windows Credential Manager, macOS Keychain, or Linux Secret Service.",
+  "vault.credentials.stronghold": "Stronghold encrypted vault",
+  "vault.credentials.strongholdDetail":
+    "Store SSH private keys, passwords, and passphrases while the UI sees opaque references only.",
+  "vault.credentials.autoLock": "Auto-lock and idle protection",
+  "vault.credentials.autoLockDetail":
+    "Seal decrypted state when the app loses focus or times out, with an explicit recovery path.",
 
   // Host trust dialogs ----------------------------------------------------
   "security.verify.title": "Check the host fingerprint",
@@ -465,6 +595,8 @@ export const en: Messages = {
   "protocol.rdp.summary": "Windows graphical desktop",
   "protocol.vnc": "VNC screen sharing",
   "protocol.vnc.summary": "Cross-platform screen control",
+  "protocol.lattice": "Lattice Remote",
+  "protocol.lattice.summary": "Encrypted display sharing with one-time pairing",
   "environment.production": "Production",
   "environment.staging": "Staging",
   "environment.development": "Development",

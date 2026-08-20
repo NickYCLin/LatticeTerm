@@ -61,6 +61,7 @@ describe("connection profiles", () => {
 
   it("starts a draft on the default port of the chosen protocol", () => {
     expect(emptyDraft("rdp").port).toBe(3389);
+    expect(emptyDraft("lattice").port).toBe(44900);
     expect(emptyDraft().protocol).toBe("ssh");
   });
 
