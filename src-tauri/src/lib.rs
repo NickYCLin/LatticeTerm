@@ -183,6 +183,25 @@ fn agent_plan_delete(id: String, plans: State<'_, AppAgentPlans>) -> Result<bool
 }
 
 #[tauri::command]
+fn agent_workspace_rename(name: String, plans: State<'_, AppAgentPlans>) -> Result<String, String> {
+    plans
+        .lock()
+        .map_err(|error| error.to_string())?
+        .rename(&name)
+}
+
+#[tauri::command]
+fn agent_plan_reorder(
+    ordered_ids: Vec<String>,
+    plans: State<'_, AppAgentPlans>,
+) -> Result<Vec<AgentLaunchPlan>, String> {
+    plans
+        .lock()
+        .map_err(|error| error.to_string())?
+        .reorder(&ordered_ids)
+}
+
+#[tauri::command]
 fn agent_plan_restore(
     app: AppHandle,
     plan_ids: Vec<String>,
@@ -820,6 +839,8 @@ pub fn run() {
             agent_plan_snapshot,
             agent_plan_save,
             agent_plan_delete,
+            agent_workspace_rename,
+            agent_plan_reorder,
             agent_plan_restore,
             credential_status,
             credential_exists,
