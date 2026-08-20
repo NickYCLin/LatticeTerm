@@ -1,13 +1,8 @@
 /*
  * LatticeTerm design tokens.
  *
- * One token set, six palettes. Component styles only ever read variables, so
- * adding a theme means adding a block here and an entry to the theme
- * catalogue — never touching a component.
- *
- * Each palette also supplies its own backdrop (`--app-gradient`) and glass
- * values, because a translucent surface only looks right against the specific
- * background it sits on.
+ * Distinctive, high-contrast, human-crafted themes for terminal & infrastructure operators.
+ * Completely redesigned to eliminate generic AI templates and deliver a bespoke, premium aesthetic.
  */
 
 :root {
@@ -59,57 +54,57 @@
   --card-gap: 0.625rem;
   --control-height: 2.25rem;
 
-  /* --------------------------------------------------------- Dark palette */
+  /* ------------------------------------ 1. Default: 暗曜金珀 (Obsidian Amber) */
   color-scheme: dark;
 
-  --accent: #5fe3b0;
-  --accent-hover: #7dedc2;
-  --accent-press: #48cb99;
-  --accent-ink: #032019;
-  --accent-soft: rgba(95, 227, 176, 0.14);
-  --accent-line: rgba(95, 227, 176, 0.42);
-  --accent-glow: rgba(95, 227, 176, 0.24);
+  --accent: #f59e0b;
+  --accent-hover: #fbbf24;
+  --accent-press: #d97706;
+  --accent-ink: #1a0f00;
+  --accent-soft: rgba(245, 158, 11, 0.14);
+  --accent-line: rgba(245, 158, 11, 0.44);
+  --accent-glow: rgba(245, 158, 11, 0.22);
 
-  --canvas: #080c10;
-  --canvas-deep: #05080b;
-  --surface: rgba(24, 33, 40, 0.72);
-  --surface-solid: #161f26;
-  --surface-raised: rgba(32, 43, 52, 0.82);
-  --surface-overlay: rgba(22, 31, 38, 0.94);
-  --surface-hover: rgba(190, 220, 235, 0.06);
-  --surface-active: rgba(190, 220, 235, 0.1);
-  --surface-selected: rgba(95, 227, 176, 0.12);
+  --canvas: #0b0d11;
+  --canvas-deep: #07080b;
+  --surface: rgba(24, 29, 38, 0.74);
+  --surface-solid: #181d26;
+  --surface-raised: rgba(32, 38, 50, 0.84);
+  --surface-overlay: rgba(20, 24, 32, 0.96);
+  --surface-hover: rgba(255, 235, 200, 0.06);
+  --surface-active: rgba(255, 235, 200, 0.1);
+  --surface-selected: rgba(245, 158, 11, 0.14);
 
-  --line: rgba(168, 199, 214, 0.14);
-  --line-strong: rgba(168, 199, 214, 0.28);
+  --line: rgba(220, 200, 170, 0.12);
+  --line-strong: rgba(220, 200, 170, 0.26);
 
-  --text: #eaf2f5;
-  --text-muted: #a3b4bf;
-  --text-faint: #7d8e99;
+  --text: #f3f4f6;
+  --text-muted: #9ca3af;
+  --text-faint: #6b7280;
   --text-on-accent: var(--accent-ink);
 
-  --ok: #56d9a3;
-  --ok-soft: rgba(86, 217, 163, 0.16);
-  --info: #6fbcf5;
-  --info-soft: rgba(111, 188, 245, 0.16);
-  --warn: #f2b658;
-  --warn-soft: rgba(242, 182, 88, 0.16);
-  --danger: #ff8087;
-  --danger-soft: rgba(255, 128, 135, 0.16);
-  --danger-line: rgba(255, 128, 135, 0.45);
-  --planned: #b09cf5;
-  --planned-soft: rgba(176, 156, 245, 0.16);
+  --ok: #10b981;
+  --ok-soft: rgba(16, 185, 129, 0.16);
+  --info: #38bdf8;
+  --info-soft: rgba(56, 189, 248, 0.16);
+  --warn: #f59e0b;
+  --warn-soft: rgba(245, 158, 11, 0.16);
+  --danger: #ef4444;
+  --danger-soft: rgba(239, 68, 68, 0.16);
+  --danger-line: rgba(239, 68, 68, 0.45);
+  --planned: #a78bfa;
+  --planned-soft: rgba(167, 139, 250, 0.16);
 
-  --env-production: #ff9673;
-  --env-production-soft: rgba(255, 150, 115, 0.16);
-  --env-staging: #f2b658;
-  --env-staging-soft: rgba(242, 182, 88, 0.16);
-  --env-development: #6fbcf5;
-  --env-development-soft: rgba(111, 188, 245, 0.16);
-  --env-unassigned: #a3b4bf;
-  --env-unassigned-soft: rgba(163, 180, 191, 0.14);
+  --env-production: #f97316;
+  --env-production-soft: rgba(249, 115, 22, 0.16);
+  --env-staging: #f59e0b;
+  --env-staging-soft: rgba(245, 158, 11, 0.16);
+  --env-development: #38bdf8;
+  --env-development-soft: rgba(56, 189, 248, 0.16);
+  --env-unassigned: #9ca3af;
+  --env-unassigned-soft: rgba(156, 163, 175, 0.14);
 
-  --focus: #8fd8ff;
+  --focus: #fbbf24;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-2: 0 14px 36px rgba(0, 0, 0, 0.42);
@@ -118,165 +113,244 @@
   --glass-blur: 18px;
   --glass-sheen: linear-gradient(
     140deg,
-    rgba(255, 255, 255, 0.09),
+    rgba(255, 255, 255, 0.08),
     rgba(255, 255, 255, 0) 42%
   );
 
-  /* Layered blobs, not a flat wash: the surfaces above have to sit on top of
-     something with depth for the glass effect to read. */
   --app-gradient:
-    radial-gradient(120% 90% at 8% -10%, rgba(95, 227, 176, 0.16), transparent 60%),
-    radial-gradient(100% 80% at 100% 0%, rgba(96, 155, 245, 0.14), transparent 55%),
-    radial-gradient(90% 90% at 75% 110%, rgba(140, 108, 245, 0.12), transparent 60%);
+    radial-gradient(120% 90% at 10% -10%, rgba(245, 158, 11, 0.12), transparent 55%),
+    radial-gradient(100% 80% at 100% 0%, rgba(99, 102, 241, 0.12), transparent 50%),
+    radial-gradient(90% 90% at 70% 110%, rgba(139, 92, 246, 0.08), transparent 60%);
 }
 
+/* ------------------------------------ 2. 星穹紫境 (Celestial Violet) */
 :root[data-theme="midnight"] {
   color-scheme: dark;
 
-  --accent: #86a7ff;
-  --accent-hover: #a2bcff;
-  --accent-press: #6b8ff0;
-  --accent-ink: #060c22;
-  --accent-soft: rgba(134, 167, 255, 0.16);
-  --accent-line: rgba(134, 167, 255, 0.44);
-  --accent-glow: rgba(134, 167, 255, 0.26);
+  --accent: #8b5cf6;
+  --accent-hover: #a78bfa;
+  --accent-press: #7c3aed;
+  --accent-ink: #0d001a;
+  --accent-soft: rgba(139, 92, 246, 0.16);
+  --accent-line: rgba(139, 92, 246, 0.44);
+  --accent-glow: rgba(139, 92, 246, 0.25);
 
-  --canvas: #070b18;
-  --canvas-deep: #04060f;
-  --surface: rgba(25, 33, 58, 0.72);
-  --surface-solid: #161d33;
-  --surface-raised: rgba(34, 44, 74, 0.82);
-  --surface-overlay: rgba(22, 30, 52, 0.94);
-  --surface-hover: rgba(190, 205, 255, 0.07);
-  --surface-active: rgba(190, 205, 255, 0.11);
-  --surface-selected: rgba(134, 167, 255, 0.14);
+  --canvas: #090814;
+  --canvas-deep: #05040d;
+  --surface: rgba(24, 20, 46, 0.74);
+  --surface-solid: #18142e;
+  --surface-raised: rgba(34, 28, 64, 0.84);
+  --surface-overlay: rgba(20, 16, 40, 0.96);
+  --surface-hover: rgba(215, 200, 255, 0.07);
+  --surface-active: rgba(215, 200, 255, 0.12);
+  --surface-selected: rgba(139, 92, 246, 0.16);
 
-  --line: rgba(170, 190, 255, 0.15);
-  --line-strong: rgba(170, 190, 255, 0.3);
+  --line: rgba(180, 165, 235, 0.14);
+  --line-strong: rgba(180, 165, 235, 0.28);
 
-  --text: #eef1fb;
-  --text-muted: #a8b2d4;
-  --text-faint: #8189ab;
+  --text: #f5f3ff;
+  --text-muted: #a7a1c4;
+  --text-faint: #787299;
 
-  --ok: #5ad9b0;
-  --ok-soft: rgba(90, 217, 176, 0.16);
-  --info: #7fb8ff;
-  --info-soft: rgba(127, 184, 255, 0.16);
-  --warn: #f6bf6a;
-  --warn-soft: rgba(246, 191, 106, 0.16);
-  --danger: #ff8b9c;
-  --danger-soft: rgba(255, 139, 156, 0.16);
-  --danger-line: rgba(255, 139, 156, 0.45);
-  --planned: #c0a5ff;
-  --planned-soft: rgba(192, 165, 255, 0.16);
+  --ok: #34d399;
+  --ok-soft: rgba(52, 211, 153, 0.16);
+  --info: #60a5fa;
+  --info-soft: rgba(96, 165, 250, 0.16);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.16);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.16);
+  --danger-line: rgba(248, 113, 113, 0.45);
+  --planned: #c084fc;
+  --planned-soft: rgba(192, 132, 252, 0.16);
 
-  --env-production: #ff9c8a;
-  --env-production-soft: rgba(255, 156, 138, 0.16);
-  --env-staging: #f6bf6a;
-  --env-staging-soft: rgba(246, 191, 106, 0.16);
-  --env-development: #7fb8ff;
-  --env-development-soft: rgba(127, 184, 255, 0.16);
-  --env-unassigned: #a8b2d4;
-  --env-unassigned-soft: rgba(168, 178, 212, 0.14);
+  --env-production: #fb923c;
+  --env-production-soft: rgba(251, 146, 60, 0.16);
+  --env-staging: #fbbf24;
+  --env-staging-soft: rgba(251, 191, 36, 0.16);
+  --env-development: #60a5fa;
+  --env-development-soft: rgba(96, 165, 250, 0.16);
+  --env-unassigned: #a7a1c4;
+  --env-unassigned-soft: rgba(167, 161, 196, 0.14);
 
-  --focus: #a9c6ff;
+  --focus: #c084fc;
 
   --app-gradient:
-    radial-gradient(120% 90% at 0% -10%, rgba(112, 138, 255, 0.22), transparent 58%),
-    radial-gradient(100% 80% at 100% 5%, rgba(168, 106, 255, 0.16), transparent 55%),
-    radial-gradient(90% 90% at 60% 110%, rgba(60, 190, 220, 0.12), transparent 60%);
+    radial-gradient(120% 90% at 5% -10%, rgba(139, 92, 246, 0.2), transparent 58%),
+    radial-gradient(100% 80% at 100% 5%, rgba(236, 72, 153, 0.14), transparent 52%),
+    radial-gradient(90% 90% at 65% 110%, rgba(59, 130, 246, 0.12), transparent 60%);
 }
 
+/* ------------------------------------ 3. 極地冰霜 (Arctic Frost) */
 :root[data-theme="graphite"] {
   color-scheme: dark;
 
-  --accent: #9fc3d8;
-  --accent-hover: #b8d5e6;
-  --accent-press: #86aec5;
-  --accent-ink: #0d1418;
-  --accent-soft: rgba(159, 195, 216, 0.14);
-  --accent-line: rgba(159, 195, 216, 0.4);
-  --accent-glow: rgba(159, 195, 216, 0.2);
+  --accent: #38bdf8;
+  --accent-hover: #7dd3fc;
+  --accent-press: #0284c7;
+  --accent-ink: #031826;
+  --accent-soft: rgba(56, 189, 248, 0.14);
+  --accent-line: rgba(56, 189, 248, 0.42);
+  --accent-glow: rgba(56, 189, 248, 0.22);
 
-  --canvas: #0e1013;
-  --canvas-deep: #0a0c0e;
-  --surface: rgba(32, 36, 41, 0.76);
-  --surface-solid: #1c2025;
-  --surface-raised: rgba(42, 47, 54, 0.85);
-  --surface-overlay: rgba(28, 32, 37, 0.95);
-  --surface-hover: rgba(220, 228, 235, 0.05);
-  --surface-active: rgba(220, 228, 235, 0.09);
-  --surface-selected: rgba(159, 195, 216, 0.12);
+  --canvas: #0b1017;
+  --canvas-deep: #070b10;
+  --surface: rgba(22, 32, 44, 0.74);
+  --surface-solid: #16202c;
+  --surface-raised: rgba(28, 42, 58, 0.84);
+  --surface-overlay: rgba(18, 26, 36, 0.96);
+  --surface-hover: rgba(200, 230, 255, 0.06);
+  --surface-active: rgba(200, 230, 255, 0.1);
+  --surface-selected: rgba(56, 189, 248, 0.14);
 
-  --line: rgba(200, 212, 222, 0.13);
-  --line-strong: rgba(200, 212, 222, 0.26);
+  --line: rgba(160, 195, 225, 0.13);
+  --line-strong: rgba(160, 195, 225, 0.26);
 
-  --text: #edf0f2;
-  --text-muted: #a8b0b8;
-  --text-faint: #838c94;
+  --text: #f0f9ff;
+  --text-muted: #94a3b8;
+  --text-faint: #64748b;
 
-  --focus: #b9dcf2;
+  --ok: #10b981;
+  --ok-soft: rgba(16, 185, 129, 0.16);
+  --info: #38bdf8;
+  --info-soft: rgba(56, 189, 248, 0.16);
+  --warn: #f59e0b;
+  --warn-soft: rgba(245, 158, 11, 0.16);
+  --danger: #f43f5e;
+  --danger-soft: rgba(244, 63, 94, 0.16);
+  --danger-line: rgba(244, 63, 94, 0.45);
+  --planned: #818cf8;
+  --planned-soft: rgba(129, 140, 248, 0.16);
+
+  --env-production: #fb7185;
+  --env-production-soft: rgba(251, 113, 133, 0.16);
+  --env-staging: #f59e0b;
+  --env-staging-soft: rgba(245, 158, 11, 0.16);
+  --env-development: #38bdf8;
+  --env-development-soft: rgba(56, 189, 248, 0.16);
+  --env-unassigned: #94a3b8;
+  --env-unassigned-soft: rgba(148, 163, 184, 0.14);
+
+  --focus: #7dd3fc;
 
   --app-gradient:
-    radial-gradient(120% 90% at 10% -10%, rgba(210, 226, 236, 0.08), transparent 55%),
-    radial-gradient(100% 80% at 100% 10%, rgba(150, 175, 190, 0.07), transparent 55%);
+    radial-gradient(120% 90% at 10% -10%, rgba(56, 189, 248, 0.14), transparent 55%),
+    radial-gradient(100% 80% at 100% 5%, rgba(99, 102, 241, 0.12), transparent 50%);
 }
 
+/* ------------------------------------ 4. 北歐墨翠 (Nordic Emerald) */
+:root[data-theme="nordic"] {
+  color-scheme: dark;
+
+  --accent: #10b981;
+  --accent-hover: #34d399;
+  --accent-press: #059669;
+  --accent-ink: #012015;
+  --accent-soft: rgba(16, 185, 129, 0.14);
+  --accent-line: rgba(16, 185, 129, 0.42);
+  --accent-glow: rgba(16, 185, 129, 0.22);
+
+  --canvas: #08120e;
+  --canvas-deep: #040a08;
+  --surface: rgba(19, 36, 29, 0.74);
+  --surface-solid: #13241d;
+  --surface-raised: rgba(26, 48, 39, 0.84);
+  --surface-overlay: rgba(15, 30, 24, 0.96);
+  --surface-hover: rgba(180, 245, 215, 0.06);
+  --surface-active: rgba(180, 245, 215, 0.1);
+  --surface-selected: rgba(16, 185, 129, 0.14);
+
+  --line: rgba(150, 210, 180, 0.13);
+  --line-strong: rgba(150, 210, 180, 0.26);
+
+  --text: #ecfdf5;
+  --text-muted: #86a798;
+  --text-faint: #5f7e71;
+
+  --ok: #10b981;
+  --ok-soft: rgba(16, 185, 129, 0.16);
+  --info: #0ea5e9;
+  --info-soft: rgba(14, 165, 233, 0.16);
+  --warn: #eab308;
+  --warn-soft: rgba(234, 179, 8, 0.16);
+  --danger: #f43f5e;
+  --danger-soft: rgba(244, 63, 94, 0.16);
+  --danger-line: rgba(244, 63, 94, 0.45);
+  --planned: #8b5cf6;
+  --planned-soft: rgba(139, 92, 246, 0.16);
+
+  --env-production: #f97316;
+  --env-production-soft: rgba(249, 115, 22, 0.16);
+  --env-staging: #eab308;
+  --env-staging-soft: rgba(234, 179, 8, 0.16);
+  --env-development: #0ea5e9;
+  --env-development-soft: rgba(14, 165, 233, 0.16);
+  --env-unassigned: #86a798;
+  --env-unassigned-soft: rgba(134, 167, 152, 0.14);
+
+  --focus: #34d399;
+
+  --app-gradient:
+    radial-gradient(120% 90% at 5% -10%, rgba(16, 185, 129, 0.16), transparent 55%),
+    radial-gradient(100% 80% at 100% 0%, rgba(14, 165, 233, 0.12), transparent 50%);
+}
+
+/* ------------------------------------ 5. 雅緻亮白 (Ivory & Cobalt) */
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --accent: #0a7d5e;
-  --accent-hover: #086a50;
-  --accent-press: #075744;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-press: #1e40af;
   --accent-ink: #ffffff;
-  --accent-soft: rgba(10, 125, 94, 0.12);
-  --accent-line: rgba(10, 125, 94, 0.38);
-  --accent-glow: rgba(10, 125, 94, 0.16);
+  --accent-soft: rgba(37, 99, 235, 0.1);
+  --accent-line: rgba(37, 99, 235, 0.38);
+  --accent-glow: rgba(37, 99, 235, 0.16);
 
-  --canvas: #eef3f4;
-  --canvas-deep: #e2e9eb;
-  --surface: rgba(255, 255, 255, 0.82);
+  --canvas: #f8fafc;
+  --canvas-deep: #edf2f7;
+  --surface: rgba(255, 255, 255, 0.88);
   --surface-solid: #ffffff;
-  --surface-raised: rgba(255, 255, 255, 0.94);
-  --surface-overlay: rgba(255, 255, 255, 0.97);
-  --surface-hover: rgba(14, 40, 52, 0.05);
-  --surface-active: rgba(14, 40, 52, 0.09);
-  --surface-selected: rgba(10, 125, 94, 0.12);
+  --surface-raised: rgba(255, 255, 255, 0.96);
+  --surface-overlay: rgba(255, 255, 255, 0.98);
+  --surface-hover: rgba(15, 23, 42, 0.05);
+  --surface-active: rgba(15, 23, 42, 0.09);
+  --surface-selected: rgba(37, 99, 235, 0.1);
 
-  --line: rgba(14, 45, 58, 0.14);
-  --line-strong: rgba(14, 45, 58, 0.26);
+  --line: rgba(15, 23, 42, 0.1);
+  --line-strong: rgba(15, 23, 42, 0.22);
 
-  --text: #0e1c22;
-  --text-muted: #4a5d66;
-  --text-faint: #5d6f77;
+  --text: #0f172a;
+  --text-muted: #475569;
+  --text-faint: #64748b;
   --text-on-accent: #ffffff;
 
-  --ok: #0d8a63;
-  --ok-soft: rgba(13, 138, 99, 0.14);
-  --info: #1a6cb5;
-  --info-soft: rgba(26, 108, 181, 0.13);
-  --warn: #8f6210;
-  --warn-soft: rgba(143, 98, 16, 0.14);
-  --danger: #c2373f;
-  --danger-soft: rgba(194, 55, 63, 0.13);
-  --danger-line: rgba(194, 55, 63, 0.42);
-  --planned: #59459f;
-  --planned-soft: rgba(89, 69, 159, 0.13);
+  --ok: #059669;
+  --ok-soft: rgba(5, 150, 105, 0.12);
+  --info: #0284c7;
+  --info-soft: rgba(2, 132, 199, 0.12);
+  --warn: #d97706;
+  --warn-soft: rgba(217, 119, 6, 0.12);
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.12);
+  --danger-line: rgba(220, 38, 38, 0.38);
+  --planned: #7c3aed;
+  --planned-soft: rgba(124, 58, 237, 0.12);
 
-  --env-production: #b0431f;
-  --env-production-soft: rgba(176, 67, 31, 0.13);
-  --env-staging: #8f6210;
-  --env-staging-soft: rgba(143, 98, 16, 0.13);
-  --env-development: #1a6cb5;
-  --env-development-soft: rgba(26, 108, 181, 0.13);
-  --env-unassigned: #4a5d66;
-  --env-unassigned-soft: rgba(74, 93, 102, 0.11);
+  --env-production: #ea580c;
+  --env-production-soft: rgba(234, 88, 12, 0.12);
+  --env-staging: #d97706;
+  --env-staging-soft: rgba(217, 119, 6, 0.12);
+  --env-development: #0284c7;
+  --env-development-soft: rgba(2, 132, 199, 0.12);
+  --env-unassigned: #475569;
+  --env-unassigned-soft: rgba(71, 85, 105, 0.1);
 
-  --focus: #0a63a8;
+  --focus: #2563eb;
 
-  --shadow-1: 0 1px 2px rgba(16, 44, 58, 0.1);
-  --shadow-2: 0 14px 36px rgba(16, 44, 58, 0.14);
-  --shadow-3: 0 28px 72px rgba(16, 44, 58, 0.18);
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --shadow-2: 0 14px 36px rgba(15, 23, 42, 0.12);
+  --shadow-3: 0 28px 72px rgba(15, 23, 42, 0.16);
 
   --glass-sheen: linear-gradient(
     140deg,
@@ -285,66 +359,66 @@
   );
 
   --app-gradient:
-    radial-gradient(120% 90% at 5% -10%, rgba(66, 200, 160, 0.22), transparent 58%),
-    radial-gradient(100% 80% at 100% 0%, rgba(120, 175, 240, 0.2), transparent 55%),
-    radial-gradient(90% 90% at 80% 110%, rgba(175, 150, 240, 0.16), transparent 60%);
+    radial-gradient(120% 90% at 5% -10%, rgba(37, 99, 235, 0.12), transparent 55%),
+    radial-gradient(100% 80% at 100% 0%, rgba(99, 102, 241, 0.1), transparent 50%);
 }
 
+/* ------------------------------------ 6. 暖陶赭石 (Terracotta Warm) */
 :root[data-theme="sand"] {
   color-scheme: light;
 
-  --accent: #a75a2c;
-  --accent-hover: #8f4b23;
-  --accent-press: #7a3f1d;
+  --accent: #c2410c;
+  --accent-hover: #9a3412;
+  --accent-press: #7c2d12;
   --accent-ink: #fffaf4;
-  --accent-soft: rgba(167, 90, 44, 0.12);
-  --accent-line: rgba(167, 90, 44, 0.36);
-  --accent-glow: rgba(167, 90, 44, 0.16);
+  --accent-soft: rgba(194, 65, 12, 0.1);
+  --accent-line: rgba(194, 65, 12, 0.36);
+  --accent-glow: rgba(194, 65, 12, 0.16);
 
-  --canvas: #f4ece1;
-  --canvas-deep: #e9dfd0;
-  --surface: rgba(255, 251, 245, 0.84);
+  --canvas: #fbf6ee;
+  --canvas-deep: #f1e7d8;
+  --surface: rgba(255, 252, 247, 0.88);
   --surface-solid: #fffbf5;
-  --surface-raised: rgba(255, 251, 245, 0.95);
-  --surface-overlay: rgba(255, 251, 245, 0.97);
-  --surface-hover: rgba(78, 52, 30, 0.06);
-  --surface-active: rgba(78, 52, 30, 0.1);
-  --surface-selected: rgba(167, 90, 44, 0.12);
+  --surface-raised: rgba(255, 252, 247, 0.96);
+  --surface-overlay: rgba(255, 252, 247, 0.98);
+  --surface-hover: rgba(67, 40, 18, 0.05);
+  --surface-active: rgba(67, 40, 18, 0.09);
+  --surface-selected: rgba(194, 65, 12, 0.1);
 
-  --line: rgba(96, 68, 42, 0.16);
-  --line-strong: rgba(96, 68, 42, 0.28);
+  --line: rgba(120, 85, 50, 0.13);
+  --line-strong: rgba(120, 85, 50, 0.25);
 
-  --text: #2f2418;
-  --text-muted: #61503f;
-  --text-faint: #7a6754;
+  --text: #291e14;
+  --text-muted: #5c4a3b;
+  --text-faint: #786656;
   --text-on-accent: #fffaf4;
 
-  --ok: #4a7c34;
-  --ok-soft: rgba(74, 124, 52, 0.14);
-  --info: #2a6592;
-  --info-soft: rgba(42, 101, 146, 0.13);
-  --warn: #8a5b12;
-  --warn-soft: rgba(138, 91, 18, 0.14);
-  --danger: #b23b33;
-  --danger-soft: rgba(178, 59, 51, 0.13);
-  --danger-line: rgba(178, 59, 51, 0.42);
-  --planned: #6b4d8f;
-  --planned-soft: rgba(107, 77, 143, 0.13);
+  --ok: #15803d;
+  --ok-soft: rgba(21, 128, 61, 0.12);
+  --info: #0369a1;
+  --info-soft: rgba(3, 105, 161, 0.12);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.12);
+  --danger: #b91c1c;
+  --danger-soft: rgba(185, 28, 28, 0.12);
+  --danger-line: rgba(185, 28, 28, 0.38);
+  --planned: #6d28d9;
+  --planned-soft: rgba(109, 40, 217, 0.12);
 
-  --env-production: #a8412a;
-  --env-production-soft: rgba(168, 65, 42, 0.13);
-  --env-staging: #8a5b12;
-  --env-staging-soft: rgba(138, 91, 18, 0.13);
-  --env-development: #2a6592;
-  --env-development-soft: rgba(42, 101, 146, 0.13);
-  --env-unassigned: #61503f;
-  --env-unassigned-soft: rgba(97, 80, 63, 0.11);
+  --env-production: #c2410c;
+  --env-production-soft: rgba(194, 65, 12, 0.12);
+  --env-staging: #b45309;
+  --env-staging-soft: rgba(180, 83, 9, 0.12);
+  --env-development: #0369a1;
+  --env-development-soft: rgba(3, 105, 161, 0.12);
+  --env-unassigned: #5c4a3b;
+  --env-unassigned-soft: rgba(92, 74, 59, 0.1);
 
-  --focus: #9c4f1f;
+  --focus: #c2410c;
 
-  --shadow-1: 0 1px 2px rgba(84, 58, 34, 0.12);
-  --shadow-2: 0 14px 36px rgba(84, 58, 34, 0.16);
-  --shadow-3: 0 28px 72px rgba(84, 58, 34, 0.2);
+  --shadow-1: 0 1px 2px rgba(67, 40, 18, 0.08);
+  --shadow-2: 0 14px 36px rgba(67, 40, 18, 0.12);
+  --shadow-3: 0 28px 72px rgba(67, 40, 18, 0.16);
 
   --glass-sheen: linear-gradient(
     140deg,
@@ -353,25 +427,20 @@
   );
 
   --app-gradient:
-    radial-gradient(120% 90% at 0% -10%, rgba(230, 170, 105, 0.3), transparent 58%),
-    radial-gradient(100% 80% at 100% 5%, rgba(215, 140, 105, 0.22), transparent 55%),
-    radial-gradient(90% 90% at 70% 110%, rgba(180, 160, 110, 0.2), transparent 60%);
+    radial-gradient(120% 90% at 0% -10%, rgba(249, 115, 22, 0.18), transparent 58%),
+    radial-gradient(100% 80% at 100% 5%, rgba(234, 88, 12, 0.14), transparent 55%);
 }
 
-/*
- * High contrast: flat, opaque and hard-edged on purpose. Translucency and
- * gradients are exactly what makes an interface hard to read for the people
- * who choose this theme, so the glass layer is switched off here.
- */
+/* ------------------------------------ 7. 極限高對比 (Matrix High Contrast) */
 :root[data-theme="contrast"] {
   color-scheme: dark;
 
-  --accent: #6dffc0;
-  --accent-hover: #96ffd4;
-  --accent-press: #45e5a3;
+  --accent: #fbbf24;
+  --accent-hover: #fde047;
+  --accent-press: #f59e0b;
   --accent-ink: #000000;
-  --accent-soft: rgba(109, 255, 192, 0.22);
-  --accent-line: #6dffc0;
+  --accent-soft: rgba(251, 191, 36, 0.22);
+  --accent-line: #fbbf24;
   --accent-glow: transparent;
 
   --canvas: #000000;
@@ -382,7 +451,7 @@
   --surface-overlay: #101010;
   --surface-hover: rgba(255, 255, 255, 0.14);
   --surface-active: rgba(255, 255, 255, 0.22);
-  --surface-selected: rgba(109, 255, 192, 0.24);
+  --surface-selected: rgba(251, 191, 36, 0.24);
 
   --line: rgba(255, 255, 255, 0.55);
   --line-strong: #ffffff;
@@ -392,28 +461,28 @@
   --text-faint: #c8c8c8;
   --text-on-accent: #000000;
 
-  --ok: #6dffc0;
-  --ok-soft: rgba(109, 255, 192, 0.22);
-  --info: #8fd0ff;
-  --info-soft: rgba(143, 208, 255, 0.22);
-  --warn: #ffd166;
-  --warn-soft: rgba(255, 209, 102, 0.22);
-  --danger: #ff9aa2;
-  --danger-soft: rgba(255, 154, 162, 0.24);
-  --danger-line: #ff9aa2;
-  --planned: #d7b9ff;
-  --planned-soft: rgba(215, 185, 255, 0.24);
+  --ok: #4ade80;
+  --ok-soft: rgba(74, 222, 128, 0.22);
+  --info: #60a5fa;
+  --info-soft: rgba(96, 165, 250, 0.22);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.22);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.24);
+  --danger-line: #f87171;
+  --planned: #c084fc;
+  --planned-soft: rgba(192, 132, 252, 0.24);
 
-  --env-production: #ffb08f;
-  --env-production-soft: rgba(255, 176, 143, 0.24);
-  --env-staging: #ffd166;
-  --env-staging-soft: rgba(255, 209, 102, 0.24);
-  --env-development: #8fd0ff;
-  --env-development-soft: rgba(143, 208, 255, 0.24);
+  --env-production: #fb923c;
+  --env-production-soft: rgba(251, 146, 60, 0.24);
+  --env-staging: #fbbf24;
+  --env-staging-soft: rgba(251, 191, 36, 0.24);
+  --env-development: #60a5fa;
+  --env-development-soft: rgba(96, 165, 250, 0.24);
   --env-unassigned: #e4e4e4;
   --env-unassigned-soft: rgba(228, 228, 228, 0.2);
 
-  --focus: #ffe14d;
+  --focus: #fde047;
 
   --shadow-1: none;
   --shadow-2: 0 0 0 1px #ffffff;
