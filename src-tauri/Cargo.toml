@@ -32,3 +32,5 @@ tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 lattice-remote = { path = "../crates/lattice-remote" }
+keyring = "4.1.6"
+zeroize = "1.9.0"

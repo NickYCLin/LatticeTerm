@@ -1,15 +1,19 @@
 /**
  * Key Vault view.
  *
- * Host trust is real and backed by the Rust core. Credential storage remains a
- * separate roadmap item and is presented honestly without sample secrets or a
- * fake lock state.
+ * Host trust and credential references are backed by the Rust core. The view
+ * can verify and delete OS-store entries, but it never requests secret values.
  */
 
 import { useId, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useHostTrust } from "../app/useHostTrust";
+import {
+  useCredentialInventory,
+  type CredentialInventoryEntry,
+} from "../app/useSavedCredential";
 import type { WorkspaceState } from "../app/useWorkspace";
+import { connectionTarget, findProtocol } from "../domain/connection";
 import {
   hostTargetKey,
   isValidFingerprint,
@@ -23,7 +27,6 @@ import {
   CopyIcon,
   PlusIcon,
   RefreshIcon,
-  RoadmapIcon,
   ShieldIcon,
   TrashIcon,
 } from "../components/icons";
@@ -47,6 +50,7 @@ function reasonText(reason: unknown): string {
 export function VaultView({ workspace }: { workspace: WorkspaceState }) {
   const { t, tag } = useI18n();
   const trust = useHostTrust();
+  const credentials = useCredentialInventory(workspace.profiles);
   const formId = useId();
 
   const [activeTab, setActiveTab] = useState<"hosts" | "credentials">("hosts");
@@ -57,6 +61,9 @@ export function VaultView({ workspace }: { workspace: WorkspaceState }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [pendingCredentialRemove, setPendingCredentialRemove] =
+    useState<CredentialInventoryEntry | null>(null);
+  const [removingCredential, setRemovingCredential] = useState(false);
 
   const [newHost, setNewHost] = useState("");
   const [newPort, setNewPort] = useState("22");
@@ -210,6 +217,43 @@ export function VaultView({ workspace }: { workspace: WorkspaceState }) {
     }
   }
 
+  async function handleRemoveCredential() {
+    if (!pendingCredentialRemove || removingCredential) return;
+
+    setRemovingCredential(true);
+    setActionError(null);
+    const entry = pendingCredentialRemove;
+    const profile = workspace.profiles.find(
+      (candidate) => candidate.id === entry.profileId,
+    );
+
+    try {
+      await credentials.remove(entry);
+      if (profile) {
+        workspace.logActivity({
+          type: "deleted",
+          message: t("vault.credentials.activity.removed", {
+            name: profile.name,
+          }),
+          detail: connectionTarget(profile),
+        });
+      }
+      setPendingCredentialRemove(null);
+    } catch (reason) {
+      setActionError(
+        t("credential.removeFailed.body", { detail: reasonText(reason) }),
+      );
+    } finally {
+      setRemovingCredential(false);
+    }
+  }
+
+  const pendingCredentialProfile = pendingCredentialRemove
+    ? workspace.profiles.find(
+        (profile) => profile.id === pendingCredentialRemove.profileId,
+      )
+    : null;
+
   const status =
     trust.mode === "ready"
       ? { tone: "ok" as const, label: t("vault.status.ready") }
@@ -264,8 +308,12 @@ export function VaultView({ workspace }: { workspace: WorkspaceState }) {
             aria-selected={activeTab === "credentials"}
             onClick={() => setActiveTab("credentials")}
           >
-            {t("vault.tabs.credentials")}
-            <Chip tone="planned">{t("common.comingSoon")}</Chip>
+            {t("vault.tabs.credentials", {
+              count: credentials.state.entries.length,
+            })}
+            {credentials.state.mode === "ready" && (
+              <Chip tone="ok">{t("common.available")}</Chip>
+            )}
           </button>
         </div>
 
@@ -438,36 +486,113 @@ export function VaultView({ workspace }: { workspace: WorkspaceState }) {
 
       {activeTab === "credentials" && (
         <div className="stack">
-          <Callout tone="planned" title={t("vault.credentials.title")}>
-            {t("vault.credentials.body")}
-          </Callout>
-          <section className="panel glass">
-            <div className="planned-list">
-              {[
-                [
-                  t("vault.credentials.systemStore"),
-                  t("vault.credentials.systemStoreDetail"),
-                ],
-                [
-                  t("vault.credentials.stronghold"),
-                  t("vault.credentials.strongholdDetail"),
-                ],
-                [
-                  t("vault.credentials.autoLock"),
-                  t("vault.credentials.autoLockDetail"),
-                ],
-              ].map(([title, detail]) => (
-                <div className="planned-list__item" key={title}>
-                  <RoadmapIcon size={18} />
-                  <div className="planned-list__text">
-                    <strong>{title}</strong>
-                    <small>{detail}</small>
-                  </div>
-                  <Chip tone="planned">{t("common.comingSoon")}</Chip>
-                </div>
-              ))}
+          {credentials.state.mode === "loading" && (
+            <div className="panel glass">
+              <EmptyState
+                icon={<RefreshIcon size={24} />}
+                title={t("vault.credentials.loading.title")}
+                description={t("vault.credentials.loading.body")}
+              />
             </div>
-          </section>
+          )}
+
+          {credentials.state.mode === "unavailable" && (
+            <Callout
+              tone="warn"
+              title={t("credential.unavailable.title")}
+              actions={
+                <button
+                  type="button"
+                  className="button button--secondary button--sm"
+                  onClick={() => void credentials.refresh()}
+                >
+                  <RefreshIcon size={13} />
+                  {t("vault.retry")}
+                </button>
+              }
+            >
+              {t("credential.unavailable.body", {
+                detail: credentials.state.detail,
+              })}
+            </Callout>
+          )}
+
+          {credentials.state.mode === "ready" && (
+            <Callout
+              tone="security"
+              title={t("vault.credentials.ready.title", {
+                provider: credentials.state.provider,
+              })}
+            >
+              {t("vault.credentials.ready.body")}
+            </Callout>
+          )}
+
+          {credentials.state.mode === "ready" &&
+            credentials.state.entries.length === 0 && (
+              <div className="panel glass">
+                <EmptyState
+                  icon={<ShieldIcon size={24} />}
+                  title={t("vault.credentials.empty.title")}
+                  description={t("vault.credentials.empty.body")}
+                />
+              </div>
+            )}
+
+          {credentials.state.mode === "ready" &&
+            credentials.state.entries.length > 0 && (
+              <div className="vault-table-wrap glass">
+                <table className="vault-table">
+                  <thead>
+                    <tr>
+                      <th>{t("vault.credentials.table.connection")}</th>
+                      <th>{t("vault.credentials.table.protocol")}</th>
+                      <th>{t("vault.credentials.table.target")}</th>
+                      <th className="vault-table__actions">
+                        {t("vault.table.actions")}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {credentials.state.entries.map((entry) => {
+                      const profile = workspace.profiles.find(
+                        (candidate) => candidate.id === entry.profileId,
+                      );
+                      if (!profile) return null;
+                      return (
+                        <tr key={entry.profileId + ":" + entry.kind}>
+                          <td>{profile.name}</td>
+                          <td>
+                            <Chip tone="neutral">
+                              {findProtocol(profile.protocol).acronym}
+                            </Chip>
+                          </td>
+                          <td>
+                            <span className="mono vault-target">
+                              {connectionTarget(profile)}
+                            </span>
+                          </td>
+                          <td className="vault-table__actions">
+                            <button
+                              type="button"
+                              className="icon-button icon-button--danger"
+                              onClick={() => setPendingCredentialRemove(entry)}
+                              title={t("credential.remove")}
+                              aria-label={t(
+                                "vault.credentials.removeFor",
+                                { name: profile.name },
+                              )}
+                            >
+                              <TrashIcon size={13} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
         </div>
       )}
 
@@ -610,6 +735,27 @@ export function VaultView({ workspace }: { workspace: WorkspaceState }) {
             </form>
           </div>
         </div>
+      )}
+
+      {pendingCredentialRemove && pendingCredentialProfile && (
+        <ConfirmDialog
+          title={t("vault.credentials.remove.title", {
+            name: pendingCredentialProfile.name,
+          })}
+          body={t("vault.credentials.remove.body", {
+            target: connectionTarget(pendingCredentialProfile),
+          })}
+          confirmLabel={
+            removingCredential
+              ? t("credential.removing")
+              : t("credential.remove")
+          }
+          cancelLabel={t("common.cancel")}
+          onConfirm={() => void handleRemoveCredential()}
+          onCancel={() => {
+            if (!removingCredential) setPendingCredentialRemove(null);
+          }}
+        />
       )}
 
       {pendingRemove && (

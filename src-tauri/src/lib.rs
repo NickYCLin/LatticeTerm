@@ -1,3 +1,4 @@
+pub mod credentials;
 pub mod domain;
 pub mod hostkeys;
 pub mod rdp;
@@ -6,7 +7,8 @@ pub mod remote_host;
 pub mod ssh;
 pub mod storage;
 
-use crate::domain::ConnectionProfile;
+use crate::credentials::{CredentialKind, CredentialStoreStatus};
+use crate::domain::{ConnectionProfile, Protocol};
 use crate::hostkeys::{HostKeyRecord, HostTrustStore};
 use crate::rdp::{
     RdpConnectOutcome, RdpConnectRequest, RdpInputRequest, RdpRegistry, RdpSessionSummary,
@@ -21,6 +23,7 @@ use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
+use zeroize::Zeroizing;
 
 type AppStorage = Mutex<FileStorage>;
 
@@ -41,6 +44,16 @@ fn now_seconds() -> u64 {
         .unwrap_or(0)
 }
 
+async fn credential_call<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("Credential operation did not complete: {error}"))?
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeSummary {
@@ -56,7 +69,7 @@ fn runtime_summary() -> RuntimeSummary {
         app_name: "LatticeTerm",
         version: env!("CARGO_PKG_VERSION"),
         supported_protocols: ["ssh", "rdp", "lattice"],
-        credential_storage_ready: false,
+        credential_storage_ready: crate::credentials::status().ready,
     }
 }
 
@@ -103,18 +116,93 @@ fn save_connection_profile(
 }
 
 #[tauri::command]
-fn delete_connection_profile(id: String, storage: State<'_, AppStorage>) -> Result<bool, String> {
+async fn delete_connection_profile(
+    id: String,
+    storage: State<'_, AppStorage>,
+) -> Result<bool, String> {
+    let credential_kind = {
+        let guard = storage.lock().map_err(|e| e.to_string())?;
+        guard
+            .get_profile(&id)
+            .map_err(|e| e.to_string())?
+            .and_then(|profile| match profile.protocol {
+                Protocol::Ssh => Some(CredentialKind::SshPassword),
+                Protocol::Rdp => Some(CredentialKind::RdpPassword),
+                _ => None,
+            })
+    };
+
+    if let Some(kind) = credential_kind {
+        let credential_profile_id = id.clone();
+        if credential_call(move || crate::credentials::exists(&credential_profile_id, kind)).await?
+        {
+            return Err(
+                "Delete the saved password from the Key Vault before deleting this connection."
+                    .to_string(),
+            );
+        }
+    }
+
     let mut guard = storage.lock().map_err(|e| e.to_string())?;
     guard.delete_profile(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+fn credential_status() -> CredentialStoreStatus {
+    crate::credentials::status()
+}
+
+#[tauri::command]
+async fn credential_exists(profile_id: String, kind: CredentialKind) -> Result<bool, String> {
+    credential_call(move || crate::credentials::exists(&profile_id, kind)).await
+}
+
+#[tauri::command]
+async fn credential_delete(profile_id: String, kind: CredentialKind) -> Result<bool, String> {
+    credential_call(move || crate::credentials::delete(&profile_id, kind)).await
+}
+
+#[tauri::command]
 async fn ssh_connect(
     app: AppHandle,
-    request: ConnectRequest,
+    mut request: ConnectRequest,
     trust: State<'_, TrustState>,
     registry: State<'_, Arc<SshRegistry>>,
 ) -> Result<ConnectOutcome, String> {
+    if request.use_saved_password && request.remember_password {
+        return Ok(ConnectOutcome::Failed {
+            stage: "credential",
+            detail: "Choose either the saved password or a new password to remember.".to_string(),
+        });
+    }
+
+    if request.use_saved_password {
+        let profile_id = request.profile_id.clone();
+        let password = match credential_call(move || {
+            crate::credentials::load(&profile_id, CredentialKind::SshPassword)
+        })
+        .await
+        {
+            Ok(password) => password,
+            Err(detail) => {
+                return Ok(ConnectOutcome::Failed {
+                    stage: "credential",
+                    detail,
+                })
+            }
+        };
+        request.auth = crate::ssh::AuthMethod::Password { password };
+    }
+
+    let profile_id = request.profile_id.clone();
+    let password_to_store = if request.remember_password {
+        match &request.auth {
+            crate::ssh::AuthMethod::Password { password } => Some(Zeroizing::new(password.clone())),
+        }
+    } else {
+        None
+    };
+
     // The trust lookup happens up front, so the store's lock is never held
     // across the connection attempt.
     let known: Option<HostKeyRecord> = match trust.inner() {
@@ -130,13 +218,31 @@ async fn ssh_connect(
         }
     };
 
-    Ok(crate::ssh::connect(
+    let outcome = crate::ssh::connect(
         Arc::new(EventSink(app)),
         Arc::clone(registry.inner()),
         known,
         request,
     )
-    .await)
+    .await;
+
+    if let (ConnectOutcome::Connected { session_id }, Some(password)) =
+        (&outcome, password_to_store)
+    {
+        let save_result = credential_call(move || {
+            crate::credentials::store(&profile_id, CredentialKind::SshPassword, password.as_str())
+        })
+        .await;
+        if let Err(detail) = save_result {
+            let _ = crate::ssh::disconnect(registry.inner(), session_id).await;
+            return Ok(ConnectOutcome::Failed {
+                stage: "credential",
+                detail,
+            });
+        }
+    }
+
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -221,10 +327,56 @@ fn remote_host_status(
 #[tauri::command]
 async fn rdp_connect(
     app: AppHandle,
-    request: RdpConnectRequest,
+    mut request: RdpConnectRequest,
     registry: State<'_, Arc<RdpRegistry>>,
 ) -> Result<RdpConnectOutcome, String> {
-    Ok(crate::rdp::connect(app, Arc::clone(registry.inner()), request).await)
+    if request.use_saved_password && request.remember_password {
+        return Ok(RdpConnectOutcome::Failed {
+            stage: "credential",
+            detail: "Choose either the saved password or a new password to remember.".to_string(),
+        });
+    }
+
+    if request.use_saved_password {
+        let profile_id = request.profile_id.clone();
+        request.password = match credential_call(move || {
+            crate::credentials::load(&profile_id, CredentialKind::RdpPassword)
+        })
+        .await
+        {
+            Ok(password) => password,
+            Err(detail) => {
+                return Ok(RdpConnectOutcome::Failed {
+                    stage: "credential",
+                    detail,
+                })
+            }
+        };
+    }
+
+    let profile_id = request.profile_id.clone();
+    let password_to_store = request
+        .remember_password
+        .then(|| Zeroizing::new(request.password.clone()));
+    let outcome = crate::rdp::connect(app.clone(), Arc::clone(registry.inner()), request).await;
+
+    if let (RdpConnectOutcome::Connected { session }, Some(password)) =
+        (&outcome, password_to_store)
+    {
+        let save_result = credential_call(move || {
+            crate::credentials::store(&profile_id, CredentialKind::RdpPassword, password.as_str())
+        })
+        .await;
+        if let Err(detail) = save_result {
+            let _ = crate::rdp::disconnect(&app, registry.inner(), &session.session_id).await;
+            return Ok(RdpConnectOutcome::Failed {
+                stage: "credential",
+                detail,
+            });
+        }
+    }
+
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -321,6 +473,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             runtime_summary,
+            credential_status,
+            credential_exists,
+            credential_delete,
             storage_status,
             list_connection_profiles,
             save_connection_profile,
@@ -358,12 +513,15 @@ mod tests {
     use crate::storage::{InMemoryStorage, Storage};
 
     #[test]
-    fn runtime_summary_does_not_claim_secure_storage_is_ready() {
+    fn runtime_summary_reports_the_real_secure_storage_status() {
         let summary = runtime_summary();
 
         assert_eq!(summary.app_name, "LatticeTerm");
         assert_eq!(summary.supported_protocols, ["ssh", "rdp", "lattice"]);
-        assert!(!summary.credential_storage_ready);
+        assert_eq!(
+            summary.credential_storage_ready,
+            crate::credentials::status().ready
+        );
     }
 
     #[test]

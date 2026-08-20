@@ -42,10 +42,6 @@ const plannedSecurity: { titleKey: MessageKey; detailKey: MessageKey }[] = [
     detailKey: "settings.security.autoLockDetail",
   },
   {
-    titleKey: "settings.security.hostKey",
-    detailKey: "settings.security.hostKeyDetail",
-  },
-  {
     titleKey: "settings.security.clipboard",
     detailKey: "settings.security.clipboardDetail",
   },

@@ -21,8 +21,9 @@ import type { MessageKey } from "../../i18n";
 import { Callout } from "../common/Callout";
 import { HostFingerprintDialog } from "../overlays/HostFingerprintDialog";
 import { HostKeyChangedDialog } from "../overlays/HostKeyChangedDialog";
-import { CloseIcon, TerminalIcon } from "../icons";
+import { CheckIcon, CloseIcon, ShieldIcon, TerminalIcon, TrashIcon } from "../icons";
 import type { HostFingerprint } from "../../domain/security";
+import { useSavedCredential } from "../../app/useSavedCredential";
 
 /**
  * The dialogs describe a stored vault entry, while a live connection only has
@@ -62,6 +63,7 @@ function stageKey(stage: string): MessageKey {
     "shell",
     "trust",
     "invoke",
+    "credential",
   ];
   return (
     known.includes(stage) ? `connect.stage.${stage}` : "connect.stage.connect"
@@ -81,15 +83,27 @@ export function ConnectFlow({
 }) {
   const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>({ step: "password" });
+  const savedCredential = useSavedCredential(profile.id, "sshPassword");
   const [password, setPassword] = useState("");
+  const [useSavedPassword, setUseSavedPassword] = useState(false);
+  const [rememberPassword, setRememberPassword] = useState(false);
+  const [removingCredential, setRemovingCredential] = useState(false);
   const [problem, setProblem] = useState<{ title: string; body: string } | null>(
     null,
   );
   const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    passwordRef.current?.focus();
-  }, [phase.step]);
+    if (savedCredential.state.mode === "saved") {
+      setUseSavedPassword(true);
+    } else if (savedCredential.state.mode !== "loading") {
+      setUseSavedPassword(false);
+    }
+  }, [savedCredential.state.mode]);
+
+  useEffect(() => {
+    if (!useSavedPassword) passwordRef.current?.focus();
+  }, [phase.step, useSavedPassword]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -111,7 +125,9 @@ export function ConnectFlow({
       hostname: profile.hostname,
       port: profile.port,
       username: profile.username,
-      auth: { kind: "password", password: secret },
+      auth: { kind: "password", password: useSavedPassword ? "" : secret },
+      useSavedPassword,
+      rememberPassword: !useSavedPassword && rememberPassword,
       // A sensible starting size; the pane corrects it the moment it mounts.
       cols: 80,
       rows: 24,
@@ -131,6 +147,7 @@ export function ConnectFlow({
         return;
       case "authFailed":
         setPhase({ step: "password" });
+        if (useSavedPassword) setUseSavedPassword(false);
         setProblem({
           title: t("connect.failed.title"),
           body: t("connect.authFailed"),
@@ -145,6 +162,22 @@ export function ConnectFlow({
             detail: outcome.detail,
           }),
         });
+    }
+  }
+
+  async function removeSavedCredential() {
+    setRemovingCredential(true);
+    setProblem(null);
+    try {
+      await savedCredential.remove();
+      setUseSavedPassword(false);
+    } catch (reason) {
+      setProblem({
+        title: t("credential.removeFailed.title"),
+        body: reason instanceof Error ? reason.message : String(reason),
+      });
+    } finally {
+      setRemovingCredential(false);
     }
   }
 
@@ -249,23 +282,87 @@ export function ConnectFlow({
             </Callout>
           )}
 
-          <div className="field">
-            <label className="field__label" htmlFor="connect-password">
-              {t("connect.password")}
+          {savedCredential.state.mode === "saved" && (
+            <Callout tone="security" title={t("credential.saved.title")}>
+              <div className="credential-choice">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={useSavedPassword}
+                    disabled={busy || removingCredential}
+                    onChange={(event) =>
+                      setUseSavedPassword(event.currentTarget.checked)
+                    }
+                  />
+                  <span className="checkbox__box" aria-hidden="true">
+                    <CheckIcon size={11} />
+                  </span>
+                  {t("credential.useSaved", {
+                    provider: savedCredential.state.provider,
+                  })}
+                </label>
+                <button
+                  type="button"
+                  className="button button--ghost button--sm"
+                  disabled={busy || removingCredential}
+                  onClick={() => void removeSavedCredential()}
+                >
+                  <TrashIcon size={13} />
+                  {removingCredential
+                    ? t("credential.removing")
+                    : t("credential.remove")}
+                </button>
+              </div>
+            </Callout>
+          )}
+
+          {savedCredential.state.mode === "unavailable" && (
+            <Callout tone="warn" title={t("credential.unavailable.title")}>
+              {t("credential.unavailable.body", {
+                detail: savedCredential.state.detail,
+              })}
+            </Callout>
+          )}
+
+          {!useSavedPassword && (
+            <div className="field">
+              <label className="field__label" htmlFor="connect-password">
+                {t("connect.password")}
+              </label>
+              <input
+                id="connect-password"
+                ref={passwordRef}
+                className="input"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.currentTarget.value)}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={busy}
+              />
+              <p className="field__optional">{t("connect.passwordHint")}</p>
+            </div>
+          )}
+
+          {!useSavedPassword && savedCredential.state.mode === "missing" && (
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={rememberPassword}
+                disabled={busy || password.length === 0}
+                onChange={(event) =>
+                  setRememberPassword(event.currentTarget.checked)
+                }
+              />
+              <span className="checkbox__box" aria-hidden="true">
+                <CheckIcon size={11} />
+              </span>
+              <ShieldIcon size={13} />
+              {t("credential.remember", {
+                provider: savedCredential.state.provider,
+              })}
             </label>
-            <input
-              id="connect-password"
-              ref={passwordRef}
-              className="input"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.currentTarget.value)}
-              autoComplete="off"
-              spellCheck={false}
-              disabled={busy}
-            />
-            <p className="field__optional">{t("connect.passwordHint")}</p>
-          </div>
+          )}
 
           <div className="dialog__actions">
             <button

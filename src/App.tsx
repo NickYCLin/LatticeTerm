@@ -22,6 +22,7 @@ import { useRemoteHost } from "./app/useRemoteHost";
 import { useRdpSessions } from "./app/useRdpSessions";
 import { useWindowTheme } from "./app/useWindowTheme";
 import { useWorkspace } from "./app/useWorkspace";
+import { useCredentialDeleteGuard } from "./app/useSavedCredential";
 import type { ConnectionDraft, ConnectionProfile } from "./domain/connection";
 import { I18nProvider, localeCatalog, useI18n } from "./i18n";
 import { NavRail } from "./components/shell/NavRail";
@@ -90,6 +91,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     profileId: string | null;
   }>({ open: false, profileId: null });
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [profileDeleteError, setProfileDeleteError] = useState<string | null>(
+    null,
+  );
   const [connectTarget, setConnectTarget] = useState<ConnectionProfile | null>(
     null,
   );
@@ -124,6 +128,12 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     () => profiles.find((entry) => entry.id === pendingDelete) ?? null,
     [profiles, pendingDelete],
   );
+  const deleteGuard = useCredentialDeleteGuard(deleting);
+
+  const requestDelete = useCallback((id: string) => {
+    setProfileDeleteError(null);
+    setPendingDelete(id);
+  }, []);
 
   const openCreate = useCallback(() => {
     setView("connections");
@@ -359,7 +369,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 workspace={workspace}
                 onCreate={openCreate}
                 onEdit={openEdit}
-                onDelete={setPendingDelete}
+                onDelete={requestDelete}
                 onConnect={setConnectTarget}
               />
             )}
@@ -392,7 +402,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
               onClose={() => setSelectedId(null)}
               onEdit={() => openEdit(selected.id)}
               onDuplicate={() => duplicateProfile(selected.id)}
-              onDelete={() => setPendingDelete(selected.id)}
+              onDelete={() => requestDelete(selected.id)}
             />
           )}
         </div>
@@ -419,15 +429,65 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
 
       {deleting && (
         <ConfirmDialog
-          title={t("confirm.delete.title", { name: deleting.name })}
-          body={t("confirm.delete.body", { host: deleting.hostname })}
-          confirmLabel={t("confirm.delete.confirm", { name: deleting.name })}
+          title={
+            deleteGuard.mode === "saved"
+              ? t("confirm.delete.credential.title", { name: deleting.name })
+              : deleteGuard.mode === "unavailable" || profileDeleteError
+                ? t("confirm.delete.credential.unavailable.title")
+                : t("confirm.delete.title", { name: deleting.name })
+          }
+          body={
+            deleteGuard.mode === "saved"
+              ? t("confirm.delete.credential.body", {
+                  provider: deleteGuard.provider,
+                })
+              : deleteGuard.mode === "unavailable" || profileDeleteError
+                ? t("confirm.delete.credential.unavailable.body", {
+                    detail:
+                      profileDeleteError ??
+                      (deleteGuard.mode === "unavailable"
+                        ? deleteGuard.detail
+                        : ""),
+                  })
+                : deleteGuard.mode === "loading"
+                  ? t("confirm.delete.credential.loading")
+                  : t("confirm.delete.body", { host: deleting.hostname })
+          }
+          confirmLabel={
+            deleteGuard.mode === "saved"
+              ? t("confirm.delete.credential.openVault")
+              : deleteGuard.mode === "loading"
+                ? t("confirm.delete.credential.checking")
+                : deleteGuard.mode === "unavailable" || profileDeleteError
+                  ? t("confirm.delete.credential.blocked")
+                  : t("confirm.delete.confirm", { name: deleting.name })
+          }
+          confirmDisabled={
+            deleteGuard.mode === "loading" ||
+            deleteGuard.mode === "unavailable" ||
+            profileDeleteError !== null
+          }
+          tone={deleteGuard.mode === "saved" ? "default" : "danger"}
           cancelLabel={t("common.cancel")}
           onConfirm={() => {
-            removeProfile(deleting.id);
+            if (deleteGuard.mode === "saved") {
+              setView("vault");
+              setProfileDeleteError(null);
+              setPendingDelete(null);
+              return;
+            }
+            void removeProfile(deleting.id)
+              .then(() => setPendingDelete(null))
+              .catch((reason: unknown) => {
+                setProfileDeleteError(
+                  reason instanceof Error ? reason.message : String(reason),
+                );
+              });
+          }}
+          onCancel={() => {
+            setProfileDeleteError(null);
             setPendingDelete(null);
           }}
-          onCancel={() => setPendingDelete(null)}
         />
       )}
 

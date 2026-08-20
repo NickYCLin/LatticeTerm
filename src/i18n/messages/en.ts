@@ -31,6 +31,18 @@ export const en: Messages = {
   "common.copied": "Copied",
   "common.detecting": "Detecting…",
 
+  // System credential storage --------------------------------------------
+  "credential.saved.title": "Password stored securely",
+  "credential.useSaved": "Use the password saved in {provider}",
+  "credential.remember": "Save to {provider} after successful authentication",
+  "credential.remove": "Delete saved password",
+  "credential.removing": "Deleting…",
+  "credential.removeFailed.title": "Could not delete the saved password",
+  "credential.removeFailed.body": "The system credential store refused the deletion: {detail}",
+  "credential.unavailable.title": "System credential storage is unavailable",
+  "credential.unavailable.body":
+    "You can still enter a password for this attempt, but it will not be saved. Reason: {detail}",
+
   // Navigation ------------------------------------------------------------
   "nav.connections": "Connections",
   "nav.connections.desc": "Find, organise and edit remote hosts",
@@ -56,7 +68,7 @@ export const en: Messages = {
   "connections.sort.environment": "Environment",
   "connections.empty.title": "No connections yet",
   "connections.empty.body":
-    "Add the hosts you want to reach and they will be one click away. LatticeTerm only keeps host details — it never asks for a password or a key.",
+    "Add the hosts you want to reach and they will be one click away. Passwords are requested only when connecting and can be saved in the operating system secure store.",
   "connections.empty.footnote":
     "Samples use documentation-only names and addresses, not real hosts.",
   "connections.noResults.title": "No connections match",
@@ -112,9 +124,9 @@ export const en: Messages = {
   "form.favorite": "Add to favorites",
   "form.organiseHint":
     "Environment and group drive the ordering, and make production hosts obvious at a glance.",
-  "form.auth.title": "No password is requested here",
+  "form.auth.title": "Passwords are never written into connection profiles",
   "form.auth.body":
-    "Credentials belong in the operating system's secure store, which is not built yet — so this form has no password, key or passphrase field at all.",
+    "After saving the host, enter its password when connecting and optionally store it in Windows Credential Manager, macOS Keychain, or Linux Secret Service.",
   "form.review.unnamed": "Unnamed connection",
   "form.review.noHost": "No host entered yet",
   "form.duplicate.title": "Another connection uses the same target",
@@ -158,6 +170,19 @@ export const en: Messages = {
   "confirm.delete.body":
     "This removes the entry for {host} from this workspace. The remote machine is not touched.",
   "confirm.delete.confirm": "Delete {name}",
+  "confirm.delete.credential.title":
+    "Delete the saved password for {name} first",
+  "confirm.delete.credential.body":
+    "This connection still has a password in {provider}. Open the Key Vault and explicitly delete it first so no unmanaged credential is left behind.",
+  "confirm.delete.credential.loading":
+    "Checking whether this connection has a saved password…",
+  "confirm.delete.credential.openVault": "Open Key Vault",
+  "confirm.delete.credential.checking": "Checking…",
+  "confirm.delete.credential.unavailable.title":
+    "This connection cannot be deleted safely right now",
+  "confirm.delete.credential.unavailable.body":
+    "LatticeTerm could not verify whether the system credential store still contains a password: {detail}",
+  "confirm.delete.credential.blocked": "Deletion unavailable",
 
   // Inspector -------------------------------------------------------------
   "inspector.tab.info": "Details",
@@ -242,10 +267,10 @@ export const en: Messages = {
   "settings.motion.reduced": "Reduce motion",
   "settings.security": "Security",
   "settings.securityHint":
-    "Strict host-key verification is active. Credential storage, auto-lock, and encrypted backup are still in development.",
-  "settings.security.title": "Credentials are never persisted",
+    "Strict host-key verification and system credential storage are active. Auto-lock, clipboard clearing, and encrypted backup are still in development.",
+  "settings.security.title": "Host trust and system credential storage are active",
   "settings.security.body":
-    "An SSH password lives only for the active connection. Persistent local data contains connection settings, appearance preferences, and public host fingerprints only.",
+    "SSH and RDP passwords default to one connection attempt. When explicitly selected, only a successfully verified password is saved by the operating system; connection profiles remain secret-free.",
   "settings.security.autoLock": "Auto-lock the vault",
   "settings.security.autoLockDetail":
     "Lock after a period of inactivity, and when the app loses focus.",
@@ -267,7 +292,7 @@ export const en: Messages = {
   "settings.about.runtime.browser": "Browser preview (no desktop backend)",
   "settings.about.credentialStore": "Credential store",
   "settings.about.credentialStore.ready": "Available",
-  "settings.about.credentialStore.pending": "Not built yet",
+  "settings.about.credentialStore.pending": "Currently unavailable",
   "settings.about.license": "Licence",
   "settings.updater": "Software Updates",
   "settings.updaterHint": "Check for updates from GitHub Releases and update directly in-app without reinstalling.",
@@ -403,6 +428,7 @@ export const en: Messages = {
   "connect.stage.shell": "starting the shell",
   "connect.stage.trust": "reading trusted host keys",
   "connect.stage.invoke": "calling the backend",
+  "connect.stage.credential": "System credential storage",
   "connect.trusted": "Key remembered. Reconnecting…",
 
   // Terminal --------------------------------------------------------------
@@ -509,7 +535,7 @@ export const en: Messages = {
   "vault.status.browser": "Desktop required",
   "vault.status.error": "Unavailable",
   "vault.summary.ready":
-    "{count} public host fingerprints loaded from the local security boundary. Credential storage is still in development.",
+    "{count} public host fingerprints loaded from the local security boundary. Passwords are isolated in the operating system credential store.",
   "vault.summary.loading": "Reading real host-trust data from the desktop core.",
   "vault.summary.browser":
     "The browser preview has no desktop security store, so it does not display or invent trust data.",
@@ -517,7 +543,7 @@ export const en: Messages = {
     "Trust data could not be read safely. SSH connections remain blocked as well.",
   "vault.tabs.label": "Key Vault sections",
   "vault.tabs.hosts": "Trusted hosts ({count})",
-  "vault.tabs.credentials": "Credentials",
+  "vault.tabs.credentials": "Credentials ({count})",
   "vault.searchPlaceholder": "Search hosts, algorithms or fingerprints",
   "vault.add": "Add host fingerprint",
   "vault.loading.title": "Loading trusted hosts",
@@ -571,13 +597,30 @@ export const en: Messages = {
     "This does not end an open session, but the next connection will require a fresh fingerprint comparison.",
   "vault.remove.confirm": "Remove host trust",
   "vault.removing": "Removing…",
-  "vault.actionFailed.title": "Trusted-host data was not changed",
+  "vault.actionFailed.title": "Security data was not changed",
   "vault.actionFailed.body": "The desktop core refused the operation: {error}",
   "vault.activity.added": "Trusted host added for {target}",
   "vault.activity.removed": "Trusted host removed for {target}",
-  "vault.credentials.title": "Credential storage is still in development",
+  "vault.credentials.title": "System credential storage is active",
   "vault.credentials.body":
-    "SSH passwords currently live only for the active connection and are never saved. This tab does not use sample keys or a fake unlocked state to impersonate a finished vault.",
+    "This tab lists which connections have a securely stored password without reading or displaying the password. SSH private keys and a Stronghold vault remain future work.",
+  "vault.credentials.loading.title": "Reading the system credential store",
+  "vault.credentials.loading.body":
+    "Only connection-to-entry associations are checked; passwords are never loaded into the view.",
+  "vault.credentials.ready.title": "{provider} connected",
+  "vault.credentials.ready.body":
+    "Only the Rust connection core can request a saved password when needed; the WebView never receives its plaintext.",
+  "vault.credentials.empty.title": "No passwords have been saved",
+  "vault.credentials.empty.body":
+    "Choose save when opening an SSH or RDP connection. The password is written only after authentication succeeds.",
+  "vault.credentials.table.connection": "Connection",
+  "vault.credentials.table.protocol": "Protocol",
+  "vault.credentials.table.target": "Target",
+  "vault.credentials.removeFor": "Delete the saved password for {name}",
+  "vault.credentials.remove.title": "Delete the saved password for {name}?",
+  "vault.credentials.remove.body":
+    "This does not affect the current session. You must enter the password again next time you connect to {target}.",
+  "vault.credentials.activity.removed": "Secure credential removed for {name}",
   "vault.credentials.systemStore": "Operating-system credential store",
   "vault.credentials.systemStoreDetail":
     "Wrap the master key with Windows Credential Manager, macOS Keychain, or Linux Secret Service.",

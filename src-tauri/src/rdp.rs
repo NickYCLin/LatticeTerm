@@ -28,6 +28,10 @@ pub struct RdpConnectRequest {
     pub username: String,
     /// One-time secret sent to the engine over stdin.
     pub password: String,
+    #[serde(default)]
+    pub use_saved_password: bool,
+    #[serde(default)]
+    pub remember_password: bool,
     pub domain: Option<String>,
     pub width: u16,
     pub height: u16,

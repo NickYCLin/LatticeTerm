@@ -15,6 +15,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel = "Cancel",
   tone = "danger",
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: {
@@ -23,6 +24,7 @@ export function ConfirmDialog({
   confirmLabel: string;
   cancelLabel?: string;
   tone?: "danger" | "default";
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -70,6 +72,7 @@ export function ConfirmDialog({
             type="button"
             ref={confirmRef}
             className={`button ${tone === "danger" ? "button--danger" : "button--primary"}`}
+            disabled={confirmDisabled}
             onClick={onConfirm}
           >
             {confirmLabel}
