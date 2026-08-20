@@ -1,0 +1,186 @@
+/*
+ * LatticeTerm design tokens.
+ *
+ * Dark-first, per the UI/UX brief. Every surface, text and semantic colour is
+ * declared once here so a future light theme, high-contrast theme or product
+ * re-skin never needs to touch component styles.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Brand ---------------------------------------------------------------- */
+  --accent: #6ee0b8;
+  --accent-hover: #8bebc9;
+  --accent-press: #57c9a1;
+  --accent-ink: #04231a;
+  --accent-soft: rgba(110, 224, 184, 0.12);
+  --accent-line: rgba(110, 224, 184, 0.36);
+
+  /* Surfaces ------------------------------------------------------------- */
+  --canvas: #0a0e11;
+  --canvas-deep: #06090b;
+  --surface: #11171c;
+  --surface-raised: #171f25;
+  --surface-overlay: #1b242b;
+  --surface-hover: rgba(197, 220, 232, 0.05);
+  --surface-active: rgba(197, 220, 232, 0.09);
+  --surface-selected: rgba(110, 224, 184, 0.1);
+
+  /* Lines ---------------------------------------------------------------- */
+  --line: rgba(154, 182, 197, 0.14);
+  --line-strong: rgba(154, 182, 197, 0.26);
+
+  /* Text ----------------------------------------------------------------- */
+  --text: #e7eef2;
+  --text-muted: #9dadb7;
+  --text-faint: #7d8b95;
+  --text-on-accent: var(--accent-ink);
+
+  /* Semantic ------------------------------------------------------------- */
+  --ok: #5ad3a6;
+  --ok-soft: rgba(90, 211, 166, 0.14);
+  --info: #6cb8f2;
+  --info-soft: rgba(108, 184, 242, 0.14);
+  --warn: #eeb45f;
+  --warn-soft: rgba(238, 180, 95, 0.14);
+  --danger: #ff8080;
+  --danger-soft: rgba(255, 128, 128, 0.14);
+  --danger-line: rgba(255, 128, 128, 0.4);
+  --planned: #a89cf0;
+  --planned-soft: rgba(168, 156, 240, 0.14);
+
+  /* Environment badges. Never the only signal: always paired with a label. */
+  --env-production: #ff9273;
+  --env-production-soft: rgba(255, 146, 115, 0.14);
+  --env-staging: #eeb45f;
+  --env-staging-soft: rgba(238, 180, 95, 0.14);
+  --env-development: #6cb8f2;
+  --env-development-soft: rgba(108, 184, 242, 0.14);
+  --env-unassigned: #9dadb7;
+  --env-unassigned-soft: rgba(157, 173, 183, 0.12);
+
+  /* Focus ---------------------------------------------------------------- */
+  --focus: #8fd4ff;
+  --focus-ring: 0 0 0 2px var(--canvas), 0 0 0 4px var(--focus);
+
+  /* Typography ----------------------------------------------------------- */
+  --font-ui:
+    "Inter var", Inter, ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI Variable Text", "Segoe UI", "Noto Sans TC",
+    "Microsoft JhengHei UI", sans-serif;
+  --font-mono:
+    ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Mono", Consolas,
+    "Liberation Mono", monospace;
+
+  --text-2xs: 0.6875rem; /* 11px - badges, meta */
+  --text-xs: 0.75rem; /* 12px - secondary */
+  --text-sm: 0.8125rem; /* 13px - UI base */
+  --text-md: 0.875rem; /* 14px - emphasised body */
+  --text-lg: 1rem; /* 16px - section titles */
+  --text-xl: 1.25rem; /* 20px - view titles */
+  --text-2xl: 1.5rem; /* 24px - display */
+
+  --leading-tight: 1.25;
+  --leading: 1.5;
+  --tracking-caps: 0.08em;
+
+  /* Space ---------------------------------------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.375rem;
+  --space-3: 0.5rem;
+  --space-4: 0.75rem;
+  --space-5: 1rem;
+  --space-6: 1.25rem;
+  --space-7: 1.5rem;
+  --space-8: 2rem;
+  --space-9: 2.5rem;
+
+  /* Radius --------------------------------------------------------------- */
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* Elevation ------------------------------------------------------------ */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.48);
+  --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.6);
+
+  /* Motion --------------------------------------------------------------- */
+  --duration-fast: 110ms;
+  --duration: 170ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.25, 1);
+
+  /* Frame ---------------------------------------------------------------- */
+  --rail-width: 3.5rem;
+  --sidebar-width: 17.5rem;
+  --inspector-width: 20rem;
+  --statusbar-height: 1.75rem;
+  --row-height: 3.25rem;
+  --control-height: 2rem;
+}
+
+/* Compact density keeps more hosts on screen for operators. */
+:root[data-density="compact"] {
+  --row-height: 2.5rem;
+  --control-height: 1.75rem;
+  --space-5: 0.875rem;
+  --space-6: 1rem;
+  --space-7: 1.25rem;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --accent: #0a7d5e;
+  --accent-hover: #086a50;
+  --accent-press: #075744;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(10, 125, 94, 0.1);
+  --accent-line: rgba(10, 125, 94, 0.34);
+
+  --canvas: #f3f6f7;
+  --canvas-deep: #e7ecee;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-overlay: #ffffff;
+  --surface-hover: rgba(16, 40, 52, 0.045);
+  --surface-active: rgba(16, 40, 52, 0.08);
+  --surface-selected: rgba(10, 125, 94, 0.1);
+
+  --line: rgba(16, 40, 52, 0.13);
+  --line-strong: rgba(16, 40, 52, 0.24);
+
+  --text: #0f1c22;
+  --text-muted: #4d6069;
+  --text-faint: #5d6f77;
+  --text-on-accent: #ffffff;
+
+  --ok: #0f8a63;
+  --ok-soft: rgba(15, 138, 99, 0.12);
+  --info: #1a6fb8;
+  --info-soft: rgba(26, 111, 184, 0.12);
+  --warn: #9a6812;
+  --warn-soft: rgba(154, 104, 18, 0.14);
+  --danger: #c33b3b;
+  --danger-soft: rgba(195, 59, 59, 0.12);
+  --danger-line: rgba(195, 59, 59, 0.4);
+  --planned: #5b4bc4;
+  --planned-soft: rgba(91, 75, 196, 0.12);
+
+  --env-production: #b84522;
+  --env-production-soft: rgba(184, 69, 34, 0.12);
+  --env-staging: #8a6112;
+  --env-staging-soft: rgba(138, 97, 18, 0.12);
+  --env-development: #1a6fb8;
+  --env-development-soft: rgba(26, 111, 184, 0.12);
+  --env-unassigned: #4d6069;
+  --env-unassigned-soft: rgba(77, 96, 105, 0.1);
+
+  --focus: #0a63a8;
+
+  --shadow-1: 0 1px 2px rgba(16, 40, 52, 0.12);
+  --shadow-2: 0 12px 32px rgba(16, 40, 52, 0.16);
+  --shadow-3: 0 24px 64px rgba(16, 40, 52, 0.2);
+}
