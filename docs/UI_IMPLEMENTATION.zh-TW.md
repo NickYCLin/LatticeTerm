@@ -1,7 +1,7 @@
 # LatticeTerm 介面實作說明
 
 文件版本：1.0  
-更新日期：2026-08-20  
+更新日期：2026-08-21<br>
 對應文件：[UI/UX 設計規格書](UI_UX_DESIGN_BRIEF.zh-TW.md)  
 
 本文件說明前端與桌面端元件的架構實作、狀態管理以及與設計規格書的對照。
@@ -22,6 +22,7 @@
 | **新增/編輯抽屜** | `ConnectionDrawer` | `src/components/overlays/ConnectionDrawer.tsx` | 抽屜式連線表單，支援即時驗證、Tab 焦點循環鎖定與重複目標提醒。 |
 | **命令面板** | `CommandPalette` | `src/components/overlays/CommandPalette.tsx` | `Ctrl` + `K` 全域命令面板，支援搜尋連線與執行全域快捷動作。 |
 | **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、SFTP 檔案、Lattice Remote 畫面與 Web RDP Canvas 分頁。 |
+| **AI Agent Fleet** | `AgentsView` | `src/views/AgentsView.tsx` | 本機多 CLI 啟動、Reporter 狀態、批次提示，以及可命名排序的安全啟動工作區。 |
 | **SFTP 檔案工作區** | `SftpPane` | `src/components/sftp/SftpPane.tsx` | 遠端路徑瀏覽、上下載、建立資料夾、改名與確認刪除。 |
 | **Web RDP Canvas** | `RdpPane` | `src/components/rdp/RdpPane.tsx` | Canvas 畫面、座標縮放、滑鼠、滾輪、掃描碼鍵盤與失焦釋放。 |
 | **金鑰保管庫** | VaultView | src/views/VaultView.tsx | 直接管理 Rust 核心的主機信任資料與系統認證參照；可檢查、重新整理及確認刪除已保存密碼，但不讀取密碼內容。 |
@@ -44,6 +45,8 @@
   - 整合 Profiles 集合、即時搜尋過濾、群組與標籤收集、CRUD 操作與批次匯入。
 - **Preferences Hook (`src/app/preferences.ts`)**：
   - 管理主題（深色/淺色/跟隨系統）、密度（舒適/緊湊）與動態偏好，並同步至 DOM 與 localStorage。
+- **Agent Sessions Hook (`src/app/useAgentSessions.ts`)**：
+  - 管理本機 PTY 工作階段、語意狀態事件、批次提示，以及安全啟動工作區的名稱、順序與 v2 儲存 command。
 
 ---
 

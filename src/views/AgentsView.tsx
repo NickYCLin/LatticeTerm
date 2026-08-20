@@ -8,12 +8,15 @@ import type {
 import {
   MAX_AGENT_BROADCAST_TARGETS,
   MAX_SAVED_AGENT_PLANS,
+  moveAgentLaunchPlan,
   splitAgentArguments,
 } from "../app/useAgentSessions";
 import { Callout } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import {
   AgentIcon,
+  ChevronDownIcon,
+  EditIcon,
   FolderIcon,
   MemoryIcon,
   PlayIcon,
@@ -61,11 +64,16 @@ export function AgentsView({
   const [customArguments, setCustomArguments] = useState("");
   const [saving, setSaving] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [editingWorkspaceName, setEditingWorkspaceName] = useState(false);
+  const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
+  const [savingWorkspaceName, setSavingWorkspaceName] = useState(false);
+  const [reorderingPlanId, setReorderingPlanId] = useState<string | null>(null);
   const [pendingRestore, setPendingRestore] = useState<string[] | null>(null);
   const [pendingDeletePlan, setPendingDeletePlan] =
     useState<AgentLaunchPlan | null>(null);
   const [workspaceNotice, setWorkspaceNotice] = useState<{
     saved?: string;
+    renamed?: string;
     restored?: number;
     failed?: number;
     detail?: string;
@@ -88,6 +96,12 @@ export function AgentsView({
       setWorkingDirectory(agents.defaultWorkingDirectory);
     }
   }, [agents.defaultWorkingDirectory, workingDirectory]);
+
+  useEffect(() => {
+    if (!editingWorkspaceName) {
+      setWorkspaceNameDraft(agents.workspaceName);
+    }
+  }, [agents.workspaceName, editingWorkspaceName]);
 
   useEffect(() => {
     const activeIds = new Set(agents.sessions.map((session) => session.sessionId));
@@ -199,6 +213,37 @@ export function AgentsView({
       await agents.deletePlan(plan.id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
+  async function saveWorkspaceName() {
+    setSavingWorkspaceName(true);
+    setError(null);
+    setWorkspaceNotice(null);
+    try {
+      const name = await agents.renameWorkspace(workspaceNameDraft);
+      setWorkspaceNameDraft(name);
+      setEditingWorkspaceName(false);
+      setWorkspaceNotice({ renamed: name });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSavingWorkspaceName(false);
+    }
+  }
+
+  async function movePlan(planId: string, offset: -1 | 1) {
+    const reordered = moveAgentLaunchPlan(agents.plans, planId, offset);
+    if (reordered === agents.plans) return;
+    setReorderingPlanId(planId);
+    setError(null);
+    setWorkspaceNotice(null);
+    try {
+      await agents.reorderPlans(reordered.map((plan) => plan.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setReorderingPlanId(null);
     }
   }
 
@@ -480,9 +525,83 @@ export function AgentsView({
 
       <section className="agents-workspace">
         <div className="agents-section-heading">
-          <div>
+          <div className="agents-workspace__identity">
             <span className="eyebrow">{t("agents.workspace.eyebrow")}</span>
-            <h3>{t("agents.workspace.title")}</h3>
+            {editingWorkspaceName ? (
+              <div className="agents-workspace__name-editor">
+                <label className="field">
+                  <span className="field__label">
+                    {t("agents.workspace.nameLabel")}
+                  </span>
+                  <input
+                    className="input"
+                    value={workspaceNameDraft}
+                    onChange={(event) =>
+                      setWorkspaceNameDraft(event.currentTarget.value)
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && workspaceNameDraft.trim()) {
+                        event.preventDefault();
+                        void saveWorkspaceName();
+                      }
+                      if (event.key === "Escape") {
+                        setWorkspaceNameDraft(agents.workspaceName);
+                        setEditingWorkspaceName(false);
+                      }
+                    }}
+                    maxLength={80}
+                    autoFocus
+                  />
+                  <span className="agents-field-hint">
+                    {t("agents.workspace.nameHint")}
+                  </span>
+                </label>
+                <div className="agents-workspace__name-actions">
+                  <button
+                    type="button"
+                    className="button button--primary button--sm"
+                    disabled={savingWorkspaceName || !workspaceNameDraft.trim()}
+                    onClick={() => void saveWorkspaceName()}
+                  >
+                    {savingWorkspaceName
+                      ? t("agents.workspace.saving")
+                      : t("agents.workspace.saveName")}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--ghost button--sm"
+                    disabled={savingWorkspaceName}
+                    onClick={() => {
+                      setWorkspaceNameDraft(agents.workspaceName);
+                      setEditingWorkspaceName(false);
+                    }}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="agents-workspace__name-row">
+                <h3>
+                  {agents.workspaceName || t("agents.workspace.defaultName")}
+                </h3>
+                <button
+                  type="button"
+                  className="icon-button icon-button--sm"
+                  disabled={agents.mode !== "ready" || restoring}
+                  onClick={() => {
+                    setWorkspaceNameDraft(
+                      agents.workspaceName || t("agents.workspace.defaultName"),
+                    );
+                    setEditingWorkspaceName(true);
+                  }}
+                  aria-label={t("agents.workspace.editName")}
+                  data-tooltip={t("agents.workspace.editName")}
+                >
+                  <EditIcon size={12} />
+                </button>
+              </div>
+            )}
             <p>{t("agents.workspace.body")}</p>
           </div>
           <button
@@ -527,6 +646,8 @@ export function AgentsView({
             title={t(
               workspaceNotice.saved
                 ? "agents.workspace.savedTitle"
+                : workspaceNotice.renamed
+                  ? "agents.workspace.renamedTitle"
                 : (workspaceNotice.failed ?? 0) > 0
                   ? "agents.workspace.partialTitle"
                   : "agents.workspace.restoredTitle",
@@ -536,6 +657,10 @@ export function AgentsView({
               ? t("agents.workspace.savedBody", {
                   name: workspaceNotice.saved,
                 })
+              : workspaceNotice.renamed
+                ? t("agents.workspace.renamedBody", {
+                    name: workspaceNotice.renamed,
+                  })
               : t("agents.workspace.restoreResult", {
                   restored: workspaceNotice.restored ?? 0,
                   failed: workspaceNotice.failed ?? 0,
@@ -554,7 +679,7 @@ export function AgentsView({
           </p>
         ) : (
           <div className="agent-plan-list">
-            {agents.plans.map((plan) => (
+            {agents.plans.map((plan, index) => (
               <article className="agent-plan-row" key={plan.id}>
                 <div className="agent-plan-row__main">
                   <strong>{plan.label}</strong>
@@ -565,6 +690,46 @@ export function AgentsView({
                       count: plan.arguments.length,
                     })}
                   </small>
+                </div>
+                <div className="agent-plan-row__reorder">
+                  <button
+                    type="button"
+                    className="icon-button icon-button--sm agent-plan-row__move-up"
+                    disabled={
+                      index === 0 ||
+                      restoring ||
+                      reorderingPlanId !== null ||
+                      agents.mode !== "ready"
+                    }
+                    onClick={() => void movePlan(plan.id, -1)}
+                    aria-label={t("agents.workspace.moveUp", {
+                      name: plan.label,
+                    })}
+                    data-tooltip={t("agents.workspace.moveUp", {
+                      name: plan.label,
+                    })}
+                  >
+                    <ChevronDownIcon size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button icon-button--sm"
+                    disabled={
+                      index === agents.plans.length - 1 ||
+                      restoring ||
+                      reorderingPlanId !== null ||
+                      agents.mode !== "ready"
+                    }
+                    onClick={() => void movePlan(plan.id, 1)}
+                    aria-label={t("agents.workspace.moveDown", {
+                      name: plan.label,
+                    })}
+                    data-tooltip={t("agents.workspace.moveDown", {
+                      name: plan.label,
+                    })}
+                  >
+                    <ChevronDownIcon size={12} />
+                  </button>
                 </div>
                 <button
                   type="button"
@@ -578,7 +743,7 @@ export function AgentsView({
                 <button
                   type="button"
                   className="icon-button icon-button--sm icon-button--danger"
-                  disabled={restoring}
+                  disabled={restoring || reorderingPlanId !== null}
                   onClick={() => setPendingDeletePlan(plan)}
                   aria-label={t("agents.workspace.delete")}
                   data-tooltip={t("agents.workspace.delete")}
