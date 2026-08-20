@@ -29,7 +29,7 @@ function cargoLockVersion(path, packageName) {
   const packageBlock = read(path)
     .split(/^\[\[package\]\]\s*$/m)
     .find((block) => block.match(/^name\s*=\s*"([^"]+)"\s*$/m)?.[1] === packageName);
-  const version = packageBlock?.match(/^version\s*=\s*"([^"]+)"(?:\s*#.*)?\s*$/m)?.[1];
+  const version = packageBlock?.match(/^version\s*=\s*"([^"]+)"\s*$/m)?.[1];
   return requiredVersion(`${path} ${packageName}`, version);
 }
 

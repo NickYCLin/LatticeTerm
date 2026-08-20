@@ -47,6 +47,7 @@ Release PR 會一起更新：
 - `src-tauri/Cargo.lock` 中的 `lattice-term` 套件版本
 
 `npm run version:check` 會比對上述七個值，`npm run check` 與 CI 都會執行它。任何來源漂移都會在合併或發布前失敗。
+由於 Cargo 會移除 lockfile 內的自訂註記，Release workflow 會先執行 `npm run version:sync-lock`，只同步 `lattice-term` package block，再以繁中 bot commit 寫回 Release PR。
 
 ## 簽章與失敗處理
 

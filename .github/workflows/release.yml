@@ -32,24 +32,60 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # Events created with GITHUB_TOKEN normally do not start another
-      # workflow. workflow_dispatch is the documented exception, so explicitly
-      # dispatch CI for the generated Release PR branch.
-      - name: Verify the generated Release PR
+      - name: Resolve the generated Release PR branch
         if: steps.release.outputs.prs_created == 'true'
+        id: release-pr
         uses: actions/github-script@v9
         env:
           RELEASE_PR: ${{ steps.release.outputs.pr }}
         with:
+          result-encoding: string
           script: |
-            const releasePr = JSON.parse(process.env.RELEASE_PR);
+            return JSON.parse(process.env.RELEASE_PR).headBranchName;
+
+      # Cargo.lock is generated and strips custom version annotations. Update
+      # only its lattice-term root package entry on the generated Release PR,
+      # then commit that deterministic lockfile change.
+      - name: Check out the generated Release PR
+        if: steps.release.outputs.prs_created == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release-pr.outputs.result }}
+          fetch-depth: 0
+
+      - name: Synchronize the Cargo lockfile
+        if: steps.release.outputs.prs_created == 'true'
+        shell: bash
+        run: |
+          npm run version:sync-lock
+          node scripts/check-version-sync.mjs
+          if git diff --quiet -- src-tauri/Cargo.lock; then
+            echo "Cargo.lock is already synchronized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- src-tauri/Cargo.lock
+          git commit -m "chore(版本): 同步 Cargo 鎖定檔"
+          git push origin "HEAD:${{ steps.release-pr.outputs.result }}"
+
+      # Events created with GITHUB_TOKEN normally do not start another
+      # workflow. workflow_dispatch is the documented exception, so explicitly
+      # dispatch CI after the Cargo-generated commit reaches the PR branch.
+      - name: Verify the generated Release PR
+        if: steps.release.outputs.prs_created == 'true'
+        uses: actions/github-script@v9
+        env:
+          RELEASE_BRANCH: ${{ steps.release-pr.outputs.result }}
+        with:
+          script: |
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: "ci.yml",
-              ref: releasePr.headBranchName,
+              ref: process.env.RELEASE_BRANCH,
             });
-            core.info(`Dispatched CI for ${releasePr.headBranchName}`);
+            core.info(`Dispatched CI for ${process.env.RELEASE_BRANCH}`);
 
   build-release:
     name: Build & upload (${{ matrix.name }})
