@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { RdpApi } from "../../app/useRdpSessions";
+import { useSavedCredential } from "../../app/useSavedCredential";
 import { connectionTarget, type ConnectionProfile } from "../../domain/connection";
 import { useI18n } from "../../i18n";
 import { Callout } from "../common/Callout";
-import { CloseIcon, ScreenShareIcon, ShieldIcon } from "../icons";
+import { CheckIcon, CloseIcon, ScreenShareIcon, ShieldIcon, TrashIcon } from "../icons";
 
 export function RdpConnectFlow({
   profile,
@@ -18,7 +19,11 @@ export function RdpConnectFlow({
   onCancel: () => void;
 }) {
   const { t } = useI18n();
+  const savedCredential = useSavedCredential(profile.id, "rdpPassword");
   const [password, setPassword] = useState("");
+  const [useSavedPassword, setUseSavedPassword] = useState(false);
+  const [rememberPassword, setRememberPassword] = useState(false);
+  const [removingCredential, setRemovingCredential] = useState(false);
   const [domain, setDomain] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -28,7 +33,17 @@ export function RdpConnectFlow({
   } | null>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => passwordRef.current?.focus(), []);
+  useEffect(() => {
+    if (savedCredential.state.mode === "saved") {
+      setUseSavedPassword(true);
+    } else if (savedCredential.state.mode !== "loading") {
+      setUseSavedPassword(false);
+    }
+  }, [savedCredential.state.mode]);
+
+  useEffect(() => {
+    if (!useSavedPassword) passwordRef.current?.focus();
+  }, [useSavedPassword]);
   useEffect(() => {
     function close(event: KeyboardEvent) {
       if (event.key === "Escape" && !busy) onCancel();
@@ -49,7 +64,9 @@ export function RdpConnectFlow({
       hostname: profile.hostname,
       port: profile.port,
       username: profile.username,
-      password,
+      password: useSavedPassword ? "" : password,
+      useSavedPassword,
+      rememberPassword: !useSavedPassword && rememberPassword,
       domain: domain.trim() || undefined,
       width: 1280,
       height: 720,
@@ -65,12 +82,32 @@ export function RdpConnectFlow({
         detail: outcome.detail,
       });
     } else {
+      if (outcome.stage === "credential" && useSavedPassword) {
+        setUseSavedPassword(false);
+      }
       setProblem(
         t("rdp.connect.failedBody", {
           stage: outcome.stage,
           detail: outcome.detail,
         }),
       );
+    }
+  }
+
+  async function removeSavedCredential() {
+    setRemovingCredential(true);
+    setProblem(null);
+    try {
+      await savedCredential.remove();
+      setUseSavedPassword(false);
+    } catch (reason) {
+      setProblem(
+        t("credential.removeFailed.body", {
+          detail: reason instanceof Error ? reason.message : String(reason),
+        }),
+      );
+    } finally {
+      setRemovingCredential(false);
     }
   }
 
@@ -135,22 +172,66 @@ export function RdpConnectFlow({
             </Callout>
           )}
 
+          {savedCredential.state.mode === "saved" && (
+            <Callout tone="security" title={t("credential.saved.title")}>
+              <div className="credential-choice">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={useSavedPassword}
+                    disabled={busy || removingCredential}
+                    onChange={(event) =>
+                      setUseSavedPassword(event.currentTarget.checked)
+                    }
+                  />
+                  <span className="checkbox__box" aria-hidden="true">
+                    <CheckIcon size={11} />
+                  </span>
+                  {t("credential.useSaved", {
+                    provider: savedCredential.state.provider,
+                  })}
+                </label>
+                <button
+                  type="button"
+                  className="button button--ghost button--sm"
+                  disabled={busy || removingCredential}
+                  onClick={() => void removeSavedCredential()}
+                >
+                  <TrashIcon size={13} />
+                  {removingCredential
+                    ? t("credential.removing")
+                    : t("credential.remove")}
+                </button>
+              </div>
+            </Callout>
+          )}
+
+          {savedCredential.state.mode === "unavailable" && (
+            <Callout tone="warn" title={t("credential.unavailable.title")}>
+              {t("credential.unavailable.body", {
+                detail: savedCredential.state.detail,
+              })}
+            </Callout>
+          )}
+
           <div className="field-grid field-grid--even">
-            <div className="field">
-              <label className="field__label" htmlFor="rdp-password">
-                {t("rdp.connect.password")}
-              </label>
-              <input
-                id="rdp-password"
-                ref={passwordRef}
-                className="input"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                disabled={busy}
-                onChange={(event) => setPassword(event.currentTarget.value)}
-              />
-            </div>
+            {!useSavedPassword && (
+              <div className="field">
+                <label className="field__label" htmlFor="rdp-password">
+                  {t("rdp.connect.password")}
+                </label>
+                <input
+                  id="rdp-password"
+                  ref={passwordRef}
+                  className="input"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  disabled={busy}
+                  onChange={(event) => setPassword(event.currentTarget.value)}
+                />
+              </div>
+            )}
             <div className="field">
               <label className="field__label" htmlFor="rdp-domain">
                 {t("rdp.connect.domain")}
@@ -165,6 +246,26 @@ export function RdpConnectFlow({
               />
             </div>
           </div>
+
+          {!useSavedPassword && savedCredential.state.mode === "missing" && (
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={rememberPassword}
+                disabled={busy || password.length === 0}
+                onChange={(event) =>
+                  setRememberPassword(event.currentTarget.checked)
+                }
+              />
+              <span className="checkbox__box" aria-hidden="true">
+                <CheckIcon size={11} />
+              </span>
+              <ShieldIcon size={13} />
+              {t("credential.remember", {
+                provider: savedCredential.state.provider,
+              })}
+            </label>
+          )}
 
           <div className="dialog__actions">
             <button

@@ -27,6 +27,8 @@ export interface RdpConnectRequest {
   port: number;
   username: string;
   password: string;
+  useSavedPassword: boolean;
+  rememberPassword: boolean;
   domain?: string;
   width: number;
   height: number;

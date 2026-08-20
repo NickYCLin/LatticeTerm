@@ -15,6 +15,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel = "Cancel",
   tone = "danger",
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: {
@@ -23,14 +24,16 @@ export function ConfirmDialog({
   confirmLabel: string;
   cancelLabel?: string;
   tone?: "danger" | "default";
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    confirmRef.current?.focus();
-  }, []);
+    (confirmDisabled ? cancelRef : confirmRef).current?.focus();
+  }, [confirmDisabled]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -63,13 +66,19 @@ export function ConfirmDialog({
           {body}
         </p>
         <div className="dialog__actions">
-          <button type="button" className="button button--ghost" onClick={onCancel}>
+          <button
+            type="button"
+            ref={cancelRef}
+            className="button button--ghost"
+            onClick={onCancel}
+          >
             {cancelLabel}
           </button>
           <button
             type="button"
             ref={confirmRef}
             className={`button ${tone === "danger" ? "button--danger" : "button--primary"}`}
+            disabled={confirmDisabled}
             onClick={onConfirm}
           >
             {confirmLabel}

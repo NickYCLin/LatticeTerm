@@ -28,6 +28,18 @@ export const zhTW = {
   "common.copied": "已複製",
   "common.detecting": "偵測中…",
 
+  // 系統認證儲存 ----------------------------------------------------------
+  "credential.saved.title": "已安全保存密碼",
+  "credential.useSaved": "使用 {provider} 中已儲存的密碼",
+  "credential.remember": "驗證成功後保存到 {provider}",
+  "credential.remove": "刪除已儲存密碼",
+  "credential.removing": "正在刪除…",
+  "credential.removeFailed.title": "無法刪除已儲存密碼",
+  "credential.removeFailed.body": "系統安全儲存區拒絕刪除：{detail}",
+  "credential.unavailable.title": "系統安全儲存區目前無法使用",
+  "credential.unavailable.body":
+    "這次仍可手動輸入密碼，但不會保存。原因：{detail}",
+
   // 導覽 ------------------------------------------------------------------
   "nav.connections": "我的連線",
   "nav.connections.desc": "尋找、整理與編輯遠端主機",
@@ -53,7 +65,7 @@ export const zhTW = {
   "connections.sort.environment": "環境",
   "connections.empty.title": "還沒有任何連線",
   "connections.empty.body":
-    "把你要連的主機加進來，之後就能在這裡一眼找到。LatticeTerm 只記主機資訊，不會問你密碼或金鑰。",
+    "把你要連的主機加進來，之後就能在這裡一眼找到。密碼只會在連線時詢問，並可選擇交給作業系統安全保存。",
   "connections.empty.footnote": "範例資料使用文件專用的網域與位址，不是真實主機。",
   "connections.noResults.title": "沒有符合的連線",
   "connections.noResults.body": "主機都還在，只是目前的搜尋或篩選把它們排除了。",
@@ -105,9 +117,9 @@ export const zhTW = {
   "form.tagsPlaceholder": "edge, eu-west",
   "form.favorite": "加入常用",
   "form.organiseHint": "環境與群組會影響排序，也讓你一眼分辨哪台是正式機。",
-  "form.auth.title": "這裡不會問你密碼",
+  "form.auth.title": "密碼不會寫進連線設定",
   "form.auth.body":
-    "認證資料要交給作業系統的安全儲存區保管，那個部分還沒完成，所以這張表單完全沒有密碼、金鑰或通行碼欄位。",
+    "儲存主機資料後，連線時可輸入密碼並選擇交給 Windows Credential Manager、macOS Keychain 或 Linux Secret Service 保存。",
   "form.review.unnamed": "尚未命名的連線",
   "form.review.noHost": "還沒填主機位址",
   "form.duplicate.title": "已經有一筆連到同一個位置",
@@ -150,6 +162,16 @@ export const zhTW = {
   "confirm.delete.title": "要刪除「{name}」嗎？",
   "confirm.delete.body": "只會從這個工作區移除 {host} 的設定，遠端主機本身不會有任何變動。",
   "confirm.delete.confirm": "刪除「{name}」",
+  "confirm.delete.credential.title": "請先刪除「{name}」保存的密碼",
+  "confirm.delete.credential.body":
+    "這個連線在 {provider} 仍有密碼。為避免留下無法管理的認證資料，請先前往金鑰保管庫明確刪除密碼。",
+  "confirm.delete.credential.loading": "正在確認這個連線是否有已儲存的密碼…",
+  "confirm.delete.credential.openVault": "前往金鑰保管庫",
+  "confirm.delete.credential.checking": "正在檢查…",
+  "confirm.delete.credential.unavailable.title": "目前無法安全刪除連線設定",
+  "confirm.delete.credential.unavailable.body":
+    "無法確認系統認證儲存區是否仍有密碼：{detail}",
+  "confirm.delete.credential.blocked": "暫時無法刪除",
 
   // 詳細資料面板 ----------------------------------------------------------
   "inspector.tab.info": "連線資訊",
@@ -231,10 +253,10 @@ export const zhTW = {
   "settings.motion.reduced": "減少動態",
   "settings.security": "安全性",
   "settings.securityHint":
-    "主機金鑰嚴格驗證已啟用；認證保存、自動鎖定與加密備份仍在開發中。",
-  "settings.security.title": "認證資料不會被保存",
+    "主機金鑰嚴格驗證與系統認證儲存已啟用；自動鎖定、剪貼簿清除與加密備份仍在開發中。",
+  "settings.security.title": "主機信任與系統認證儲存已啟用",
   "settings.security.body":
-    "SSH 密碼只用於當次連線並留在記憶體；本機持久化內容只有連線設定、外觀偏好與公開的主機指紋。",
+    "SSH/RDP 密碼預設只用於當次連線；明確勾選後，也只有驗證成功才交給作業系統安全保存，連線設定檔仍不含機密。",
   "settings.security.autoLock": "自動鎖定保管庫",
   "settings.security.autoLockDetail": "閒置一段時間或切換到其他程式時自動上鎖。",
   "settings.security.hostKey": "主機金鑰驗證原則",
@@ -252,7 +274,7 @@ export const zhTW = {
   "settings.about.runtime.browser": "瀏覽器預覽（沒有桌面後端）",
   "settings.about.credentialStore": "認證儲存區",
   "settings.about.credentialStore.ready": "可使用",
-  "settings.about.credentialStore.pending": "尚未建立",
+  "settings.about.credentialStore.pending": "目前無法使用",
   "settings.about.license": "授權",
   "settings.updater": "軟體更新",
   "settings.updaterHint": "透過 GitHub Releases 自動檢查並直接就地更新，無需重新下載安裝包。",
@@ -377,6 +399,7 @@ export const zhTW = {
   "connect.stage.shell": "啟動 Shell",
   "connect.stage.trust": "主機信任資料",
   "connect.stage.invoke": "呼叫後端",
+  "connect.stage.credential": "系統安全儲存區",
   "connect.trusted": "已記住這台主機的金鑰，正在重新連線…",
 
   // 終端機 ----------------------------------------------------------------
@@ -472,13 +495,13 @@ export const zhTW = {
   "vault.status.browser": "需要桌面版",
   "vault.status.error": "無法讀取",
   "vault.summary.ready":
-    "已從本機安全邊界載入 {count} 筆公開主機指紋；認證資料儲存仍在開發中。",
+    "已從本機安全邊界載入 {count} 筆公開主機指紋；密碼由作業系統認證儲存區隔離保存。",
   "vault.summary.loading": "正在向桌面核心讀取真正的主機信任資料。",
   "vault.summary.browser": "網頁預覽沒有桌面安全儲存區，因此不顯示或偽造信任資料。",
   "vault.summary.error": "信任資料無法安全讀取；SSH 連線也會維持拒絕狀態。",
   "vault.tabs.label": "金鑰保管庫分頁",
   "vault.tabs.hosts": "受信任的主機（{count}）",
-  "vault.tabs.credentials": "認證資料",
+  "vault.tabs.credentials": "認證資料（{count}）",
   "vault.searchPlaceholder": "搜尋主機、演算法或指紋",
   "vault.add": "新增主機指紋",
   "vault.loading.title": "正在讀取主機信任資料",
@@ -532,13 +555,29 @@ export const zhTW = {
     "移除後不會中斷目前的工作階段，但下次連線一定會重新要求你比對主機指紋。",
   "vault.remove.confirm": "移除主機信任",
   "vault.removing": "正在移除…",
-  "vault.actionFailed.title": "主機信任資料沒有變更",
+  "vault.actionFailed.title": "安全資料沒有變更",
   "vault.actionFailed.body": "桌面核心拒絕這次操作：{error}",
   "vault.activity.added": "已新增 {target} 的主機信任",
   "vault.activity.removed": "已移除 {target} 的主機信任",
-  "vault.credentials.title": "認證資料儲存仍在開發中",
+  "vault.credentials.title": "系統認證儲存已啟用",
   "vault.credentials.body":
-    "目前 SSH 密碼只存在於當次連線記憶體，不會保存。這個分頁不會用範例金鑰或假的解鎖狀態冒充已完成的安全保管庫。",
+    "這裡只列出哪些連線已有安全保存的密碼，不會讀取或顯示密碼內容。SSH 私鑰與 Stronghold 保管庫仍屬後續項目。",
+  "vault.credentials.loading.title": "正在讀取系統認證儲存區",
+  "vault.credentials.loading.body": "只檢查哪些連線有對應項目，不會把密碼載入畫面。",
+  "vault.credentials.ready.title": "{provider} 已連線",
+  "vault.credentials.ready.body":
+    "密碼只會由 Rust 連線核心在需要時取用；前端保管庫不會收到明文內容。",
+  "vault.credentials.empty.title": "還沒有保存任何密碼",
+  "vault.credentials.empty.body":
+    "開啟 SSH 或 RDP 連線時勾選保存；只有驗證成功後才會寫入系統安全儲存區。",
+  "vault.credentials.table.connection": "連線",
+  "vault.credentials.table.protocol": "連線方式",
+  "vault.credentials.table.target": "目標",
+  "vault.credentials.removeFor": "刪除「{name}」已儲存的密碼",
+  "vault.credentials.remove.title": "刪除「{name}」已儲存的密碼？",
+  "vault.credentials.remove.body":
+    "刪除後不影響目前工作階段；下次連到 {target} 時必須重新輸入密碼。",
+  "vault.credentials.activity.removed": "已刪除「{name}」的安全認證資料",
   "vault.credentials.systemStore": "作業系統認證儲存區",
   "vault.credentials.systemStoreDetail":
     "用 Windows Credential Manager、macOS Keychain 或 Linux Secret Service 包裝主密鑰。",

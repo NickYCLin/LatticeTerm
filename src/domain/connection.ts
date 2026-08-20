@@ -2,8 +2,8 @@
  * Connection metadata model.
  *
  * This module deliberately has no field for a password, passphrase, private
- * key or token. Secrets belong to the OS credential store, which is a later
- * milestone; keeping the shape secret-free means an entry can be logged,
+ * key or token. Secrets belong to the OS credential store; keeping this shape
+ * secret-free means an entry can be logged,
  * exported or shown in a screenshot without leaking anything.
  *
  * Nothing here holds display text. Validation reports message keys and their

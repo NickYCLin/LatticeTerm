@@ -47,6 +47,8 @@ export interface ConnectRequest {
   username: string;
   /** Held only for this call; nothing here is written to disk. */
   auth: { kind: "password"; password: string };
+  useSavedPassword: boolean;
+  rememberPassword: boolean;
   cols: number;
   rows: number;
 }

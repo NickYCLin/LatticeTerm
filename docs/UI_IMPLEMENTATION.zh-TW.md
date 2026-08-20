@@ -23,7 +23,7 @@
 | **命令面板** | `CommandPalette` | `src/components/overlays/CommandPalette.tsx` | `Ctrl` + `K` 全域命令面板，支援搜尋連線與執行全域快捷動作。 |
 | **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、Lattice Remote 畫面與 Web RDP Canvas 分頁。 |
 | **Web RDP Canvas** | `RdpPane` | `src/components/rdp/RdpPane.tsx` | Canvas 畫面、座標縮放、滑鼠、滾輪、掃描碼鍵盤與失焦釋放。 |
-| **金鑰保管庫** | `VaultView` | `src/views/VaultView.tsx` | 直接管理 Rust 核心的主機信任資料；認證保存尚未完成並明確標示開發狀態。 |
+| **金鑰保管庫** | VaultView | src/views/VaultView.tsx | 直接管理 Rust 核心的主機信任資料與系統認證參照；可檢查、重新整理及確認刪除已保存密碼，但不讀取密碼內容。 |
 | **活動紀錄** | `ActivityView` | `src/views/ActivityView.tsx` | 活動日誌清單、關鍵字搜尋、事件類型篩選與純文字日誌匯出。 |
 | **設定檢視** | `SettingsView` | `src/views/SettingsView.tsx` | 外觀設定（主題、密度、動態效果）、安全機制說明與執行環境資訊。 |
 | **狀態列** | `StatusBar` | `src/components/shell/StatusBar.tsx` | 28 px 底部狀態列，顯示連線數、記憶體/儲存模式與認證儲存區就緒狀態。 |
@@ -126,22 +126,32 @@
 
 ---
 
-## 9. SSH 連線
+## 9. 作業系統認證儲存
+
+- src-tauri/src/credentials.rs 以 profile UUID 與認證種類組成不含機密的帳號鍵；Windows 使用 Credential Manager、macOS 使用 Keychain、Linux 使用 Secret Service。
+- Tauri IPC 只公開可用狀態、是否存在與確認刪除；沒有任何命令會把已保存密碼回傳 WebView。
+- SSH 與 RDP 可使用已保存密碼，或在新密碼驗證成功後保存。若保存失敗，剛建立的工作階段會中止，避免畫面聲稱保存成功。
+- useSavedCredential 與 useCredentialInventory 負責連線對話框和保管庫的真實狀態；瀏覽器預覽或系統儲存區鎖定時顯示原因並退回單次輸入。
+- 刪除密碼是保管庫與連線對話框中的獨立確認操作，不會因刪除一般連線設定而隱含永久刪除。
+
+---
+
+## 10. SSH 連線
 
 - **實作方式**：採用純 Rust 的 `russh`，不呼叫系統的 `ssh` 執行檔。iOS 不允許執行外部程式、Android 預設也沒有 `ssh`，走這條路才能讓桌面與行動版共用同一套連線核心。
 - **密碼學後端**：改用 `ring` 而非預設的 `aws-lc-rs`。後者在 Windows 上需要 NASM 與 C 工具鏈，交叉編譯到 Android／iOS 也麻煩。
 - **信任先於連線**：主機金鑰不在信任清單內，連線會被拒絕，並把指紋交回介面請使用者比對；金鑰與上次不同則直接擋下。任何情況下都不會留下一個「還沒決定信任與否」的工作階段。
 - **信任資料**：`known_hosts.json` 只存公開指紋（`SHA256:` 格式，與 `ssh-keygen -lf` 輸出一致），指紋本來就是公開比對用的，不是機密。
 - **讀不到信任檔時不會退化成空清單**：那會讓原本已信任的主機全部變成「第一次連線」，反而把金鑰變更藏在裡面。這種情況會直接拒絕連線並說明原因。
-- **密碼**：由對話框輸入，只用於當次連線，用完即丟，不寫入任何檔案，也不進記錄。
+- **密碼**：預設由對話框輸入並只用於當次連線；使用者可勾選保存，Rust 核心只在驗證成功後寫入作業系統認證儲存區。已保存密碼由 Rust 直接取用，不回傳 WebView。
 - **輸出管道**：Rust 端以 `SessionSink` 介面輸出，正式執行時發送 Tauri 事件，測試時收進緩衝區——這是連線流程能對真實伺服器做整合測試的原因。
 - **測試**：`src-tauri/tests/ssh_live.rs` 針對真實 SSH 伺服器驗證「拒絕→信任→開 shell→指令有輸出」、密碼錯誤、金鑰變更與連不上四種情況；預設標記 `#[ignore]`，需要時搭配拋棄式容器執行。
 - **Key Vault 管理介面**：`useHostTrust` 透過 `ssh_known_hosts`、`ssh_trust_host` 與 `ssh_forget_host` IPC 直接操作同一份信任資料。手動新增只接受完整 OpenSSH SHA-256 指紋，既有主機不可靜默覆蓋，移除前必須再次確認。
-- **誠實的執行環境狀態**：網頁預覽沒有 Tauri 後端時不注入 sample hosts；信任檔損壞時顯示安全錯誤並禁止操作。認證資料分頁只呈現規劃，不顯示假的金鑰、對應數量或解鎖狀態。
+- **誠實的執行環境狀態**：網頁預覽沒有 Tauri 後端時不注入 sample hosts；信任檔損壞時顯示安全錯誤並禁止操作。認證資料分頁直接查詢系統儲存區，只列真實參照並在不可用時顯示原因。
 
 ---
 
-## 10. Lattice Remote
+## 11. Lattice Remote
 
 - `crates/lattice-remote` 定義版本化二進位訊息、分塊畫面與 Noise `XXpsk3_25519_ChaChaPoly_BLAKE2s` 傳輸。
 - `lattice-agent` 預設只監聽 `127.0.0.1:44900`；分享區域為完整主螢幕，使用者必須在被控端看到並提供一次性八位數配對碼；配對碼五分鐘後失效，連續五次失敗即停止。
@@ -149,17 +159,17 @@
 - Tauri 以 NDJSON 事件管理每次分享的 sidecar 生命週期。配對成功後立即從 UI 狀態移除配對碼；關閉對話框可選擇讓分享留在背景，但停止分享或應用程式結束時會終止 Agent。
 - v1 僅傳送 JPEG 畫面，不接受任何輸入事件；UI 必須標示唯讀。
 
-## 11. Web RDP Canvas
+## 12. Web RDP Canvas
 
 - `crates/lattice-rdp` 是每個工作階段一個程序的 IronRDP engine，用 NDJSON stdin/stdout 與 Tauri bridge 溝通，以隔離 russh 與 IronRDP 的密碼學相依。
-- 密碼只出現在連線對話框、單次 Tauri IPC 與 engine 記憶體，不寫入 profile、事件、程序參數或磁碟。
+- 密碼只出現在連線對話框、單次 Tauri IPC 與 engine 記憶體，不寫入 profile、事件或程序參數；使用者明確勾選時，成功連線後才會寫入作業系統認證儲存區。
 - TLS 預設嚴格驗證；自簽憑證第一次必定拒絕並回傳 SHA-256 指紋，只有使用者明確核對後才能針對同一指紋重試一次。
 - React 端以真正的 `<canvas>` 繪圖，輸入轉為 RDP FastPath；Canvas 失焦、離開或卸載時會釋放所有按鍵與滑鼠按鈕。
 - `CanvasCaptureControls` 同時供 Lattice Remote 與 Web RDP 使用。使用者可手動輸出 PNG，或以 `canvas.captureStream` 和 `MediaRecorder` 開始、停止並下載 WebM／MP4；只錄遠端畫布、不錄 UI、不自動啟動，也不上傳。
 
 ---
 
-## 12. 自動更新與發行簽章
+## 13. 自動更新與發行簽章
 
 - **簽章金鑰**：以 `npm run tauri signer generate` 產生。公鑰放在 `tauri.conf.json` 的 `plugins.updater.pubkey`，私鑰與其密碼存在 GitHub Actions 的 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets，不會進入版本庫。
 - **為什麼不能放假的公鑰**：Tauri 的 updater plugin 缺 `pubkey` 會直接讓程式無法啟動；而填一把不對的公鑰雖然程式能開，卻會讓每一次更新的簽章驗證都失敗，問題被藏起來反而更難查。

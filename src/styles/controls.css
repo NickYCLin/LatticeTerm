@@ -292,6 +292,14 @@
   outline-offset: 2px;
 }
 
+.credential-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
 /* Badges ----------------------------------------------------------------- */
 
 .badge {

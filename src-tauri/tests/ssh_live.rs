@@ -70,6 +70,8 @@ fn temp_dir(label: &str) -> std::path::PathBuf {
 fn request() -> ConnectRequest {
     ConnectRequest {
         profile_id: "live-test".into(),
+        use_saved_password: false,
+        remember_password: false,
         hostname: HOST.into(),
         port: PORT,
         username: USER.into(),

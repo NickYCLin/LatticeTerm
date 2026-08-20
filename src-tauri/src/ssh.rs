@@ -100,6 +100,10 @@ pub struct ConnectRequest {
     pub port: u16,
     pub username: String,
     pub auth: AuthMethod,
+    #[serde(default)]
+    pub use_saved_password: bool,
+    #[serde(default)]
+    pub remember_password: bool,
     /// Terminal size at the moment of connecting.
     pub cols: u32,
     pub rows: u32,

@@ -46,12 +46,9 @@ async function syncSaveToBackend(profile: ConnectionProfile): Promise<void> {
 }
 
 async function syncDeleteToBackend(id: string): Promise<void> {
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("delete_connection_profile", { id });
-  } catch {
-    // In-memory fallback
-  }
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("delete_connection_profile", { id });
 }
 
 export function useWorkspace() {
@@ -143,8 +140,9 @@ export function useWorkspace() {
   );
 
   const removeProfile = useCallback(
-    (id: string): void => {
+    async (id: string): Promise<void> => {
       const target = profiles.find((entry) => entry.id === id);
+      await syncDeleteToBackend(id);
       setProfiles((current) => current.filter((entry) => entry.id !== id));
       setSelectedId((current) => (current === id ? null : current));
       if (target) {
@@ -154,7 +152,6 @@ export function useWorkspace() {
           detail: connectionTarget(target),
         });
       }
-      void syncDeleteToBackend(id);
     },
     [profiles, record],
   );
