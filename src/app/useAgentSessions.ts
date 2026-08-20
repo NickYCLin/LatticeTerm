@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type AgentLifecycle = "working" | "needsAttention";
+export type AgentLifecycle = "working" | "needsAttention" | "idle" | "done";
+export type AgentStateSource = "heuristic" | "integration";
 export type AgentBackendMode = "loading" | "ready" | "unavailable";
 
 export interface AgentDefinition {
@@ -18,6 +19,7 @@ export interface AgentSessionSummary {
   executable: string;
   workingDirectory: string;
   state: AgentLifecycle;
+  stateSource: AgentStateSource;
   processId: number | null;
 }
 
@@ -29,6 +31,23 @@ export interface AgentLaunchRequest {
   workingDirectory: string;
   cols: number;
   rows: number;
+}
+
+export interface AgentStateEvent {
+  sessionId: string;
+  state: AgentLifecycle;
+  source: AgentStateSource;
+}
+
+export function applyAgentStateEvent(
+  sessions: AgentSessionSummary[],
+  event: AgentStateEvent,
+): AgentSessionSummary[] {
+  return sessions.map((session) =>
+    session.sessionId === event.sessionId
+      ? { ...session, state: event.state, stateSource: event.source }
+      : session,
+  );
 }
 
 const FALLBACK_CATALOG: AgentDefinition[] = [
@@ -180,18 +199,12 @@ export function useAgentSessions(): AgentApi {
         }
         cleanups.push(stopData);
 
-        const stopState = await listen<{
-          sessionId: string;
-          state: AgentLifecycle;
-        }>("agent://state", (event) => {
-          setSessions((current) =>
-            current.map((session) =>
-              session.sessionId === event.payload.sessionId
-                ? { ...session, state: event.payload.state }
-                : session,
-            ),
-          );
-        });
+        const stopState = await listen<AgentStateEvent>(
+          "agent://state",
+          (event) => {
+            setSessions((current) => applyAgentStateEvent(current, event.payload));
+          },
+        );
         if (disposed) {
           stopState();
           return;

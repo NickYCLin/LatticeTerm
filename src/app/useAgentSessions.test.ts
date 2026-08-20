@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyAgentStateEvent,
   decodeAgentPayload,
   encodeAgentPayload,
   splitAgentArguments,
@@ -17,5 +18,28 @@ describe("agent session transport", () => {
       "gpt-5",
       "--full-auto",
     ]);
+  });
+
+  it("updates both semantic state and its trusted source", () => {
+    const sessions = [
+      {
+        sessionId: "agent-session-1",
+        definitionId: "codex",
+        label: "Codex",
+        executable: "/usr/bin/codex",
+        workingDirectory: "/work",
+        state: "working" as const,
+        stateSource: "heuristic" as const,
+        processId: 42,
+      },
+    ];
+
+    expect(
+      applyAgentStateEvent(sessions, {
+        sessionId: "agent-session-1",
+        state: "done",
+        source: "integration",
+      })[0],
+    ).toMatchObject({ state: "done", stateSource: "integration" });
   });
 });

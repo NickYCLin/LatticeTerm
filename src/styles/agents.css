@@ -244,6 +244,23 @@
   box-shadow: 0 0 0 0.2rem var(--warn-soft);
 }
 
+.agent-state-dot.state-idle {
+  background: var(--text-faint);
+  box-shadow: 0 0 0 0.2rem var(--surface-muted);
+}
+
+.agent-session-row__status {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-1);
+}
+
+.agent-state-source {
+  color: var(--text-faint);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+
 .agent-session-row__main {
   display: grid;
   gap: var(--space-1);
