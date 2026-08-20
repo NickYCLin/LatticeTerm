@@ -2,11 +2,11 @@
  * Workspace state: the connection collection, the activity log and the filter
  * the connections view renders from.
  *
- * Entries live in memory for this foundation build. Persistence waits for the
- * encrypted local store, so nothing here writes connection data to disk.
+ * Synchronizes with Rust backend storage in desktop mode, and seamlessly falls
+ * back to React in-memory state in browser preview mode.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   appendActivity,
   createActivityEntry,
@@ -36,12 +36,58 @@ function describe(profile: ConnectionProfile): string {
   return `${findProtocol(profile.protocol).acronym} · ${connectionTarget(profile)}`;
 }
 
+async function syncSaveToBackend(profile: ConnectionProfile): Promise<void> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("save_connection_profile", { profile });
+  } catch {
+    // In-memory fallback
+  }
+}
+
+async function syncDeleteToBackend(id: string): Promise<void> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("delete_connection_profile", { id });
+  } catch {
+    // In-memory fallback
+  }
+}
+
 export function useWorkspace() {
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [filter, setFilter] = useState<ConnectionFilter>(emptyFilter);
   const [sortOrder, setSortOrder] = useState<SortOrder>("name");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Sync initial list from Rust backend storage if running inside Tauri
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBackendProfiles() {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const backendProfiles = await invoke<ConnectionProfile[]>(
+          "list_connection_profiles",
+        );
+        if (
+          !cancelled &&
+          Array.isArray(backendProfiles) &&
+          backendProfiles.length > 0
+        ) {
+          setProfiles(backendProfiles);
+        }
+      } catch {
+        // In-memory fallback for browser
+      }
+    }
+
+    void loadBackendProfiles();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const record = useCallback((entry: Omit<ActivityEntry, "id" | "at">) => {
     setActivity((entries) => appendActivity(entries, createActivityEntry(entry)));
@@ -53,6 +99,7 @@ export function useWorkspace() {
       setProfiles((current) => [...current, profile]);
       setSelectedId(profile.id);
       record({ kind: "created", subject: profile.name, detail: describe(profile) });
+      void syncSaveToBackend(profile);
       return profile;
     },
     [record],
@@ -65,6 +112,7 @@ export function useWorkspace() {
         current.map((entry) => (entry.id === id ? profile : entry)),
       );
       record({ kind: "updated", subject: profile.name, detail: describe(profile) });
+      void syncSaveToBackend(profile);
       return profile;
     },
     [record],
@@ -88,6 +136,7 @@ export function useWorkspace() {
         subject: copy.name,
         note: { key: "activity.duplicatedFrom", values: { name: source.name } },
       });
+      void syncSaveToBackend(copy);
       return copy;
     },
     [profiles, record],
@@ -105,21 +154,26 @@ export function useWorkspace() {
           detail: connectionTarget(target),
         });
       }
+      void syncDeleteToBackend(id);
     },
     [profiles, record],
   );
 
   const toggleFavorite = useCallback((id: string): void => {
     setProfiles((current) =>
-      current.map((entry) =>
-        entry.id === id ? { ...entry, favorite: !entry.favorite } : entry,
-      ),
+      current.map((entry) => {
+        if (entry.id !== id) return entry;
+        const updated = { ...entry, favorite: !entry.favorite };
+        void syncSaveToBackend(updated);
+        return updated;
+      }),
     );
   }, []);
 
   const loadSamples = useCallback((): void => {
-    setProfiles(sampleProfiles.map((profile) => ({ ...profile })));
-    setSelectedId(sampleProfiles[0]?.id ?? null);
+    const loaded = sampleProfiles.map((profile) => ({ ...profile }));
+    setProfiles(loaded);
+    setSelectedId(loaded[0]?.id ?? null);
     record({
       kind: "workspace",
       titleKey: "activity.samplesLoaded",
@@ -128,6 +182,9 @@ export function useWorkspace() {
         values: { count: sampleProfiles.length },
       },
     });
+    for (const p of loaded) {
+      void syncSaveToBackend(p);
+    }
   }, [record]);
 
   /** Imported entries are appended; nothing already in the workspace is lost. */
@@ -144,6 +201,7 @@ export function useWorkspace() {
           subject: profile.name,
           detail: describe(profile),
         });
+        void syncSaveToBackend(profile);
       }
 
       return imported.length;
@@ -154,6 +212,21 @@ export function useWorkspace() {
   const resetFilter = useCallback((): void => setFilter(emptyFilter), []);
 
   const clearActivity = useCallback((): void => setActivity([]), []);
+
+  const logActivity = useCallback(
+    (entry: {
+      type: "created" | "updated" | "deleted" | "workspace";
+      message: string;
+      detail?: string;
+    }) => {
+      record({
+        kind: entry.type,
+        subject: entry.message,
+        detail: entry.detail,
+      });
+    },
+    [record],
+  );
 
   const visibleProfiles = useMemo(
     () => sortProfiles(filterProfiles(profiles, filter), sortOrder),
@@ -196,7 +269,9 @@ export function useWorkspace() {
     loadSamples,
     importProfiles,
     clearActivity,
+    logActivity,
   };
 }
 
-export type Workspace = ReturnType<typeof useWorkspace>;
+export type WorkspaceState = ReturnType<typeof useWorkspace>;
+export type Workspace = WorkspaceState;
