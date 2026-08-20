@@ -464,6 +464,7 @@ export const en: Messages = {
   "agents.backend.unavailable.body":
     "The browser preview cannot access local PTYs. You can inspect this interface here, but it cannot launch a CLI.",
   "agents.launch.failed": "Could not launch the agent",
+  "agents.operation.failed": "Agent Fleet operation failed",
   "agents.directory.eyebrow": "Launch context",
   "agents.directory.title": "Choose a working directory and CLI",
   "agents.directory.refresh": "Detect again",
@@ -488,6 +489,39 @@ export const en: Messages = {
   "agents.custom.arguments.placeholder": "--model\nteam-model\n--resume",
   "agents.custom.arguments.hint": "One argument per line; blank lines are ignored, up to 64.",
   "agents.custom.launch": "Launch custom CLI",
+  "agents.workspace.eyebrow": "Restart recovery",
+  "agents.workspace.title": "Save a launch workspace",
+  "agents.workspace.body":
+    "Save the CLI type, arguments, and working directory for multiple agents. When LatticeTerm opens again, you confirm before new processes are launched.",
+  "agents.workspace.save": "Save launch item",
+  "agents.workspace.saving": "Saving…",
+  "agents.workspace.restore": "Launch again",
+  "agents.workspace.restoring": "Restoring…",
+  "agents.workspace.restoreAll": "Restore all {count}",
+  "agents.workspace.securityTitle": "Only non-secret launch metadata is saved",
+  "agents.workspace.securityBody":
+    "Up to {count} launch items may be saved. Prompts, terminal output, process IDs, reporter tokens, and model credentials are never stored. Password, token, API key, passphrase, and secret arguments are rejected.",
+  "agents.workspace.recoveryTitle": "The previous launch workspace could not be read",
+  "agents.workspace.recoveryBody":
+    "The original file was preserved at {path} instead of being overwritten. Reason: {detail}",
+  "agents.workspace.savedTitle": "Launch item saved",
+  "agents.workspace.savedBody":
+    "“{name}” will remain in this launch workspace the next time LatticeTerm opens.",
+  "agents.workspace.restoredTitle": "Launch workspace restored",
+  "agents.workspace.partialTitle": "Some launch items could not be restored",
+  "agents.workspace.restoreResult": "Launched {restored}; failed {failed}.",
+  "agents.workspace.empty":
+    "No launch items are saved yet. Add a built-in or custom CLI above.",
+  "agents.workspace.command": "{executable} · {count} arguments",
+  "agents.workspace.delete": "Delete launch item",
+  "agents.workspace.confirmTitle": "Restore this launch workspace?",
+  "agents.workspace.confirmBody":
+    "This immediately starts {count} new local CLI processes. Previous terminal content and processes are not restored.",
+  "agents.workspace.confirmAction": "Launch {count} agents",
+  "agents.workspace.deleteTitle": "Delete “{name}”?",
+  "agents.workspace.deleteBody":
+    "Only the saved launch metadata is deleted. Any currently running agent keeps running.",
+  "agents.workspace.deleteAction": "Delete launch item",
   "agents.broadcast.eyebrow": "Safe orchestration",
   "agents.broadcast.title": "Prompt multiple agents together",
   "agents.broadcast.body":

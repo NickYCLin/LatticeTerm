@@ -33,6 +33,22 @@ export interface AgentLaunchRequest {
   rows: number;
 }
 
+export type AgentLaunchPlanDraft = Omit<AgentLaunchRequest, "cols" | "rows">;
+
+export interface AgentLaunchPlan extends AgentLaunchPlanDraft {
+  id: string;
+}
+
+export interface AgentPlanRecovery {
+  reason: string;
+  backupPath: string;
+}
+
+interface AgentPlanSnapshot {
+  plans: AgentLaunchPlan[];
+  recovery: AgentPlanRecovery | null;
+}
+
 export interface AgentStateEvent {
   sessionId: string;
   state: AgentLifecycle;
@@ -42,6 +58,13 @@ export interface AgentStateEvent {
 export interface AgentBroadcastOutcome {
   sessionId: string;
   delivered: boolean;
+  error: string | null;
+}
+
+export interface AgentRestoreOutcome {
+  planId: string;
+  label: string;
+  session: AgentSessionSummary | null;
   error: string | null;
 }
 
@@ -79,6 +102,7 @@ const FALLBACK_CATALOG: AgentDefinition[] = [
 
 const MAX_PENDING_OUTPUT = 256 * 1024;
 export const MAX_AGENT_BROADCAST_TARGETS = 32;
+export const MAX_SAVED_AGENT_PLANS = 32;
 
 async function core() {
   return import("@tauri-apps/api/core");
@@ -124,8 +148,13 @@ export interface AgentApi {
   catalog: AgentDefinition[];
   defaultWorkingDirectory: string;
   sessions: AgentSessionSummary[];
+  plans: AgentLaunchPlan[];
+  planRecovery: AgentPlanRecovery | null;
   refreshCatalog: () => Promise<void>;
   launch: (request: AgentLaunchRequest) => Promise<AgentSessionSummary>;
+  savePlan: (draft: AgentLaunchPlanDraft) => Promise<AgentLaunchPlan>;
+  deletePlan: (id: string) => Promise<boolean>;
+  restorePlans: (planIds: string[]) => Promise<AgentRestoreOutcome[]>;
   send: (sessionId: string, data: string) => Promise<void>;
   broadcast: (
     sessionIds: string[],
@@ -149,6 +178,10 @@ export function useAgentSessions(): AgentApi {
   const [catalog, setCatalog] = useState<AgentDefinition[]>(FALLBACK_CATALOG);
   const [defaultWorkingDirectory, setDefaultWorkingDirectory] = useState("");
   const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
+  const [plans, setPlans] = useState<AgentLaunchPlan[]>([]);
+  const [planRecovery, setPlanRecovery] = useState<AgentPlanRecovery | null>(
+    null,
+  );
   const dataHandlers = useRef(
     new Map<string, Set<(bytes: Uint8Array) => void>>(),
   );
@@ -161,14 +194,18 @@ export function useAgentSessions(): AgentApi {
   const load = useCallback(async () => {
     try {
       const { invoke } = await core();
-      const [definitions, directory, currentSessions] = await Promise.all([
+      const [definitions, directory, currentSessions, planSnapshot] =
+        await Promise.all([
         invoke<AgentDefinition[]>("agent_catalog"),
         invoke<string>("agent_default_working_directory"),
         invoke<AgentSessionSummary[]>("agent_sessions"),
+        invoke<AgentPlanSnapshot>("agent_plan_snapshot"),
       ]);
       setCatalog(definitions);
       setDefaultWorkingDirectory(directory);
       setSessions(currentSessions);
+      setPlans(planSnapshot.plans);
+      setPlanRecovery(planSnapshot.recovery);
       setError(null);
       setMode("ready");
     } catch (reason) {
@@ -268,6 +305,33 @@ export function useAgentSessions(): AgentApi {
     return session;
   }, []);
 
+  const savePlan = useCallback(async (draft: AgentLaunchPlanDraft) => {
+    const { invoke } = await core();
+    const plan = await invoke<AgentLaunchPlan>("agent_plan_save", { draft });
+    setPlans((current) => [...current, plan]);
+    return plan;
+  }, []);
+
+  const deletePlan = useCallback(async (id: string) => {
+    const { invoke } = await core();
+    const deleted = await invoke<boolean>("agent_plan_delete", { id });
+    if (deleted) {
+      setPlans((current) => current.filter((plan) => plan.id !== id));
+    }
+    return deleted;
+  }, []);
+
+  const restorePlans = useCallback(async (planIds: string[]) => {
+    const { invoke } = await core();
+    const outcomes = await invoke<AgentRestoreOutcome[]>("agent_plan_restore", {
+      planIds,
+    });
+    const currentSessions =
+      await invoke<AgentSessionSummary[]>("agent_sessions");
+    setSessions(currentSessions);
+    return outcomes;
+  }, []);
+
   const send = useCallback(async (sessionId: string, data: string) => {
     const { invoke } = await core();
     await invoke("agent_send", {
@@ -345,8 +409,13 @@ export function useAgentSessions(): AgentApi {
     catalog,
     defaultWorkingDirectory,
     sessions,
+    plans,
+    planRecovery,
     refreshCatalog: load,
     launch,
+    savePlan,
+    deletePlan,
+    restorePlans,
     send,
     broadcast,
     resize,
