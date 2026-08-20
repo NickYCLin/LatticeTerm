@@ -10,9 +10,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 pub const EVENT_DATA: &str = "agent://data";
@@ -22,6 +24,9 @@ pub const EVENT_STATE: &str = "agent://state";
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 4096;
+const MAX_REPORT_BYTES: u64 = 4096;
+const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
+const REPORT_RETRIES: usize = 5;
 
 #[derive(Debug, Clone, Copy)]
 struct AgentSpec {
@@ -103,11 +108,20 @@ pub struct AgentDefinition {
     pub installed_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentLifecycle {
     Working,
     NeedsAttention,
+    Idle,
+    Done,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentStateSource {
+    Heuristic,
+    Integration,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,6 +133,7 @@ pub struct AgentSessionSummary {
     pub executable: String,
     pub working_directory: String,
     pub state: AgentLifecycle,
+    pub state_source: AgentStateSource,
     pub process_id: Option<u32>,
 }
 
@@ -156,11 +171,12 @@ struct AgentClosed {
 struct AgentStateChanged {
     session_id: String,
     state: AgentLifecycle,
+    source: AgentStateSource,
 }
 
 pub trait AgentSink: Send + Sync + 'static {
     fn data(&self, session_id: &str, bytes: &[u8]);
-    fn state(&self, session_id: &str, state: AgentLifecycle);
+    fn state(&self, session_id: &str, state: AgentLifecycle, source: AgentStateSource);
     fn closed(&self, session_id: &str, reason: &str);
 }
 
@@ -177,12 +193,13 @@ impl AgentSink for EventSink {
         );
     }
 
-    fn state(&self, session_id: &str, state: AgentLifecycle) {
+    fn state(&self, session_id: &str, state: AgentLifecycle, source: AgentStateSource) {
         let _ = self.0.emit(
             EVENT_STATE,
             AgentStateChanged {
                 session_id: session_id.to_string(),
                 state,
+                source,
             },
         );
     }
@@ -200,20 +217,63 @@ impl AgentSink for EventSink {
 
 struct AgentSessionEntry {
     summary: Mutex<AgentSessionSummary>,
+    report_token: Option<String>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+}
+
+#[derive(Clone)]
+struct ReporterEndpoint {
+    address: SocketAddr,
+    executable: PathBuf,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReporterMessage {
+    session_id: String,
+    token: String,
+    state: AgentLifecycle,
 }
 
 #[derive(Default)]
 pub struct AgentRegistry {
     sessions: Mutex<HashMap<String, Arc<AgentSessionEntry>>>,
     counter: AtomicU64,
+    reporter: Option<ReporterEndpoint>,
 }
 
 impl AgentRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_local_reporter(sink: Arc<dyn AgentSink>) -> Result<Arc<Self>, String> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .map_err(|error| format!("Cannot start the local agent reporter: {error}"))?;
+        let address = listener
+            .local_addr()
+            .map_err(|error| format!("Cannot read the local reporter address: {error}"))?;
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("Cannot locate the LatticeTerm executable: {error}"))?;
+        let registry = Arc::new(Self {
+            reporter: Some(ReporterEndpoint {
+                address,
+                executable,
+            }),
+            ..Self::default()
+        });
+        let thread_registry = Arc::clone(&registry);
+        std::thread::Builder::new()
+            .name("latticeterm-agent-reporter".to_string())
+            .spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    handle_report_connection(stream, &thread_registry, sink.as_ref());
+                }
+            })
+            .map_err(|error| format!("Cannot run the local agent reporter: {error}"))?;
+        Ok(registry)
     }
 
     fn next_id(&self) -> String {
@@ -246,18 +306,49 @@ impl AgentRegistry {
         self.sessions.lock().ok()?.remove(session_id)
     }
 
-    fn update_state(&self, session_id: &str, next: AgentLifecycle) -> bool {
+    fn update_state(
+        &self,
+        session_id: &str,
+        next: AgentLifecycle,
+        source: AgentStateSource,
+    ) -> bool {
         let Ok(entry) = self.get(session_id) else {
             return false;
         };
         let Ok(mut summary) = entry.summary.lock() else {
             return false;
         };
-        if summary.state == next {
+        if summary.state_source == AgentStateSource::Integration
+            && source == AgentStateSource::Heuristic
+        {
+            return false;
+        }
+        if summary.state == next && summary.state_source == source {
             return false;
         }
         summary.state = next;
+        summary.state_source = source;
         true
+    }
+
+    fn update_reported_state(
+        &self,
+        session_id: &str,
+        token: &str,
+        next: AgentLifecycle,
+    ) -> Result<bool, String> {
+        let entry = self.get(session_id)?;
+        if entry.report_token.as_deref() != Some(token) {
+            return Err("Reporter authentication failed.".to_string());
+        }
+        Ok(self.update_state(session_id, next, AgentStateSource::Integration))
+    }
+
+    #[cfg(test)]
+    fn reporter_credentials(&self, session_id: &str) -> Option<(SocketAddr, String)> {
+        let endpoint = self.reporter.as_ref()?;
+        let entry = self.get(session_id).ok()?;
+        Some((endpoint.address, entry.report_token.clone()?))
     }
 
     pub fn list(&self) -> Vec<AgentSessionSummary> {
@@ -282,6 +373,167 @@ impl AgentRegistry {
             if let Ok(mut killer) = entry.killer.lock() {
                 let _ = killer.kill();
             }
+        }
+    }
+}
+
+fn random_report_token() -> Result<String, String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| format!("Cannot create an agent reporter token: {error}"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn write_report_response(stream: &mut TcpStream, accepted: bool) {
+    let _ = stream.write_all(if accepted { b"ok\n" } else { b"error\n" });
+    let _ = stream.flush();
+}
+
+fn handle_report_connection(mut stream: TcpStream, registry: &AgentRegistry, sink: &dyn AgentSink) {
+    let _ = stream.set_read_timeout(Some(REPORT_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(REPORT_TIMEOUT));
+    let mut payload = Vec::new();
+    if std::io::Read::by_ref(&mut stream)
+        .take(MAX_REPORT_BYTES + 1)
+        .read_to_end(&mut payload)
+        .is_err()
+        || payload.len() as u64 > MAX_REPORT_BYTES
+    {
+        write_report_response(&mut stream, false);
+        return;
+    }
+    let Ok(message) = serde_json::from_slice::<ReporterMessage>(&payload) else {
+        write_report_response(&mut stream, false);
+        return;
+    };
+    let accepted =
+        match registry.update_reported_state(&message.session_id, &message.token, message.state) {
+            Ok(changed) => {
+                if changed {
+                    sink.state(
+                        &message.session_id,
+                        message.state,
+                        AgentStateSource::Integration,
+                    );
+                }
+                true
+            }
+            Err(_) => false,
+        };
+    write_report_response(&mut stream, accepted);
+}
+
+fn send_report_once(
+    address: SocketAddr,
+    session_id: &str,
+    token: &str,
+    state: AgentLifecycle,
+) -> Result<(), String> {
+    if !address.ip().is_loopback() {
+        return Err("The agent reporter address must be loopback-only.".to_string());
+    }
+    let mut stream = TcpStream::connect_timeout(&address, REPORT_TIMEOUT)
+        .map_err(|error| format!("Cannot reach the local agent reporter: {error}"))?;
+    stream
+        .set_read_timeout(Some(REPORT_TIMEOUT))
+        .map_err(|error| format!("Cannot configure the agent reporter: {error}"))?;
+    stream
+        .set_write_timeout(Some(REPORT_TIMEOUT))
+        .map_err(|error| format!("Cannot configure the agent reporter: {error}"))?;
+    let payload = serde_json::to_vec(&ReporterMessage {
+        session_id: session_id.to_string(),
+        token: token.to_string(),
+        state,
+    })
+    .map_err(|error| format!("Cannot encode the agent state: {error}"))?;
+    if payload.len() as u64 > MAX_REPORT_BYTES {
+        return Err("The agent state report is too large.".to_string());
+    }
+    stream
+        .write_all(&payload)
+        .and_then(|_| stream.shutdown(Shutdown::Write))
+        .map_err(|error| format!("Cannot send the agent state: {error}"))?;
+    let mut response = String::new();
+    stream
+        .take(16)
+        .read_to_string(&mut response)
+        .map_err(|error| format!("Cannot read the agent reporter response: {error}"))?;
+    if response == "ok\n" {
+        Ok(())
+    } else {
+        Err("The agent reporter rejected the state update.".to_string())
+    }
+}
+
+fn send_report(
+    address: SocketAddr,
+    session_id: &str,
+    token: &str,
+    state: AgentLifecycle,
+) -> Result<(), String> {
+    let mut last_error = None;
+    for attempt in 0..REPORT_RETRIES {
+        match send_report_once(address, session_id, token, state) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        if attempt + 1 < REPORT_RETRIES {
+            std::thread::sleep(Duration::from_millis(40));
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "The agent state report failed.".to_string()))
+}
+
+fn lifecycle_from_report_arg(value: &str) -> Option<AgentLifecycle> {
+    match value {
+        "working" => Some(AgentLifecycle::Working),
+        "needs-attention" | "needsAttention" => Some(AgentLifecycle::NeedsAttention),
+        "idle" => Some(AgentLifecycle::Idle),
+        "done" => Some(AgentLifecycle::Done),
+        _ => None,
+    }
+}
+
+/// Handle the tiny reporter subcommand before Tauri starts.
+///
+/// Adapter hooks can run `$LATTICETERM_AGENT_REPORTER agent-report done` and
+/// credentials are taken only from the environment of that PTY child.
+pub fn run_reporter_cli<I, S>(args: I) -> Option<i32>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut args = args.into_iter();
+    if args.next()?.as_ref() != OsStr::new("agent-report") {
+        return None;
+    }
+    let Some(state) = args
+        .next()
+        .and_then(|value| value.as_ref().to_str().and_then(lifecycle_from_report_arg))
+    else {
+        eprintln!("usage: latticeterm agent-report <working|needs-attention|idle|done>");
+        return Some(2);
+    };
+    if args.next().is_some() {
+        eprintln!("agent-report accepts exactly one state");
+        return Some(2);
+    }
+    let result = (|| {
+        let address: SocketAddr = std::env::var("LATTICETERM_AGENT_REPORT_ADDR")
+            .map_err(|_| "Agent reporter environment is unavailable.".to_string())?
+            .parse()
+            .map_err(|_| "Agent reporter address is invalid.".to_string())?;
+        let session_id = std::env::var("LATTICETERM_AGENT_SESSION")
+            .map_err(|_| "Agent reporter session is unavailable.".to_string())?;
+        let token = std::env::var("LATTICETERM_AGENT_REPORT_TOKEN")
+            .map_err(|_| "Agent reporter token is unavailable.".to_string())?;
+        send_report(address, &session_id, &token, state)
+    })();
+    match result {
+        Ok(()) => Some(0),
+        Err(error) => {
+            eprintln!("agent state report failed: {error}");
+            Some(1)
         }
     }
 }
@@ -517,6 +769,11 @@ pub fn launch(
     let (definition_id, label, executable, arguments, working_directory) =
         resolve_launch(&request)?;
     let session_id = registry.next_id();
+    let reporter = registry.reporter.clone();
+    let report_token = reporter
+        .as_ref()
+        .map(|_| random_report_token())
+        .transpose()?;
 
     let pair = native_pty_system()
         .openpty(size)
@@ -527,6 +784,14 @@ pub fn launch(
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     command.env("LATTICETERM_AGENT_SESSION", &session_id);
+    if let (Some(endpoint), Some(token)) = (&reporter, &report_token) {
+        command.env("LATTICETERM_AGENT_REPORTER", &endpoint.executable);
+        command.env(
+            "LATTICETERM_AGENT_REPORT_ADDR",
+            endpoint.address.to_string(),
+        );
+        command.env("LATTICETERM_AGENT_REPORT_TOKEN", token);
+    }
 
     let mut child = pair
         .slave
@@ -552,10 +817,12 @@ pub fn launch(
         executable: executable.display().to_string(),
         working_directory: working_directory.display().to_string(),
         state: AgentLifecycle::Working,
+        state_source: AgentStateSource::Heuristic,
         process_id,
     };
     let entry = Arc::new(AgentSessionEntry {
         summary: Mutex::new(summary.clone()),
+        report_token,
         writer: Mutex::new(writer),
         master: Mutex::new(pair.master),
         killer: Mutex::new(killer),
@@ -574,8 +841,9 @@ pub fn launch(
                     let bytes = &buffer[..count];
                     reader_sink.data(&reader_id, bytes);
                     let state = lifecycle_from_output(bytes);
-                    if reader_registry.update_state(&reader_id, state) {
-                        reader_sink.state(&reader_id, state);
+                    if reader_registry.update_state(&reader_id, state, AgentStateSource::Heuristic)
+                    {
+                        reader_sink.state(&reader_id, state, AgentStateSource::Heuristic);
                     }
                 }
                 Err(_) => break,
@@ -611,8 +879,16 @@ pub fn send(
         .write_all(&bytes)
         .and_then(|_| writer.flush())
         .map_err(|error| format!("Cannot write to the agent terminal: {error}"))?;
-    if registry.update_state(session_id, AgentLifecycle::Working) {
-        sink.state(session_id, AgentLifecycle::Working);
+    if registry.update_state(
+        session_id,
+        AgentLifecycle::Working,
+        AgentStateSource::Heuristic,
+    ) {
+        sink.state(
+            session_id,
+            AgentLifecycle::Working,
+            AgentStateSource::Heuristic,
+        );
     }
     Ok(())
 }
@@ -661,6 +937,7 @@ mod tests {
     #[derive(Default)]
     struct TestSink {
         data: Mutex<Vec<u8>>,
+        states: Mutex<Vec<(String, AgentLifecycle, AgentStateSource)>>,
         closed: Mutex<Vec<String>>,
     }
 
@@ -669,7 +946,12 @@ mod tests {
             self.data.lock().unwrap().extend_from_slice(bytes);
         }
 
-        fn state(&self, _session_id: &str, _state: AgentLifecycle) {}
+        fn state(&self, session_id: &str, state: AgentLifecycle, source: AgentStateSource) {
+            self.states
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), state, source));
+        }
 
         fn closed(&self, _session_id: &str, reason: &str) {
             self.closed.lock().unwrap().push(reason.to_string());
@@ -700,6 +982,70 @@ mod tests {
     fn input_decoder_rejects_oversized_events() {
         let encoded = encode(&vec![0_u8; MAX_INPUT_BYTES + 1]);
         assert!(decode(&encoded).unwrap_err().contains("at most"));
+    }
+
+    #[test]
+    fn reporter_subcommand_accepts_only_known_states() {
+        assert_eq!(
+            lifecycle_from_report_arg("needs-attention"),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+        assert_eq!(
+            lifecycle_from_report_arg("done"),
+            Some(AgentLifecycle::Done)
+        );
+        assert_eq!(lifecycle_from_report_arg("arbitrary-command"), None);
+        assert_eq!(run_reporter_cli(["different-command", "done"]), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn semantic_reporter_authenticates_and_overrides_heuristics() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = AgentRegistry::with_local_reporter(sink.clone()).unwrap();
+        let request = AgentLaunchRequest {
+            definition_id: "custom".to_string(),
+            label: "Reporter test".to_string(),
+            executable: "/bin/cat".to_string(),
+            arguments: Vec::new(),
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 80,
+            rows: 24,
+        };
+        let session = launch(sink.clone(), registry.clone(), request).unwrap();
+        let (address, token) = registry
+            .reporter_credentials(&session.session_id)
+            .expect("reporter credentials");
+
+        assert!(send_report(
+            address,
+            &session.session_id,
+            "wrong-token",
+            AgentLifecycle::NeedsAttention,
+        )
+        .is_err());
+        assert_eq!(registry.list()[0].state, AgentLifecycle::Working);
+
+        send_report(address, &session.session_id, &token, AgentLifecycle::Done).unwrap();
+        let summary = &registry.list()[0];
+        assert_eq!(summary.state, AgentLifecycle::Done);
+        assert_eq!(summary.state_source, AgentStateSource::Integration);
+        assert!(!registry.update_state(
+            &session.session_id,
+            AgentLifecycle::NeedsAttention,
+            AgentStateSource::Heuristic,
+        ));
+        assert_eq!(registry.list()[0].state, AgentLifecycle::Done);
+        assert!(collector
+            .states
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, state, source)| *state == AgentLifecycle::Done
+                && *source == AgentStateSource::Integration));
+
+        disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
     }
 
     #[cfg(unix)]
