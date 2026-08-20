@@ -167,7 +167,13 @@ export function ConnectionInspector({
                       <strong>{t(protocolLabelKey(entry.id))}</strong>
                       <small>{t(protocolSummaryKey(entry.id))}</small>
                     </span>
-                    <Chip tone="planned">{t("common.comingSoon")}</Chip>
+                    <Chip tone={entry.available ? "ok" : "planned"}>
+                      {t(
+                        entry.available
+                          ? "common.available"
+                          : "common.comingSoon",
+                      )}
+                    </Chip>
                   </li>
                 ))}
               </ul>

@@ -44,7 +44,7 @@ fn now_seconds() -> u64 {
 struct RuntimeSummary {
     app_name: &'static str,
     version: &'static str,
-    supported_protocols: [&'static str; 5],
+    supported_protocols: [&'static str; 3],
     credential_storage_ready: bool,
 }
 
@@ -53,7 +53,7 @@ fn runtime_summary() -> RuntimeSummary {
     RuntimeSummary {
         app_name: "LatticeTerm",
         version: env!("CARGO_PKG_VERSION"),
-        supported_protocols: ["ssh", "sftp", "rdp", "vnc", "lattice"],
+        supported_protocols: ["ssh", "rdp", "lattice"],
         credential_storage_ready: false,
     }
 }
@@ -332,10 +332,7 @@ mod tests {
         let summary = runtime_summary();
 
         assert_eq!(summary.app_name, "LatticeTerm");
-        assert_eq!(
-            summary.supported_protocols,
-            ["ssh", "sftp", "rdp", "vnc", "lattice"]
-        );
+        assert_eq!(summary.supported_protocols, ["ssh", "rdp", "lattice"]);
         assert!(!summary.credential_storage_ready);
     }
 

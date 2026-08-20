@@ -19,30 +19,35 @@ export const protocolCatalog = [
     acronym: "SSH",
     defaultPort: 22,
     milestone: 1,
+    available: true,
   },
   {
     id: "sftp",
     acronym: "SFTP",
     defaultPort: 22,
     milestone: 3,
+    available: false,
   },
   {
     id: "rdp",
     acronym: "RDP",
     defaultPort: 3389,
     milestone: 4,
+    available: true,
   },
   {
     id: "vnc",
     acronym: "VNC",
     defaultPort: 5900,
     milestone: 5,
+    available: false,
   },
   {
     id: "lattice",
     acronym: "REMOTE",
     defaultPort: 44900,
     milestone: 2,
+    available: true,
   },
 ] as const;
 
@@ -116,6 +121,10 @@ export type ValidationErrors = Partial<Record<ValidationField, ValidationIssue>>
 
 export function findProtocol(protocol: Protocol): ProtocolDefinition {
   return protocolCatalog.find((entry) => entry.id === protocol)!;
+}
+
+export function isProtocolAvailable(protocol: Protocol): boolean {
+  return findProtocol(protocol).available;
 }
 
 export function protocolLabelKey(protocol: Protocol): MessageKey {
