@@ -59,8 +59,14 @@ const UNITS = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
 /**
  * Human-readable size using 1024 steps. Values below 10 in their unit keep one
  * decimal, so 9.4 GB stays precise while 421 GB stays short.
+ *
+ * Formatted arithmetically rather than through `Intl`: a scaled size is always
+ * under four digits with at most one decimal, so there is no grouping to apply
+ * and both supported locales use a dot as the decimal separator. Avoiding
+ * `Intl` here also keeps the function fast on a cold start, where the first
+ * `toLocaleString` call pays for loading the whole ICU data set.
  */
-export function formatBytes(bytes: number, locale?: string): string {
+export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
   if (bytes === 0) return `0 ${UNITS[0]}`;
 
@@ -72,12 +78,8 @@ export function formatBytes(bytes: number, locale?: string): string {
   }
 
   const digits = unit === 0 ? 0 : value < 10 ? 1 : 0;
-  const formatted = value.toLocaleString(locale, {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
 
-  return `${formatted} ${UNITS[unit]}`;
+  return `${value.toFixed(digits)} ${UNITS[unit]}`;
 }
 
 /** Used share of a total, clamped to 0-100 and safe when the total is zero. */

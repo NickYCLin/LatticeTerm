@@ -64,7 +64,7 @@ function MetricCard({
 }
 
 export function HostMetricsPanel({ state }: { state: MetricsState }) {
-  const { t, tag } = useI18n();
+  const { t } = useI18n();
 
   if (state.status === "unavailable") {
     return (
@@ -115,8 +115,8 @@ export function HostMetricsPanel({ state }: { state: MetricsState }) {
         label={t("metrics.memory")}
         value={t("metrics.percentUsed", { percent: memoryPercent })}
         detail={t("metrics.usedOfTotal", {
-          used: formatBytes(metrics.memory.usedBytes, tag),
-          total: formatBytes(metrics.memory.totalBytes, tag),
+          used: formatBytes(metrics.memory.usedBytes),
+          total: formatBytes(metrics.memory.totalBytes),
         })}
         percent={memoryPercent}
       />
@@ -130,8 +130,8 @@ export function HostMetricsPanel({ state }: { state: MetricsState }) {
             label={`${t("metrics.disk")} ${disk.mountpoint}`}
             value={t("metrics.percentUsed", { percent })}
             detail={t("metrics.usedOfTotal", {
-              used: formatBytes(disk.usedBytes, tag),
-              total: formatBytes(disk.totalBytes, tag),
+              used: formatBytes(disk.usedBytes),
+              total: formatBytes(disk.totalBytes),
             })}
             percent={percent}
           />

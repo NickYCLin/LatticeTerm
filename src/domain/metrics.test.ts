@@ -11,20 +11,20 @@ import {
 
 describe("byte formatting", () => {
   it("scales through the units and keeps small values precise", () => {
-    expect(formatBytes(0, "en")).toBe("0 B");
-    expect(formatBytes(512, "en")).toBe("512 B");
-    expect(formatBytes(1024, "en")).toBe("1.0 KB");
-    expect(formatBytes(1536, "en")).toBe("1.5 KB");
-    expect(formatBytes(9.4 * 1024 ** 3, "en")).toBe("9.4 GB");
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1024)).toBe("1.0 KB");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(9.4 * 1024 ** 3)).toBe("9.4 GB");
   });
 
   it("drops the decimal once the number is big enough to read", () => {
-    expect(formatBytes(421 * 1024 ** 3, "en")).toBe("421 GB");
+    expect(formatBytes(421 * 1024 ** 3)).toBe("421 GB");
   });
 
   it("refuses to guess for impossible input", () => {
-    expect(formatBytes(-1, "en")).toBe("—");
-    expect(formatBytes(Number.NaN, "en")).toBe("—");
+    expect(formatBytes(-1)).toBe("—");
+    expect(formatBytes(Number.NaN)).toBe("—");
   });
 });
 
