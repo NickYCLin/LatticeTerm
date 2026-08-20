@@ -27,6 +27,7 @@ const protocolIcons: Record<Protocol, (props: IconProps) => ReactElement> = {
   sftp: TransferIcon,
   rdp: DesktopIcon,
   vnc: ScreenShareIcon,
+  lattice: ScreenShareIcon,
 };
 
 export function ProtocolIcon({

@@ -386,6 +386,10 @@
   --tile-color: var(--warn);
   --tile-soft: var(--warn-soft);
 }
+.protocol-lattice {
+  --tile-color: var(--ok);
+  --tile-soft: var(--ok-soft);
+}
 
 .protocol-tile {
   display: grid;

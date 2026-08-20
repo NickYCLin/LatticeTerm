@@ -9,7 +9,11 @@
 import { useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import type { Workspace } from "../app/useWorkspace";
-import { UNGROUPED, type ConnectionProfile } from "../domain/connection";
+import {
+  UNGROUPED,
+  isProtocolAvailable,
+  type ConnectionProfile,
+} from "../domain/connection";
 import type { SortOrder } from "../domain/query";
 import { parseAndValidateImport, serializeProfiles } from "../domain/export";
 import type { ImportIssue } from "../domain/export";
@@ -310,7 +314,7 @@ export function ConnectionsView({
                     onDelete={() => onDelete(profile.id)}
                     onToggleFavorite={() => toggleFavorite(profile.id)}
                     onConnect={
-                      profile.protocol === "ssh"
+                      isProtocolAvailable(profile.protocol)
                         ? () => onConnect(profile)
                         : undefined
                     }

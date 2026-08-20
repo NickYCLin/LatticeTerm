@@ -17,6 +17,9 @@ import { findTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
 import { useStorageStatus } from "./app/useStorageStatus";
 import { useSshSessions } from "./app/useSshSessions";
+import { useRemoteSessions } from "./app/useRemoteSessions";
+import { useRemoteHost } from "./app/useRemoteHost";
+import { useRdpSessions } from "./app/useRdpSessions";
 import { useWindowTheme } from "./app/useWindowTheme";
 import { useWorkspace } from "./app/useWorkspace";
 import type { ConnectionDraft, ConnectionProfile } from "./domain/connection";
@@ -33,13 +36,16 @@ import {
 import { ConfirmDialog } from "./components/overlays/ConfirmDialog";
 import { ConnectionDrawer } from "./components/overlays/ConnectionDrawer";
 import { ConnectionsView } from "./views/ConnectionsView";
-import { TerminalView } from "./views/TerminalView";
+import { SessionsView } from "./views/SessionsView";
 import { ConnectFlow } from "./components/terminal/ConnectFlow";
+import { RemoteConnectFlow } from "./components/remote/RemoteConnectFlow";
+import { RemoteHostDialog } from "./components/remote/RemoteHostDialog";
+import { RdpConnectFlow } from "./components/rdp/RdpConnectFlow";
 import { ActivityView } from "./views/ActivityView";
 import { VaultView } from "./views/VaultView";
 import { PlannedView, type PlannedArea } from "./views/PlannedView";
 import { SettingsView } from "./views/SettingsView";
-import { PlusIcon, TunnelIcon } from "./components/icons";
+import { PlusIcon, ScreenShareIcon, TunnelIcon } from "./components/icons";
 import "./styles/index.css";
 
 const plannedAreas: Record<"tunnels", PlannedArea> = {
@@ -70,11 +76,15 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const runtime = useRuntimeSummary();
   const storage = useStorageStatus();
   const ssh = useSshSessions();
+  const remote = useRemoteSessions();
+  const remoteHost = useRemoteHost();
+  const rdp = useRdpSessions();
 
   useWindowTheme(findTheme(activeTheme).isDark);
 
   const [view, setView] = useState<ViewId>("connections");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [remoteHostOpen, setRemoteHostOpen] = useState(false);
   const [drawer, setDrawer] = useState<{
     open: boolean;
     profileId: string | null;
@@ -311,16 +321,34 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
             update({ sidebarCollapsed: !preferences.sidebarCollapsed })
           }
           actions={
-            view === "connections" && profiles.length > 0 ? (
+            <>
               <button
                 type="button"
-                className="button button--primary"
-                onClick={openCreate}
+                className={
+                  remoteHost.status
+                    ? "button button--secondary"
+                    : "button button--ghost"
+                }
+                onClick={() => setRemoteHostOpen(true)}
               >
-                <PlusIcon size={15} />
-                {t("connections.add")}
+                <ScreenShareIcon size={15} />
+                {t(
+                  remoteHost.status
+                    ? "remote.host.activeAction"
+                    : "remote.host.action",
+                )}
               </button>
-            ) : undefined
+              {view === "connections" && profiles.length > 0 && (
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={openCreate}
+                >
+                  <PlusIcon size={15} />
+                  {t("connections.add")}
+                </button>
+              )}
+            </>
           }
         />
 
@@ -336,8 +364,10 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
               />
             )}
             {view === "terminal" && (
-              <TerminalView
+              <SessionsView
                 ssh={ssh}
+                remote={remote}
+                rdp={rdp}
                 activeSessionId={activeSessionId}
                 onSelect={setActiveSessionId}
                 theme={activeTheme}
@@ -401,10 +431,36 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       )}
 
-      {connectTarget && (
+      {connectTarget?.protocol === "ssh" && (
         <ConnectFlow
           profile={connectTarget}
           ssh={ssh}
+          onConnected={(sessionId) => {
+            setConnectTarget(null);
+            setActiveSessionId(sessionId);
+            setView("terminal");
+          }}
+          onCancel={() => setConnectTarget(null)}
+        />
+      )}
+
+      {connectTarget?.protocol === "lattice" && (
+        <RemoteConnectFlow
+          profile={connectTarget}
+          remote={remote}
+          onConnected={(sessionId) => {
+            setConnectTarget(null);
+            setActiveSessionId(sessionId);
+            setView("terminal");
+          }}
+          onCancel={() => setConnectTarget(null)}
+        />
+      )}
+
+      {connectTarget?.protocol === "rdp" && (
+        <RdpConnectFlow
+          profile={connectTarget}
+          rdp={rdp}
           onConnected={(sessionId) => {
             setConnectTarget(null);
             setActiveSessionId(sessionId);
@@ -423,6 +479,13 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
             setSelectedId(profile.id);
           }}
           onClose={() => setPaletteOpen(false)}
+        />
+      )}
+
+      {remoteHostOpen && (
+        <RemoteHostDialog
+          host={remoteHost}
+          onClose={() => setRemoteHostOpen(false)}
         />
       )}
     </div>

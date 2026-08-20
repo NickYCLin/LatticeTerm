@@ -25,6 +25,7 @@ pub enum Protocol {
     Sftp,
     Rdp,
     Vnc,
+    Lattice,
 }
 
 impl Protocol {
@@ -34,6 +35,7 @@ impl Protocol {
             Protocol::Sftp => 22,
             Protocol::Rdp => 3389,
             Protocol::Vnc => 5900,
+            Protocol::Lattice => 44900,
         }
     }
 
@@ -43,6 +45,7 @@ impl Protocol {
             Protocol::Sftp => "sftp",
             Protocol::Rdp => "rdp",
             Protocol::Vnc => "vnc",
+            Protocol::Lattice => "lattice",
         }
     }
 }

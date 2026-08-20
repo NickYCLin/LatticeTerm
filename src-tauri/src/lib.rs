@@ -1,10 +1,20 @@
 pub mod domain;
 pub mod hostkeys;
+pub mod rdp;
+pub mod remote;
+pub mod remote_host;
 pub mod ssh;
 pub mod storage;
 
 use crate::domain::ConnectionProfile;
 use crate::hostkeys::{HostKeyRecord, HostTrustStore};
+use crate::rdp::{
+    RdpConnectOutcome, RdpConnectRequest, RdpInputRequest, RdpRegistry, RdpSessionSummary,
+};
+use crate::remote::{
+    RemoteConnectOutcome, RemoteConnectRequest, RemoteRegistry, RemoteSessionSummary,
+};
+use crate::remote_host::{RemoteHostRegistry, RemoteHostStartRequest, RemoteHostStatus};
 use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
 use serde::Serialize;
@@ -36,7 +46,7 @@ fn now_seconds() -> u64 {
 struct RuntimeSummary {
     app_name: &'static str,
     version: &'static str,
-    supported_protocols: [&'static str; 4],
+    supported_protocols: [&'static str; 3],
     credential_storage_ready: bool,
 }
 
@@ -45,7 +55,7 @@ fn runtime_summary() -> RuntimeSummary {
     RuntimeSummary {
         app_name: "LatticeTerm",
         version: env!("CARGO_PKG_VERSION"),
-        supported_protocols: ["ssh", "sftp", "rdp", "vnc"],
+        supported_protocols: ["ssh", "rdp", "lattice"],
         credential_storage_ready: false,
     }
 }
@@ -161,6 +171,85 @@ fn ssh_sessions(registry: State<'_, Arc<SshRegistry>>) -> Vec<SessionSummary> {
     registry.list()
 }
 
+#[tauri::command]
+async fn remote_connect(
+    app: AppHandle,
+    request: RemoteConnectRequest,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<RemoteConnectOutcome, String> {
+    Ok(crate::remote::connect(app, Arc::clone(registry.inner()), request).await)
+}
+
+#[tauri::command]
+fn remote_disconnect(
+    app: AppHandle,
+    session_id: String,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<(), String> {
+    crate::remote::disconnect(&app, registry.inner(), &session_id)
+}
+
+#[tauri::command]
+fn remote_sessions(registry: State<'_, Arc<RemoteRegistry>>) -> Vec<RemoteSessionSummary> {
+    registry.list()
+}
+
+#[tauri::command]
+async fn remote_host_start(
+    app: AppHandle,
+    request: RemoteHostStartRequest,
+    registry: State<'_, Arc<RemoteHostRegistry>>,
+) -> Result<RemoteHostStatus, String> {
+    crate::remote_host::start(app, Arc::clone(registry.inner()), request).await
+}
+
+#[tauri::command]
+async fn remote_host_stop(
+    app: AppHandle,
+    registry: State<'_, Arc<RemoteHostRegistry>>,
+) -> Result<(), String> {
+    crate::remote_host::stop(&app, registry.inner()).await
+}
+
+#[tauri::command]
+fn remote_host_status(
+    registry: State<'_, Arc<RemoteHostRegistry>>,
+) -> Result<Option<RemoteHostStatus>, String> {
+    registry.status()
+}
+
+#[tauri::command]
+async fn rdp_connect(
+    app: AppHandle,
+    request: RdpConnectRequest,
+    registry: State<'_, Arc<RdpRegistry>>,
+) -> Result<RdpConnectOutcome, String> {
+    Ok(crate::rdp::connect(app, Arc::clone(registry.inner()), request).await)
+}
+
+#[tauri::command]
+async fn rdp_input(
+    session_id: String,
+    request: RdpInputRequest,
+    registry: State<'_, Arc<RdpRegistry>>,
+) -> Result<(), String> {
+    crate::rdp::input(registry.inner(), &session_id, request).await
+}
+
+#[tauri::command]
+async fn rdp_disconnect(
+    app: AppHandle,
+    session_id: String,
+    registry: State<'_, Arc<RdpRegistry>>,
+) -> Result<(), String> {
+    crate::rdp::disconnect(&app, registry.inner(), &session_id).await
+}
+
+#[tauri::command]
+fn rdp_sessions(registry: State<'_, Arc<RdpRegistry>>) -> Vec<RdpSessionSummary> {
+    registry.list()
+}
+
 /// Records a key the user has just compared and accepted.
 #[tauri::command]
 fn ssh_trust_host(
@@ -225,6 +314,9 @@ pub fn run() {
             };
             app.manage(trust);
             app.manage(Arc::new(SshRegistry::new()));
+            app.manage(Arc::new(RemoteRegistry::new()));
+            app.manage(Arc::new(RemoteHostRegistry::new()));
+            app.manage(Arc::new(RdpRegistry::new()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -238,6 +330,16 @@ pub fn run() {
             ssh_resize,
             ssh_disconnect,
             ssh_sessions,
+            remote_connect,
+            remote_disconnect,
+            remote_sessions,
+            remote_host_start,
+            remote_host_stop,
+            remote_host_status,
+            rdp_connect,
+            rdp_input,
+            rdp_disconnect,
+            rdp_sessions,
             ssh_trust_host,
             ssh_known_hosts,
             ssh_forget_host
@@ -260,7 +362,7 @@ mod tests {
         let summary = runtime_summary();
 
         assert_eq!(summary.app_name, "LatticeTerm");
-        assert_eq!(summary.supported_protocols, ["ssh", "sftp", "rdp", "vnc"]);
+        assert_eq!(summary.supported_protocols, ["ssh", "rdp", "lattice"]);
         assert!(!summary.credential_storage_ready);
     }
 

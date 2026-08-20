@@ -1,0 +1,26 @@
+[package]
+name = "lattice-remote"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Encrypted direct-connect protocol and agent for Lattice Remote"
+
+[features]
+default = []
+agent = ["dep:image", "dep:serde", "dep:serde_json", "dep:xcap"]
+
+[dependencies]
+sha2 = "0.11.0"
+snow = "0.10.0"
+thiserror = "2"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+image = { version = "0.25", default-features = false, features = ["jpeg"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+# xcap 0.5+ uses pipewire-rs APIs newer than Ubuntu 22.04 headers.
+xcap = { version = "=0.4.1", optional = true }
+
+[[bin]]
+name = "lattice-agent"
+path = "src/bin/lattice-agent.rs"
+required-features = ["agent"]

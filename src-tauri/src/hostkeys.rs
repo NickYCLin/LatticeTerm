@@ -50,6 +50,41 @@ pub fn host_target_key(host: &str, port: u16) -> String {
     }
 }
 
+fn validate_host(host: &str) -> bool {
+    let host = host.trim();
+    !host.is_empty()
+        && host.chars().count() <= crate::domain::MAX_HOSTNAME_LENGTH
+        && !host.contains(char::is_whitespace)
+        && !host.contains("://")
+        && !host.contains('/')
+        && !host.contains('@')
+        && host.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | ':' | '-' | '[' | ']' | '%')
+        })
+}
+
+fn validate_algorithm(algorithm: &str) -> bool {
+    let algorithm = algorithm.trim();
+    !algorithm.is_empty()
+        && algorithm.len() <= 128
+        && algorithm.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '+' | '@')
+        })
+}
+
+fn validate_fingerprint(fingerprint: &str) -> bool {
+    let Some(encoded) = fingerprint.trim().strip_prefix("SHA256:") else {
+        return false;
+    };
+
+    encoded.len() == 43
+        && base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(encoded)
+            .map(|digest| digest.len() == 32)
+            .unwrap_or(false)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostKeyRecord {
@@ -210,6 +245,27 @@ impl HostTrustStore {
         fingerprint: &str,
         now: u64,
     ) -> Result<HostKeyRecord, StorageError> {
+        if !validate_host(host) {
+            return Err(StorageError::Validation(
+                "host must be a hostname or IP address without a scheme, account, or path".into(),
+            ));
+        }
+        if port == 0 {
+            return Err(StorageError::Validation(
+                "port must be between 1 and 65535".into(),
+            ));
+        }
+        if !validate_algorithm(algorithm) {
+            return Err(StorageError::Validation(
+                "host key algorithm is invalid".into(),
+            ));
+        }
+        if !validate_fingerprint(fingerprint) {
+            return Err(StorageError::Validation(
+                "fingerprint must use OpenSSH SHA256 format".into(),
+            ));
+        }
+
         let key = host_target_key(host, port);
         let first_trusted_at = self
             .entries
@@ -220,24 +276,41 @@ impl HostTrustStore {
         let record = HostKeyRecord {
             host: host.trim().to_lowercase(),
             port,
-            algorithm: algorithm.to_string(),
-            fingerprint: fingerprint.to_string(),
+            algorithm: algorithm.trim().to_string(),
+            fingerprint: fingerprint.trim().to_string(),
             first_trusted_at,
             last_seen_at: now,
         };
 
-        self.entries.insert(key, record.clone());
-        self.persist()?;
+        let previous = self.entries.insert(key.clone(), record.clone());
+        if let Err(error) = self.persist() {
+            match previous {
+                Some(previous) => {
+                    self.entries.insert(key, previous);
+                }
+                None => {
+                    self.entries.remove(&key);
+                }
+            }
+            return Err(error);
+        }
+
         Ok(record)
     }
 
     /// Drops a host's trusted key, so the next connection asks again.
     pub fn forget(&mut self, host: &str, port: u16) -> Result<bool, StorageError> {
-        let removed = self.entries.remove(&host_target_key(host, port)).is_some();
-        if removed {
-            self.persist()?;
+        let key = host_target_key(host, port);
+        let Some(removed) = self.entries.remove(&key) else {
+            return Ok(false);
+        };
+
+        if let Err(error) = self.persist() {
+            self.entries.insert(key, removed);
+            return Err(error);
         }
-        Ok(removed)
+
+        Ok(true)
     }
 
     fn persist(&self) -> Result<(), StorageError> {
@@ -285,7 +358,7 @@ mod tests {
     }
 
     const FP_A: &str = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-    const FP_B: &str = "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    const FP_B: &str = "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA";
 
     #[test]
     fn fingerprints_match_the_openssh_display_form() {
@@ -445,6 +518,52 @@ mod tests {
         // "do you trust this?" prompt, which is how a changed key gets waved
         // through. Refusing to open is the safe failure.
         assert!(matches!(error, StorageError::Validation(_)));
+    }
+
+    #[test]
+    fn invalid_manual_trust_records_are_rejected_without_mutating_the_store() {
+        let dir = temp_dir("validation");
+        let mut store = HostTrustStore::open(&dir).unwrap();
+
+        for (host, port, algorithm, fingerprint) in [
+            ("ssh://gateway.example.com", 22, "ssh-ed25519", FP_A),
+            ("gateway.example.com", 0, "ssh-ed25519", FP_A),
+            ("gateway.example.com", 22, "invalid algorithm", FP_A),
+            (
+                "gateway.example.com",
+                22,
+                "ssh-ed25519",
+                "not-a-fingerprint",
+            ),
+        ] {
+            assert!(matches!(
+                store.trust(host, port, algorithm, fingerprint, 1),
+                Err(StorageError::Validation(_))
+            ));
+        }
+
+        assert!(store.is_empty());
+        assert!(!store.path().exists());
+    }
+
+    #[test]
+    fn trusted_record_fields_are_trimmed_and_normalized() {
+        let dir = temp_dir("normalization");
+        let mut store = HostTrustStore::open(&dir).unwrap();
+
+        let record = store
+            .trust(
+                " Gateway.Example.COM ",
+                22,
+                " ssh-ed25519 ",
+                &format!(" {FP_A} "),
+                1,
+            )
+            .unwrap();
+
+        assert_eq!(record.host, "gateway.example.com");
+        assert_eq!(record.algorithm, "ssh-ed25519");
+        assert_eq!(record.fingerprint, FP_A);
     }
 
     #[test]

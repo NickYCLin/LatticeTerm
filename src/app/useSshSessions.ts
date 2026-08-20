@@ -8,15 +8,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { HostKeyRecord } from "../domain/security";
 
-export interface HostKeyRecord {
-  host: string;
-  port: number;
-  algorithm: string;
-  fingerprint: string;
-  firstTrustedAt: number;
-  lastSeenAt: number;
-}
+export type { HostKeyRecord } from "../domain/security";
 
 export type ConnectOutcome =
   | { outcome: "connected"; sessionId: string }

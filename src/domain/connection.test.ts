@@ -6,6 +6,7 @@ import {
   draftFromProfile,
   emptyDraft,
   findDuplicateTarget,
+  isProtocolAvailable,
   parseTags,
   validateConnectionDraft,
 } from "./connection";
@@ -61,7 +62,16 @@ describe("connection profiles", () => {
 
   it("starts a draft on the default port of the chosen protocol", () => {
     expect(emptyDraft("rdp").port).toBe(3389);
+    expect(emptyDraft("lattice").port).toBe(44900);
     expect(emptyDraft().protocol).toBe("ssh");
+  });
+
+  it("reports only protocols with working session engines as available", () => {
+    expect(isProtocolAvailable("ssh")).toBe(true);
+    expect(isProtocolAvailable("rdp")).toBe(true);
+    expect(isProtocolAvailable("lattice")).toBe(true);
+    expect(isProtocolAvailable("sftp")).toBe(false);
+    expect(isProtocolAvailable("vnc")).toBe(false);
   });
 
   it("round-trips a profile into an editable draft", () => {

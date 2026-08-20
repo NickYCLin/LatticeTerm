@@ -28,6 +28,7 @@ serde_json = "1"
 russh = { version = "0.62.7", default-features = false, features = ["ring", "flate2", "rsa"] }
 sha2 = "0.11.0"
 base64 = "0.23.1"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time", "process"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+lattice-remote = { path = "../crates/lattice-remote" }

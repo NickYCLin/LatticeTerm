@@ -24,43 +24,27 @@ export interface HostFingerprint {
   lastSeenAt: number;
 }
 
-export interface CredentialReference {
-  id: string;
-  name: string;
-  type: "ssh-key" | "agent" | "password" | "certificate";
-  comment?: string;
-  createdAt: number;
-}
-
-export interface VaultState {
-  isLocked: boolean;
-  autoLockMinutes: number;
-  systemKeyringAvailable: boolean;
-  knownHosts: HostFingerprint[];
-  credentials: CredentialReference[];
+/** The persisted host-trust shape returned by the Rust core. */
+export interface HostKeyRecord {
+  host: string;
+  port: number;
+  algorithm: KeyAlgorithm | string;
+  fingerprint: string;
+  /** Seconds since the Unix epoch. */
+  firstTrustedAt: number;
+  /** Seconds since the Unix epoch. */
+  lastSeenAt: number;
 }
 
 export type HostTrustDecision = "trust_once" | "trust_and_save" | "reject";
 
 /**
- * Validates that a fingerprint follows standard SHA-256 base64 format (e.g. SHA256:xxx)
- * or MD5 hex format.
+ * Validates OpenSSH's SHA-256 display form: `SHA256:` plus the unpadded
+ * 43-character base64 encoding of a 32-byte digest.
  */
 export function isValidFingerprint(fingerprint: string): boolean {
   const trimmed = fingerprint.trim();
-  if (!trimmed) return false;
-
-  // SHA256:43-character base64 string
-  if (/^SHA256:[A-Za-z0-9+/=]{40,45}$/.test(trimmed)) {
-    return true;
-  }
-
-  // MD5: 16 hex bytes separated by colons
-  if (/^([0-9a-fA-F]{2}:){15}[0-9a-fA-F]{2}$/.test(trimmed)) {
-    return true;
-  }
-
-  return false;
+  return /^SHA256:[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]$/.test(trimmed);
 }
 
 /**
@@ -83,44 +67,20 @@ export function hostTargetKey(host: string, port: number = 22): string {
   return `[${cleanHost}]:${port}`;
 }
 
-export function sampleKnownHosts(): HostFingerprint[] {
-  return [
-    {
-      id: "host-trust-1",
-      host: "gateway.example.com",
-      port: 22,
-      algorithm: "ssh-ed25519",
-      fingerprint: "SHA256:uNiVztksCsDhccWphiWmKdqiUVeyDNAd5NNIzAVqpHg",
-      firstSeenAt: Date.now() - 86400000 * 5,
-      lastSeenAt: Date.now() - 3600000 * 2,
-    },
-    {
-      id: "host-trust-2",
-      host: "staging-cluster.example.org",
-      port: 2222,
-      algorithm: "ecdsa-sha2-nistp256",
-      fingerprint: "SHA256:4e1K9mPzYq2vL7wR8sT3uX6yB0cE5fH1jN4aG7kM9pQ",
-      firstSeenAt: Date.now() - 86400000 * 12,
-      lastSeenAt: Date.now() - 86400000 * 1,
-    },
-  ];
-}
-
-export function sampleCredentials(): CredentialReference[] {
-  return [
-    {
-      id: "cred-1",
-      name: "Personal ED25519 Key",
-      type: "ssh-key",
-      comment: "id_ed25519_2026",
-      createdAt: Date.now() - 86400000 * 30,
-    },
-    {
-      id: "cred-2",
-      name: "Production Bastion Agent",
-      type: "agent",
-      comment: "SSH_AUTH_SOCK",
-      createdAt: Date.now() - 86400000 * 14,
-    },
-  ];
+/**
+ * Hostname or IP literal accepted by the connection model. This intentionally
+ * rejects schemes, accounts and paths so a trust entry cannot target a shape
+ * that the SSH core would never connect to.
+ */
+export function isValidHost(host: string): boolean {
+  const trimmed = host.trim();
+  return (
+    trimmed.length > 0 &&
+    trimmed.length <= 253 &&
+    !/\s/.test(trimmed) &&
+    !trimmed.includes("://") &&
+    !trimmed.includes("/") &&
+    !trimmed.includes("@") &&
+    /^[A-Za-z0-9._:\-[\]%]+$/.test(trimmed)
+  );
 }
