@@ -7,7 +7,6 @@
 
 * **agent:** 加入安全啟動工作區儲存 ([68a6afe](https://github.com/NickYCLin/LatticeTerm/commit/68a6afe60d5325b8b381fd39d5e26babfae8d93a))
 * **agent:** 加入啟動工作區操作介面 ([1302bf8](https://github.com/NickYCLin/LatticeTerm/commit/1302bf8169115a2b17c9c946d3d24dd7889e0d77))
-* **agent:** 合併跨重啟安全啟動工作區 ([#20](https://github.com/NickYCLin/LatticeTerm/issues/20)) ([b3a32c0](https://github.com/NickYCLin/LatticeTerm/commit/b3a32c06540ea651a30beabd770f4f1a673ebd1e))
 
 ## [0.4.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.3.0...v0.4.0) (2026-08-20)
 
