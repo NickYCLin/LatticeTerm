@@ -49,7 +49,7 @@ export const LatticeMark = ({ size = 20, ...props }: IconProps) => (
     {...props}
   >
     <path
-      d="M6 6 18 18M18 6 6 18"
+      d="M6 6L18 18M18 6L6 18"
       stroke="currentColor"
       strokeOpacity="0.45"
       strokeWidth="1.5"
@@ -64,7 +64,11 @@ export const LatticeMark = ({ size = 20, ...props }: IconProps) => (
       stroke="currentColor"
       strokeWidth="1.5"
     />
-    <circle cx="12" cy="12" r="2.5" fill="currentColor" />
+    <circle cx="6" cy="6" r="1.75" fill="currentColor" />
+    <circle cx="18" cy="6" r="1.75" fill="currentColor" />
+    <circle cx="6" cy="18" r="1.75" fill="currentColor" />
+    <circle cx="18" cy="18" r="1.75" fill="currentColor" />
+    <circle cx="12" cy="12" r="2" fill="currentColor" />
   </svg>
 );
 

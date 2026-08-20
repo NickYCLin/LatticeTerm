@@ -8,7 +8,6 @@
 
 import { useI18n } from "../../i18n";
 import { Kbd } from "../common/Callout";
-import { ShieldIcon, VaultIcon } from "../icons";
 import type { StorageState } from "../../app/useStorageStatus";
 
 export function StatusBar({
@@ -43,14 +42,12 @@ export function StatusBar({
         className="statusbar__item statusbar__item--quiet"
         title={storage.status?.path}
       >
-        <ShieldIcon size={12} />
         {storage.mode === "persistent"
           ? t("status.savedLocally")
           : t("status.notSaved")}
       </span>
 
       <span className="statusbar__item statusbar__item--quiet">
-        <VaultIcon size={12} />
         {t("status.vault", {
           state: vaultReady ? t("status.vault.ready") : t("status.vault.locked"),
         })}
