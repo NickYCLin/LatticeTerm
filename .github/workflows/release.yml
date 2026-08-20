@@ -64,14 +64,35 @@ jobs:
       - name: Verify code quality
         run: npm run check
 
+      - name: Check the release signing key is available
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is not set."
+            echo "Artifacts would be unsigned and every auto-update would be refused."
+            exit 1
+          fi
+          echo "Signing key is present."
+
       - name: Build Tauri Application & Publish Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Installed apps refuse an update that is not signed by the private
+          # half of the key in `plugins.updater.pubkey`. Without these the
+          # build still succeeds, but every update would be rejected on the
+          # user's machine, so a missing key must fail here instead.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.event.inputs.version || github.ref_name }}
           releaseName: 'LatticeTerm ${{ github.event.inputs.version || github.ref_name }}'
           releaseBody: 'LatticeTerm release build. Download platform-specific installers below.'
           releaseDraft: false
           prerelease: false
+          # Publishes `latest.json`, which is the file the updater endpoint
+          # points at; without it the app has nothing to check against.
+          includeUpdaterJson: true
           args: ${{ matrix.args }}

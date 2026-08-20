@@ -133,3 +133,16 @@
 - **密碼**：由對話框輸入，只用於當次連線，用完即丟，不寫入任何檔案，也不進記錄。
 - **輸出管道**：Rust 端以 `SessionSink` 介面輸出，正式執行時發送 Tauri 事件，測試時收進緩衝區——這是連線流程能對真實伺服器做整合測試的原因。
 - **測試**：`src-tauri/tests/ssh_live.rs` 針對真實 SSH 伺服器驗證「拒絕→信任→開 shell→指令有輸出」、密碼錯誤、金鑰變更與連不上四種情況；預設標記 `#[ignore]`，需要時搭配拋棄式容器執行。
+
+---
+
+## 10. 自動更新與發行簽章
+
+- **簽章金鑰**：以 `npm run tauri signer generate` 產生。公鑰放在 `tauri.conf.json` 的 `plugins.updater.pubkey`，私鑰與其密碼存在 GitHub Actions 的 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets，不會進入版本庫。
+- **為什麼不能放假的公鑰**：Tauri 的 updater plugin 缺 `pubkey` 會直接讓程式無法啟動；而填一把不對的公鑰雖然程式能開，卻會讓每一次更新的簽章驗證都失敗，問題被藏起來反而更難查。
+- **必要的三個設定**，缺一則更新不會運作：
+  1. `plugins.updater.pubkey`：用戶端據此驗證更新包簽章。
+  2. `bundle.createUpdaterArtifacts`：沒有它只會產生安裝檔，不會產生更新包。
+  3. `includeUpdaterJson`：把 `latest.json` 一併發佈，那正是更新端點指向的檔案。
+- **發行流程的防呆**：發行工作流程在建置前會確認簽章金鑰存在，缺少時直接失敗。否則會產出一份沒有簽章的發行版，安裝端會拒絕它的每一次更新，而問題要等使用者更新失敗才會被發現。
+- **既有安裝需要重裝一次**：v0.2.0 建置時 updater plugin 是停用狀態，那個版本沒有檢查更新的能力。自動更新從下一個發行版開始生效。
