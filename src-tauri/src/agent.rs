@@ -271,6 +271,19 @@ impl AgentRegistry {
         summaries.sort_by(|left, right| left.session_id.cmp(&right.session_id));
         summaries
     }
+
+    /// Stop every child before the desktop process exits or restarts.
+    pub fn stop_all(&self) {
+        let entries: Vec<_> = match self.sessions.lock() {
+            Ok(mut sessions) => sessions.drain().map(|(_, entry)| entry).collect(),
+            Err(_) => return,
+        };
+        for entry in entries {
+            if let Ok(mut killer) = entry.killer.lock() {
+                let _ = killer.kill();
+            }
+        }
+    }
 }
 
 pub fn catalog() -> Vec<AgentDefinition> {
@@ -726,5 +739,27 @@ mod tests {
             String::from_utf8_lossy(&collector.data.lock().unwrap()).contains("lattice-agent-test")
         );
         disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_all_removes_and_terminates_registered_processes() {
+        let sink: Arc<dyn AgentSink> = Arc::new(TestSink::default());
+        let registry = Arc::new(AgentRegistry::new());
+        let request = AgentLaunchRequest {
+            definition_id: "custom".to_string(),
+            label: "Test cat".to_string(),
+            executable: "/bin/cat".to_string(),
+            arguments: Vec::new(),
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 80,
+            rows: 24,
+        };
+        launch(sink, registry.clone(), request).unwrap();
+        assert_eq!(registry.list().len(), 1);
+
+        registry.stop_all();
+
+        assert!(registry.list().is_empty());
     }
 }

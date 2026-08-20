@@ -667,7 +667,7 @@ fn ssh_forget_host(host: String, port: u16, trust: State<'_, TrustState>) -> Res
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
@@ -738,8 +738,13 @@ pub fn run() {
             ssh_known_hosts,
             ssh_forget_host
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running LatticeTerm");
+        .build(tauri::generate_context!())
+        .expect("error while building LatticeTerm");
+    app.run(|handle, event| {
+        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+            handle.state::<Arc<AgentRegistry>>().stop_all();
+        }
+    });
 }
 
 #[cfg(test)]
