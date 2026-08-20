@@ -8,6 +8,7 @@
 @import "./shell.css";
 @import "./controls.css";
 @import "./connections.css";
+@import "./agents.css";
 @import "./vault.css";
 @import "./remote.css";
 @import "./sftp.css";

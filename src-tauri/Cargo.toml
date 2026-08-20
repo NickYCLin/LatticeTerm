@@ -1,7 +1,7 @@
 [package]
 name = "lattice-term"
 version = "0.2.0"
-description = "A secure, cross-platform workspace for SSH, SFTP, RDP, and remote desktop access."
+description = "A secure, cross-platform workspace for local AI CLIs, SSH, SFTP, RDP, and remote desktop access."
 authors = ["NickYCLin"]
 edition = "2021"
 license = "MPL-2.0"
@@ -35,3 +35,4 @@ tauri-plugin-process = "2"
 lattice-remote = { path = "../crates/lattice-remote" }
 keyring = "4.1.6"
 zeroize = "1.9.0"
+portable-pty = "0.9.0"

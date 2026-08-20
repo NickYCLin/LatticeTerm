@@ -1,9 +1,9 @@
 # LatticeTerm
 
-LatticeTerm 是一套現代、安全且跨平台的遠端連線工作空間，用來統一管理 SSH、SFTP、RDP 與 VNC 連線，以 Tauri 2、Rust、React 與 TypeScript 建構。
+LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作空間，用來統一管理本機 AI CLI、SSH、SFTP、RDP 與 VNC 連線，以 Tauri 2、Rust、React 與 TypeScript 建構。
 
 > [!NOTE]
-> LatticeTerm 目前處於開發初期階段，已提供 SSH、SFTP、Lattice Remote、Web RDP、主機信任與作業系統認證儲存；Tunnel、VNC 與 Relay 等功能正依開發藍圖陸續接入。
+> LatticeTerm 目前處於開發初期階段，已提供 AI Agent Fleet、SSH、SFTP、Lattice Remote、Web RDP、主機信任與作業系統認證儲存；背景 Agent daemon、Tunnel、VNC 與 Relay 等功能正依開發藍圖陸續接入。
 
 ## 主要特色
 
@@ -17,6 +17,7 @@ LatticeTerm 是一套現代、安全且跨平台的遠端連線工作空間，�
 - **六種主題**：深色、淺色、午夜藍、石墨黑、暖砂與高對比，另可跟隨系統；切換時原生標題列會一起換色。
 - **主機資源檢視**：連線詳細面板保留「主機狀態」分頁，用來顯示 CPU、記憶體與磁碟用量。
 - **本機持久化**：連線設定會存在本機的應用程式資料目錄，關閉再開仍在；檔案只含主機資訊，不含任何認證資料。
+- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、OpenCode、Hermes 等本機 LLM CLI，也可安全指定自訂可執行檔與參數；登入資料仍由各 CLI 自行管理。
 - **SSH 連線**：以純 Rust 的 russh 實作，可建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼預設只用於當次連線，使用者可在驗證成功後明確保存到系統認證儲存區。
 - **SFTP 檔案工作區**：沿用 SSH 主機指紋驗證與獨立的系統認證項目，可瀏覽遠端路徑、上下載、新增資料夾、重新命名及確認刪除。單次傳輸限制為 32 MiB，避免大型內容耗盡 WebView／IPC 記憶體。
 - **Lattice Remote（唯讀 v1）**：桌面版內建「分享這台裝置」，由使用者明確啟動自建 Agent 擷取完整主螢幕，以 Noise XXpsk3 與一次性八位數配對碼建立端對端加密直連；目前不注入鍵盤或滑鼠。
@@ -42,7 +43,7 @@ LatticeTerm 是一套現代、安全且跨平台的遠端連線工作空間，�
 介面必須讓使用者一眼分辨「已經可用」與「還在開發」：
 
 - 尚未實作的功能標示為「即將推出」，不使用看起來可按、實際上停用的假按鈕。
-- SSH、SFTP、Lattice Remote 與 Web RDP 會啟動真正的工作階段；VNC 仍明確標示開發狀態。
+- AI Agent Fleet、SSH、SFTP、Lattice Remote 與 Web RDP 會啟動真正的工作階段；背景 Agent daemon、跨重啟還原與 VNC 仍明確標示開發狀態。
 - 主機資源分頁在監控資料尚未接入前直接說明原因，不顯示假的 CPU 或記憶體數字。
 - SSH/SFTP/RDP 密碼永遠不寫入連線設定檔；預設只供當次驗證，勾選後也只有驗證成功才會寫入作業系統認證儲存區。
 - Key Vault 的主機信任與認證分頁都顯示真正的本機狀態；認證分頁只列連線參照，不顯示密碼內容。
@@ -55,8 +56,9 @@ LatticeTerm 是一套現代、安全且跨平台的遠端連線工作空間，�
 3. Lattice Remote 唯讀加密主螢幕與內嵌主機分享（已可用，後續增加 Relay/NAT 穿透、無人值守與顯式授權的輸入控制）
 4. 內嵌 Web RDP Canvas（已可用，持續強化封裝與憑證管理）
 5. SFTP 檔案瀏覽與安全傳輸（已可用；大型檔案佇列仍待完成）、SSH Tunnel 與 VNC
-6. 跨平台安裝檔打包與自動更新機制
-7. Android 與 iOS 版本（連線核心不依賴系統 ssh 執行檔，因此可沿用）
+6. AI Agent Fleet 本機多 CLI PTY（已可用）；語意 adapter、背景 daemon、跨重啟還原、任務編排與遠端 attach 仍待完成
+7. 跨平台安裝檔打包與自動更新機制
+8. Android 與 iOS 版本（遠端連線核心可沿用；本機 CLI Fleet 為桌面功能）
 
 ## 鍵盤快捷鍵
 
@@ -100,6 +102,12 @@ cargo run --manifest-path crates/lattice-remote/Cargo.toml --features agent --bi
 ```
 
 Agent 顯示的八位數配對碼五分鐘後失效，連續五次失敗就會停止；一次成功工作階段結束後程序也會退出。內嵌模式配對成功後會立即從介面清除配對碼，使用者可隨時停止分享。v1 僅傳畫面，不接受遠端輸入。
+
+### 執行 AI Agent Fleet
+
+Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示後端不可用。開啟側邊導覽的「AI Agent Fleet」，選擇工作目錄後即可啟動已偵測到的 CLI，或以「每行一個參數」加入自訂工具。工作階段只存於記憶體，停止或關閉應用程式會終止 CLI。
+
+Herdr 類型的背景服務、語意狀態、跨重啟還原與自建遠端 attach 規劃，請見 [AI Agent Fleet 架構與整合藍圖](docs/AGENT_FLEET_ARCHITECTURE.zh-TW.md)。
 
 ### 專案驗證
 

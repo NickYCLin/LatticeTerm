@@ -27,6 +27,8 @@ jobs:
             platform: ubuntu-22.04-arm
           - name: Windows amd64
             platform: windows-latest
+          - name: macOS arm64
+            platform: macos-latest
 
     runs-on: ${{ matrix.platform }}
 

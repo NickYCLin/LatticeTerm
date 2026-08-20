@@ -46,6 +46,8 @@ export const en: Messages = {
   // Navigation ------------------------------------------------------------
   "nav.connections": "Connections",
   "nav.connections.desc": "Find, organise and edit remote hosts",
+  "nav.agents": "AI Agent Fleet",
+  "nav.agents.desc": "Run and monitor multiple local LLM CLIs",
   "nav.tunnels": "Tunnels",
   "nav.tunnels.desc": "Local, remote and dynamic port forwarding",
   "nav.vault": "Key vault",
@@ -436,7 +438,7 @@ export const en: Messages = {
 
   // Terminal --------------------------------------------------------------
   "terminal.title": "Sessions",
-  "terminal.desc": "Open SSH, SFTP, Lattice Remote, and Web RDP connections",
+  "terminal.desc": "Open AI CLI, SSH, SFTP, Lattice Remote, and Web RDP sessions",
   "terminal.disconnect": "Disconnect",
   "terminal.backToList": "Back to connections",
   "terminal.closed": "Session ended ({reason})",
@@ -445,7 +447,59 @@ export const en: Messages = {
   "terminal.reconnect": "Reconnect",
   "terminal.empty.title": "No session is open",
   "terminal.empty.body":
-    "Pick a host and press Connect to open SSH, SFTP, or a remote display here.",
+    "Launch a CLI from AI Agent Fleet or pick a host to open its session here.",
+
+  // AI Agent Fleet --------------------------------------------------------
+  "agents.hero.eyebrow": "Local collaboration hub",
+  "agents.hero.title": "Keep multiple AI CLIs in view",
+  "agents.hero.body":
+    "Every agent runs in its own native terminal. Launch, switch, and stop them in parallel without moving existing sign-in data into LatticeTerm.",
+  "agents.stats.installed": "Detected",
+  "agents.stats.running": "Running",
+  "agents.stats.attention": "May need input",
+  "agents.security.title": "Each CLI keeps its own sign-in and permissions",
+  "agents.security.body":
+    "LatticeTerm only starts the local program and arguments you select; it does not read or store model API keys. CLIs still run with your user permissions, so add only executables you trust.",
+  "agents.backend.unavailable.title": "Use the LatticeTerm desktop app",
+  "agents.backend.unavailable.body":
+    "The browser preview cannot access local PTYs. You can inspect this interface here, but it cannot launch a CLI.",
+  "agents.launch.failed": "Could not launch the agent",
+  "agents.directory.eyebrow": "Launch context",
+  "agents.directory.title": "Choose a working directory and CLI",
+  "agents.directory.refresh": "Detect again",
+  "agents.cwd": "Working directory",
+  "agents.cwd.placeholder": "For example /home/me/project",
+  "agents.cwd.hint":
+    "The agent starts in this folder and may read or change its files according to the CLI's permissions.",
+  "agents.installed": "Available",
+  "agents.notInstalled": "Not detected",
+  "agents.path.missing": "No directly executable program was found on PATH",
+  "agents.launching": "Launching…",
+  "agents.launch": "Launch",
+  "agents.custom.eyebrow": "Custom adapter",
+  "agents.custom.title": "Connect another LLM CLI",
+  "agents.custom.body":
+    "Provide an executable and explicit argument vector; the system never joins them into a shell command.",
+  "agents.custom.label": "Display name",
+  "agents.custom.label.placeholder": "For example My Team Agent",
+  "agents.custom.executable": "Executable",
+  "agents.custom.executable.placeholder": "For example my-agent or an absolute path",
+  "agents.custom.arguments": "Launch arguments",
+  "agents.custom.arguments.placeholder": "--model\nteam-model\n--resume",
+  "agents.custom.arguments.hint": "One argument per line; blank lines are ignored, up to 64.",
+  "agents.custom.launch": "Launch custom CLI",
+  "agents.running.eyebrow": "Live state",
+  "agents.running.title": "Running agents",
+  "agents.running.empty": "No agent is running. Choose a CLI above to begin.",
+  "agents.state.needsAttention": "May be waiting for input",
+  "agents.state.working": "Working",
+  "agents.open": "Open",
+  "agents.stop": "Stop agent",
+  "agents.stop.confirm.title": "Stop “{name}”?",
+  "agents.stop.confirm.body":
+    "This terminates the local CLI process. Anything the CLI has not saved may be lost.",
+  "agents.stop.confirm.action": "Stop",
+  "agents.terminal.inputFailed": "The agent has ended and can no longer accept input.",
 
   // SFTP ------------------------------------------------------------------
   "sftp.title": "SFTP file workspace",

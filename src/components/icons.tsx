@@ -223,6 +223,15 @@ export const TerminalIcon: Glyph = (props) => (
   </Icon>
 );
 
+export const AgentIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <rect x="2" y="3" width="12" height="10" rx="2" />
+    <circle cx="6" cy="7" r="1" fill="currentColor" />
+    <circle cx="10" cy="7" r="1" fill="currentColor" />
+    <path d="M5.5 10h5M8 1.5V3" />
+  </Icon>
+);
+
 export const FolderIcon: Glyph = (props) => (
   <Icon {...props}>
     <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.5 1.5h4.9A1.5 1.5 0 0 1 14 6v6.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-8z" />
