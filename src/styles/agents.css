@@ -82,6 +82,7 @@
 
 .agents-directory,
 .agents-custom,
+.agents-orchestration,
 .agents-running {
   display: grid;
   gap: var(--space-5);
@@ -205,6 +206,75 @@
   margin-bottom: 1.55rem;
 }
 
+.agents-broadcast__targets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--space-3);
+}
+
+.agents-broadcast__target {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    background-color var(--duration-fast) var(--ease);
+}
+
+.agents-broadcast__target:hover,
+.agents-broadcast__target.is-selected {
+  border-color: var(--accent-line);
+}
+
+.agents-broadcast__target.is-selected {
+  background: var(--surface-selected);
+}
+
+.agents-broadcast__target-label {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.agents-broadcast__target-label strong,
+.agents-broadcast__target-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-broadcast__target-label span {
+  color: var(--text-faint);
+  font-size: var(--text-2xs);
+}
+
+.agents-broadcast__compose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-4);
+}
+
+.agents-broadcast__compose textarea {
+  min-height: 7rem;
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.agents-broadcast__compose > .button {
+  margin-bottom: 1.55rem;
+}
+
+.agents-broadcast__error {
+  display: block;
+  margin-top: var(--space-2);
+  overflow-wrap: anywhere;
+}
+
 .agents-running__empty {
   margin: 0;
   padding: var(--space-5);
@@ -315,6 +385,7 @@
   .agents-hero,
   .agents-directory,
   .agents-custom,
+  .agents-orchestration,
   .agents-running {
     padding: var(--space-5);
   }
@@ -330,6 +401,15 @@
 
   .agents-custom__fields {
     grid-template-columns: 1fr;
+  }
+
+  .agents-broadcast__compose {
+    grid-template-columns: 1fr;
+  }
+
+  .agents-broadcast__compose > .button {
+    justify-self: start;
+    margin-bottom: 0;
   }
 
   .agent-session-row {
