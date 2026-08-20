@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ConnectionProfile } from "../domain/connection";
 
-export type CredentialKind = "sshPassword" | "rdpPassword";
+export type CredentialKind =
+  | "sshPassword"
+  | "sftpPassword"
+  | "rdpPassword";
 
 export interface CredentialStoreStatus {
   ready: boolean;
@@ -53,6 +56,7 @@ export function credentialKindFor(
   profile: ConnectionProfile,
 ): CredentialKind | null {
   if (profile.protocol === "ssh") return "sshPassword";
+  if (profile.protocol === "sftp") return "sftpPassword";
   if (profile.protocol === "rdp") return "rdpPassword";
   return null;
 }

@@ -270,7 +270,7 @@ export const en: Messages = {
     "Strict host-key verification and system credential storage are active. Auto-lock, clipboard clearing, and encrypted backup are still in development.",
   "settings.security.title": "Host trust and system credential storage are active",
   "settings.security.body":
-    "SSH and RDP passwords default to one connection attempt. When explicitly selected, only a successfully verified password is saved by the operating system; connection profiles remain secret-free.",
+    "SSH, SFTP, and RDP passwords default to one connection attempt. When explicitly selected, only a successfully verified password is saved by the operating system; connection profiles remain secret-free.",
   "settings.security.autoLock": "Auto-lock the vault",
   "settings.security.autoLockDetail":
     "Lock after a period of inactivity, and when the app loses focus.",
@@ -424,6 +424,9 @@ export const en: Messages = {
   "connect.stage.connect": "opening the connection",
   "connect.stage.authenticate": "signing in",
   "connect.stage.channel": "opening a channel",
+  "connect.stage.subsystem": "starting the SFTP subsystem",
+  "connect.stage.directory": "reading the initial directory",
+  "connect.stage.registry": "creating the session",
   "connect.stage.pty": "requesting a terminal",
   "connect.stage.shell": "starting the shell",
   "connect.stage.trust": "reading trusted host keys",
@@ -433,7 +436,7 @@ export const en: Messages = {
 
   // Terminal --------------------------------------------------------------
   "terminal.title": "Sessions",
-  "terminal.desc": "Open SSH, Lattice Remote, and Web RDP connections",
+  "terminal.desc": "Open SSH, SFTP, Lattice Remote, and Web RDP connections",
   "terminal.disconnect": "Disconnect",
   "terminal.backToList": "Back to connections",
   "terminal.closed": "Session ended ({reason})",
@@ -442,7 +445,37 @@ export const en: Messages = {
   "terminal.reconnect": "Reconnect",
   "terminal.empty.title": "No session is open",
   "terminal.empty.body":
-    "Pick a host and press Connect to open its terminal or remote display here.",
+    "Pick a host and press Connect to open SSH, SFTP, or a remote display here.",
+
+  // SFTP ------------------------------------------------------------------
+  "sftp.title": "SFTP file workspace",
+  "sftp.path": "Remote path",
+  "sftp.go": "Go",
+  "sftp.up": "Up",
+  "sftp.refresh": "Refresh",
+  "sftp.newFolder": "New folder",
+  "sftp.upload": "Upload",
+  "sftp.download": "Download",
+  "sftp.rename": "Rename",
+  "sftp.delete": "Delete",
+  "sftp.limit":
+    "Each upload or download is limited to 32 MiB so large files never fill WebView memory.",
+  "sftp.problem": "SFTP operation failed",
+  "sftp.loading": "Reading the remote directory…",
+  "sftp.empty": "This folder is empty.",
+  "sftp.createPrompt": "New folder name",
+  "sftp.renamePrompt": "New file or folder name",
+  "sftp.deleteConfirm": "Delete “{name}”? This action cannot be undone.",
+  "sftp.overwriteConfirm":
+    "“{name}” already exists. Overwrite it? This action cannot be undone.",
+  "sftp.overwriteDirectory":
+    "“{name}” is a folder and cannot be overwritten by an uploaded file.",
+  "sftp.tooLarge": "This file exceeds the {limit} MiB transfer limit.",
+  "sftp.column.name": "Name",
+  "sftp.column.size": "Size",
+  "sftp.column.modified": "Modified",
+  "sftp.column.permissions": "Permissions",
+  "sftp.column.actions": "Actions",
 
   // Lattice Remote ---------------------------------------------------------
   "remote.connect.title": "Connect to {name}",

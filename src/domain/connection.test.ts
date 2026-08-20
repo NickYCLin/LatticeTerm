@@ -70,7 +70,7 @@ describe("connection profiles", () => {
     expect(isProtocolAvailable("ssh")).toBe(true);
     expect(isProtocolAvailable("rdp")).toBe(true);
     expect(isProtocolAvailable("lattice")).toBe(true);
-    expect(isProtocolAvailable("sftp")).toBe(false);
+    expect(isProtocolAvailable("sftp")).toBe(true);
     expect(isProtocolAvailable("vnc")).toBe(false);
   });
 

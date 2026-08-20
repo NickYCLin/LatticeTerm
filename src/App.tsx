@@ -17,6 +17,7 @@ import { findTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
 import { useStorageStatus } from "./app/useStorageStatus";
 import { useSshSessions } from "./app/useSshSessions";
+import { useSftpSessions } from "./app/useSftpSessions";
 import { useRemoteSessions } from "./app/useRemoteSessions";
 import { useRemoteHost } from "./app/useRemoteHost";
 import { useRdpSessions } from "./app/useRdpSessions";
@@ -42,6 +43,7 @@ import { ConnectFlow } from "./components/terminal/ConnectFlow";
 import { RemoteConnectFlow } from "./components/remote/RemoteConnectFlow";
 import { RemoteHostDialog } from "./components/remote/RemoteHostDialog";
 import { RdpConnectFlow } from "./components/rdp/RdpConnectFlow";
+import { SftpConnectFlow } from "./components/sftp/SftpConnectFlow";
 import { ActivityView } from "./views/ActivityView";
 import { VaultView } from "./views/VaultView";
 import { PlannedView, type PlannedArea } from "./views/PlannedView";
@@ -77,6 +79,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const runtime = useRuntimeSummary();
   const storage = useStorageStatus();
   const ssh = useSshSessions();
+  const sftp = useSftpSessions();
   const remote = useRemoteSessions();
   const remoteHost = useRemoteHost();
   const rdp = useRdpSessions();
@@ -376,6 +379,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
             {view === "terminal" && (
               <SessionsView
                 ssh={ssh}
+                sftp={sftp}
                 remote={remote}
                 rdp={rdp}
                 activeSessionId={activeSessionId}
@@ -508,6 +512,19 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         <RemoteConnectFlow
           profile={connectTarget}
           remote={remote}
+          onConnected={(sessionId) => {
+            setConnectTarget(null);
+            setActiveSessionId(sessionId);
+            setView("terminal");
+          }}
+          onCancel={() => setConnectTarget(null)}
+        />
+      )}
+
+      {connectTarget?.protocol === "sftp" && (
+        <SftpConnectFlow
+          profile={connectTarget}
+          sftp={sftp}
           onConnected={(sessionId) => {
             setConnectTarget(null);
             setActiveSessionId(sessionId);
