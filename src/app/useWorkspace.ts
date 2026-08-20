@@ -128,8 +128,29 @@ export function useWorkspace() {
     );
   }, [record]);
 
+  const importProfiles = useCallback(
+    (imported: ConnectionProfile[]): number => {
+      if (imported.length === 0) return 0;
+      setProfiles((current) => [...current, ...imported]);
+      if (imported.length > 0 && !selectedId) {
+        setSelectedId(imported[0].id);
+      }
+      record(
+        "workspace",
+        `Imported ${imported.length} profile${imported.length === 1 ? "" : "s"}`,
+        "Non-secret JSON import",
+      );
+      return imported.length;
+    },
+    [record, selectedId],
+  );
+
   const clearActivity = useCallback((): void => {
     setActivity([]);
+  }, []);
+
+  const resetFilter = useCallback((): void => {
+    setFilter(emptyFilter);
   }, []);
 
   const visibleProfiles = useMemo(
@@ -162,6 +183,7 @@ export function useWorkspace() {
     selected,
     selectedId,
     setFilter,
+    resetFilter,
     setSortOrder,
     setSelectedId,
     addProfile,
@@ -170,6 +192,7 @@ export function useWorkspace() {
     removeProfile,
     toggleFavorite,
     loadSamples,
+    importProfiles,
     clearActivity,
     record,
   };

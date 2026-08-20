@@ -6,11 +6,19 @@
  * offers a way back.
  */
 
+import { useRef, useState, type ChangeEvent } from "react";
 import type { Workspace } from "../app/useWorkspace";
 import type { SortOrder } from "../domain/query";
 import { ConnectionRow } from "../components/connections/ConnectionRow";
-import { EmptyState } from "../components/common/Callout";
-import { ConnectionsIcon, ImportIcon, PlusIcon, SearchIcon } from "../components/icons";
+import { Callout, EmptyState } from "../components/common/Callout";
+import {
+  ConnectionsIcon,
+  ExportIcon,
+  ImportIcon,
+  PlusIcon,
+  SearchIcon,
+} from "../components/icons";
+import { parseAndValidateImport, serializeProfiles } from "../domain/export";
 
 const sortLabels: Record<SortOrder, string> = {
   name: "Name",
@@ -36,34 +44,133 @@ export function ConnectionsView({
     filterActive,
     sortOrder,
     setSortOrder,
-    setFilter,
+    resetFilter,
     selectedId,
     setSelectedId,
     duplicateProfile,
     toggleFavorite,
     loadSamples,
+    importProfiles,
   } = workspace;
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importNotice, setImportNotice] = useState<{
+    tone: "info" | "warn";
+    title: string;
+    message: string;
+  } | null>(null);
+
+  function triggerImport() {
+    fileInputRef.current?.click();
+  }
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = String(e.target?.result ?? "");
+      const result = parseAndValidateImport(content);
+
+      if (result.validProfiles.length > 0) {
+        const count = importProfiles(result.validProfiles);
+        if (result.errors.length > 0) {
+          setImportNotice({
+            tone: "warn",
+            title: `Imported ${count} profiles with notices`,
+            message: `${result.errors.join(" ")} (${result.skippedCount} invalid entries skipped).`,
+          });
+        } else {
+          setImportNotice({
+            tone: "info",
+            title: `Import successful`,
+            message: `Successfully imported ${count} connection profiles.`,
+          });
+        }
+      } else {
+        setImportNotice({
+          tone: "warn",
+          title: "Import failed",
+          message:
+            result.errors.length > 0
+              ? result.errors.join(" ")
+              : "No valid connection profiles found in file.",
+        });
+      }
+    };
+    reader.readAsText(file);
+    // Reset file input so same file can be re-selected if desired
+    event.target.value = "";
+  }
+
+  function handleExport() {
+    if (profiles.length === 0) return;
+    const json = serializeProfiles(profiles);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `latticeterm-connections-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
 
   if (profiles.length === 0) {
     return (
-      <EmptyState
-        icon={<ConnectionsIcon size={22} />}
-        title="No connections yet"
-        description="Add the first host you want to reach. LatticeTerm stores its name, address and organisation — never a password or a key."
-        actions={
-          <>
-            <button type="button" className="button button--primary" onClick={onCreate}>
-              <PlusIcon size={14} />
-              Add connection
-            </button>
-            <button type="button" className="button button--ghost" onClick={loadSamples}>
-              <ImportIcon size={14} />
-              Load sample workspace
-            </button>
-          </>
-        }
-        footnote="Sample hosts use documentation-only names such as example.com and 192.0.2.0/24."
-      />
+      <div className="stack">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: "none" }}
+          onChange={handleFileChange}
+          aria-hidden="true"
+        />
+
+        {importNotice && (
+          <Callout tone={importNotice.tone} title={importNotice.title}>
+            {importNotice.message}
+          </Callout>
+        )}
+
+        <EmptyState
+          icon={<ConnectionsIcon size={22} />}
+          title="No connections yet"
+          description="Add the first host you want to reach, load documentation samples, or import a previously exported non-secret JSON backup."
+          actions={
+            <>
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={onCreate}
+              >
+                <PlusIcon size={14} />
+                Add connection
+              </button>
+              <button
+                type="button"
+                className="button button--ghost"
+                onClick={loadSamples}
+              >
+                <ImportIcon size={14} />
+                Load sample workspace
+              </button>
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={triggerImport}
+              >
+                <ImportIcon size={14} />
+                Import JSON
+              </button>
+            </>
+          }
+          footnote="LatticeTerm only stores non-secret metadata (hostname, protocol, tags). Secrets are never exported or accepted."
+        />
+      </div>
     );
   }
 
@@ -77,16 +184,7 @@ export function ConnectionsView({
           <button
             type="button"
             className="button button--secondary"
-            onClick={() =>
-              setFilter({
-                search: "",
-                protocols: [],
-                environments: [],
-                tags: [],
-                favoritesOnly: false,
-                group: null,
-              })
-            }
+            onClick={resetFilter}
           >
             Reset filters
           </button>
@@ -97,6 +195,21 @@ export function ConnectionsView({
 
   return (
     <div className="connections">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json,application/json"
+        style={{ display: "none" }}
+        onChange={handleFileChange}
+        aria-hidden="true"
+      />
+
+      {importNotice && (
+        <Callout tone={importNotice.tone} title={importNotice.title}>
+          {importNotice.message}
+        </Callout>
+      )}
+
       <div className="connections__toolbar">
         <p className="connections__count" aria-live="polite">
           {visibleProfiles.length}
@@ -104,21 +217,43 @@ export function ConnectionsView({
           {visibleProfiles.length === 1 ? "" : "s"}
         </p>
 
-        <label className="select">
-          <span className="select__label">Sort by</span>
-          <select
-            value={sortOrder}
-            onChange={(event) =>
-              setSortOrder(event.currentTarget.value as SortOrder)
-            }
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <label className="select">
+            <span className="select__label">Sort by</span>
+            <select
+              value={sortOrder}
+              onChange={(event) =>
+                setSortOrder(event.currentTarget.value as SortOrder)
+              }
+            >
+              {Object.entries(sortLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button
+            type="button"
+            className="button button--ghost button--sm"
+            onClick={triggerImport}
+            title="Import connection profiles from JSON"
           >
-            {Object.entries(sortLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
+            <ImportIcon size={14} />
+            Import
+          </button>
+
+          <button
+            type="button"
+            className="button button--ghost button--sm"
+            onClick={handleExport}
+            title="Export connection profiles as non-secret JSON"
+          >
+            <ExportIcon size={14} />
+            Export
+          </button>
+        </div>
       </div>
 
       <div className="connections__scroll">

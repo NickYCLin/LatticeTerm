@@ -263,3 +263,10 @@ export const ImportIcon: Glyph = (props) => (
     <path d="M2.75 11.25v1.25a1.5 1.5 0 0 0 1.5 1.5h7.5a1.5 1.5 0 0 0 1.5-1.5v-1.25" />
   </Icon>
 );
+
+export const ExportIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M8 9.75V2.25m0 0L5.5 4.75M8 2.25l2.5 2.5" />
+    <path d="M2.75 11.25v1.25a1.5 1.5 0 0 0 1.5 1.5h7.5a1.5 1.5 0 0 0 1.5-1.5v-1.25" />
+  </Icon>
+);
