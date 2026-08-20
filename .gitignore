@@ -1,0 +1,44 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+
+# Credentials and signing material
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+known_hosts
+
+# Local QA artifacts
+output/
+.playwright-cli/
+
+# Mobile icon sets are generated on demand; this project currently targets desktop.
+src-tauri/icons/android/
+src-tauri/icons/ios/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
