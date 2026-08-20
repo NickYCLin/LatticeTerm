@@ -488,6 +488,30 @@ export const en: Messages = {
   "agents.custom.arguments.placeholder": "--model\nteam-model\n--resume",
   "agents.custom.arguments.hint": "One argument per line; blank lines are ignored, up to 64.",
   "agents.custom.launch": "Launch custom CLI",
+  "agents.broadcast.eyebrow": "Safe orchestration",
+  "agents.broadcast.title": "Prompt multiple agents together",
+  "agents.broadcast.body":
+    "Select running agents, review the targets, and send the same prompt into each independent PTY.",
+  "agents.broadcast.selectAll": "Select all",
+  "agents.broadcast.clearAll": "Clear selection",
+  "agents.broadcast.securityTitle": "Every broadcast requires explicit selection and confirmation",
+  "agents.broadcast.securityBody":
+    "The prompt is written only to the local agents selected for this send, with a final confirmation first. LatticeTerm does not save prompt content or create a background schedule.",
+  "agents.broadcast.successTitle": "Broadcast prompt sent",
+  "agents.broadcast.partialTitle": "Some agents did not receive the prompt",
+  "agents.broadcast.result": "Delivered to {delivered}; failed for {failed}.",
+  "agents.broadcast.empty": "Launch at least one agent to use broadcast prompts.",
+  "agents.broadcast.prompt": "Shared prompt",
+  "agents.broadcast.promptPlaceholder":
+    "For example: review the current changes and list the three highest risks.",
+  "agents.broadcast.promptHint":
+    "Up to {count} agents and 16,000 characters. Line breaks are preserved; sending is equivalent to pressing Enter in every selected PTY.",
+  "agents.broadcast.review": "Review send to {count}",
+  "agents.broadcast.sending": "Sending…",
+  "agents.broadcast.confirmTitle": "Send this broadcast prompt?",
+  "agents.broadcast.confirmBody":
+    "The same prompt will be sent immediately to {count} selected agents and Enter will be pressed in every PTY. Confirm that each one is currently ready to accept a prompt.",
+  "agents.broadcast.confirmAction": "Send to {count} agents",
   "agents.running.eyebrow": "Live state",
   "agents.running.title": "Running agents",
   "agents.running.empty": "No agent is running. Choose a CLI above to begin.",

@@ -27,6 +27,7 @@ flowchart LR
 - PTY 位元組以 Base64 跨越 IPC，前端在終端機掛載前最多暫存 256 KiB，之後直接交給 xterm。
 - 未整合 hook 的 CLI 使用少量明確提示詞將狀態標成「可能等待輸入」；這只是提醒，不宣稱已理解完整語意。
 - 支援 Adapter／hook 明確回報「工作中、等待輸入、閒置、完成」。UI 會顯示狀態來源；收到 Adapter 回報後，終端輸出 heuristic 不再覆蓋該工作階段的語意狀態。
+- 支援使用者明確勾選執行中的 Agent，經二次確認後將同一段提示送進最多 32 個獨立 PTY；每個目標逐一回報成功或失敗，提示內容不會保存。
 
 ## 語意 Reporter 協定
 
@@ -76,11 +77,12 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 | 主動停止與退出清理 | 已完成 | 停止按鈕有確認，應用程式退出會清理 |
 | 待輸入提醒 | 已完成 | 支援 heuristic，Adapter 可明確覆蓋 |
 | CLI 語意 Reporter | 已完成 | loopback、每 session 權杖、四種狀態與來源標示 |
+| 批次提示 | 已完成 | 明確選取、二次確認、最多 32 個目標與部分失敗回報 |
 | 工具專用語意 Adapter | 未完成 | 尚未內建各工具 hook、CLI session ID、token／cost 擷取 |
 | 背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段 |
 | 跨重啟還原 | 未完成 | 尚未保存 workspace、pane 與 CLI restore ID |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
-| 任務編排 | 未完成 | 尚無 broadcast prompt、依賴圖、佇列與排程 |
+| 任務編排 | 部分完成 | broadcast prompt 已完成；依賴圖、佇列與排程仍待實作 |
 | 權限隔離 | 未完成 | 尚無每 Agent 容器、沙箱或檔案範圍策略 |
 
 ## 下一階段設計
