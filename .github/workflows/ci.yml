@@ -35,6 +35,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Install Linux desktop dependencies
         if: startsWith(matrix.platform, 'ubuntu-')
@@ -47,6 +49,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Verify Conventional Commits
+        if: github.event_name == 'pull_request'
+        run: node .github/scripts/check-conventional-commits.mjs "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
