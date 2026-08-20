@@ -29,9 +29,16 @@
   width: 2.5rem;
   height: 2.5rem;
   border-radius: var(--radius-md);
-  color: var(--accent-ink);
-  background: linear-gradient(150deg, var(--accent), var(--accent-press));
-  box-shadow: 0 6px 18px var(--accent-glow);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 12px var(--shadow-1);
+}
+
+.rail__brand-img {
+  width: 1.75rem;
+  height: 1.75rem;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3));
 }
 
 .rail__items {

@@ -8,7 +8,6 @@
 
 import { navigationItems, type ViewId } from "../../app/navigation";
 import { useI18n } from "../../i18n";
-import { LatticeMark } from "../icons";
 
 export function NavRail({
   current,
@@ -22,7 +21,13 @@ export function NavRail({
   return (
     <nav className="rail glass glass--sheen" aria-label={t("a11y.primaryNav")}>
       <div className="rail__brand" title={t("common.appName")}>
-        <LatticeMark size={24} />
+        <img
+          src="/app-icon.png"
+          alt={t("common.appName")}
+          width={28}
+          height={28}
+          className="rail__brand-img"
+        />
         <span className="visually-hidden">{t("common.appName")}</span>
       </div>
 
