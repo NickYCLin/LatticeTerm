@@ -1,0 +1,38 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "c3337b863b935e5c9bed1660e714de044dbc0d0d",
+  "release-type": "node",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "draft-pull-request": true,
+  "pull-request-title-pattern": "chore${scope}: 發布${component} ${version}",
+  "changelog-sections": [
+    { "type": "feat", "section": "新功能" },
+    { "type": "fix", "section": "問題修正" },
+    { "type": "perf", "section": "效能改善" },
+    { "type": "revert", "section": "還原變更" },
+    { "type": "chore", "section": "維護", "hidden": true },
+    { "type": "docs", "section": "文件", "hidden": true },
+    { "type": "style", "section": "格式", "hidden": true },
+    { "type": "refactor", "section": "重構", "hidden": true },
+    { "type": "test", "section": "測試", "hidden": true },
+    { "type": "build", "section": "建置", "hidden": true },
+    { "type": "ci", "section": "持續整合", "hidden": true }
+  ],
+  "packages": {
+    ".": {
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "src-tauri/tauri.conf.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "toml",
+          "path": "src-tauri/Cargo.toml",
+          "jsonpath": "$.package.version"
+        }
+      ]
+    }
+  }
+}

@@ -2,44 +2,118 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version tag (e.g. v0.2.0)'
-        required: false
-        default: 'v0.2.0'
 
 permissions:
+  actions: write
   contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-main
   cancel-in-progress: false
 
 jobs:
-  release-tauri:
-    name: Build & Release (${{ matrix.platform }})
+  release-please:
+    name: Plan or publish release
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+
+    steps:
+      - name: Create or update the Release PR
+        id: release
+        uses: googleapis/release-please-action@v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Resolve the generated Release PR branch
+        if: steps.release.outputs.prs_created == 'true'
+        id: release-pr
+        uses: actions/github-script@v9
+        env:
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+        with:
+          result-encoding: string
+          script: |
+            return JSON.parse(process.env.RELEASE_PR).headBranchName;
+
+      # Cargo.lock is generated and strips custom version annotations. Update
+      # only its lattice-term root package entry on the generated Release PR,
+      # then commit that deterministic lockfile change.
+      - name: Check out the generated Release PR
+        if: steps.release.outputs.prs_created == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release-pr.outputs.result }}
+          fetch-depth: 0
+
+      - name: Synchronize the Cargo lockfile
+        if: steps.release.outputs.prs_created == 'true'
+        shell: bash
+        run: |
+          npm run version:sync-lock
+          node scripts/check-version-sync.mjs
+          if git diff --quiet -- src-tauri/Cargo.lock; then
+            echo "Cargo.lock is already synchronized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- src-tauri/Cargo.lock
+          git commit -m "chore(版本): 同步 Cargo 鎖定檔"
+          git push origin "HEAD:${{ steps.release-pr.outputs.result }}"
+
+      # Events created with GITHUB_TOKEN normally do not start another
+      # workflow. workflow_dispatch is the documented exception, so explicitly
+      # dispatch CI after the Cargo-generated commit reaches the PR branch.
+      - name: Verify the generated Release PR
+        if: steps.release.outputs.prs_created == 'true'
+        uses: actions/github-script@v9
+        env:
+          RELEASE_BRANCH: ${{ steps.release-pr.outputs.result }}
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "ci.yml",
+              ref: process.env.RELEASE_BRANCH,
+            });
+            core.info(`Dispatched CI for ${process.env.RELEASE_BRANCH}`);
+
+  build-release:
+    name: Build & upload (${{ matrix.name }})
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'windows-latest'
-            args: ''
-          - platform: 'ubuntu-22.04'
-            args: ''
-          - platform: 'macos-latest'
-            args: ''
+          - name: Linux amd64
+            platform: ubuntu-22.04
+          - name: Linux arm64
+            platform: ubuntu-22.04-arm
+          - name: Windows amd64
+            platform: windows-latest
+          - name: macOS arm64
+            platform: macos-latest
 
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - name: Check out source
+      - name: Check out released source
         uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
 
       - name: Install Linux desktop dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu-')
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev
@@ -53,7 +127,12 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust target
+      - name: Configure Linux bindgen
+        if: startsWith(matrix.platform, 'ubuntu-')
+        shell: bash
+        run: echo "BINDGEN_EXTRA_CLANG_ARGS=-I$(gcc -print-file-name=include)" >> "$GITHUB_ENV"
+
+      - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -64,38 +143,31 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Verify code quality
+      - name: Verify released source
         run: npm run check
 
-      - name: Check the release signing key is available
+      - name: Check the updater signing key
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "TAURI_SIGNING_PRIVATE_KEY is not set."
-            echo "Artifacts would be unsigned and every auto-update would be refused."
+            echo "Unsigned updater artifacts would be refused by installed clients."
             exit 1
           fi
-          echo "Signing key is present."
+          echo "Updater signing key is present."
 
-      - name: Build Tauri Application & Publish Release
+      - name: Build and upload signed installers
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Installed apps refuse an update that is not signed by the private
-          # half of the key in `plugins.updater.pubkey`. Without these the
-          # build still succeeds, but every update would be rejected on the
-          # user's machine, so a missing key must fail here instead.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.event.inputs.version || github.ref_name }}
-          releaseName: 'LatticeTerm ${{ github.event.inputs.version || github.ref_name }}'
-          releaseBody: 'LatticeTerm release build. Download platform-specific installers below.'
+          tagName: ${{ needs.release-please.outputs.tag_name }}
           releaseDraft: false
           prerelease: false
-          # Publishes `latest.json`, which is the file the updater endpoint
-          # points at; without it the app has nothing to check against.
-          includeUpdaterJson: true
-          args: ${{ matrix.args }}
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          retryAttempts: 2
