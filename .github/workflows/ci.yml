@@ -70,6 +70,9 @@ jobs:
       - name: Verify frontend
         run: npm run check
 
+      - name: Build desktop sidecars
+        run: npm run build:sidecars
+
       - name: Check Rust formatting
         run: |
           cargo fmt --manifest-path src-tauri/Cargo.toml --check
