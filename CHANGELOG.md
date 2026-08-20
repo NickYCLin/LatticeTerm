@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.5.0...v0.6.0) (2026-08-20)
+
+
+### 新功能
+
+* **agent:** 加入工作區命名與排序介面 ([afc5c7a](https://github.com/NickYCLin/LatticeTerm/commit/afc5c7acd6e8b98fb1e85cc22b6e4972b252ac15))
+* **agent:** 支援啟動工作區名稱與排序儲存 ([1a17df7](https://github.com/NickYCLin/LatticeTerm/commit/1a17df78528df23852b1ad0180951f1d9b465abc))
+
+
+### 問題修正
+
+* **agent:** 驗證磁碟中的工作區名稱 ([0572737](https://github.com/NickYCLin/LatticeTerm/commit/0572737be2f168e70b6b2c928893c2913d724afa))
+* **ui:** 由建置資訊同步顯示版號 ([c308f49](https://github.com/NickYCLin/LatticeTerm/commit/c308f497ee12b6bc01d10136c7404524470d6dbc))
+
 ## [0.5.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.4.0...v0.5.0) (2026-08-20)
 
 
