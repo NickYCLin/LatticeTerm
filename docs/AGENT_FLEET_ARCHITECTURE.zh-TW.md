@@ -14,6 +14,9 @@ flowchart LR
   REG --> PTY["portable-pty"]
   PTY --> A["Codex / Claude / Gemini / ..."]
   PTY --> C["Custom CLI"]
+  A -->|"tool hook"] REP["LatticeTerm Reporter CLI"]
+  C -->|"custom hook"] REP
+  REP -->|"loopback + session token"] REG
   REG -->|"data / state / closed events"| UI
 ```
 
@@ -22,7 +25,34 @@ flowchart LR
 - 每個工作階段都有獨立程序、PTY、尺寸、輸入、輸出與停止控制，並與 SSH、SFTP、Lattice Remote、Web RDP 共用工作階段分頁。
 - 啟動時指定經過驗證的工作目錄；CLI 可依目前作業系統使用者權限操作該目錄。
 - PTY 位元組以 Base64 跨越 IPC，前端在終端機掛載前最多暫存 256 KiB，之後直接交給 xterm。
-- 使用少量明確提示詞將狀態標成「可能等待輸入」；這只是提醒，不宣稱已理解每個 CLI 的完整語意。
+- 未整合 hook 的 CLI 使用少量明確提示詞將狀態標成「可能等待輸入」；這只是提醒，不宣稱已理解完整語意。
+- 支援 Adapter／hook 明確回報「工作中、等待輸入、閒置、完成」。UI 會顯示狀態來源；收到 Adapter 回報後，終端輸出 heuristic 不再覆蓋該工作階段的語意狀態。
+
+## 語意 Reporter 協定
+
+每個由 Agent Fleet 啟動的 CLI 都會收到下列環境變數：
+
+- `LATTICETERM_AGENT_REPORTER`：目前 LatticeTerm 可執行檔，可當作狀態回報 CLI。
+- `LATTICETERM_AGENT_REPORT_ADDR`：只綁定 `127.0.0.1` 的隨機連接埠。
+- `LATTICETERM_AGENT_REPORT_TOKEN`：每個工作階段獨立產生的 256-bit 隨機權杖。
+- `LATTICETERM_AGENT_SESSION`：目前 Agent Fleet 工作階段 ID。
+
+POSIX hook 可執行：
+
+```sh
+"$LATTICETERM_AGENT_REPORTER" agent-report working
+"$LATTICETERM_AGENT_REPORTER" agent-report needs-attention
+"$LATTICETERM_AGENT_REPORTER" agent-report idle
+"$LATTICETERM_AGENT_REPORTER" agent-report done
+```
+
+PowerShell hook 可執行：
+
+```powershell
+& $env:LATTICETERM_AGENT_REPORTER agent-report done
+```
+
+Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須同時驗證 session ID 與權杖才會接受；它沒有終端輸入、程序啟動、檔案讀寫或任意命令能力。工具專用 Adapter 後續只需把各 CLI 的 hook 事件映射到這四種狀態，不必取得 Tauri IPC 權限。
 
 ## 安全與生命週期
 
@@ -32,6 +62,7 @@ flowchart LR
 - CLI 以啟動 LatticeTerm 的使用者權限執行，不是沙箱。使用者只能加入自己信任的程式。
 - 工作階段只存在記憶體；使用者停止或應用程式結束／重啟時會終止已登記的 CLI。
 - 不保存終端輸出、提示內容或輸入歷史。
+- Reporter 只監聽 loopback，訊息限制 4 KiB 且有讀寫逾時；每個工作階段使用獨立高熵權杖。權杖會存在該 CLI 的環境中，因此相同作業系統使用者權限的程序仍屬於信任邊界，但即使權杖外洩也只能變更該工作階段的顯示狀態。
 - Windows 目前只直接啟動 `.exe`／`.com`。需要 `.cmd`／`.bat` 的 npm shim 尚未經過 shell adapter 安全設計，因此不會被誤標為可用。
 
 ## 完成度矩陣
@@ -43,8 +74,9 @@ flowchart LR
 | 自訂 CLI adapter | 已完成 | 明確 executable 與每行一個 argument |
 | 統一終端分頁 | 已完成 | 與其他 LatticeTerm 連線工具共用工作區 |
 | 主動停止與退出清理 | 已完成 | 停止按鈕有確認，應用程式退出會清理 |
-| 待輸入提醒 | 基礎版 | 目前為保守的終端輸出提示詞判斷 |
-| CLI 語意 adapter | 未完成 | 尚無各工具 hook、session ID、token／cost 與完成狀態 |
+| 待輸入提醒 | 已完成 | 支援 heuristic，Adapter 可明確覆蓋 |
+| CLI 語意 Reporter | 已完成 | loopback、每 session 權杖、四種狀態與來源標示 |
+| 工具專用語意 Adapter | 未完成 | 尚未內建各工具 hook、CLI session ID、token／cost 擷取 |
 | 背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段 |
 | 跨重啟還原 | 未完成 | 尚未保存 workspace、pane 與 CLI restore ID |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
@@ -55,7 +87,7 @@ flowchart LR
 
 ### 1. 語意 adapter
 
-定義版本化 adapter manifest，至少包含 executable、參數模板、狀態 reporter、CLI session ID 擷取與 restore 命令。優先替 Codex、Claude Code、Gemini CLI、OpenCode 與 Hermes 實作，讓「工作中／等待輸入／完成」改由工具 hook 或本機 socket 回報；沒有 adapter 的 CLI 繼續使用保守 heuristic。
+Reporter 傳輸與狀態模型已完成。下一步定義版本化 adapter manifest，至少包含 executable、參數模板、工具 hook 安裝方式、CLI session ID 擷取與 restore 命令。優先替 Codex、Claude Code、Gemini CLI、OpenCode 與 Hermes 實作；沒有工具專用 Adapter 的 CLI 繼續使用保守 heuristic，也可由使用者自訂 hook 呼叫通用 Reporter。
 
 ### 2. Lattice Agent daemon
 
