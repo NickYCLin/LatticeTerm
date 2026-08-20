@@ -998,17 +998,20 @@ mod tests {
         assert_eq!(run_reporter_cli(["different-command", "done"]), None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn semantic_reporter_authenticates_and_overrides_heuristics() {
         let collector = Arc::new(TestSink::default());
         let sink: Arc<dyn AgentSink> = collector.clone();
         let registry = AgentRegistry::with_local_reporter(sink.clone()).unwrap();
+        #[cfg(unix)]
+        let (executable, arguments) = ("/bin/cat".to_string(), Vec::new());
+        #[cfg(windows)]
+        let (executable, arguments) = ("cmd.exe".to_string(), vec!["/Q".to_string()]);
         let request = AgentLaunchRequest {
             definition_id: "custom".to_string(),
             label: "Reporter test".to_string(),
-            executable: "/bin/cat".to_string(),
-            arguments: Vec::new(),
+            executable,
+            arguments,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
