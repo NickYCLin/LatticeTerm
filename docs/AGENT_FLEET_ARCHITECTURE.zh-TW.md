@@ -11,6 +11,8 @@ Agent Fleet 讓 LatticeTerm 成為多個大型語言模型 CLI 的本機工作�
 ```mermaid
 flowchart LR
   UI["React Agent Fleet"] -->|"Tauri commands"| REG["Rust AgentRegistry"]
+  UI -->|"保存／確認還原"| PLAN["agent-workspaces.json"]
+  PLAN -->|"重新驗證啟動資料"| REG
   REG --> PTY["portable-pty"]
   PTY --> A["Codex / Claude / Gemini / ..."]
   PTY --> C["Custom CLI"]
@@ -28,6 +30,7 @@ flowchart LR
 - 未整合 hook 的 CLI 使用少量明確提示詞將狀態標成「可能等待輸入」；這只是提醒，不宣稱已理解完整語意。
 - 支援 Adapter／hook 明確回報「工作中、等待輸入、閒置、完成」。UI 會顯示狀態來源；收到 Adapter 回報後，終端輸出 heuristic 不再覆蓋該工作階段的語意狀態。
 - 支援使用者明確勾選執行中的 Agent，經二次確認後將同一段提示送進最多 32 個獨立 PTY；每個目標逐一回報成功或失敗，提示內容不會保存。
+- 支援最多 32 個安全啟動項目。應用程式重啟後，使用者可逐項或整批確認，LatticeTerm 會重新驗證磁碟資料並建立新的 CLI 程序；每項分別回報成功或失敗。
 
 ## 語意 Reporter 協定
 
@@ -61,8 +64,9 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 - 自訂名稱、路徑、參數數量、單一參數大小、終端尺寸與輸入事件大小都有上限與控制字元驗證。
 - LatticeTerm 不讀取、不複製也不保存模型 API 金鑰；登入仍由各 CLI 自行處理。
 - CLI 以啟動 LatticeTerm 的使用者權限執行，不是沙箱。使用者只能加入自己信任的程式。
-- 工作階段只存在記憶體；使用者停止或應用程式結束／重啟時會終止已登記的 CLI。
-- 不保存終端輸出、提示內容或輸入歷史。
+- 執行中的工作階段只存在記憶體；使用者停止或應用程式結束／重啟時會終止已登記的 CLI。
+- 安全啟動工作區使用獨立的版本化 JSON，只保存 CLI 類型、標籤、可執行檔、明確參數與工作目錄。密碼、Token、API Key、Passphrase、Secret 參數會被拒絕；讀不到或版本不相容的原檔會先移到復原檔，不會直接覆寫。
+- 不保存終端輸出、提示內容、輸入歷史、程序 ID、Reporter 權杖或模型憑證。
 - Reporter 只監聽 loopback，訊息限制 4 KiB 且有讀寫逾時；每個工作階段使用獨立高熵權杖。權杖會存在該 CLI 的環境中，因此相同作業系統使用者權限的程序仍屬於信任邊界，但即使權杖外洩也只能變更該工作階段的顯示狀態。
 - Windows 目前只直接啟動 `.exe`／`.com`。需要 `.cmd`／`.bat` 的 npm shim 尚未經過 shell adapter 安全設計，因此不會被誤標為可用。
 
@@ -80,7 +84,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 | 批次提示 | 已完成 | 明確選取、二次確認、最多 32 個目標與部分失敗回報 |
 | 工具專用語意 Adapter | 未完成 | 尚未內建各工具 hook、CLI session ID、token／cost 擷取 |
 | 背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段 |
-| 跨重啟還原 | 未完成 | 尚未保存 workspace、pane 與 CLI restore ID |
+| 跨重啟還原 | 部分完成 | 已有安全啟動工作區與明確確認的批次重新啟動；原程序、pane、輸出與 CLI restore ID 尚未還原 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 任務編排 | 部分完成 | broadcast prompt 已完成；依賴圖、佇列與排程仍待實作 |
 | 權限隔離 | 未完成 | 尚無每 Agent 容器、沙箱或檔案範圍策略 |
@@ -109,7 +113,7 @@ Reporter 傳輸與狀態模型已完成。下一步定義版本化 adapter manif
 
 ### 4. 編排與可觀測性
 
-在語意狀態可靠之後再加入工作區群組、批次啟動、broadcast prompt、任務依賴與資源限制。預設只保存狀態 metadata，不保存提示或終端逐字稿；任何錄製都必須由使用者明確開啟並設定保存位置。
+安全啟動工作區、明確確認的批次重新啟動與 broadcast prompt 已完成。下一步加入工作區命名／排序、任務依賴、佇列、排程與資源限制。預設只保存狀態 metadata，不保存提示或終端逐字稿；任何錄製都必須由使用者明確開啟並設定保存位置。
 
 ## 驗收原則
 

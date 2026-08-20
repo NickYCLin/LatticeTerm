@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_plans;
 pub mod credentials;
 pub mod domain;
 pub mod hostkeys;
@@ -10,8 +11,11 @@ pub mod ssh;
 pub mod storage;
 
 use crate::agent::{
-    AgentBroadcastOutcome, AgentDefinition, AgentLaunchRequest, AgentRegistry, AgentSessionSummary,
+    AgentBroadcastOutcome, AgentDefinition, AgentLaunchPlan, AgentLaunchPlanDraft,
+    AgentLaunchRequest, AgentRegistry, AgentRestoreOutcome, AgentSessionSummary,
+    MAX_SAVED_AGENT_PLANS,
 };
+use crate::agent_plans::{AgentPlanSnapshot, FileAgentPlanStore};
 use crate::credentials::{CredentialKind, CredentialStoreStatus};
 use crate::domain::{ConnectionProfile, Protocol};
 use crate::hostkeys::{HostKeyRecord, HostTrustStore};
@@ -28,12 +32,14 @@ use crate::sftp::{
 use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
 use serde::Serialize;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 use zeroize::Zeroizing;
 
 type AppStorage = Mutex<FileStorage>;
+type AppAgentPlans = Mutex<FileAgentPlanStore>;
 
 /// The trust store, or the reason it could not be opened.
 ///
@@ -156,6 +162,90 @@ fn agent_disconnect(
 #[tauri::command]
 fn agent_sessions(registry: State<'_, Arc<AgentRegistry>>) -> Vec<AgentSessionSummary> {
     registry.list()
+}
+
+#[tauri::command]
+fn agent_plan_snapshot(plans: State<'_, AppAgentPlans>) -> Result<AgentPlanSnapshot, String> {
+    Ok(plans.lock().map_err(|error| error.to_string())?.snapshot())
+}
+
+#[tauri::command]
+fn agent_plan_save(
+    draft: AgentLaunchPlanDraft,
+    plans: State<'_, AppAgentPlans>,
+) -> Result<AgentLaunchPlan, String> {
+    plans.lock().map_err(|error| error.to_string())?.save(draft)
+}
+
+#[tauri::command]
+fn agent_plan_delete(id: String, plans: State<'_, AppAgentPlans>) -> Result<bool, String> {
+    plans.lock().map_err(|error| error.to_string())?.delete(&id)
+}
+
+#[tauri::command]
+fn agent_plan_restore(
+    app: AppHandle,
+    plan_ids: Vec<String>,
+    plans: State<'_, AppAgentPlans>,
+    registry: State<'_, Arc<AgentRegistry>>,
+) -> Result<Vec<AgentRestoreOutcome>, String> {
+    if plan_ids.is_empty() {
+        return Err("Select at least one saved launch plan.".to_string());
+    }
+    if plan_ids.len() > MAX_SAVED_AGENT_PLANS {
+        return Err(format!(
+            "At most {MAX_SAVED_AGENT_PLANS} launch plans may be restored at once."
+        ));
+    }
+    let mut unique = HashSet::with_capacity(plan_ids.len());
+    for plan_id in &plan_ids {
+        if plan_id.trim() != plan_id || plan_id.is_empty() || plan_id.len() > 128 {
+            return Err("A saved launch plan ID is invalid.".to_string());
+        }
+        if !unique.insert(plan_id.as_str()) {
+            return Err(
+                "Saved launch plans cannot be restored more than once per request.".to_string(),
+            );
+        }
+    }
+
+    let selected = {
+        let guard = plans.lock().map_err(|error| error.to_string())?;
+        plan_ids
+            .iter()
+            .map(|plan_id| {
+                guard
+                    .find(plan_id)
+                    .ok_or_else(|| format!("Saved launch plan '{plan_id}' no longer exists."))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let sink: Arc<dyn crate::agent::AgentSink> = Arc::new(crate::agent::EventSink(app));
+    Ok(selected
+        .into_iter()
+        .map(|plan| {
+            let plan_id = plan.id.clone();
+            let label = plan.label.clone();
+            let launched =
+                crate::agent::launch_request_from_plan(&plan, 120, 32).and_then(|request| {
+                    crate::agent::launch(Arc::clone(&sink), Arc::clone(registry.inner()), request)
+                });
+            match launched {
+                Ok(session) => AgentRestoreOutcome {
+                    plan_id,
+                    label,
+                    session: Some(session),
+                    error: None,
+                },
+                Err(error) => AgentRestoreOutcome {
+                    plan_id,
+                    label,
+                    session: None,
+                    error: Some(error),
+                },
+            }
+        })
+        .collect())
 }
 
 /// Where connection data lives, and whether anything had to be rescued on the
@@ -694,6 +784,8 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             let storage = FileStorage::open(&dir)?;
             app.manage(Mutex::new(storage));
+            let agent_plans = FileAgentPlanStore::open(&dir).map_err(std::io::Error::other)?;
+            app.manage(Mutex::new(agent_plans));
 
             // A trust store that cannot be read is carried as a reason rather
             // than a panic: the app still runs, and connecting explains why it
@@ -725,6 +817,10 @@ pub fn run() {
             agent_resize,
             agent_disconnect,
             agent_sessions,
+            agent_plan_snapshot,
+            agent_plan_save,
+            agent_plan_delete,
+            agent_plan_restore,
             credential_status,
             credential_exists,
             credential_delete,

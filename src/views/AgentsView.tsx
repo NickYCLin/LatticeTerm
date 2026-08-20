@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   AgentApi,
   AgentDefinition,
+  AgentLaunchPlan,
   AgentSessionSummary,
 } from "../app/useAgentSessions";
 import {
   MAX_AGENT_BROADCAST_TARGETS,
+  MAX_SAVED_AGENT_PLANS,
   splitAgentArguments,
 } from "../app/useAgentSessions";
 import { Callout } from "../components/common/Callout";
@@ -13,10 +15,12 @@ import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import {
   AgentIcon,
   FolderIcon,
+  MemoryIcon,
   PlayIcon,
   RefreshIcon,
   StopIcon,
   TerminalIcon,
+  TrashIcon,
   TransferIcon,
 } from "../components/icons";
 import { useI18n } from "../i18n";
@@ -55,6 +59,17 @@ export function AgentsView({
   const [customLabel, setCustomLabel] = useState("");
   const [customExecutable, setCustomExecutable] = useState("");
   const [customArguments, setCustomArguments] = useState("");
+  const [saving, setSaving] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [pendingRestore, setPendingRestore] = useState<string[] | null>(null);
+  const [pendingDeletePlan, setPendingDeletePlan] =
+    useState<AgentLaunchPlan | null>(null);
+  const [workspaceNotice, setWorkspaceNotice] = useState<{
+    saved?: string;
+    restored?: number;
+    failed?: number;
+    detail?: string;
+  } | null>(null);
   const [pendingStop, setPendingStop] = useState<AgentSessionSummary | null>(null);
   const [selectedBroadcastIds, setSelectedBroadcastIds] = useState<Set<string>>(
     () => new Set(),
@@ -95,6 +110,19 @@ export function AgentsView({
     [agents.sessions],
   );
 
+  function launchDraft(
+    definition: AgentDefinition | null,
+    custom = false,
+  ) {
+    return {
+      definitionId: custom ? "custom" : (definition?.id ?? ""),
+      label: custom ? customLabel : "",
+      executable: custom ? customExecutable : "",
+      arguments: custom ? splitAgentArguments(customArguments) : [],
+      workingDirectory,
+    };
+  }
+
   async function launch(
     definition: AgentDefinition | null,
     custom = false,
@@ -104,11 +132,7 @@ export function AgentsView({
     setError(null);
     try {
       const session = await agents.launch({
-        definitionId: id,
-        label: custom ? customLabel : "",
-        executable: custom ? customExecutable : "",
-        arguments: custom ? splitAgentArguments(customArguments) : [],
-        workingDirectory,
+        ...launchDraft(definition, custom),
         cols: 120,
         rows: 32,
       });
@@ -120,8 +144,72 @@ export function AgentsView({
     }
   }
 
+  async function savePlan(
+    definition: AgentDefinition | null,
+    custom = false,
+  ) {
+    const id = custom ? "custom" : (definition?.id ?? "");
+    setSaving(id);
+    setError(null);
+    setWorkspaceNotice(null);
+    try {
+      const plan = await agents.savePlan(launchDraft(definition, custom));
+      setWorkspaceNotice({ saved: plan.label });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function confirmRestorePlans() {
+    const planIds = pendingRestore;
+    if (!planIds) return;
+    setPendingRestore(null);
+    setRestoring(true);
+    setError(null);
+    setWorkspaceNotice(null);
+    try {
+      const outcomes = await agents.restorePlans(planIds);
+      const failures = outcomes.filter((outcome) => !outcome.session);
+      setWorkspaceNotice({
+        restored: outcomes.length - failures.length,
+        failed: failures.length,
+        detail: failures
+          .map((outcome) =>
+            outcome.error ? `${outcome.label}: ${outcome.error}` : "",
+          )
+          .filter(Boolean)
+          .join("; "),
+      });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRestoring(false);
+    }
+  }
+
+  async function confirmDeletePlan() {
+    const plan = pendingDeletePlan;
+    if (!plan) return;
+    setPendingDeletePlan(null);
+    setError(null);
+    setWorkspaceNotice(null);
+    try {
+      await agents.deletePlan(plan.id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
   const launchDisabled =
     agents.mode !== "ready" || !workingDirectory.trim() || launching !== null;
+  const planLimitReached = agents.plans.length >= MAX_SAVED_AGENT_PLANS;
+  const saveDisabled =
+    agents.mode !== "ready" ||
+    !workingDirectory.trim() ||
+    saving !== null ||
+    planLimitReached;
   const broadcastCandidates = agents.sessions.slice(
     0,
     MAX_AGENT_BROADCAST_TARGETS,
@@ -217,7 +305,7 @@ export function AgentsView({
         </Callout>
       )}
       {error && (
-        <Callout tone="danger" title={t("agents.launch.failed")}>
+        <Callout tone="danger" title={t("agents.operation.failed")}>
           <span className="mono">{error}</span>
         </Callout>
       )}
@@ -281,17 +369,30 @@ export function AgentsView({
                   {definition.installedPath ?? t("agents.path.missing")}
                 </span>
               </div>
-              <button
-                type="button"
-                className="button button--secondary button--sm"
-                disabled={launchDisabled || !definition.installed}
-                onClick={() => void launch(definition)}
-              >
-                <PlayIcon size={12} />
-                {launching === definition.id
-                  ? t("agents.launching")
-                  : t("agents.launch")}
-              </button>
+              <div className="agent-card__actions">
+                <button
+                  type="button"
+                  className="button button--ghost button--sm"
+                  disabled={saveDisabled}
+                  onClick={() => void savePlan(definition)}
+                >
+                  <MemoryIcon size={12} />
+                  {saving === definition.id
+                    ? t("agents.workspace.saving")
+                    : t("agents.workspace.save")}
+                </button>
+                <button
+                  type="button"
+                  className="button button--secondary button--sm"
+                  disabled={launchDisabled || !definition.installed}
+                  onClick={() => void launch(definition)}
+                >
+                  <PlayIcon size={12} />
+                  {launching === definition.id
+                    ? t("agents.launching")
+                    : t("agents.launch")}
+                </button>
+              </div>
             </article>
           ))}
         </div>
@@ -342,22 +443,152 @@ export function AgentsView({
               {t("agents.custom.arguments.hint")}
             </span>
           </label>
+          <div className="agents-custom__actions">
+            <button
+              type="button"
+              className="button button--ghost"
+              disabled={
+                saveDisabled ||
+                !customLabel.trim() ||
+                !customExecutable.trim()
+              }
+              onClick={() => void savePlan(null, true)}
+            >
+              <MemoryIcon size={13} />
+              {saving === "custom"
+                ? t("agents.workspace.saving")
+                : t("agents.workspace.save")}
+            </button>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={
+                launchDisabled ||
+                !customLabel.trim() ||
+                !customExecutable.trim()
+              }
+              onClick={() => void launch(null, true)}
+            >
+              <PlayIcon size={13} />
+              {launching === "custom"
+                ? t("agents.launching")
+                : t("agents.custom.launch")}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="agents-workspace">
+        <div className="agents-section-heading">
+          <div>
+            <span className="eyebrow">{t("agents.workspace.eyebrow")}</span>
+            <h3>{t("agents.workspace.title")}</h3>
+            <p>{t("agents.workspace.body")}</p>
+          </div>
           <button
             type="button"
-            className="button button--primary"
+            className="button button--secondary button--sm"
             disabled={
-              launchDisabled ||
-              !customLabel.trim() ||
-              !customExecutable.trim()
+              agents.plans.length === 0 ||
+              restoring ||
+              agents.mode !== "ready"
             }
-            onClick={() => void launch(null, true)}
+            onClick={() =>
+              setPendingRestore(agents.plans.map((plan) => plan.id))
+            }
           >
-            <PlayIcon size={13} />
-            {launching === "custom"
-              ? t("agents.launching")
-              : t("agents.custom.launch")}
+            <PlayIcon size={12} />
+            {restoring
+              ? t("agents.workspace.restoring")
+              : t("agents.workspace.restoreAll", {
+                  count: agents.plans.length,
+                })}
           </button>
         </div>
+
+        <Callout tone="security" title={t("agents.workspace.securityTitle")}>
+          {t("agents.workspace.securityBody", {
+            count: MAX_SAVED_AGENT_PLANS,
+          })}
+        </Callout>
+
+        {agents.planRecovery && (
+          <Callout tone="warn" title={t("agents.workspace.recoveryTitle")}>
+            {t("agents.workspace.recoveryBody", {
+              detail: agents.planRecovery.reason,
+              path: agents.planRecovery.backupPath,
+            })}
+          </Callout>
+        )}
+
+        {workspaceNotice && (
+          <Callout
+            tone={(workspaceNotice.failed ?? 0) > 0 ? "danger" : "info"}
+            title={t(
+              workspaceNotice.saved
+                ? "agents.workspace.savedTitle"
+                : (workspaceNotice.failed ?? 0) > 0
+                  ? "agents.workspace.partialTitle"
+                  : "agents.workspace.restoredTitle",
+            )}
+          >
+            {workspaceNotice.saved
+              ? t("agents.workspace.savedBody", {
+                  name: workspaceNotice.saved,
+                })
+              : t("agents.workspace.restoreResult", {
+                  restored: workspaceNotice.restored ?? 0,
+                  failed: workspaceNotice.failed ?? 0,
+                })}
+            {workspaceNotice.detail && (
+              <span className="mono agents-workspace__error">
+                {workspaceNotice.detail}
+              </span>
+            )}
+          </Callout>
+        )}
+
+        {agents.plans.length === 0 ? (
+          <p className="agents-running__empty">
+            {t("agents.workspace.empty")}
+          </p>
+        ) : (
+          <div className="agent-plan-list">
+            {agents.plans.map((plan) => (
+              <article className="agent-plan-row" key={plan.id}>
+                <div className="agent-plan-row__main">
+                  <strong>{plan.label}</strong>
+                  <span className="mono">{plan.workingDirectory}</span>
+                  <small>
+                    {t("agents.workspace.command", {
+                      executable: plan.executable,
+                      count: plan.arguments.length,
+                    })}
+                  </small>
+                </div>
+                <button
+                  type="button"
+                  className="button button--secondary button--sm"
+                  disabled={restoring || agents.mode !== "ready"}
+                  onClick={() => setPendingRestore([plan.id])}
+                >
+                  <PlayIcon size={12} />
+                  {t("agents.workspace.restore")}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button icon-button--sm icon-button--danger"
+                  disabled={restoring}
+                  onClick={() => setPendingDeletePlan(plan)}
+                  aria-label={t("agents.workspace.delete")}
+                  data-tooltip={t("agents.workspace.delete")}
+                >
+                  <TrashIcon size={12} />
+                </button>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="agents-orchestration">
@@ -567,6 +798,36 @@ export function AgentsView({
           tone="default"
           onConfirm={() => void confirmBroadcast()}
           onCancel={() => setPendingBroadcast(null)}
+        />
+      )}
+
+      {pendingRestore && (
+        <ConfirmDialog
+          title={t("agents.workspace.confirmTitle")}
+          body={t("agents.workspace.confirmBody", {
+            count: pendingRestore.length,
+          })}
+          confirmLabel={t("agents.workspace.confirmAction", {
+            count: pendingRestore.length,
+          })}
+          cancelLabel={t("common.cancel")}
+          tone="default"
+          onConfirm={() => void confirmRestorePlans()}
+          onCancel={() => setPendingRestore(null)}
+        />
+      )}
+
+      {pendingDeletePlan && (
+        <ConfirmDialog
+          title={t("agents.workspace.deleteTitle", {
+            name: pendingDeletePlan.label,
+          })}
+          body={t("agents.workspace.deleteBody")}
+          confirmLabel={t("agents.workspace.deleteAction")}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => void confirmDeletePlan()}
+          onCancel={() => setPendingDeletePlan(null)}
         />
       )}
     </div>
