@@ -23,7 +23,8 @@
     "build:sidecars": "npm run build:rdp && npm run build:remote",
     "build:sidecars:release": "npm run build:rdp:release && npm run build:remote:release",
     "test": "vitest run",
-    "check": "npm run test && npm run build",
+    "version:check": "node scripts/check-version-sync.mjs",
+    "check": "npm run version:check && npm run test && npm run build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
