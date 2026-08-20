@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyAgentStateEvent,
+  buildAgentBroadcastPayload,
   decodeAgentPayload,
   encodeAgentPayload,
   splitAgentArguments,
@@ -18,6 +19,13 @@ describe("agent session transport", () => {
       "gpt-5",
       "--full-auto",
     ]);
+  });
+
+  it("submits one normalized broadcast payload without saving shell syntax", () => {
+    expect(buildAgentBroadcastPayload("Review this change\nReturn risks\n")).toBe(
+      "Review this change\rReturn risks\r",
+    );
+    expect(buildAgentBroadcastPayload("   ")).toBe("");
   });
 
   it("updates both semantic state and its trusted source", () => {

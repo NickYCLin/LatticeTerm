@@ -7,7 +7,7 @@
 use base64::Engine;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
@@ -24,6 +24,7 @@ pub const EVENT_STATE: &str = "agent://state";
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 4096;
+const MAX_BROADCAST_TARGETS: usize = 32;
 const MAX_REPORT_BYTES: u64 = 4096;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REPORT_RETRIES: usize = 5;
@@ -135,6 +136,14 @@ pub struct AgentSessionSummary {
     pub state: AgentLifecycle,
     pub state_source: AgentStateSource,
     pub process_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentBroadcastOutcome {
+    pub session_id: String,
+    pub delivered: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -873,10 +882,19 @@ pub fn send(
     encoded: &str,
 ) -> Result<(), String> {
     let bytes = decode(encoded)?;
+    send_bytes(sink, registry, session_id, &bytes)
+}
+
+fn send_bytes(
+    sink: &dyn AgentSink,
+    registry: &AgentRegistry,
+    session_id: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
     let entry = registry.get(session_id)?;
     let mut writer = entry.writer.lock().map_err(|error| error.to_string())?;
     writer
-        .write_all(&bytes)
+        .write_all(bytes)
         .and_then(|_| writer.flush())
         .map_err(|error| format!("Cannot write to the agent terminal: {error}"))?;
     if registry.update_state(
@@ -891,6 +909,57 @@ pub fn send(
         );
     }
     Ok(())
+}
+
+pub fn broadcast(
+    sink: &dyn AgentSink,
+    registry: &AgentRegistry,
+    session_ids: &[String],
+    encoded: &str,
+) -> Result<Vec<AgentBroadcastOutcome>, String> {
+    if session_ids.is_empty() {
+        return Err("Select at least one agent session.".to_string());
+    }
+    if session_ids.len() > MAX_BROADCAST_TARGETS {
+        return Err(format!(
+            "A broadcast may target at most {MAX_BROADCAST_TARGETS} agent sessions."
+        ));
+    }
+
+    let mut unique = HashSet::with_capacity(session_ids.len());
+    for session_id in session_ids {
+        if session_id.trim() != session_id
+            || validate_text(session_id, "Agent session", 128).is_err()
+        {
+            return Err("An agent session ID is invalid.".to_string());
+        }
+        if !unique.insert(session_id.as_str()) {
+            return Err("A broadcast cannot contain duplicate agent sessions.".to_string());
+        }
+    }
+
+    let bytes = decode(encoded)?;
+    if bytes.is_empty() {
+        return Err("A broadcast prompt is required.".to_string());
+    }
+
+    Ok(session_ids
+        .iter()
+        .map(
+            |session_id| match send_bytes(sink, registry, session_id, &bytes) {
+                Ok(()) => AgentBroadcastOutcome {
+                    session_id: session_id.clone(),
+                    delivered: true,
+                    error: None,
+                },
+                Err(error) => AgentBroadcastOutcome {
+                    session_id: session_id.clone(),
+                    delivered: false,
+                    error: Some(error),
+                },
+            },
+        )
+        .collect())
 }
 
 pub fn resize(
@@ -931,19 +1000,26 @@ pub fn disconnect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::time::{Duration, Instant};
 
     #[derive(Default)]
     struct TestSink {
         data: Mutex<Vec<u8>>,
+        session_data: Mutex<HashMap<String, Vec<u8>>>,
         states: Mutex<Vec<(String, AgentLifecycle, AgentStateSource)>>,
         closed: Mutex<Vec<String>>,
     }
 
     impl AgentSink for TestSink {
-        fn data(&self, _session_id: &str, bytes: &[u8]) {
+        fn data(&self, session_id: &str, bytes: &[u8]) {
             self.data.lock().unwrap().extend_from_slice(bytes);
+            self.session_data
+                .lock()
+                .unwrap()
+                .entry(session_id.to_string())
+                .or_default()
+                .extend_from_slice(bytes);
         }
 
         fn state(&self, session_id: &str, state: AgentLifecycle, source: AgentStateSource) {
@@ -982,6 +1058,20 @@ mod tests {
     fn input_decoder_rejects_oversized_events() {
         let encoded = encode(&vec![0_u8; MAX_INPUT_BYTES + 1]);
         assert!(decode(&encoded).unwrap_err().contains("at most"));
+    }
+
+    #[test]
+    fn broadcast_rejects_duplicate_targets_before_sending() {
+        let sink = TestSink::default();
+        let registry = AgentRegistry::new();
+        let error = broadcast(
+            &sink,
+            &registry,
+            &["agent-session-1".to_string(), "agent-session-1".to_string()],
+            &encode(b"review this\r"),
+        )
+        .unwrap_err();
+        assert!(error.contains("duplicate"));
     }
 
     #[test]
@@ -1088,6 +1178,71 @@ mod tests {
             String::from_utf8_lossy(&collector.data.lock().unwrap()).contains("lattice-agent-test")
         );
         disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broadcast_fans_out_to_each_selected_pty() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        let mut sessions = Vec::new();
+        for label in ["Agent one", "Agent two"] {
+            sessions.push(
+                launch(
+                    sink.clone(),
+                    registry.clone(),
+                    AgentLaunchRequest {
+                        definition_id: "custom".to_string(),
+                        label: label.to_string(),
+                        executable: "/bin/cat".to_string(),
+                        arguments: Vec::new(),
+                        working_directory: std::env::current_dir().unwrap().display().to_string(),
+                        cols: 80,
+                        rows: 24,
+                    },
+                )
+                .unwrap(),
+            );
+        }
+
+        let target_ids: Vec<_> = sessions
+            .iter()
+            .map(|session| session.session_id.clone())
+            .collect();
+        let outcomes = broadcast(
+            sink.as_ref(),
+            &registry,
+            &target_ids,
+            &encode(b"fleet-broadcast-test\n"),
+        )
+        .unwrap();
+        assert!(outcomes.iter().all(|outcome| outcome.delivered));
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            let received = collector.session_data.lock().unwrap();
+            if target_ids.iter().all(|session_id| {
+                received.get(session_id).is_some_and(|bytes| {
+                    String::from_utf8_lossy(bytes).contains("fleet-broadcast-test")
+                })
+            }) {
+                break;
+            }
+            drop(received);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let received = collector.session_data.lock().unwrap();
+        assert!(target_ids.iter().all(|session_id| {
+            received.get(session_id).is_some_and(|bytes| {
+                String::from_utf8_lossy(bytes).contains("fleet-broadcast-test")
+            })
+        }));
+        drop(received);
+
+        for session in sessions {
+            disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
+        }
     }
 
     #[cfg(unix)]

@@ -9,7 +9,9 @@ pub mod sftp;
 pub mod ssh;
 pub mod storage;
 
-use crate::agent::{AgentDefinition, AgentLaunchRequest, AgentRegistry, AgentSessionSummary};
+use crate::agent::{
+    AgentBroadcastOutcome, AgentDefinition, AgentLaunchRequest, AgentRegistry, AgentSessionSummary,
+};
 use crate::credentials::{CredentialKind, CredentialStoreStatus};
 use crate::domain::{ConnectionProfile, Protocol};
 use crate::hostkeys::{HostKeyRecord, HostTrustStore};
@@ -113,6 +115,21 @@ fn agent_send(
         &crate::agent::EventSink(app),
         registry.inner(),
         &session_id,
+        &data,
+    )
+}
+
+#[tauri::command]
+fn agent_broadcast(
+    app: AppHandle,
+    session_ids: Vec<String>,
+    data: String,
+    registry: State<'_, Arc<AgentRegistry>>,
+) -> Result<Vec<AgentBroadcastOutcome>, String> {
+    crate::agent::broadcast(
+        &crate::agent::EventSink(app),
+        registry.inner(),
+        &session_ids,
         &data,
     )
 }
@@ -704,6 +721,7 @@ pub fn run() {
             agent_default_working_directory,
             agent_launch,
             agent_send,
+            agent_broadcast,
             agent_resize,
             agent_disconnect,
             agent_sessions,

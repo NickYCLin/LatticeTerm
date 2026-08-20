@@ -39,6 +39,12 @@ export interface AgentStateEvent {
   source: AgentStateSource;
 }
 
+export interface AgentBroadcastOutcome {
+  sessionId: string;
+  delivered: boolean;
+  error: string | null;
+}
+
 export function applyAgentStateEvent(
   sessions: AgentSessionSummary[],
   event: AgentStateEvent,
@@ -72,6 +78,7 @@ const FALLBACK_CATALOG: AgentDefinition[] = [
 }));
 
 const MAX_PENDING_OUTPUT = 256 * 1024;
+export const MAX_AGENT_BROADCAST_TARGETS = 32;
 
 async function core() {
   return import("@tauri-apps/api/core");
@@ -105,6 +112,12 @@ export function splitAgentArguments(value: string): string[] {
     .filter(Boolean);
 }
 
+export function buildAgentBroadcastPayload(value: string): string {
+  if (!value.trim()) return "";
+  const normalized = value.replace(/\r?\n/g, "\r").replace(/\r+$/, "");
+  return `${normalized}\r`;
+}
+
 export interface AgentApi {
   mode: AgentBackendMode;
   error: string | null;
@@ -114,6 +127,10 @@ export interface AgentApi {
   refreshCatalog: () => Promise<void>;
   launch: (request: AgentLaunchRequest) => Promise<AgentSessionSummary>;
   send: (sessionId: string, data: string) => Promise<void>;
+  broadcast: (
+    sessionIds: string[],
+    prompt: string,
+  ) => Promise<AgentBroadcastOutcome[]>;
   resize: (sessionId: string, cols: number, rows: number) => Promise<void>;
   disconnect: (sessionId: string) => Promise<void>;
   onData: (
@@ -259,6 +276,16 @@ export function useAgentSessions(): AgentApi {
     });
   }, []);
 
+  const broadcast = useCallback(async (sessionIds: string[], prompt: string) => {
+    const payload = buildAgentBroadcastPayload(prompt);
+    if (!payload) throw new Error("A broadcast prompt is required.");
+    const { invoke } = await core();
+    return invoke<AgentBroadcastOutcome[]>("agent_broadcast", {
+      sessionIds,
+      data: encodeAgentPayload(new TextEncoder().encode(payload)),
+    });
+  }, []);
+
   const resize = useCallback(
     async (sessionId: string, cols: number, rows: number) => {
       const { invoke } = await core();
@@ -321,6 +348,7 @@ export function useAgentSessions(): AgentApi {
     refreshCatalog: load,
     launch,
     send,
+    broadcast,
     resize,
     disconnect,
     onData,
