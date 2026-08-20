@@ -24,6 +24,13 @@ export const activityLabels: Record<ActivityKind, string> = {
   workspace: "Workspace",
 };
 
+export const activityKindList: ActivityKind[] = [
+  "created",
+  "updated",
+  "deleted",
+  "workspace",
+];
+
 export function createActivityEntry(
   kind: ActivityKind,
   message: string,
@@ -41,4 +48,75 @@ export function appendActivity(
   limit = 200,
 ): ActivityEntry[] {
   return [entry, ...entries].slice(0, limit);
+}
+
+/** Filters activity entries by search term and kind. */
+export function filterActivity(
+  entries: ActivityEntry[],
+  searchQuery: string,
+  kindFilter: ActivityKind | "all" = "all",
+): ActivityEntry[] {
+  const query = searchQuery.trim().toLowerCase();
+
+  return entries.filter((entry) => {
+    if (kindFilter !== "all" && entry.kind !== kindFilter) {
+      return false;
+    }
+
+    if (!query) return true;
+
+    const label = activityLabels[entry.kind].toLowerCase();
+    const message = entry.message.toLowerCase();
+    const detail = (entry.detail ?? "").toLowerCase();
+
+    return (
+      label.includes(query) ||
+      message.includes(query) ||
+      detail.includes(query)
+    );
+  });
+}
+
+/**
+ * Formats activity entries into a clean, human-readable plain text log.
+ * Guaranteed to be free of credentials and secrets.
+ */
+export function exportActivityLogText(entries: ActivityEntry[]): string {
+  const lines: string[] = [
+    `# LatticeTerm Activity Log`,
+    `# Exported At: ${new Date().toISOString()}`,
+    `# Total Entries: ${entries.length}`,
+    `# Note: In-memory session log only. No secrets or credentials are recorded.`,
+    `--------------------------------------------------------------------------------`,
+  ];
+
+  for (const entry of entries) {
+    const time = new Date(entry.at).toISOString();
+    const kind = activityLabels[entry.kind].padEnd(16, " ");
+    const detail = entry.detail ? ` (${entry.detail})` : "";
+    lines.push(`[${time}] [${kind}] ${entry.message}${detail}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Serializes activity entries to structured JSON format.
+ */
+export function exportActivityLogJson(entries: ActivityEntry[]): string {
+  const data = {
+    application: "LatticeTerm",
+    exportedAt: new Date().toISOString(),
+    totalEntries: entries.length,
+    entries: entries.map((e) => ({
+      id: e.id,
+      kind: e.kind,
+      kindLabel: activityLabels[e.kind],
+      message: e.message,
+      detail: e.detail ?? null,
+      timestamp: new Date(e.at).toISOString(),
+    })),
+  };
+
+  return JSON.stringify(data, null, 2);
 }
