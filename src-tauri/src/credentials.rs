@@ -15,6 +15,7 @@ const MAX_PROFILE_ID_LENGTH: usize = 128;
 #[serde(rename_all = "camelCase")]
 pub enum CredentialKind {
     SshPassword,
+    SftpPassword,
     RdpPassword,
 }
 
@@ -22,6 +23,7 @@ impl CredentialKind {
     fn suffix(self) -> &'static str {
         match self {
             Self::SshPassword => "ssh-password",
+            Self::SftpPassword => "sftp-password",
             Self::RdpPassword => "rdp-password",
         }
     }
@@ -141,5 +143,13 @@ mod tests {
     fn account_rejects_path_like_profile_ids() {
         assert!(account("../profile", CredentialKind::RdpPassword).is_err());
         assert!(account("profile/child", CredentialKind::RdpPassword).is_err());
+    }
+
+    #[test]
+    fn sftp_passwords_have_their_own_namespace() {
+        assert_eq!(
+            account("profile-123", CredentialKind::SftpPassword).unwrap(),
+            "profile:profile-123:sftp-password"
+        );
     }
 }

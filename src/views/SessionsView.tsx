@@ -3,21 +3,30 @@
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
 import type { SshApi } from "../app/useSshSessions";
+import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
 import { useI18n } from "../i18n";
 import { EmptyState } from "../components/common/Callout";
-import { CloseIcon, ScreenShareIcon, TerminalIcon } from "../components/icons";
+import {
+  CloseIcon,
+  ScreenShareIcon,
+  TerminalIcon,
+  TransferIcon,
+} from "../components/icons";
 import { RemotePane } from "../components/remote/RemotePane";
 import { RdpPane } from "../components/rdp/RdpPane";
+import { SftpPane } from "../components/sftp/SftpPane";
 import { TerminalPane } from "../components/terminal/TerminalPane";
 
 type SessionRef =
   | { kind: "ssh"; sessionId: string; label: string }
+  | { kind: "sftp"; sessionId: string; label: string }
   | { kind: "remote"; sessionId: string; label: string }
   | { kind: "rdp"; sessionId: string; label: string };
 
 export function SessionsView({
   ssh,
+  sftp,
   remote,
   rdp,
   activeSessionId,
@@ -25,6 +34,7 @@ export function SessionsView({
   theme,
 }: {
   ssh: SshApi;
+  sftp: SftpApi;
   remote: RemoteApi;
   rdp: RdpApi;
   activeSessionId: string | null;
@@ -35,6 +45,11 @@ export function SessionsView({
   const sessions: SessionRef[] = [
     ...ssh.sessions.map((session) => ({
       kind: "ssh" as const,
+      sessionId: session.sessionId,
+      label: `${session.username}@${session.host}`,
+    })),
+    ...sftp.sessions.map((session) => ({
+      kind: "sftp" as const,
       sessionId: session.sessionId,
       label: `${session.username}@${session.host}`,
     })),
@@ -65,6 +80,7 @@ export function SessionsView({
 
   async function close(session: SessionRef) {
     if (session.kind === "ssh") await ssh.disconnect(session.sessionId);
+    else if (session.kind === "sftp") await sftp.disconnect(session.sessionId);
     else if (session.kind === "remote") await remote.disconnect(session.sessionId);
     else await rdp.disconnect(session.sessionId);
     if (session.sessionId === active.sessionId) onSelect(null);
@@ -75,7 +91,12 @@ export function SessionsView({
       <div className="session-tabs" role="tablist">
         {sessions.map((session) => {
           const selected = session.sessionId === active.sessionId;
-          const Glyph = session.kind === "ssh" ? TerminalIcon : ScreenShareIcon;
+          const Glyph =
+            session.kind === "ssh"
+              ? TerminalIcon
+              : session.kind === "sftp"
+                ? TransferIcon
+                : ScreenShareIcon;
           return (
             <div
               className={`session-tab${selected ? " is-active" : ""}`}
@@ -118,6 +139,15 @@ export function SessionsView({
               theme={theme}
               onClosed={() => onSelect(null)}
             />
+          </div>
+        ))}
+        {sftp.sessions.map((session) => (
+          <div
+            className="terminal-slot"
+            key={session.sessionId}
+            hidden={session.sessionId !== active.sessionId}
+          >
+            <SftpPane session={session} sftp={sftp} />
           </div>
         ))}
         {remote.sessions.map((session) => (

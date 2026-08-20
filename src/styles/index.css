@@ -10,4 +10,5 @@
 @import "./connections.css";
 @import "./vault.css";
 @import "./remote.css";
+@import "./sftp.css";
 @import "./overlays.css";

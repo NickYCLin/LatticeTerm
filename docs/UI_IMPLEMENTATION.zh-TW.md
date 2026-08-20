@@ -21,7 +21,8 @@
 | **主機資源面板** | `HostMetricsPanel` | `src/components/connections/HostMetricsPanel.tsx` | CPU、記憶體、磁碟與開機時間的量表；尚未連線時顯示原因而非假數值。 |
 | **新增/編輯抽屜** | `ConnectionDrawer` | `src/components/overlays/ConnectionDrawer.tsx` | 抽屜式連線表單，支援即時驗證、Tab 焦點循環鎖定與重複目標提醒。 |
 | **命令面板** | `CommandPalette` | `src/components/overlays/CommandPalette.tsx` | `Ctrl` + `K` 全域命令面板，支援搜尋連線與執行全域快捷動作。 |
-| **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、Lattice Remote 畫面與 Web RDP Canvas 分頁。 |
+| **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、SFTP 檔案、Lattice Remote 畫面與 Web RDP Canvas 分頁。 |
+| **SFTP 檔案工作區** | `SftpPane` | `src/components/sftp/SftpPane.tsx` | 遠端路徑瀏覽、上下載、建立資料夾、改名與確認刪除。 |
 | **Web RDP Canvas** | `RdpPane` | `src/components/rdp/RdpPane.tsx` | Canvas 畫面、座標縮放、滑鼠、滾輪、掃描碼鍵盤與失焦釋放。 |
 | **金鑰保管庫** | VaultView | src/views/VaultView.tsx | 直接管理 Rust 核心的主機信任資料與系統認證參照；可檢查、重新整理及確認刪除已保存密碼，但不讀取密碼內容。 |
 | **活動紀錄** | `ActivityView` | `src/views/ActivityView.tsx` | 活動日誌清單、關鍵字搜尋、事件類型篩選與純文字日誌匯出。 |
@@ -130,7 +131,7 @@
 
 - src-tauri/src/credentials.rs 以 profile UUID 與認證種類組成不含機密的帳號鍵；Windows 使用 Credential Manager、macOS 使用 Keychain、Linux 使用 Secret Service。
 - Tauri IPC 只公開可用狀態、是否存在與確認刪除；沒有任何命令會把已保存密碼回傳 WebView。
-- SSH 與 RDP 可使用已保存密碼，或在新密碼驗證成功後保存。若保存失敗，剛建立的工作階段會中止，避免畫面聲稱保存成功。
+- SSH、SFTP 與 RDP 可使用已保存密碼，或在新密碼驗證成功後保存。若保存失敗，剛建立的工作階段會中止，避免畫面聲稱保存成功。
 - useSavedCredential 與 useCredentialInventory 負責連線對話框和保管庫的真實狀態；瀏覽器預覽或系統儲存區鎖定時顯示原因並退回單次輸入。
 - 刪除密碼是保管庫與連線對話框中的獨立確認操作，不會因刪除一般連線設定而隱含永久刪除。
 
@@ -151,7 +152,17 @@
 
 ---
 
-## 11. Lattice Remote
+## 11. SFTP 檔案工作區
+
+- Rust 核心以 `russh-sftp` 建立 SFTP v3 子系統，沿用 SSH 的嚴格主機指紋比對；未知主機必須先確認，金鑰變更直接阻擋。
+- `useSftpSessions` 管理工作階段與 Tauri IPC；`SftpPane` 顯示 canonical remote path、目錄優先排序、檔案大小、修改時間與權限。
+- 使用者可手動前往路徑、上一層、重新整理、建立空資料夾、上傳、下載、改名與刪除；同名覆寫及刪除都要再次確認，不提供遞迴刪除。
+- 每次上傳與下載上限 32 MiB。Rust 下載以「上限 + 1 byte」串流讀取，不信任伺服器回報的檔案大小；大型傳輸佇列留待後續版本。
+- `src-tauri/tests/sftp_live.rs` 可搭配拋棄式 OpenSSH 容器驗證拒絕未知主機、信任後登入與完整檔案生命週期。
+
+---
+
+## 12. Lattice Remote
 
 - `crates/lattice-remote` 定義版本化二進位訊息、分塊畫面與 Noise `XXpsk3_25519_ChaChaPoly_BLAKE2s` 傳輸。
 - `lattice-agent` 預設只監聽 `127.0.0.1:44900`；分享區域為完整主螢幕，使用者必須在被控端看到並提供一次性八位數配對碼；配對碼五分鐘後失效，連續五次失敗即停止。
@@ -159,7 +170,7 @@
 - Tauri 以 NDJSON 事件管理每次分享的 sidecar 生命週期。配對成功後立即從 UI 狀態移除配對碼；關閉對話框可選擇讓分享留在背景，但停止分享或應用程式結束時會終止 Agent。
 - v1 僅傳送 JPEG 畫面，不接受任何輸入事件；UI 必須標示唯讀。
 
-## 12. Web RDP Canvas
+## 13. Web RDP Canvas
 
 - `crates/lattice-rdp` 是每個工作階段一個程序的 IronRDP engine，用 NDJSON stdin/stdout 與 Tauri bridge 溝通，以隔離 russh 與 IronRDP 的密碼學相依。
 - 密碼只出現在連線對話框、單次 Tauri IPC 與 engine 記憶體，不寫入 profile、事件或程序參數；使用者明確勾選時，成功連線後才會寫入作業系統認證儲存區。
@@ -169,7 +180,7 @@
 
 ---
 
-## 13. 自動更新與發行簽章
+## 14. 自動更新與發行簽章
 
 - **簽章金鑰**：以 `npm run tauri signer generate` 產生。公鑰放在 `tauri.conf.json` 的 `plugins.updater.pubkey`，私鑰與其密碼存在 GitHub Actions 的 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets，不會進入版本庫。
 - **為什麼不能放假的公鑰**：Tauri 的 updater plugin 缺 `pubkey` 會直接讓程式無法啟動；而填一把不對的公鑰雖然程式能開，卻會讓每一次更新的簽章驗證都失敗，問題被藏起來反而更難查。

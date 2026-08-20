@@ -26,7 +26,7 @@ export const protocolCatalog = [
     acronym: "SFTP",
     defaultPort: 22,
     milestone: 3,
-    available: false,
+    available: true,
   },
   {
     id: "rdp",

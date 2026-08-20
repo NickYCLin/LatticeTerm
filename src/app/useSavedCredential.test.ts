@@ -25,7 +25,7 @@ describe("credentialKindFor", () => {
 
   it("never persists one-time or unsupported protocol secrets", () => {
     expect(credentialKindFor(profile("lattice"))).toBeNull();
-    expect(credentialKindFor(profile("sftp"))).toBeNull();
+    expect(credentialKindFor(profile("sftp"))).toBe("sftpPassword");
     expect(credentialKindFor(profile("vnc"))).toBeNull();
   });
 });
