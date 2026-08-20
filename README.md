@@ -18,6 +18,19 @@ LatticeTerm 是一套現代、安全且跨平台的遠端連線工作空間，�
 - **本機持久化**：連線設定會存在本機的應用程式資料目錄，關閉再開仍在；檔案只含主機資訊，不含任何認證資料。
 - **跨平台支援**：支援 Windows、Linux 與 macOS。
 
+## 📥 下載與安裝 (Downloads)
+
+你可以直接前往 [GitHub Releases](https://github.com/NickYCLin/LatticeTerm/releases) 取得最新發行版本的安裝檔與執行檔：
+
+| 平台 | 安裝包格式 | 系統支援 |
+|---|---|---|
+| **Windows** | `.msi` / `.exe` (NSIS) | Windows 10 / 11 (x64) |
+| **Linux** | `.deb` / `.AppImage` | Ubuntu、Debian 及通用 Linux 發行版 (x64) |
+| **macOS** | `.dmg` / `.app` | macOS 12+ (Apple Silicon 與 Intel) |
+
+> [!TIP]
+> 歡迎至 [Releases 列表](https://github.com/NickYCLin/LatticeTerm/releases) 下載對應平台的安裝檔或檢視各版本更新說明。
+
 ## 誠實呈現的介面原則
 
 介面必須讓使用者一眼分辨「已經可用」與「還在開發」：
@@ -30,12 +43,13 @@ LatticeTerm 是一套現代、安全且跨平台的遠端連線工作空間，�
 
 ## 開發藍圖
 
-1. 透過系統 OpenSSH 用戶端與 PTY 建立 SSH 終端機工作階段
+1. 以純 Rust 的 SSH 實作（russh）建立終端機工作階段，桌面與行動版共用同一套連線核心
 2. 以作業系統金鑰鏈保存機密，並嚴格驗證 `known_hosts`
 3. SFTP 檔案瀏覽與安全傳輸佇列
 4. SSH Tunnel 連接埠轉送與 RDP 連線啟動
 5. 內嵌式 RDP 與 VNC 遠端桌面工作階段
 6. 跨平台安裝檔打包與自動更新機制
+7. Android 與 iOS 版本（連線核心不依賴系統 ssh 執行檔，因此可沿用）
 
 ## 鍵盤快捷鍵
 
