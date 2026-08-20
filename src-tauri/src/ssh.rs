@@ -208,11 +208,11 @@ impl SshRegistry {
 
 /// Answers russh's "do you accept this host key?" question from the trust
 /// store, and remembers the verdict so the caller can explain a refusal.
-struct TrustingHandler {
-    host: String,
-    port: u16,
-    known: Option<HostKeyRecord>,
-    verdict: Arc<Mutex<Option<TrustVerdict>>>,
+pub(crate) struct TrustingHandler {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) known: Option<HostKeyRecord>,
+    pub(crate) verdict: Arc<Mutex<Option<TrustVerdict>>>,
 }
 
 impl client::Handler for TrustingHandler {

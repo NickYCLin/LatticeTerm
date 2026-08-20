@@ -4,6 +4,7 @@ pub mod hostkeys;
 pub mod rdp;
 pub mod remote;
 pub mod remote_host;
+pub mod sftp;
 pub mod ssh;
 pub mod storage;
 
@@ -17,6 +18,9 @@ use crate::remote::{
     RemoteConnectOutcome, RemoteConnectRequest, RemoteRegistry, RemoteSessionSummary,
 };
 use crate::remote_host::{RemoteHostRegistry, RemoteHostStartRequest, RemoteHostStatus};
+use crate::sftp::{
+    SftpConnectOutcome, SftpConnectRequest, SftpDirectory, SftpRegistry, SftpSessionSummary,
+};
 use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
 use serde::Serialize;
@@ -59,7 +63,7 @@ where
 struct RuntimeSummary {
     app_name: &'static str,
     version: &'static str,
-    supported_protocols: [&'static str; 3],
+    supported_protocols: [&'static str; 4],
     credential_storage_ready: bool,
 }
 
@@ -68,7 +72,7 @@ fn runtime_summary() -> RuntimeSummary {
     RuntimeSummary {
         app_name: "LatticeTerm",
         version: env!("CARGO_PKG_VERSION"),
-        supported_protocols: ["ssh", "rdp", "lattice"],
+        supported_protocols: ["ssh", "sftp", "rdp", "lattice"],
         credential_storage_ready: crate::credentials::status().ready,
     }
 }
@@ -127,6 +131,7 @@ async fn delete_connection_profile(
             .map_err(|e| e.to_string())?
             .and_then(|profile| match profile.protocol {
                 Protocol::Ssh => Some(CredentialKind::SshPassword),
+                Protocol::Sftp => Some(CredentialKind::SftpPassword),
                 Protocol::Rdp => Some(CredentialKind::RdpPassword),
                 _ => None,
             })
@@ -275,6 +280,149 @@ async fn ssh_disconnect(
 #[tauri::command]
 fn ssh_sessions(registry: State<'_, Arc<SshRegistry>>) -> Vec<SessionSummary> {
     registry.list()
+}
+
+#[tauri::command]
+async fn sftp_connect(
+    mut request: SftpConnectRequest,
+    trust: State<'_, TrustState>,
+    registry: State<'_, Arc<SftpRegistry>>,
+) -> Result<SftpConnectOutcome, String> {
+    if request.use_saved_password && request.remember_password {
+        return Ok(SftpConnectOutcome::Failed {
+            stage: "credential",
+            detail: "Choose either the saved password or a new password to remember.".to_string(),
+        });
+    }
+
+    if request.use_saved_password {
+        let profile_id = request.profile_id.clone();
+        request.auth = match credential_call(move || {
+            crate::credentials::load(&profile_id, CredentialKind::SftpPassword)
+        })
+        .await
+        {
+            Ok(password) => crate::ssh::AuthMethod::Password { password },
+            Err(detail) => {
+                return Ok(SftpConnectOutcome::Failed {
+                    stage: "credential",
+                    detail,
+                })
+            }
+        };
+    }
+
+    let profile_id = request.profile_id.clone();
+    let password_to_store = if request.remember_password {
+        match &request.auth {
+            crate::ssh::AuthMethod::Password { password } => Some(Zeroizing::new(password.clone())),
+        }
+    } else {
+        None
+    };
+    let known = match trust.inner() {
+        TrustState::Unavailable(reason) => {
+            return Ok(SftpConnectOutcome::Failed {
+                stage: "trust",
+                detail: reason.clone(),
+            })
+        }
+        TrustState::Ready(store) => {
+            let guard = store.lock().map_err(|error| error.to_string())?;
+            crate::ssh::known_record(&guard, &request.hostname, request.port)
+        }
+    };
+
+    let outcome = crate::sftp::connect(Arc::clone(registry.inner()), known, request).await;
+    if let (SftpConnectOutcome::Connected { session }, Some(password)) =
+        (&outcome, password_to_store)
+    {
+        let session_id = session.session_id.clone();
+        if let Err(detail) = credential_call(move || {
+            crate::credentials::store(&profile_id, CredentialKind::SftpPassword, password.as_str())
+        })
+        .await
+        {
+            let _ = crate::sftp::disconnect(registry.inner(), &session_id).await;
+            return Ok(SftpConnectOutcome::Failed {
+                stage: "credential",
+                detail,
+            });
+        }
+    }
+    Ok(outcome)
+}
+
+#[tauri::command]
+fn sftp_sessions(registry: State<'_, Arc<SftpRegistry>>) -> Vec<SftpSessionSummary> {
+    registry.list()
+}
+
+#[tauri::command]
+async fn sftp_list(
+    session_id: String,
+    path: String,
+    registry: State<'_, Arc<SftpRegistry>>,
+) -> Result<SftpDirectory, String> {
+    crate::sftp::list_directory(registry.inner(), &session_id, &path).await
+}
+
+#[tauri::command]
+async fn sftp_create_directory(
+    session_id: String,
+    parent: String,
+    name: String,
+    registry: State<'_, Arc<SftpRegistry>>,
+) -> Result<(), String> {
+    crate::sftp::create_directory(registry.inner(), &session_id, &parent, &name).await
+}
+
+#[tauri::command]
+async fn sftp_rename(
+    session_id: String,
+    path: String,
+    new_name: String,
+    registry: State<'_, Arc<SftpRegistry>>,
+) -> Result<(), String> {
+    crate::sftp::rename(registry.inner(), &session_id, &path, &new_name).await
+}
+
+#[tauri::command]
+async fn sftp_remove(
+    session_id: String,
+    path: String,
+    directory: bool,
+    registry: State<'_, Arc<SftpRegistry>>,
+) -> Result<(), String> {
+    crate::sftp::remove(registry.inner(), &session_id, &path, directory).await
+}
+
+#[tauri::command]
+async fn sftp_read_file(
+    session_id: String,
+    path: String,
+    registry: State<'_, Arc<SftpRegistry>>,
+) -> Result<String, String> {
+    crate::sftp::read_file(registry.inner(), &session_id, &path).await
+}
+
+#[tauri::command]
+async fn sftp_write_file(
+    session_id: String,
+    parent: String,
+    name: String,
+    data: String,
+    registry: State<'_, Arc<SftpRegistry>>,
+) -> Result<(), String> {
+    crate::sftp::write_file(registry.inner(), &session_id, &parent, &name, &data).await
+}
+
+#[tauri::command]
+async fn sftp_disconnect(
+    session_id: String,
+    registry: State<'_, Arc<SftpRegistry>>,
+) -> Result<(), String> {
+    crate::sftp::disconnect(registry.inner(), &session_id).await
 }
 
 #[tauri::command]
@@ -466,6 +614,7 @@ pub fn run() {
             };
             app.manage(trust);
             app.manage(Arc::new(SshRegistry::new()));
+            app.manage(Arc::new(SftpRegistry::new()));
             app.manage(Arc::new(RemoteRegistry::new()));
             app.manage(Arc::new(RemoteHostRegistry::new()));
             app.manage(Arc::new(RdpRegistry::new()));
@@ -485,6 +634,15 @@ pub fn run() {
             ssh_resize,
             ssh_disconnect,
             ssh_sessions,
+            sftp_connect,
+            sftp_sessions,
+            sftp_list,
+            sftp_create_directory,
+            sftp_rename,
+            sftp_remove,
+            sftp_read_file,
+            sftp_write_file,
+            sftp_disconnect,
             remote_connect,
             remote_disconnect,
             remote_sessions,
@@ -517,7 +675,10 @@ mod tests {
         let summary = runtime_summary();
 
         assert_eq!(summary.app_name, "LatticeTerm");
-        assert_eq!(summary.supported_protocols, ["ssh", "rdp", "lattice"]);
+        assert_eq!(
+            summary.supported_protocols,
+            ["ssh", "sftp", "rdp", "lattice"]
+        );
         assert_eq!(
             summary.credential_storage_ready,
             crate::credentials::status().ready
