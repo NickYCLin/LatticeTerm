@@ -112,6 +112,7 @@ export default function App() {
     filter,
     filterActive,
     setFilter,
+    resetFilter,
     selected,
     setSelectedId,
     addProfile,
@@ -119,6 +120,7 @@ export default function App() {
     duplicateProfile,
     removeProfile,
     loadSamples,
+    clearActivity,
   } = workspace;
 
   const editing = useMemo(
@@ -211,6 +213,16 @@ export default function App() {
       },
     );
 
+    if (filterActive) {
+      entries.push({
+        id: "action:reset-filter",
+        label: "Reset connection filters",
+        hint: "Clear current search, environment and tag filters",
+        group: "Actions",
+        run: resetFilter,
+      });
+    }
+
     if (profiles.length === 0) {
       entries.push({
         id: "action:samples",
@@ -221,6 +233,16 @@ export default function App() {
       });
     }
 
+    if (workspace.activity.length > 0) {
+      entries.push({
+        id: "action:clear-activity",
+        label: "Clear session activity log",
+        hint: "Remove all transient activity entries from this window",
+        group: "Actions",
+        run: clearActivity,
+      });
+    }
+
     return entries;
   }, [
     openCreate,
@@ -228,8 +250,12 @@ export default function App() {
     resolvedTheme,
     preferences.density,
     preferences.sidebarCollapsed,
+    filterActive,
+    resetFilter,
     profiles.length,
     loadSamples,
+    workspace.activity.length,
+    clearActivity,
   ]);
 
   // Global shortcuts. Anything typed into a field is left alone.
