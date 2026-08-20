@@ -32,11 +32,12 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | 平台 | 安裝包格式 | 系統支援 |
 |---|---|---|
 | **Windows** | `.msi` / `.exe` (NSIS) | Windows 10 / 11 (x64) |
-| **Linux** | `.deb` / `.AppImage` | Ubuntu、Debian 及通用 Linux 發行版 (x64) |
-| **macOS** | `.dmg` / `.app` | macOS 12+ (Apple Silicon 與 Intel) |
+| **Linux** | `.deb` / `.AppImage` | Ubuntu、Debian 及通用 Linux 發行版 (x64 / arm64) |
+| **macOS** | `.dmg` / `.app` | macOS 12+ (Apple Silicon) |
 
 > [!TIP]
 > 歡迎至 [Releases 列表](https://github.com/NickYCLin/LatticeTerm/releases) 下載對應平台的安裝檔或檢視各版本更新說明。
+> 維護者可參考 [Release 自動化與版本規則](docs/RELEASE_AUTOMATION.zh-TW.md)；版本會由 Conventional Commits 自動計算，合併 Release PR 後才正式發布。
 
 ## 誠實呈現的介面原則
 
@@ -57,7 +58,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 4. 內嵌 Web RDP Canvas（已可用，持續強化封裝與憑證管理）
 5. SFTP 檔案瀏覽與安全傳輸（已可用；大型檔案佇列仍待完成）、SSH Tunnel 與 VNC
 6. AI Agent Fleet 本機多 CLI PTY 與安全語意 Reporter（已可用）；工具專用 adapter、背景 daemon、跨重啟還原、任務編排與遠端 attach 仍待完成
-7. 跨平台安裝檔打包與自動更新機制
+7. 跨平台安裝檔打包、自動版號 Release PR、簽章更新包與自動更新機制（已可用；作業系統發行者簽章仍待憑證）
 8. Android 與 iOS 版本（遠端連線核心可沿用；本機 CLI Fleet 為桌面功能）
 
 ## 鍵盤快捷鍵
