@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useState } from "react";
+import { APP_VERSION } from "./version";
 
 export type UpdateStatus =
   | "idle"
@@ -31,7 +32,7 @@ export interface UpdateInfo {
   lastChecked: Date | null;
 }
 
-export function useAppUpdater(currentVersion = "0.2.0") {
+export function useAppUpdater(currentVersion = APP_VERSION) {
   const [info, setInfo] = useState<UpdateInfo>({
     status: "idle",
     currentVersion,

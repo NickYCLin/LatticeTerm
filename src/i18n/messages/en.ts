@@ -491,6 +491,15 @@ export const en: Messages = {
   "agents.custom.launch": "Launch custom CLI",
   "agents.workspace.eyebrow": "Restart recovery",
   "agents.workspace.title": "Save a launch workspace",
+  "agents.workspace.defaultName": "My agent workspace",
+  "agents.workspace.editName": "Edit workspace name",
+  "agents.workspace.nameLabel": "Workspace name",
+  "agents.workspace.nameHint":
+    "Up to 80 bytes. The name only identifies this saved launch list.",
+  "agents.workspace.saveName": "Save name",
+  "agents.workspace.renamedTitle": "Workspace renamed",
+  "agents.workspace.renamedBody":
+    "This safe launch workspace is now named “{name}”.",
   "agents.workspace.body":
     "Save the CLI type, arguments, and working directory for multiple agents. When LatticeTerm opens again, you confirm before new processes are launched.",
   "agents.workspace.save": "Save launch item",
@@ -513,6 +522,8 @@ export const en: Messages = {
   "agents.workspace.empty":
     "No launch items are saved yet. Add a built-in or custom CLI above.",
   "agents.workspace.command": "{executable} · {count} arguments",
+  "agents.workspace.moveUp": "Move “{name}” up",
+  "agents.workspace.moveDown": "Move “{name}” down",
   "agents.workspace.delete": "Delete launch item",
   "agents.workspace.confirmTitle": "Restore this launch workspace?",
   "agents.workspace.confirmBody":

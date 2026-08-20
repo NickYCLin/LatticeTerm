@@ -45,6 +45,7 @@ export interface AgentPlanRecovery {
 }
 
 interface AgentPlanSnapshot {
+  workspaceName: string;
   plans: AgentLaunchPlan[];
   recovery: AgentPlanRecovery | null;
 }
@@ -142,17 +143,33 @@ export function buildAgentBroadcastPayload(value: string): string {
   return `${normalized}\r`;
 }
 
+export function moveAgentLaunchPlan(
+  plans: AgentLaunchPlan[],
+  id: string,
+  offset: -1 | 1,
+): AgentLaunchPlan[] {
+  const index = plans.findIndex((plan) => plan.id === id);
+  const target = index + offset;
+  if (index < 0 || target < 0 || target >= plans.length) return plans;
+  const next = [...plans];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
 export interface AgentApi {
   mode: AgentBackendMode;
   error: string | null;
   catalog: AgentDefinition[];
   defaultWorkingDirectory: string;
   sessions: AgentSessionSummary[];
+  workspaceName: string;
   plans: AgentLaunchPlan[];
   planRecovery: AgentPlanRecovery | null;
   refreshCatalog: () => Promise<void>;
   launch: (request: AgentLaunchRequest) => Promise<AgentSessionSummary>;
   savePlan: (draft: AgentLaunchPlanDraft) => Promise<AgentLaunchPlan>;
+  renameWorkspace: (name: string) => Promise<string>;
+  reorderPlans: (orderedIds: string[]) => Promise<AgentLaunchPlan[]>;
   deletePlan: (id: string) => Promise<boolean>;
   restorePlans: (planIds: string[]) => Promise<AgentRestoreOutcome[]>;
   send: (sessionId: string, data: string) => Promise<void>;
@@ -178,6 +195,7 @@ export function useAgentSessions(): AgentApi {
   const [catalog, setCatalog] = useState<AgentDefinition[]>(FALLBACK_CATALOG);
   const [defaultWorkingDirectory, setDefaultWorkingDirectory] = useState("");
   const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
+  const [workspaceName, setWorkspaceName] = useState("");
   const [plans, setPlans] = useState<AgentLaunchPlan[]>([]);
   const [planRecovery, setPlanRecovery] = useState<AgentPlanRecovery | null>(
     null,
@@ -204,6 +222,7 @@ export function useAgentSessions(): AgentApi {
       setCatalog(definitions);
       setDefaultWorkingDirectory(directory);
       setSessions(currentSessions);
+      setWorkspaceName(planSnapshot.workspaceName);
       setPlans(planSnapshot.plans);
       setPlanRecovery(planSnapshot.recovery);
       setError(null);
@@ -312,6 +331,22 @@ export function useAgentSessions(): AgentApi {
     return plan;
   }, []);
 
+  const renameWorkspace = useCallback(async (name: string) => {
+    const { invoke } = await core();
+    const saved = await invoke<string>("agent_workspace_rename", { name });
+    setWorkspaceName(saved);
+    return saved;
+  }, []);
+
+  const reorderPlans = useCallback(async (orderedIds: string[]) => {
+    const { invoke } = await core();
+    const reordered = await invoke<AgentLaunchPlan[]>("agent_plan_reorder", {
+      orderedIds,
+    });
+    setPlans(reordered);
+    return reordered;
+  }, []);
+
   const deletePlan = useCallback(async (id: string) => {
     const { invoke } = await core();
     const deleted = await invoke<boolean>("agent_plan_delete", { id });
@@ -409,11 +444,14 @@ export function useAgentSessions(): AgentApi {
     catalog,
     defaultWorkingDirectory,
     sessions,
+    workspaceName,
     plans,
     planRecovery,
     refreshCatalog: load,
     launch,
     savePlan,
+    renameWorkspace,
+    reorderPlans,
     deletePlan,
     restorePlans,
     send,

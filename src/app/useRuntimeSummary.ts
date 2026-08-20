@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { APP_VERSION } from "./version";
 
 export interface RuntimeSummary {
   appName: string;
@@ -24,7 +25,7 @@ export interface RuntimeState {
 
 const fallback: RuntimeSummary = {
   appName: "LatticeTerm",
-  version: "0.2.0",
+  version: APP_VERSION,
   supportedProtocols: ["ssh", "rdp", "lattice"],
   credentialStorageReady: false,
 };

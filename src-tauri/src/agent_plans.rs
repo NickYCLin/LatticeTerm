@@ -13,13 +13,15 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const STORE_VERSION: u32 = 1;
+const STORE_VERSION: u32 = 2;
 const STORE_FILE: &str = "agent-workspaces.json";
 const TEMP_FILE: &str = "agent-workspaces.json.tmp";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct StoreFile {
     version: u32,
+    #[serde(default, rename = "workspaceName")]
+    workspace_name: String,
     plans: Vec<AgentLaunchPlan>,
 }
 
@@ -33,6 +35,7 @@ pub struct AgentPlanRecovery {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPlanSnapshot {
+    pub workspace_name: String,
     pub plans: Vec<AgentLaunchPlan>,
     pub recovery: Option<AgentPlanRecovery>,
 }
@@ -40,6 +43,7 @@ pub struct AgentPlanSnapshot {
 #[derive(Debug)]
 pub struct FileAgentPlanStore {
     path: PathBuf,
+    workspace_name: String,
     plans: Vec<AgentLaunchPlan>,
     recovery: Option<AgentPlanRecovery>,
 }
@@ -50,6 +54,7 @@ impl FileAgentPlanStore {
         let path = dir.join(STORE_FILE);
         let mut store = Self {
             path,
+            workspace_name: String::new(),
             plans: Vec::new(),
             recovery: None,
         };
@@ -63,7 +68,17 @@ impl FileAgentPlanStore {
             Ok(file)
                 if file.version <= STORE_VERSION && file.plans.len() <= MAX_SAVED_AGENT_PLANS =>
             {
-                store.plans = file.plans;
+                match normalize_stored_workspace_name(&file.workspace_name) {
+                    Ok(name) => {
+                        store.workspace_name = name;
+                        store.plans = file.plans;
+                    }
+                    Err(error) => {
+                        store.recovery = Some(store.set_aside(format!(
+                            "file contains an invalid workspace name: {error}"
+                        ))?);
+                    }
+                }
             }
             Ok(file) if file.version > STORE_VERSION => {
                 store.recovery = Some(store.set_aside(format!(
@@ -114,6 +129,7 @@ impl FileAgentPlanStore {
     fn persist(&self) -> Result<(), String> {
         let json = serde_json::to_string_pretty(&StoreFile {
             version: STORE_VERSION,
+            workspace_name: self.workspace_name.clone(),
             plans: self.plans.clone(),
         })
         .map_err(|error| error.to_string())?;
@@ -134,9 +150,57 @@ impl FileAgentPlanStore {
 
     pub fn snapshot(&self) -> AgentPlanSnapshot {
         AgentPlanSnapshot {
+            workspace_name: self.workspace_name.clone(),
             plans: self.plans.clone(),
             recovery: self.recovery.clone(),
         }
+    }
+
+    pub fn rename(&mut self, name: &str) -> Result<String, String> {
+        let name = normalize_workspace_name(name)?;
+        if name == self.workspace_name {
+            return Ok(name);
+        }
+        let previous = std::mem::replace(&mut self.workspace_name, name.clone());
+        if let Err(error) = self.persist() {
+            self.workspace_name = previous;
+            return Err(error);
+        }
+        Ok(name)
+    }
+
+    pub fn reorder(&mut self, ordered_ids: &[String]) -> Result<Vec<AgentLaunchPlan>, String> {
+        if ordered_ids.len() != self.plans.len() {
+            return Err("The ordered launch plan list must contain every saved item.".to_string());
+        }
+        let mut reordered = Vec::with_capacity(self.plans.len());
+        for id in ordered_ids {
+            if id.trim() != id || id.is_empty() || id.len() > 128 {
+                return Err("A saved launch plan ID is invalid.".to_string());
+            }
+            let plan = self
+                .plans
+                .iter()
+                .find(|plan| &plan.id == id)
+                .ok_or_else(|| format!("Saved launch plan '{id}' no longer exists."))?;
+            if reordered
+                .iter()
+                .any(|entry: &AgentLaunchPlan| entry.id == plan.id)
+            {
+                return Err("A saved launch plan appears more than once in the order.".to_string());
+            }
+            reordered.push(plan.clone());
+        }
+
+        if reordered == self.plans {
+            return Ok(reordered);
+        }
+        let previous = std::mem::replace(&mut self.plans, reordered);
+        if let Err(error) = self.persist() {
+            self.plans = previous;
+            return Err(error);
+        }
+        Ok(self.plans.clone())
     }
 
     pub fn save(&mut self, draft: AgentLaunchPlanDraft) -> Result<AgentLaunchPlan, String> {
@@ -168,6 +232,28 @@ impl FileAgentPlanStore {
 
     pub fn find(&self, id: &str) -> Option<AgentLaunchPlan> {
         self.plans.iter().find(|plan| plan.id == id).cloned()
+    }
+}
+
+fn normalize_workspace_name(value: &str) -> Result<String, String> {
+    let name = value.trim();
+    if name.is_empty() {
+        return Err("Workspace name is required.".to_string());
+    }
+    if name.len() > 80 {
+        return Err("Workspace name is too long (maximum 80 bytes).".to_string());
+    }
+    if name.chars().any(char::is_control) {
+        return Err("Workspace name contains unsupported control characters.".to_string());
+    }
+    Ok(name.to_string())
+}
+
+fn normalize_stored_workspace_name(value: &str) -> Result<String, String> {
+    if value.is_empty() {
+        Ok(String::new())
+    } else {
+        normalize_workspace_name(value)
     }
 }
 
@@ -230,6 +316,70 @@ mod tests {
     }
 
     #[test]
+    fn version_one_files_migrate_when_named_and_reordered() {
+        let directory = temp_dir("v1-migration");
+        let first =
+            normalize_launch_plan("agent-plan-first".to_string(), draft(&directory, "First"))
+                .unwrap();
+        let second =
+            normalize_launch_plan("agent-plan-second".to_string(), draft(&directory, "Second"))
+                .unwrap();
+        fs::write(
+            directory.join(STORE_FILE),
+            serde_json::json!({ "version": 1, "plans": [first, second] }).to_string(),
+        )
+        .unwrap();
+
+        let mut store = FileAgentPlanStore::open(&directory).unwrap();
+        assert_eq!(store.snapshot().workspace_name, "");
+        assert_eq!(store.rename("  Release crew  ").unwrap(), "Release crew");
+        store
+            .reorder(&[
+                "agent-plan-second".to_string(),
+                "agent-plan-first".to_string(),
+            ])
+            .unwrap();
+
+        let reopened = FileAgentPlanStore::open(&directory).unwrap();
+        let snapshot = reopened.snapshot();
+        assert_eq!(snapshot.workspace_name, "Release crew");
+        assert_eq!(
+            snapshot
+                .plans
+                .iter()
+                .map(|plan| plan.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["agent-plan-second", "agent-plan-first"]
+        );
+        let raw = fs::read_to_string(directory.join(STORE_FILE)).unwrap();
+        assert!(raw.contains("\"version\": 2"));
+        assert!(raw.contains("\"workspaceName\": \"Release crew\""));
+    }
+
+    #[test]
+    fn invalid_reorders_do_not_change_the_saved_order() {
+        let directory = temp_dir("invalid-reorder");
+        let mut store = FileAgentPlanStore::open(&directory).unwrap();
+        let first = store.save(draft(&directory, "First")).unwrap();
+        let second = store.save(draft(&directory, "Second")).unwrap();
+
+        assert!(store
+            .reorder(&[first.id.clone(), first.id.clone()])
+            .is_err());
+        assert_eq!(store.snapshot().plans, vec![first, second]);
+    }
+
+    #[test]
+    fn workspace_names_are_trimmed_and_validated() {
+        let directory = temp_dir("workspace-name");
+        let mut store = FileAgentPlanStore::open(&directory).unwrap();
+        assert_eq!(store.rename("  Planning team  ").unwrap(), "Planning team");
+        assert!(store.rename("  ").is_err());
+        assert!(store.rename("bad\nname").is_err());
+        assert_eq!(store.snapshot().workspace_name, "Planning team");
+    }
+
+    #[test]
     fn unreadable_files_are_preserved_for_recovery() {
         let directory = temp_dir("recovery");
         let path = directory.join(STORE_FILE);
@@ -242,6 +392,24 @@ mod tests {
             fs::read_to_string(recovery.backup_path).unwrap(),
             "{ broken json"
         );
+    }
+
+    #[test]
+    fn invalid_stored_workspace_names_are_preserved_for_recovery() {
+        let directory = temp_dir("invalid-stored-name");
+        let path = directory.join(STORE_FILE);
+        let raw = serde_json::json!({
+            "version": STORE_VERSION,
+            "workspaceName": "bad\nname",
+            "plans": []
+        })
+        .to_string();
+        fs::write(&path, &raw).unwrap();
+
+        let store = FileAgentPlanStore::open(&directory).unwrap();
+        let recovery = store.snapshot().recovery.expect("recovery details");
+        assert!(recovery.reason.contains("invalid workspace name"));
+        assert_eq!(fs::read_to_string(recovery.backup_path).unwrap(), raw);
     }
 
     #[test]

@@ -15,6 +15,7 @@ import {
 import { usePreferences, type PreferencesValue } from "./app/preferences";
 import { findTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
+import { APP_VERSION } from "./app/version";
 import { useStorageStatus } from "./app/useStorageStatus";
 import { useAgentSessions } from "./app/useAgentSessions";
 import { useSshSessions } from "./app/useSshSessions";
@@ -429,7 +430,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           visibleCount={visibleProfiles.length}
           filterActive={filterActive}
           vaultReady={runtime.summary?.credentialStorageReady ?? false}
-          version={runtime.summary?.version ?? "0.2.0"}
+          version={runtime.summary?.version ?? APP_VERSION}
           storage={storage}
         />
       </main>
