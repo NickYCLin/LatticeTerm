@@ -17,7 +17,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 - **六種主題**：深色、淺色、午夜藍、石墨黑、暖砂與高對比，另可跟隨系統；切換時原生標題列會一起換色。
 - **主機資源檢視**：連線詳細面板保留「主機狀態」分頁，用來顯示 CPU、記憶體與磁碟用量。
 - **本機持久化**：連線設定會存在本機的應用程式資料目錄，關閉再開仍在；檔案只含主機資訊，不含任何認證資料。
-- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、OpenCode、Hermes 等本機 LLM CLI，也可安全指定自訂可執行檔與參數；通用 Reporter 讓工具 hook 明確回報狀態，並可在二次確認後將同一段提示送給多個已選 Agent，登入資料仍由各 CLI 自行管理。
+- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、OpenCode、Hermes 等本機 LLM CLI，也可安全指定自訂可執行檔與參數；通用 Reporter 讓工具 hook 明確回報狀態，並可在二次確認後將同一段提示送給多個已選 Agent。安全啟動工作區可跨應用程式重啟保存非機密的 CLI 啟動資料，再由使用者確認後建立新程序；登入資料仍由各 CLI 自行管理。
 - **SSH 連線**：以純 Rust 的 russh 實作，可建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼預設只用於當次連線，使用者可在驗證成功後明確保存到系統認證儲存區。
 - **SFTP 檔案工作區**：沿用 SSH 主機指紋驗證與獨立的系統認證項目，可瀏覽遠端路徑、上下載、新增資料夾、重新命名及確認刪除。單次傳輸限制為 32 MiB，避免大型內容耗盡 WebView／IPC 記憶體。
 - **Lattice Remote（唯讀 v1）**：桌面版內建「分享這台裝置」，由使用者明確啟動自建 Agent 擷取完整主螢幕，以 Noise XXpsk3 與一次性八位數配對碼建立端對端加密直連；目前不注入鍵盤或滑鼠。
@@ -44,7 +44,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 介面必須讓使用者一眼分辨「已經可用」與「還在開發」：
 
 - 尚未實作的功能標示為「即將推出」，不使用看起來可按、實際上停用的假按鈕。
-- AI Agent Fleet、SSH、SFTP、Lattice Remote 與 Web RDP 會啟動真正的工作階段；背景 Agent daemon、跨重啟還原與 VNC 仍明確標示開發狀態。
+- AI Agent Fleet、SSH、SFTP、Lattice Remote 與 Web RDP 會啟動真正的工作階段；Agent Fleet 可保存安全啟動工作區，但不會假裝舊程序或終端內容可跨重啟存活。背景 Agent daemon、原工作階段重新 attach 與 VNC 仍明確標示開發狀態。
 - 主機資源分頁在監控資料尚未接入前直接說明原因，不顯示假的 CPU 或記憶體數字。
 - SSH/SFTP/RDP 密碼永遠不寫入連線設定檔；預設只供當次驗證，勾選後也只有驗證成功才會寫入作業系統認證儲存區。
 - Key Vault 的主機信任與認證分頁都顯示真正的本機狀態；認證分頁只列連線參照，不顯示密碼內容。
@@ -57,7 +57,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 3. Lattice Remote 唯讀加密主螢幕與內嵌主機分享（已可用，後續增加 Relay/NAT 穿透、無人值守與顯式授權的輸入控制）
 4. 內嵌 Web RDP Canvas（已可用，持續強化封裝與憑證管理）
 5. SFTP 檔案瀏覽與安全傳輸（已可用；大型檔案佇列仍待完成）、SSH Tunnel 與 VNC
-6. AI Agent Fleet 本機多 CLI PTY、安全語意 Reporter 與明確確認的批次提示（已可用）；工具專用 adapter、背景 daemon、跨重啟還原、依賴／佇列編排與遠端 attach 仍待完成
+6. AI Agent Fleet 本機多 CLI PTY、安全語意 Reporter、批次提示與跨重啟安全啟動工作區（已可用）；工具專用 adapter、背景 daemon、原工作階段重新 attach、依賴／佇列編排與遠端 attach 仍待完成
 7. 跨平台安裝檔打包、自動版號 Release PR、簽章更新包與自動更新機制（已可用；作業系統發行者簽章仍待憑證）
 8. Android 與 iOS 版本（遠端連線核心可沿用；本機 CLI Fleet 為桌面功能）
 
@@ -106,11 +106,13 @@ Agent 顯示的八位數配對碼五分鐘後失效，連續五次失敗就會�
 
 ### 執行 AI Agent Fleet
 
-Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示後端不可用。開啟側邊導覽的「AI Agent Fleet」，選擇工作目錄後即可啟動已偵測到的 CLI，或以「每行一個參數」加入自訂工具。批次提示必須先勾選執行中的目標並再次確認，LatticeTerm 不保存提示內容。工作階段只存於記憶體，停止或關閉應用程式會終止 CLI。
+Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示後端不可用。開啟側邊導覽的「AI Agent Fleet」，選擇工作目錄後即可啟動已偵測到的 CLI，或以「每行一個參數」加入自訂工具。批次提示必須先勾選執行中的目標並再次確認，LatticeTerm 不保存提示內容。
+
+「保存啟動項目」只會記錄 CLI 類型、標籤、可執行檔、明確參數與工作目錄，最多 32 個；密碼、Token、API Key、Passphrase、Secret 參數、提示、輸出與 Reporter 權杖都不會保存。下次開啟應用程式時，使用者可逐項或整批確認並建立新的 CLI 程序；舊程序、終端內容與原生 CLI session 不會被假裝還原。工作階段本身仍只存於記憶體，停止或關閉應用程式會終止 CLI。
 
 每個 CLI 都會收到本機 Reporter 環境變數。工具 hook 可執行 `"$LATTICETERM_AGENT_REPORTER" agent-report done`，並以 `working`、`needs-attention`、`idle` 或 `done` 回報狀態；Windows PowerShell 使用 `& $env:LATTICETERM_AGENT_REPORTER agent-report done`。Reporter 只接受該工作階段的隨機權杖，且只能更新狀態。完整協定與安全邊界請見架構文件。
 
-Herdr 類型的背景服務、工具專用 Adapter、跨重啟還原與自建遠端 attach 規劃，請見 [AI Agent Fleet 架構與整合藍圖](docs/AGENT_FLEET_ARCHITECTURE.zh-TW.md)。
+Herdr 類型的背景服務、工具專用 Adapter、原工作階段重新 attach 與自建遠端 attach 規劃，請見 [AI Agent Fleet 架構與整合藍圖](docs/AGENT_FLEET_ARCHITECTURE.zh-TW.md)。
 
 ### 專案驗證
 
