@@ -1,16 +1,18 @@
 /**
  * Badges.
  *
- * Every badge pairs its colour with a text label or an icon, so no state in
- * the interface is communicated by colour alone.
+ * Every badge pairs its colour with a label or an icon, so no state in the
+ * interface is communicated by colour alone.
  */
 
 import {
-  findEnvironment,
+  environmentLabelKey,
   findProtocol,
+  protocolLabelKey,
   type Environment,
   type Protocol,
 } from "../../domain/connection";
+import { useI18n } from "../../i18n";
 import {
   DesktopIcon,
   ScreenShareIcon,
@@ -38,7 +40,7 @@ export function ProtocolIcon({
   return <Glyph size={size} />;
 }
 
-/** The square protocol marker that anchors each connection row. */
+/** The rounded protocol marker that anchors each card. */
 export function ProtocolTile({
   protocol,
   size = "md",
@@ -46,36 +48,37 @@ export function ProtocolTile({
   protocol: Protocol;
   size?: "sm" | "md" | "lg";
 }) {
+  const { t } = useI18n();
+
   return (
     <span
       className={`protocol-tile protocol-tile--${size} protocol-${protocol}`}
-      title={findProtocol(protocol).name}
+      title={t(protocolLabelKey(protocol))}
     >
-      <ProtocolIcon protocol={protocol} size={size === "lg" ? 20 : 16} />
+      <ProtocolIcon
+        protocol={protocol}
+        size={size === "lg" ? 22 : size === "sm" ? 14 : 18}
+      />
     </span>
   );
 }
 
 export function ProtocolBadge({ protocol }: { protocol: Protocol }) {
-  const definition = findProtocol(protocol);
   return (
-    <span className={`badge badge--protocol protocol-${protocol}`}>
+    <span className={`badge protocol-${protocol}`}>
       <ProtocolIcon protocol={protocol} size={12} />
-      {definition.name}
+      {findProtocol(protocol).acronym}
     </span>
   );
 }
 
-export function EnvironmentBadge({
-  environment,
-}: {
-  environment: Environment;
-}) {
-  const definition = findEnvironment(environment);
+export function EnvironmentBadge({ environment }: { environment: Environment }) {
+  const { t } = useI18n();
+
   return (
-    <span className={`badge badge--env env-${environment}`}>
+    <span className={`badge env-${environment}`}>
       <span className="badge__dot" aria-hidden="true" />
-      {definition.label}
+      {t(environmentLabelKey(environment))}
     </span>
   );
 }
@@ -84,7 +87,14 @@ export function TagChip({ label }: { label: string }) {
   return <span className="badge badge--tag">{label}</span>;
 }
 
-export type ChipTone = "neutral" | "accent" | "ok" | "info" | "warn" | "danger" | "planned";
+export type ChipTone =
+  | "neutral"
+  | "accent"
+  | "ok"
+  | "info"
+  | "warn"
+  | "danger"
+  | "planned";
 
 export function Chip({
   tone = "neutral",
@@ -96,7 +106,7 @@ export function Chip({
   children: ReactNode;
 }) {
   return (
-    <span className={`badge badge--tone tone-${tone}`}>
+    <span className={`badge tone-${tone}`}>
       {icon}
       {children}
     </span>
@@ -104,13 +114,10 @@ export function Chip({
 }
 
 /**
- * The label for capability that does not exist yet. Used instead of a disabled
- * button, which would imply the feature is merely unavailable right now.
+ * The label for capability that does not exist yet, used instead of a disabled
+ * button — which would imply the feature is merely unavailable right now.
  */
-export function PlannedChip({ milestone }: { milestone?: number }) {
-  return (
-    <span className="badge badge--tone tone-planned">
-      Planned{milestone ? ` · Milestone ${milestone}` : ""}
-    </span>
-  );
+export function PlannedChip() {
+  const { t } = useI18n();
+  return <Chip tone="planned">{t("planned.badge")}</Chip>;
 }

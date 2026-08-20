@@ -1,35 +1,36 @@
 /**
  * Global navigation rail.
  *
- * Icon-only to keep horizontal space for real work; every button carries an
- * accessible name and a tooltip, and the current area is also named in the
+ * Icon-only to leave the width for real work; every button carries an
+ * accessible name and a tooltip, and the current area is named again in the
  * view header, so the rail is never the only place a label appears.
  */
 
 import { navigationItems, type ViewId } from "../../app/navigation";
-import type { ThemeChoice } from "../../app/preferences";
+import { findTheme, oppositeTheme, type ThemeId } from "../../app/themes";
+import { useI18n } from "../../i18n";
 import { LatticeMark, MoonIcon, SunIcon } from "../icons";
 
 export function NavRail({
   current,
   onSelect,
-  theme,
-  resolvedTheme,
+  activeTheme,
   onToggleTheme,
 }: {
   current: ViewId;
   onSelect: (view: ViewId) => void;
-  theme: ThemeChoice;
-  resolvedTheme: "dark" | "light";
+  activeTheme: ThemeId;
   onToggleTheme: () => void;
 }) {
-  const nextTheme = resolvedTheme === "dark" ? "light" : "dark";
+  const { t } = useI18n();
+  const next = oppositeTheme(activeTheme);
+  const themeLabel = `${t("a11y.switchTheme")}: ${t(findTheme(next).labelKey)}`;
 
   return (
-    <nav className="rail" aria-label="Primary">
-      <div className="rail__brand" title="LatticeTerm">
-        <LatticeMark size={22} />
-        <span className="visually-hidden">LatticeTerm</span>
+    <nav className="rail glass glass--sheen" aria-label={t("a11y.primaryNav")}>
+      <div className="rail__brand" title={t("common.appName")}>
+        <LatticeMark size={24} />
+        <span className="visually-hidden">{t("common.appName")}</span>
       </div>
 
       <ul className="rail__items">
@@ -37,6 +38,7 @@ export function NavRail({
           const Glyph = item.icon;
           const active = item.id === current;
           const planned = item.status === "planned";
+          const label = t(item.labelKey);
 
           return (
             <li key={item.id}>
@@ -45,12 +47,13 @@ export function NavRail({
                 className={`rail__item${active ? " is-active" : ""}`}
                 aria-current={active ? "page" : undefined}
                 onClick={() => onSelect(item.id)}
-                data-tooltip={`${item.label}${planned ? " · Planned" : ""}`}
+                data-tooltip={
+                  planned ? `${label} · ${t("planned.badge")}` : label
+                }
               >
-                <Glyph size={18} />
+                <Glyph size={19} />
                 <span className="visually-hidden">
-                  {item.label}
-                  {planned ? " (planned)" : ""}
+                  {planned ? `${label}（${t("planned.badge")}）` : label}
                 </span>
                 {planned && <span className="rail__flag" aria-hidden="true" />}
               </button>
@@ -62,14 +65,16 @@ export function NavRail({
       <div className="rail__footer">
         <button
           type="button"
-          className="rail__item rail__item--quiet"
+          className="rail__item"
           onClick={onToggleTheme}
-          data-tooltip={`Switch to ${nextTheme} theme`}
-          aria-label={`Switch to ${nextTheme} theme${
-            theme === "system" ? ", overriding the system setting" : ""
-          }`}
+          data-tooltip={themeLabel}
+          aria-label={themeLabel}
         >
-          {resolvedTheme === "dark" ? <SunIcon size={18} /> : <MoonIcon size={18} />}
+          {findTheme(activeTheme).isDark ? (
+            <SunIcon size={19} />
+          ) : (
+            <MoonIcon size={19} />
+          )}
         </button>
       </div>
     </nav>

@@ -1,6 +1,7 @@
 /** Header for the workspace column: area name, context and area actions. */
 
 import type { ReactNode } from "react";
+import { useI18n } from "../../i18n";
 import { SidebarIcon } from "../icons";
 
 export function ViewHeader({
@@ -18,16 +19,21 @@ export function ViewHeader({
   sidebarCollapsed: boolean;
   showSidebarToggle?: boolean;
 }) {
+  const { t } = useI18n();
+  const toggleLabel = sidebarCollapsed
+    ? t("a11y.toggleSidebar.show")
+    : t("a11y.toggleSidebar.hide");
+
   return (
-    <header className="view-header">
+    <header className="view-header glass glass--sheen">
       {showSidebarToggle && (
         <button
           type="button"
           className="icon-button"
           onClick={onToggleSidebar}
           aria-pressed={!sidebarCollapsed}
-          aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-          data-tooltip={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+          aria-label={toggleLabel}
+          data-tooltip={toggleLabel}
         >
           <SidebarIcon />
         </button>

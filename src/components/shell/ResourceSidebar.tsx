@@ -1,19 +1,22 @@
 /**
  * Resource sidebar: search plus the facets that narrow the connection list.
  *
- * Facets are toggle buttons with `aria-pressed`, so their state is available
- * to assistive technology and not only to the eye.
+ * Facets are toggle buttons with `aria-pressed`, so their state reaches
+ * assistive technology and not only the eye.
  */
 
 import { forwardRef } from "react";
 import {
   environmentCatalog,
+  environmentLabelKey,
+  findProtocol,
   protocolCatalog,
+  UNGROUPED,
   type Environment,
   type Protocol,
 } from "../../domain/connection";
-import type { ConnectionFilter } from "../../domain/query";
-import type { ConnectionGroup } from "../../domain/query";
+import type { ConnectionFilter, ConnectionGroup } from "../../domain/query";
+import { useI18n } from "../../i18n";
 import { ProtocolIcon } from "../common/Badge";
 import { CloseIcon, SearchIcon, StarIcon } from "../icons";
 
@@ -28,6 +31,7 @@ export const ResourceSidebar = forwardRef<
   {
     filter: ConnectionFilter;
     onFilterChange: (filter: ConnectionFilter) => void;
+    onReset: () => void;
     filterActive: boolean;
     groups: ConnectionGroup[];
     tags: string[];
@@ -39,6 +43,7 @@ export const ResourceSidebar = forwardRef<
   {
     filter,
     onFilterChange,
+    onReset,
     filterActive,
     groups,
     tags,
@@ -48,22 +53,23 @@ export const ResourceSidebar = forwardRef<
   },
   searchRef,
 ) {
+  const { t } = useI18n();
   const patch = (next: Partial<ConnectionFilter>) =>
     onFilterChange({ ...filter, ...next });
 
   return (
-    <div className="sidebar">
+    <div className="sidebar glass glass--sheen">
       <div className="sidebar__search">
         <span className="sidebar__search-icon" aria-hidden="true">
-          <SearchIcon />
+          <SearchIcon size={15} />
         </span>
         <input
           ref={searchRef}
           type="search"
           value={filter.search}
           onChange={(event) => patch({ search: event.currentTarget.value })}
-          placeholder="Search connections"
-          aria-label="Search connections"
+          placeholder={t("connections.searchPlaceholder")}
+          aria-label={t("a11y.searchConnections")}
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
@@ -73,7 +79,7 @@ export const ResourceSidebar = forwardRef<
             type="button"
             className="sidebar__search-clear"
             onClick={() => patch({ search: "" })}
-            aria-label="Clear search"
+            aria-label={t("connections.clearSearch")}
           >
             <CloseIcon size={12} />
           </button>
@@ -81,7 +87,7 @@ export const ResourceSidebar = forwardRef<
       </div>
 
       <div className="sidebar__scroll">
-        <section className="sidebar__section" aria-label="Views">
+        <section className="sidebar__section">
           <button
             type="button"
             className={`sidebar__row${
@@ -89,7 +95,7 @@ export const ResourceSidebar = forwardRef<
             }`}
             onClick={() => patch({ favoritesOnly: false, group: null })}
           >
-            <span className="truncate">All connections</span>
+            <span className="truncate">{t("connections.all")}</span>
             <span className="sidebar__count">{totalCount}</span>
           </button>
           <button
@@ -99,16 +105,18 @@ export const ResourceSidebar = forwardRef<
             onClick={() => patch({ favoritesOnly: !filter.favoritesOnly })}
           >
             <span className="sidebar__row-icon">
-              <StarIcon size={13} filled={filter.favoritesOnly} />
+              <StarIcon size={14} filled={filter.favoritesOnly} />
             </span>
-            <span className="truncate">Favorites</span>
+            <span className="truncate">{t("connections.favorites")}</span>
             <span className="sidebar__count">{favoriteCount}</span>
           </button>
         </section>
 
         {groups.length > 0 && (
-          <section className="sidebar__section" aria-label="Groups">
-            <h2 className="sidebar__heading eyebrow">Groups</h2>
+          <section className="sidebar__section">
+            <h2 className="sidebar__heading eyebrow">
+              {t("connections.groups")}
+            </h2>
             {groups.map((group) => (
               <button
                 type="button"
@@ -123,15 +131,21 @@ export const ResourceSidebar = forwardRef<
                   })
                 }
               >
-                <span className="truncate">{group.name}</span>
+                <span className="truncate">
+                  {group.name === UNGROUPED
+                    ? t("connections.ungrouped")
+                    : group.name}
+                </span>
                 <span className="sidebar__count">{group.profiles.length}</span>
               </button>
             ))}
           </section>
         )}
 
-        <section className="sidebar__section" aria-label="Protocols">
-          <h2 className="sidebar__heading eyebrow">Protocols</h2>
+        <section className="sidebar__section">
+          <h2 className="sidebar__heading eyebrow">
+            {t("connections.protocols")}
+          </h2>
           <div className="sidebar__chips">
             {protocolCatalog.map((protocol) => {
               const pressed = filter.protocols.includes(protocol.id);
@@ -150,23 +164,25 @@ export const ResourceSidebar = forwardRef<
                   }
                 >
                   <ProtocolIcon protocol={protocol.id} size={12} />
-                  {protocol.name}
+                  {findProtocol(protocol.id).acronym}
                 </button>
               );
             })}
           </div>
         </section>
 
-        <section className="sidebar__section" aria-label="Environments">
-          <h2 className="sidebar__heading eyebrow">Environments</h2>
+        <section className="sidebar__section">
+          <h2 className="sidebar__heading eyebrow">
+            {t("connections.environments")}
+          </h2>
           <div className="sidebar__chips">
             {environmentCatalog.map((environment) => {
-              const pressed = filter.environments.includes(environment.id);
+              const pressed = filter.environments.includes(environment);
               return (
                 <button
                   type="button"
-                  key={environment.id}
-                  className={`filter-chip env-${environment.id}${
+                  key={environment}
+                  className={`filter-chip env-${environment}${
                     pressed ? " is-on" : ""
                   }`}
                   aria-pressed={pressed}
@@ -174,13 +190,13 @@ export const ResourceSidebar = forwardRef<
                     patch({
                       environments: toggle<Environment>(
                         filter.environments,
-                        environment.id,
+                        environment,
                       ),
                     })
                   }
                 >
                   <span className="badge__dot" aria-hidden="true" />
-                  {environment.label}
+                  {t(environmentLabelKey(environment))}
                 </button>
               );
             })}
@@ -188,8 +204,10 @@ export const ResourceSidebar = forwardRef<
         </section>
 
         {tags.length > 0 && (
-          <section className="sidebar__section" aria-label="Tags">
-            <h2 className="sidebar__heading eyebrow">Tags</h2>
+          <section className="sidebar__section">
+            <h2 className="sidebar__heading eyebrow">
+              {t("connections.tags")}
+            </h2>
             <div className="sidebar__chips">
               {tags.map((tag) => {
                 const pressed = filter.tags.includes(tag);
@@ -213,23 +231,14 @@ export const ResourceSidebar = forwardRef<
       {filterActive && (
         <div className="sidebar__footer">
           <span className="sidebar__result" aria-live="polite">
-            {visibleCount} of {totalCount} shown
+            {t("connections.shown", { visible: visibleCount, total: totalCount })}
           </span>
           <button
             type="button"
             className="button button--ghost button--sm"
-            onClick={() =>
-              onFilterChange({
-                search: "",
-                protocols: [],
-                environments: [],
-                tags: [],
-                favoritesOnly: false,
-                group: null,
-              })
-            }
+            onClick={onReset}
           >
-            Reset filters
+            {t("connections.resetFilters")}
           </button>
         </div>
       )}

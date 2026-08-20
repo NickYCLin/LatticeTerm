@@ -270,3 +270,54 @@ export const ExportIcon: Glyph = (props) => (
     <path d="M2.75 11.25v1.25a1.5 1.5 0 0 0 1.5 1.5h7.5a1.5 1.5 0 0 0 1.5-1.5v-1.25" />
   </Icon>
 );
+
+export const CpuIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <rect x="4.25" y="4.25" width="7.5" height="7.5" rx="1.25" />
+    <path d="M6.5 1.75v2.5M9.5 1.75v2.5M6.5 11.75v2.5M9.5 11.75v2.5M1.75 6.5h2.5M1.75 9.5h2.5M11.75 6.5h2.5M11.75 9.5h2.5" />
+  </Icon>
+);
+
+export const MemoryIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <rect x="1.75" y="4.75" width="12.5" height="6.5" rx="1.25" />
+    <path d="M4.75 7.25v1.5M8 7.25v1.5M11.25 7.25v1.5" />
+  </Icon>
+);
+
+export const DiskIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <ellipse cx="8" cy="4.25" rx="5.25" ry="2.25" />
+    <path d="M2.75 4.25v7.5c0 1.24 2.35 2.25 5.25 2.25s5.25-1.01 5.25-2.25v-7.5" />
+    <path d="M2.75 8c0 1.24 2.35 2.25 5.25 2.25s5.25-1.01 5.25-2.25" />
+  </Icon>
+);
+
+export const RefreshIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M13.25 8a5.25 5.25 0 1 1-1.6-3.77" />
+    <path d="M13.25 2.5V5h-2.5" />
+  </Icon>
+);
+
+export const GlobeIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <circle cx="8" cy="8" r="6.25" />
+    <path d="M1.9 6.25h12.2M1.9 9.75h12.2" />
+    <path d="M8 1.75c1.8 2 2.7 4.1 2.7 6.25S9.8 12.25 8 14.25c-1.8-2-2.7-4.1-2.7-6.25S6.2 3.75 8 1.75z" />
+  </Icon>
+);
+
+export const PaletteIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M8 1.75a6.25 6.25 0 0 0 0 12.5c.9 0 1.35-.6 1.35-1.25 0-.7-.5-1.05-.5-1.65 0-.5.4-.9.95-.9h1.2a3.25 3.25 0 0 0 3.25-3.25c0-3-2.8-5.45-6.25-5.45z" />
+    <path d="M5 7.25h.01M7.25 4.75h.01M10.25 5.75h.01" />
+  </Icon>
+);
+
+export const ClockIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <circle cx="8" cy="8" r="6.25" />
+    <path d="M8 4.5V8l2.25 1.5" />
+  </Icon>
+);

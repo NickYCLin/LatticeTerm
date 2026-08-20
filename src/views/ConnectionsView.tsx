@@ -1,15 +1,21 @@
 /**
  * Connections: the default area and the only one with live data.
  *
- * Rows are grouped, favorites float to the top, and the two empty states are
- * distinct — an empty workspace offers a way to start, while an empty result
- * offers a way back.
+ * Cards are grouped, favorites float to the top, and the two empty states are
+ * distinct — an empty workspace offers a way to start, an empty result offers
+ * a way back.
  */
 
-import { useRef, useState, type ChangeEvent } from "react";
+import { useRef, useState } from "react";
+import type { ChangeEvent } from "react";
 import type { Workspace } from "../app/useWorkspace";
+import { UNGROUPED } from "../domain/connection";
 import type { SortOrder } from "../domain/query";
-import { ConnectionRow } from "../components/connections/ConnectionRow";
+import { parseAndValidateImport, serializeProfiles } from "../domain/export";
+import type { ImportIssue } from "../domain/export";
+import { useI18n } from "../i18n";
+import type { MessageKey } from "../i18n";
+import { ConnectionCard } from "../components/connections/ConnectionCard";
 import { Callout, EmptyState } from "../components/common/Callout";
 import {
   ConnectionsIcon,
@@ -18,13 +24,34 @@ import {
   PlusIcon,
   SearchIcon,
 } from "../components/icons";
-import { parseAndValidateImport, serializeProfiles } from "../domain/export";
 
-const sortLabels: Record<SortOrder, string> = {
-  name: "Name",
-  hostname: "Hostname",
-  environment: "Environment",
+const sortKeys: Record<SortOrder, MessageKey> = {
+  name: "connections.sort.name",
+  hostname: "connections.sort.hostname",
+  environment: "connections.sort.environment",
 };
+
+interface Notice {
+  tone: "info" | "warn";
+  title: string;
+  body: string;
+}
+
+function timestamp(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Triggers a download without leaving the app or touching the filesystem API. */
+function downloadFile(content: string, filename: string, type: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 
 export function ConnectionsView({
   workspace,
@@ -37,6 +64,7 @@ export function ConnectionsView({
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
+  const { t } = useI18n();
   const {
     profiles,
     visibleGroups,
@@ -54,92 +82,89 @@ export function ConnectionsView({
   } = workspace;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [importNotice, setImportNotice] = useState<{
-    tone: "info" | "warn";
-    title: string;
-    message: string;
-  } | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
 
-  function triggerImport() {
-    fileInputRef.current?.click();
+  /** Renders one import problem, including its field-level reasons. */
+  function describeIssue(issue: ImportIssue): string {
+    const reasons = (issue.fieldIssues ?? [])
+      .map((field) => t(field.key, field.values))
+      .join(" ");
+    return t(issue.key, {
+      ...(issue.values ?? {}),
+      name: String(issue.values?.name ?? t("transfer.unnamed")),
+      reasons,
+    });
   }
 
-  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+  function handleFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
+    event.target.value = "";
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
-      const content = String(e.target?.result ?? "");
-      const result = parseAndValidateImport(content);
+    reader.onload = () => {
+      const result = parseAndValidateImport(String(reader.result ?? ""));
 
-      if (result.validProfiles.length > 0) {
-        const count = importProfiles(result.validProfiles);
-        if (result.errors.length > 0) {
-          setImportNotice({
-            tone: "warn",
-            title: `Imported ${count} profiles with notices`,
-            message: `${result.errors.join(" ")} (${result.skippedCount} invalid entries skipped).`,
-          });
-        } else {
-          setImportNotice({
-            tone: "info",
-            title: `Import successful`,
-            message: `Successfully imported ${count} connection profiles.`,
-          });
-        }
-      } else {
-        setImportNotice({
+      if (result.validProfiles.length === 0) {
+        setNotice({
           tone: "warn",
-          title: "Import failed",
-          message:
-            result.errors.length > 0
-              ? result.errors.join(" ")
-              : "No valid connection profiles found in file.",
+          title: t("transfer.import.failed"),
+          body:
+            result.issues.length > 0
+              ? result.issues.map(describeIssue).join(" ")
+              : t("transfer.import.failedBody"),
         });
+        return;
       }
+
+      const count = importProfiles(result.validProfiles);
+
+      setNotice(
+        result.issues.length > 0
+          ? {
+              tone: "warn",
+              title: t("transfer.import.partial"),
+              body: t("transfer.import.partialBody", {
+                errors: result.issues.map(describeIssue).join(" "),
+                skipped: result.skippedCount,
+              }),
+            }
+          : {
+              tone: "info",
+              title: t("transfer.import.success"),
+              body: t("transfer.import.successBody", { count }),
+            },
+      );
     };
     reader.readAsText(file);
-    // Reset file input so same file can be re-selected if desired
-    event.target.value = "";
   }
 
-  function handleExport() {
-    if (profiles.length === 0) return;
-    const json = serializeProfiles(profiles);
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `latticeterm-connections-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  }
+  const filePicker = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept=".json,application/json"
+      className="visually-hidden"
+      onChange={handleFile}
+      tabIndex={-1}
+    />
+  );
 
   if (profiles.length === 0) {
     return (
-      <div className="stack">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".json,application/json"
-          style={{ display: "none" }}
-          onChange={handleFileChange}
-          aria-hidden="true"
-        />
-
-        {importNotice && (
-          <Callout tone={importNotice.tone} title={importNotice.title}>
-            {importNotice.message}
-          </Callout>
-        )}
-
+      <div className="connections">
+        {filePicker}
+        <div style={{ padding: "var(--space-5) var(--space-6) 0" }}>
+          {notice && (
+            <Callout tone={notice.tone} title={notice.title}>
+              {notice.body}
+            </Callout>
+          )}
+        </div>
         <EmptyState
-          icon={<ConnectionsIcon size={22} />}
-          title="No connections yet"
-          description="Add the first host you want to reach, load documentation samples, or import a previously exported non-secret JSON backup."
+          icon={<ConnectionsIcon size={26} />}
+          title={t("connections.empty.title")}
+          description={t("connections.empty.body")}
           actions={
             <>
               <button
@@ -147,88 +172,58 @@ export function ConnectionsView({
                 className="button button--primary"
                 onClick={onCreate}
               >
-                <PlusIcon size={14} />
-                Add connection
-              </button>
-              <button
-                type="button"
-                className="button button--ghost"
-                onClick={loadSamples}
-              >
-                <ImportIcon size={14} />
-                Load sample workspace
+                <PlusIcon size={15} />
+                {t("connections.add")}
               </button>
               <button
                 type="button"
                 className="button button--secondary"
-                onClick={triggerImport}
+                onClick={loadSamples}
               >
-                <ImportIcon size={14} />
-                Import JSON
+                {t("connections.loadSamples")}
+              </button>
+              <button
+                type="button"
+                className="button button--ghost"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <ImportIcon size={15} />
+                {t("connections.importJson")}
               </button>
             </>
           }
-          footnote="LatticeTerm only stores non-secret metadata (hostname, protocol, tags). Secrets are never exported or accepted."
+          footnote={t("connections.empty.footnote")}
         />
       </div>
     );
   }
 
-  if (visibleProfiles.length === 0) {
-    return (
-      <EmptyState
-        icon={<SearchIcon size={22} />}
-        title="No connections match this filter"
-        description="Every host is still here — the current search and facets simply exclude them all."
-        actions={
-          <button
-            type="button"
-            className="button button--secondary"
-            onClick={resetFilter}
-          >
-            Reset filters
-          </button>
-        }
-      />
-    );
-  }
-
   return (
     <div className="connections">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json,application/json"
-        style={{ display: "none" }}
-        onChange={handleFileChange}
-        aria-hidden="true"
-      />
-
-      {importNotice && (
-        <Callout tone={importNotice.tone} title={importNotice.title}>
-          {importNotice.message}
-        </Callout>
-      )}
+      {filePicker}
 
       <div className="connections__toolbar">
         <p className="connections__count" aria-live="polite">
-          {visibleProfiles.length}
-          {filterActive ? ` of ${profiles.length}` : ""} connection
-          {visibleProfiles.length === 1 ? "" : "s"}
+          {filterActive
+            ? t("connections.countFiltered", {
+                visible: visibleProfiles.length,
+                total: profiles.length,
+              })
+            : t("connections.count", { count: profiles.length })}
         </p>
 
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <div className="connections__tools">
           <label className="select">
-            <span className="select__label">Sort by</span>
+            <span className="select__label">{t("connections.sortBy")}</span>
             <select
               value={sortOrder}
               onChange={(event) =>
                 setSortOrder(event.currentTarget.value as SortOrder)
               }
             >
-              {Object.entries(sortLabels).map(([value, label]) => (
+              {(Object.keys(sortKeys) as SortOrder[]).map((value) => (
                 <option key={value} value={value}>
-                  {label}
+                  {t(sortKeys[value])}
                 </option>
               ))}
             </select>
@@ -237,52 +232,87 @@ export function ConnectionsView({
           <button
             type="button"
             className="button button--ghost button--sm"
-            onClick={triggerImport}
-            title="Import connection profiles from JSON"
+            onClick={() => fileInputRef.current?.click()}
           >
             <ImportIcon size={14} />
-            Import
+            {t("common.import")}
           </button>
-
           <button
             type="button"
             className="button button--ghost button--sm"
-            onClick={handleExport}
-            title="Export connection profiles as non-secret JSON"
+            onClick={() =>
+              downloadFile(
+                serializeProfiles(profiles),
+                `latticeterm-connections-${timestamp()}.json`,
+                "application/json",
+              )
+            }
+            title={t("transfer.export.hint")}
           >
             <ExportIcon size={14} />
-            Export
+            {t("common.export")}
           </button>
         </div>
       </div>
 
       <div className="connections__scroll">
-        {visibleGroups.map((group) => (
-          <section className="connection-group" key={group.name}>
-            <h2 className="connection-group__title">
-              <span className="eyebrow">{group.name}</span>
-              <span className="connection-group__count">
-                {group.profiles.length}
-              </span>
-            </h2>
-            <ul className="connection-list">
-              {group.profiles.map((profile) => (
-                <ConnectionRow
-                  key={profile.id}
-                  profile={profile}
-                  selected={profile.id === selectedId}
-                  onSelect={() =>
-                    setSelectedId(profile.id === selectedId ? null : profile.id)
-                  }
-                  onEdit={() => onEdit(profile.id)}
-                  onDuplicate={() => duplicateProfile(profile.id)}
-                  onDelete={() => onDelete(profile.id)}
-                  onToggleFavorite={() => toggleFavorite(profile.id)}
-                />
-              ))}
-            </ul>
-          </section>
-        ))}
+        {notice && (
+          <div style={{ marginBottom: "var(--space-4)" }}>
+            <Callout tone={notice.tone} title={notice.title}>
+              {notice.body}
+            </Callout>
+          </div>
+        )}
+
+        {visibleProfiles.length === 0 ? (
+          <EmptyState
+            icon={<SearchIcon size={26} />}
+            title={t("connections.noResults.title")}
+            description={t("connections.noResults.body")}
+            actions={
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={resetFilter}
+              >
+                {t("connections.resetFilters")}
+              </button>
+            }
+          />
+        ) : (
+          visibleGroups.map((group) => (
+            <section className="connection-group" key={group.name}>
+              <h2 className="connection-group__title">
+                <span className="eyebrow">
+                  {group.name === UNGROUPED
+                    ? t("connections.ungrouped")
+                    : group.name}
+                </span>
+                <span className="connection-group__count">
+                  {group.profiles.length}
+                </span>
+              </h2>
+              <ul className="connection-grid">
+                {group.profiles.map((profile) => (
+                  <ConnectionCard
+                    key={profile.id}
+                    profile={profile}
+                    selected={profile.id === selectedId}
+                    onSelect={() =>
+                      setSelectedId(
+                        profile.id === selectedId ? null : profile.id,
+                      )
+                    }
+                    onEdit={() => onEdit(profile.id)}
+                    onDuplicate={() => duplicateProfile(profile.id)}
+                    onDelete={() => onDelete(profile.id)}
+                    onToggleFavorite={() => toggleFavorite(profile.id)}
+                  />
+                ))}
+              </ul>
+            </section>
+          ))
+        )}
       </div>
     </div>
   );

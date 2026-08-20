@@ -1,14 +1,16 @@
 /**
  * Host fingerprint trust dialog.
  *
- * Appears when connecting to an unknown host for the first time. Displays
- * the full key algorithm and fingerprint with clear options for session-only
- * trust or permanent trust.
+ * Shown the first time a host is reached. The fingerprint is displayed in
+ * full and can be copied, because a truncated one cannot be compared against
+ * what the host itself reports.
  */
 
 import { useState } from "react";
 import type { HostFingerprint } from "../../domain/security";
-import { ShieldIcon, CloseIcon, CheckIcon } from "../icons";
+import { hostTargetKey } from "../../domain/security";
+import { useI18n } from "../../i18n";
+import { CheckIcon, CloseIcon, ShieldIcon } from "../icons";
 
 export function HostFingerprintDialog({
   fingerprint,
@@ -21,119 +23,99 @@ export function HostFingerprintDialog({
   onTrustAndSave: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
 
-  function copyToClipboard() {
-    navigator.clipboard.writeText(fingerprint.fingerprint);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(fingerprint.fingerprint);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard access can be refused; the value stays selectable on screen.
+    }
   }
 
   return (
     <div className="scrim scrim--top" role="presentation" onMouseDown={onCancel}>
       <div
-        className="dialog"
+        className="dialog dialog--wide"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="fingerprint-title"
-        onMouseDown={(e) => e.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <span style={{ color: "var(--accent)", display: "flex" }}>
-              <ShieldIcon size={18} />
-            </span>
-            <h2 className="dialog__title" id="fingerprint-title">
-              Verify Host Fingerprint
-            </h2>
-          </div>
+          <span className="dialog__icon dialog__icon--inline" aria-hidden="true">
+            <ShieldIcon size={18} />
+          </span>
+          <h2 className="dialog__title" id="fingerprint-title">
+            {t("security.verify.title")}
+          </h2>
           <button
             type="button"
-            className="icon-button"
+            className="icon-button icon-button--sm"
             onClick={onCancel}
-            aria-label="Close"
+            aria-label={t("common.close")}
+            style={{ marginLeft: "auto" }}
           >
             <CloseIcon size={14} />
           </button>
         </header>
 
-        <div className="dialog__body stack">
-          <p className="dialog__text">
-            The authenticity of host{" "}
-            <strong className="mono">
-              {fingerprint.host}:{fingerprint.port}
-            </strong>{" "}
-            cannot be established automatically. Please verify that this fingerprint
-            matches your server before connecting:
+        <div className="dialog__stack">
+          <p className="dialog__body">
+            {t("security.verify.body", {
+              target: hostTargetKey(fingerprint.host, fingerprint.port),
+            })}
           </p>
 
-          <div
-            style={{
-              backgroundColor: "var(--surface-raised)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              padding: "0.75rem 1rem",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.25rem" }}>
-              <span className="eyebrow">Key Algorithm</span>
-              <span className="mono" style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-                {fingerprint.algorithm}
-              </span>
+          <div className="fingerprint-box">
+            <div className="fingerprint-box__row">
+              <span className="eyebrow">{t("security.algorithm")}</span>
+              <span className="mono">{fingerprint.algorithm}</span>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
-              <span
-                className="mono"
-                style={{
-                  fontSize: "0.8125rem",
-                  color: "var(--text)",
-                  wordBreak: "break-all",
-                  userSelect: "all",
-                }}
-              >
-                {fingerprint.fingerprint}
-              </span>
+            <div className="fingerprint-box__row">
+              <span className="eyebrow">{t("security.fingerprint")}</span>
               <button
                 type="button"
                 className="button button--ghost button--sm"
-                onClick={copyToClipboard}
-                style={{ flexShrink: 0 }}
+                onClick={copy}
               >
-                {copied ? <CheckIcon size={12} /> : null}
-                {copied ? "Copied" : "Copy"}
+                {copied ? <CheckIcon size={13} /> : null}
+                {copied ? t("common.copied") : t("common.copy")}
               </button>
             </div>
+            <span className="fingerprint-box__value">
+              {fingerprint.fingerprint}
+            </span>
           </div>
 
-          <p style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-            Are you sure you want to continue connecting?
-          </p>
+          <p className="dialog__body">{t("security.verifyHint")}</p>
         </div>
 
-        <div className="dialog__foot">
+        <div className="dialog__actions">
           <button
             type="button"
             className="button button--ghost"
             onClick={onCancel}
           >
-            Cancel
+            {t("common.cancel")}
           </button>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button
-              type="button"
-              className="button button--secondary"
-              onClick={onTrustOnce}
-            >
-              Trust once
-            </button>
-            <button
-              type="button"
-              className="button button--primary"
-              onClick={onTrustAndSave}
-            >
-              Trust & remember
-            </button>
-          </div>
+          <button
+            type="button"
+            className="button button--secondary"
+            onClick={onTrustOnce}
+          >
+            {t("security.trustOnce")}
+          </button>
+          <button
+            type="button"
+            className="button button--primary"
+            onClick={onTrustAndSave}
+          >
+            {t("security.trustAndSave")}
+          </button>
         </div>
       </div>
     </div>

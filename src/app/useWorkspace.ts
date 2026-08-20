@@ -1,9 +1,9 @@
 /**
- * Workspace state: the connection collection, the activity log and the
- * filter the Connections view renders from.
+ * Workspace state: the connection collection, the activity log and the filter
+ * the connections view renders from.
  *
- * Profiles live in memory for this foundation build. Persistence waits for the
- * encrypted local store, so nothing here writes connection metadata to disk.
+ * Entries live in memory for this foundation build. Persistence waits for the
+ * encrypted local store, so nothing here writes connection data to disk.
  */
 
 import { useCallback, useMemo, useState } from "react";
@@ -15,6 +15,7 @@ import {
 import {
   connectionTarget,
   createConnectionProfile,
+  findProtocol,
   type ConnectionDraft,
   type ConnectionProfile,
 } from "../domain/connection";
@@ -30,6 +31,11 @@ import {
 } from "../domain/query";
 import { sampleProfiles } from "../domain/samples";
 
+/** `SSH · operator@host:22`, the line shown beside an activity entry. */
+function describe(profile: ConnectionProfile): string {
+  return `${findProtocol(profile.protocol).acronym} · ${connectionTarget(profile)}`;
+}
+
 export function useWorkspace() {
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
@@ -37,29 +43,16 @@ export function useWorkspace() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("name");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const record = useCallback(
-    (
-      kind: ActivityEntry["kind"],
-      message: string,
-      detail?: string,
-    ): void => {
-      setActivity((entries) =>
-        appendActivity(entries, createActivityEntry(kind, message, detail)),
-      );
-    },
-    [],
-  );
+  const record = useCallback((entry: Omit<ActivityEntry, "id" | "at">) => {
+    setActivity((entries) => appendActivity(entries, createActivityEntry(entry)));
+  }, []);
 
   const addProfile = useCallback(
     (draft: ConnectionDraft): ConnectionProfile => {
       const profile = createConnectionProfile(draft);
       setProfiles((current) => [...current, profile]);
       setSelectedId(profile.id);
-      record(
-        "created",
-        profile.name,
-        `${profile.protocol.toUpperCase()} · ${connectionTarget(profile)}`,
-      );
+      record({ kind: "created", subject: profile.name, detail: describe(profile) });
       return profile;
     },
     [record],
@@ -71,11 +64,7 @@ export function useWorkspace() {
       setProfiles((current) =>
         current.map((entry) => (entry.id === id ? profile : entry)),
       );
-      record(
-        "updated",
-        profile.name,
-        `${profile.protocol.toUpperCase()} · ${connectionTarget(profile)}`,
-      );
+      record({ kind: "updated", subject: profile.name, detail: describe(profile) });
       return profile;
     },
     [record],
@@ -88,13 +77,17 @@ export function useWorkspace() {
 
       const copy = createConnectionProfile({
         ...source,
-        name: `${source.name} copy`,
+        name: `${source.name} (2)`,
         favorite: false,
       });
 
       setProfiles((current) => [...current, copy]);
       setSelectedId(copy.id);
-      record("created", copy.name, `Duplicated from ${source.name}`);
+      record({
+        kind: "created",
+        subject: copy.name,
+        note: { key: "activity.duplicatedFrom", values: { name: source.name } },
+      });
       return copy;
     },
     [profiles, record],
@@ -105,7 +98,13 @@ export function useWorkspace() {
       const target = profiles.find((entry) => entry.id === id);
       setProfiles((current) => current.filter((entry) => entry.id !== id));
       setSelectedId((current) => (current === id ? null : current));
-      if (target) record("deleted", target.name, connectionTarget(target));
+      if (target) {
+        record({
+          kind: "deleted",
+          subject: target.name,
+          detail: connectionTarget(target),
+        });
+      }
     },
     [profiles, record],
   );
@@ -121,37 +120,40 @@ export function useWorkspace() {
   const loadSamples = useCallback((): void => {
     setProfiles(sampleProfiles.map((profile) => ({ ...profile })));
     setSelectedId(sampleProfiles[0]?.id ?? null);
-    record(
-      "workspace",
-      "Sample workspace loaded",
-      `${sampleProfiles.length} example profiles using documentation hostnames`,
-    );
+    record({
+      kind: "workspace",
+      titleKey: "activity.samplesLoaded",
+      note: {
+        key: "activity.samplesDetail",
+        values: { count: sampleProfiles.length },
+      },
+    });
   }, [record]);
 
+  /** Imported entries are appended; nothing already in the workspace is lost. */
   const importProfiles = useCallback(
     (imported: ConnectionProfile[]): number => {
       if (imported.length === 0) return 0;
+
       setProfiles((current) => [...current, ...imported]);
-      if (imported.length > 0 && !selectedId) {
-        setSelectedId(imported[0].id);
+      setSelectedId((current) => current ?? imported[0].id);
+
+      for (const profile of imported) {
+        record({
+          kind: "created",
+          subject: profile.name,
+          detail: describe(profile),
+        });
       }
-      record(
-        "workspace",
-        `Imported ${imported.length} profile${imported.length === 1 ? "" : "s"}`,
-        "Non-secret JSON import",
-      );
+
       return imported.length;
     },
-    [record, selectedId],
+    [record],
   );
 
-  const clearActivity = useCallback((): void => {
-    setActivity([]);
-  }, []);
+  const resetFilter = useCallback((): void => setFilter(emptyFilter), []);
 
-  const resetFilter = useCallback((): void => {
-    setFilter(emptyFilter);
-  }, []);
+  const clearActivity = useCallback((): void => setActivity([]), []);
 
   const visibleProfiles = useMemo(
     () => sortProfiles(filterProfiles(profiles, filter), sortOrder),
@@ -194,7 +196,6 @@ export function useWorkspace() {
     loadSamples,
     importProfiles,
     clearActivity,
-    record,
   };
 }
 

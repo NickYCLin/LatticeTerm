@@ -1,9 +1,9 @@
 /**
  * Primary navigation registry.
  *
- * `status` is what the interface promises the user: `available` areas do real
- * work, `planned` areas describe an upcoming milestone and never show controls
- * that pretend to act.
+ * `status` is what the interface promises: `available` areas do real work,
+ * `planned` areas describe what is coming and never show a control that
+ * pretends to act.
  */
 
 import {
@@ -14,6 +14,7 @@ import {
   VaultIcon,
   type IconProps,
 } from "../components/icons";
+import type { MessageKey } from "../i18n/messages/zh-TW";
 import type { ReactElement } from "react";
 
 export type ViewId =
@@ -25,49 +26,45 @@ export type ViewId =
 
 export interface NavigationItem {
   id: ViewId;
-  label: string;
-  /** Read by assistive technology and shown in the rail tooltip. */
-  description: string;
+  labelKey: MessageKey;
+  descriptionKey: MessageKey;
   icon: (props: IconProps) => ReactElement;
   status: "available" | "planned";
-  milestone?: number;
 }
 
 export const navigationItems: NavigationItem[] = [
   {
     id: "connections",
-    label: "Connections",
-    description: "Find, organise and edit remote hosts",
+    labelKey: "nav.connections",
+    descriptionKey: "nav.connections.desc",
     icon: ConnectionsIcon,
     status: "available",
   },
   {
     id: "tunnels",
-    label: "Tunnels",
-    description: "Local, remote and dynamic port forwarding",
+    labelKey: "nav.tunnels",
+    descriptionKey: "nav.tunnels.desc",
     icon: TunnelIcon,
     status: "planned",
-    milestone: 4,
   },
   {
     id: "vault",
-    label: "Key vault",
-    description: "Keys, credentials and host trust",
+    labelKey: "nav.vault",
+    descriptionKey: "nav.vault.desc",
     icon: VaultIcon,
     status: "planned",
-    milestone: 2,
   },
   {
     id: "activity",
-    label: "Activity",
-    description: "Changes made in this workspace session",
+    labelKey: "nav.activity",
+    descriptionKey: "nav.activity.desc",
     icon: ActivityIcon,
     status: "available",
   },
   {
     id: "settings",
-    label: "Settings",
-    description: "Appearance, security and network preferences",
+    labelKey: "nav.settings",
+    descriptionKey: "nav.settings.desc",
     icon: SettingsIcon,
     status: "available",
   },

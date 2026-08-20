@@ -1,29 +1,32 @@
 /**
  * Add and edit connection drawer.
  *
- * Follows the sectioned form from the design brief: Protocol, Target,
- * Organisation, Authentication and Review. Errors appear next to their field
- * and never clear what the user typed. Closing a dirty form asks first.
+ * Five short sections instead of one long form: how to connect, where the host
+ * is, how to organise it, sign-in, and a review. Errors appear next to their
+ * field and never clear what was typed. Closing a dirty form asks first.
  *
- * The Authentication section holds no inputs on purpose. Until the credential
- * store exists there is nowhere safe to put a secret, so the section explains
- * that rather than offering a field that would quietly keep a password in
- * memory.
+ * The sign-in section holds no inputs on purpose. Until the credential store
+ * exists there is nowhere safe to put a secret, so the section explains that
+ * rather than offering a field that would quietly keep a password in memory.
  */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import {
   connectionTarget,
   createConnectionProfile,
   draftFromProfile,
   emptyDraft,
   environmentCatalog,
+  environmentHintKey,
+  environmentLabelKey,
   findDuplicateTarget,
   findProtocol,
   limits,
   parseTags,
   protocolCatalog,
+  protocolLabelKey,
+  protocolSummaryKey,
   validateConnectionDraft,
   type ConnectionDraft,
   type ConnectionProfile,
@@ -31,6 +34,7 @@ import {
   type Protocol,
   type ValidationErrors,
 } from "../../domain/connection";
+import { useI18n } from "../../i18n";
 import { Chip, EnvironmentBadge, ProtocolTile } from "../common/Badge";
 import { Callout } from "../common/Callout";
 import { AlertIcon, CheckIcon, CloseIcon } from "../icons";
@@ -49,6 +53,31 @@ function sameDraft(a: ConnectionDraft, b: ConnectionDraft): boolean {
   );
 }
 
+function Section({
+  step,
+  title,
+  hint,
+  children,
+}: {
+  step: number;
+  title: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="form-section">
+      <h3 className="form-section__title">
+        <span className="form-section__step" aria-hidden="true">
+          {step}
+        </span>
+        {title}
+      </h3>
+      {hint && <p className="form-section__hint">{hint}</p>}
+      {children}
+    </section>
+  );
+}
+
 export function ConnectionDrawer({
   profile,
   profiles,
@@ -61,6 +90,8 @@ export function ConnectionDrawer({
   onSave: (draft: ConnectionDraft) => void;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
+
   const initial = useMemo(
     () => (profile ? draftFromProfile(profile) : emptyDraft()),
     [profile],
@@ -70,11 +101,9 @@ export function ConnectionDrawer({
   const [tagInput, setTagInput] = useState((initial.tags ?? []).join(", "));
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const [testNotice, setTestNotice] = useState<{
-    tone: "info" | "warn";
-    title: string;
-    message: string;
-  } | null>(null);
+  const [checkResult, setCheckResult] = useState<"valid" | "invalid" | null>(
+    null,
+  );
 
   const formId = useId();
   const nameRef = useRef<HTMLInputElement>(null);
@@ -110,7 +139,9 @@ export function ConnectionDrawer({
       const focusable = panelRef.current.querySelectorAll<HTMLElement>(
         'button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])',
       );
-      const items = [...focusable].filter((item) => !item.hasAttribute("disabled"));
+      const items = [...focusable].filter(
+        (item) => !item.hasAttribute("disabled"),
+      );
       if (items.length === 0) return;
 
       const first = items[0];
@@ -131,6 +162,7 @@ export function ConnectionDrawer({
 
   function patch(next: Partial<ConnectionDraft>) {
     setDraft((current) => ({ ...current, ...next }));
+    setCheckResult(null);
   }
 
   function selectProtocol(protocol: Protocol) {
@@ -157,24 +189,33 @@ export function ConnectionDrawer({
     [profiles, candidate],
   );
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  /** Shared by submit and the settings check: validate, then focus the first problem. */
+  function validateNow(): ValidationErrors {
     const next = { ...draft, tags: parseTags(tagInput) };
     const found = validateConnectionDraft(next);
     setErrors(found);
 
-    if (Object.keys(found).length > 0) {
-      const firstField = Object.keys(found)[0];
+    const firstField = Object.keys(found)[0];
+    if (firstField) {
       panelRef.current
         ?.querySelector<HTMLElement>(`[data-field="${firstField}"]`)
         ?.focus();
-      return;
     }
 
-    onSave(next);
+    return found;
   }
 
-  const title = profile ? "Edit connection" : "New connection";
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (Object.keys(validateNow()).length > 0) return;
+    onSave({ ...draft, tags: parseTags(tagInput) });
+  }
+
+  const title = profile ? t("form.editTitle") : t("form.addTitle");
+  const error = (field: keyof ValidationErrors) => {
+    const issue = errors[field];
+    return issue ? t(issue.key, issue.values) : undefined;
+  };
 
   return (
     <div className="scrim" role="presentation" onMouseDown={requestClose}>
@@ -188,28 +229,32 @@ export function ConnectionDrawer({
       >
         <header className="drawer__head">
           <div>
-            <p className="eyebrow">{profile ? "Edit" : "Add"}</p>
+            <p className="eyebrow">
+              {profile ? t("form.editEyebrow") : t("form.addEyebrow")}
+            </p>
             <h2 className="drawer__title">{title}</h2>
           </div>
           <button
             type="button"
             className="icon-button"
             onClick={requestClose}
-            aria-label="Close"
-            data-tooltip="Close (Esc)"
+            aria-label={t("common.close")}
           >
             <CloseIcon />
           </button>
         </header>
 
         <form className="drawer__body" id={formId} onSubmit={submit} noValidate>
-          <section className="form-section">
-            <h3 className="form-section__title">1 · Protocol</h3>
-            <p className="form-section__hint">
-              Choose how this host is reached. The port follows the protocol
-              until you set one yourself.
-            </p>
-            <div className="protocol-picker" role="radiogroup" aria-label="Protocol">
+          <Section
+            step={1}
+            title={t("form.step.protocol")}
+            hint={t("form.protocolHint")}
+          >
+            <div
+              className="protocol-picker"
+              role="radiogroup"
+              aria-label={t("form.step.protocol")}
+            >
               {protocolCatalog.map((entry) => {
                 const active = draft.protocol === entry.id;
                 return (
@@ -223,8 +268,8 @@ export function ConnectionDrawer({
                   >
                     <ProtocolTile protocol={entry.id} />
                     <span className="protocol-option__text">
-                      <strong>{entry.name}</strong>
-                      <small>{entry.summary}</small>
+                      <strong>{t(protocolLabelKey(entry.id))}</strong>
+                      <small>{t(protocolSummaryKey(entry.id))}</small>
                     </span>
                     <span className="protocol-option__port mono">
                       :{entry.defaultPort}
@@ -233,14 +278,12 @@ export function ConnectionDrawer({
                 );
               })}
             </div>
-          </section>
+          </Section>
 
-          <section className="form-section">
-            <h3 className="form-section__title">2 · Target</h3>
-
+          <Section step={2} title={t("form.step.target")}>
             <div className="field">
               <label className="field__label" htmlFor={`${formId}-name`}>
-                Display name
+                {t("form.name")}
               </label>
               <input
                 id={`${formId}-name`}
@@ -250,21 +293,23 @@ export function ConnectionDrawer({
                 value={draft.name}
                 maxLength={limits.nameLength}
                 onChange={(event) => patch({ name: event.currentTarget.value })}
-                placeholder="Edge gateway"
+                placeholder={t("form.namePlaceholder")}
                 aria-invalid={Boolean(errors.name)}
-                aria-describedby={errors.name ? `${formId}-name-error` : undefined}
+                aria-describedby={
+                  errors.name ? `${formId}-name-error` : undefined
+                }
               />
-              {errors.name && (
+              {error("name") && (
                 <p className="field__error" id={`${formId}-name-error`}>
                   <AlertIcon size={12} />
-                  {errors.name}
+                  {error("name")}
                 </p>
               )}
             </div>
 
             <div className="field">
               <label className="field__label" htmlFor={`${formId}-host`}>
-                Hostname or IP address
+                {t("form.hostname")}
               </label>
               <input
                 id={`${formId}-host`}
@@ -274,19 +319,16 @@ export function ConnectionDrawer({
                 onChange={(event) =>
                   patch({ hostname: event.currentTarget.value })
                 }
-                placeholder="gateway.example.com"
+                placeholder={t("form.hostnamePlaceholder")}
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
                 aria-invalid={Boolean(errors.hostname)}
-                aria-describedby={
-                  errors.hostname ? `${formId}-host-error` : undefined
-                }
               />
-              {errors.hostname && (
-                <p className="field__error" id={`${formId}-host-error`}>
+              {error("hostname") && (
+                <p className="field__error">
                   <AlertIcon size={12} />
-                  {errors.hostname}
+                  {error("hostname")}
                 </p>
               )}
             </div>
@@ -294,7 +336,8 @@ export function ConnectionDrawer({
             <div className="field-grid">
               <div className="field">
                 <label className="field__label" htmlFor={`${formId}-user`}>
-                  Username <span className="field__optional">Optional</span>
+                  {t("form.username")}
+                  <span className="field__optional">{t("common.optional")}</span>
                 </label>
                 <input
                   id={`${formId}-user`}
@@ -304,23 +347,23 @@ export function ConnectionDrawer({
                   onChange={(event) =>
                     patch({ username: event.currentTarget.value })
                   }
-                  placeholder="operator"
+                  placeholder={t("form.usernamePlaceholder")}
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
                   aria-invalid={Boolean(errors.username)}
                 />
-                {errors.username && (
+                {error("username") && (
                   <p className="field__error">
                     <AlertIcon size={12} />
-                    {errors.username}
+                    {error("username")}
                   </p>
                 )}
               </div>
 
               <div className="field field--port">
                 <label className="field__label" htmlFor={`${formId}-port`}>
-                  Port
+                  {t("form.port")}
                 </label>
                 <input
                   id={`${formId}-port`}
@@ -336,26 +379,24 @@ export function ConnectionDrawer({
                   }
                   aria-invalid={Boolean(errors.port)}
                 />
-                {errors.port && (
+                {error("port") && (
                   <p className="field__error">
                     <AlertIcon size={12} />
-                    {errors.port}
+                    {error("port")}
                   </p>
                 )}
               </div>
             </div>
-          </section>
+          </Section>
 
-          <section className="form-section">
-            <h3 className="form-section__title">3 · Organisation</h3>
-            <p className="form-section__hint">
-              Environment and group decide how the host is sorted and how
-              obviously it stands out in the list.
-            </p>
-
+          <Section
+            step={3}
+            title={t("form.step.organise")}
+            hint={t("form.organiseHint")}
+          >
             <div className="field">
               <span className="field__label" id={`${formId}-env-label`}>
-                Environment
+                {t("form.environment")}
               </span>
               <div
                 className="segmented"
@@ -363,24 +404,23 @@ export function ConnectionDrawer({
                 aria-labelledby={`${formId}-env-label`}
               >
                 {environmentCatalog.map((entry) => {
-                  const active =
-                    (draft.environment ?? "unassigned") === entry.id;
+                  const active = (draft.environment ?? "unassigned") === entry;
                   return (
                     <button
                       type="button"
-                      key={entry.id}
+                      key={entry}
                       role="radio"
                       aria-checked={active}
-                      title={entry.hint}
-                      className={`segmented__option env-${entry.id}${
+                      title={t(environmentHintKey(entry))}
+                      className={`segmented__option env-${entry}${
                         active ? " is-selected" : ""
                       }`}
                       onClick={() =>
-                        patch({ environment: entry.id as Environment })
+                        patch({ environment: entry as Environment })
                       }
                     >
                       <span className="badge__dot" aria-hidden="true" />
-                      {entry.label}
+                      {t(environmentLabelKey(entry))}
                     </button>
                   );
                 })}
@@ -390,7 +430,8 @@ export function ConnectionDrawer({
             <div className="field-grid field-grid--even">
               <div className="field">
                 <label className="field__label" htmlFor={`${formId}-group`}>
-                  Group <span className="field__optional">Optional</span>
+                  {t("form.group")}
+                  <span className="field__optional">{t("common.optional")}</span>
                 </label>
                 <input
                   id={`${formId}-group`}
@@ -401,7 +442,7 @@ export function ConnectionDrawer({
                   onChange={(event) =>
                     patch({ group: event.currentTarget.value })
                   }
-                  placeholder="Core platform"
+                  placeholder={t("form.groupPlaceholder")}
                   list={`${formId}-groups`}
                   aria-invalid={Boolean(errors.group)}
                 />
@@ -412,31 +453,35 @@ export function ConnectionDrawer({
                     ),
                   )}
                 </datalist>
-                {errors.group && (
+                {error("group") && (
                   <p className="field__error">
                     <AlertIcon size={12} />
-                    {errors.group}
+                    {error("group")}
                   </p>
                 )}
               </div>
 
               <div className="field">
                 <label className="field__label" htmlFor={`${formId}-tags`}>
-                  Tags <span className="field__optional">Comma separated</span>
+                  {t("form.tags")}
+                  <span className="field__optional">{t("form.tagsHint")}</span>
                 </label>
                 <input
                   id={`${formId}-tags`}
                   data-field="tags"
                   className={`input${errors.tags ? " is-invalid" : ""}`}
                   value={tagInput}
-                  onChange={(event) => setTagInput(event.currentTarget.value)}
-                  placeholder="edge, eu-west"
+                  onChange={(event) => {
+                    setTagInput(event.currentTarget.value);
+                    setCheckResult(null);
+                  }}
+                  placeholder={t("form.tagsPlaceholder")}
                   aria-invalid={Boolean(errors.tags)}
                 />
-                {errors.tags && (
+                {error("tags") && (
                   <p className="field__error">
                     <AlertIcon size={12} />
-                    {errors.tags}
+                    {error("tags")}
                   </p>
                 )}
               </div>
@@ -453,95 +498,86 @@ export function ConnectionDrawer({
               <span className="checkbox__box" aria-hidden="true">
                 <CheckIcon size={11} />
               </span>
-              Pin to favorites
+              {t("form.favorite")}
             </label>
-          </section>
+          </Section>
 
-          <section className="form-section">
-            <h3 className="form-section__title">4 · Authentication</h3>
-            <Callout tone="security" title="No secret fields, by design">
-              LatticeTerm has no credential store yet, so this form never asks
-              for a password, passphrase or private key. Keys, agent forwarding
-              and jump hosts arrive with the system credential store in
-              milestone 2.
+          <Section step={4} title={t("form.step.auth")}>
+            <Callout tone="security" title={t("form.auth.title")}>
+              {t("form.auth.body")}
             </Callout>
-          </section>
+          </Section>
 
-          <section className="form-section">
-            <h3 className="form-section__title">5 · Review</h3>
+          <Section step={5} title={t("form.step.review")}>
             <div className="review-card">
               <div className="review-card__head">
                 <ProtocolTile protocol={candidate.protocol} size="lg" />
                 <div className="review-card__identity">
                   <strong className="truncate">
-                    {candidate.name || "Unnamed connection"}
+                    {candidate.name || t("form.review.unnamed")}
                   </strong>
                   <span className="mono truncate">
                     {candidate.hostname
                       ? connectionTarget(candidate)
-                      : "No host entered yet"}
+                      : t("form.review.noHost")}
                   </span>
                 </div>
               </div>
               <div className="review-card__badges">
-                <EnvironmentBadge
-                  environment={candidate.environment}
-                />
-                <Chip tone="neutral">{findProtocol(candidate.protocol).name}</Chip>
-                <Chip tone="neutral">{candidate.group}</Chip>
-                {candidate.favorite && <Chip tone="accent">Favorite</Chip>}
+                <EnvironmentBadge environment={candidate.environment} />
+                <Chip tone="neutral">
+                  {findProtocol(candidate.protocol).acronym}
+                </Chip>
+                {candidate.favorite && (
+                  <Chip tone="accent">{t("connections.favorites")}</Chip>
+                )}
               </div>
             </div>
 
-            <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.5rem" }}>
-              <button
-                type="button"
-                className="button button--secondary button--sm"
-                onClick={() => {
-                  const next = { ...draft, tags: parseTags(tagInput) };
-                  const found = validateConnectionDraft(next);
-                  if (Object.keys(found).length > 0) {
-                    setErrors(found);
-                    setTestNotice({
-                      tone: "warn",
-                      title: "Validation check failed",
-                      message: "Please correct the form errors before testing.",
-                    });
-                  } else {
-                    setTestNotice({
-                      tone: "info",
-                      title: "Configuration preflight valid",
-                      message: `Target syntax, port (${draft.port}) and protocol (${findProtocol(draft.protocol).name}) are valid. Engine execution connects in Milestone ${findProtocol(draft.protocol).milestone}.`,
-                    });
-                  }
-                }}
-              >
-                Test configuration
-              </button>
-            </div>
+            <button
+              type="button"
+              className="button button--secondary button--sm"
+              onClick={() =>
+                setCheckResult(
+                  Object.keys(validateNow()).length > 0 ? "invalid" : "valid",
+                )
+              }
+            >
+              {t("form.test.button")}
+            </button>
 
-            {testNotice && (
-              <Callout tone={testNotice.tone} title={testNotice.title}>
-                {testNotice.message}
+            {checkResult === "valid" && (
+              <Callout tone="info" title={t("form.test.valid.title")}>
+                {t("form.test.valid.body", {
+                  port: candidate.port,
+                  protocol: findProtocol(candidate.protocol).acronym,
+                })}
+              </Callout>
+            )}
+
+            {checkResult === "invalid" && (
+              <Callout tone="warn" title={t("form.test.invalid.title")}>
+                {t("form.test.invalid.body")}
               </Callout>
             )}
 
             {duplicate && (
-              <Callout tone="warn" title="Another profile uses this target">
-                <strong>{duplicate.name}</strong> already reaches{" "}
-                <span className="mono">{connectionTarget(duplicate)}</span> over{" "}
-                {findProtocol(duplicate.protocol).name}. Saving is still fine if
-                that is deliberate.
+              <Callout tone="warn" title={t("form.duplicate.title")}>
+                {t("form.duplicate.body", {
+                  name: duplicate.name,
+                  target: connectionTarget(duplicate),
+                  protocol: findProtocol(duplicate.protocol).acronym,
+                })}
               </Callout>
             )}
-          </section>
+          </Section>
         </form>
 
         {confirmDiscard ? (
           <div className="drawer__foot drawer__foot--confirm">
             <p className="drawer__confirm-text">
               <AlertIcon size={14} />
-              Discard your unsaved changes to this connection?
+              {t("form.discard.question")}
             </p>
             <div className="drawer__foot-actions">
               <button
@@ -549,21 +585,21 @@ export function ConnectionDrawer({
                 className="button button--ghost"
                 onClick={() => setConfirmDiscard(false)}
               >
-                Keep editing
+                {t("form.discard.keep")}
               </button>
               <button
                 type="button"
                 className="button button--danger"
                 onClick={onClose}
               >
-                Discard changes
+                {t("form.discard.confirm")}
               </button>
             </div>
           </div>
         ) : (
           <div className="drawer__foot">
             <span className="drawer__foot-note">
-              {dirty ? "Unsaved changes" : "No changes yet"}
+              {dirty ? t("form.unsaved") : t("form.noChanges")}
             </span>
             <div className="drawer__foot-actions">
               <button
@@ -571,10 +607,14 @@ export function ConnectionDrawer({
                 className="button button--ghost"
                 onClick={requestClose}
               >
-                Cancel
+                {t("common.cancel")}
               </button>
-              <button type="submit" form={formId} className="button button--primary">
-                {profile ? "Save changes" : "Add connection"}
+              <button
+                type="submit"
+                form={formId}
+                className="button button--primary"
+              >
+                {profile ? t("form.submit.save") : t("form.submit.add")}
               </button>
             </div>
           </div>

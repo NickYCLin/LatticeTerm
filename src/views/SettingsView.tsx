@@ -10,71 +10,61 @@ import type {
   DensityChoice,
   MotionChoice,
   Preferences,
-  ThemeChoice,
 } from "../app/preferences";
+import { themeCatalog } from "../app/themes";
 import type { RuntimeState } from "../app/useRuntimeSummary";
+import { localeCatalog, useI18n, type Locale } from "../i18n";
+import type { MessageKey } from "../i18n";
 import { Chip } from "../components/common/Badge";
 import { Callout } from "../components/common/Callout";
+import { CheckIcon } from "../components/icons";
 
 interface Choice<T> {
   value: T;
-  label: string;
-  hint: string;
+  labelKey: MessageKey;
 }
 
-const themeChoices: Choice<ThemeChoice>[] = [
-  { value: "dark", label: "Dark", hint: "Default, tuned for long sessions" },
-  { value: "light", label: "Light", hint: "For bright rooms" },
-  { value: "system", label: "System", hint: "Follow the desktop setting" },
-];
-
 const densityChoices: Choice<DensityChoice>[] = [
-  { value: "comfortable", label: "Comfortable", hint: "Roomier rows" },
-  { value: "compact", label: "Compact", hint: "More hosts per screen" },
+  { value: "comfortable", labelKey: "settings.density.comfortable" },
+  { value: "compact", labelKey: "settings.density.compact" },
 ];
 
 const motionChoices: Choice<MotionChoice>[] = [
-  { value: "system", label: "System", hint: "Follow the desktop setting" },
-  { value: "reduced", label: "Reduced", hint: "Suppress transitions" },
+  { value: "system", labelKey: "settings.motion.system" },
+  { value: "reduced", labelKey: "settings.motion.reduced" },
 ];
 
-const plannedSecuritySettings = [
+const plannedSecurity: { titleKey: MessageKey; detailKey: MessageKey }[] = [
   {
-    label: "Auto-lock the vault",
-    detail: "Lock after a period of inactivity, and when the app loses focus.",
-    milestone: 2,
+    titleKey: "settings.security.autoLock",
+    detailKey: "settings.security.autoLockDetail",
   },
   {
-    label: "Host key verification policy",
-    detail: "Strict known_hosts checking, with an explicit trust decision on first connect.",
-    milestone: 2,
+    titleKey: "settings.security.hostKey",
+    detailKey: "settings.security.hostKeyDetail",
   },
   {
-    label: "Clipboard clearing",
-    detail: "Clear copied secrets after a countdown, with an option to clear now.",
-    milestone: 2,
+    titleKey: "settings.security.clipboard",
+    detailKey: "settings.security.clipboardDetail",
   },
   {
-    label: "Encrypted backup and recovery",
-    detail: "Export and restore the local store without exposing its contents.",
-    milestone: 2,
+    titleKey: "settings.security.backup",
+    detailKey: "settings.security.backupDetail",
   },
 ];
 
-function SettingRow<T extends string>({
+function SegmentedSetting<T extends string>({
   title,
   description,
   choices,
   value,
   onChange,
-  name,
 }: {
   title: string;
   description: string;
-  choices: Choice<T>[];
+  choices: { value: T; label: string }[];
   value: T;
   onChange: (value: T) => void;
-  name: string;
 }) {
   return (
     <div className="setting">
@@ -88,9 +78,7 @@ function SettingRow<T extends string>({
             type="button"
             key={choice.value}
             role="radio"
-            name={name}
             aria-checked={value === choice.value}
-            title={choice.hint}
             className={`segmented__option${
               value === choice.value ? " is-selected" : ""
             }`}
@@ -113,119 +101,163 @@ export function SettingsView({
   onChange: (patch: Partial<Preferences>) => void;
   runtime: RuntimeState;
 }) {
+  const { t } = useI18n();
   const { summary, host } = runtime;
 
   return (
     <div className="stack">
-      <section className="panel">
+      <section className="panel glass glass--sheen">
         <header className="panel__head">
           <div>
-            <h2 className="panel__title">Appearance</h2>
-            <p className="panel__hint">Applies immediately and is remembered.</p>
+            <h2 className="panel__title">{t("settings.appearance")}</h2>
+            <p className="panel__hint">{t("settings.appearanceHint")}</p>
           </div>
         </header>
 
+        <div className="setting">
+          <div className="setting__text">
+            <strong className="setting__title">{t("settings.theme")}</strong>
+            <p className="setting__description">{t("settings.themeHint")}</p>
+          </div>
+        </div>
+
+        <div className="theme-grid" role="radiogroup" aria-label={t("settings.theme")}>
+          {themeCatalog.map((theme) => {
+            const selected = preferences.theme === theme.id;
+            return (
+              <button
+                type="button"
+                key={theme.id}
+                role="radio"
+                aria-checked={selected}
+                className={`theme-option${selected ? " is-selected" : ""}`}
+                onClick={() => onChange({ theme: theme.id })}
+              >
+                <span className="theme-option__preview" aria-hidden="true">
+                  <span style={{ background: theme.swatch[0] }} />
+                  <span style={{ background: theme.swatch[1] }} />
+                  <span style={{ background: theme.swatch[2] }} />
+                </span>
+                <span className="theme-option__label">
+                  {t(theme.labelKey)}
+                  {selected && (
+                    <span className="theme-option__check">
+                      <CheckIcon size={14} />
+                    </span>
+                  )}
+                </span>
+                <span className="theme-option__hint">{t(theme.hintKey)}</span>
+              </button>
+            );
+          })}
+        </div>
+
         <div className="setting-list">
-          <SettingRow
-            name="theme"
-            title="Theme"
-            description="Dark is the default. The light theme uses the same tokens with a higher-contrast accent."
-            choices={themeChoices}
-            value={preferences.theme}
-            onChange={(theme) => onChange({ theme })}
+          <SegmentedSetting
+            title={t("settings.language")}
+            description={t("settings.languageHint")}
+            choices={localeCatalog.map((entry) => ({
+              value: entry.id,
+              label: entry.label,
+            }))}
+            value={preferences.locale}
+            onChange={(locale: Locale) => onChange({ locale })}
           />
-          <SettingRow
-            name="density"
-            title="Density"
-            description="Compact tightens row height and spacing for large host inventories."
-            choices={densityChoices}
+          <SegmentedSetting
+            title={t("settings.density")}
+            description={t("settings.densityHint")}
+            choices={densityChoices.map((choice) => ({
+              value: choice.value,
+              label: t(choice.labelKey),
+            }))}
             value={preferences.density}
             onChange={(density) => onChange({ density })}
           />
-          <SettingRow
-            name="motion"
-            title="Motion"
-            description="Reduced removes transitions even when the desktop does not request it."
-            choices={motionChoices}
+          <SegmentedSetting
+            title={t("settings.motion")}
+            description={t("settings.motionHint")}
+            choices={motionChoices.map((choice) => ({
+              value: choice.value,
+              label: t(choice.labelKey),
+            }))}
             value={preferences.motion}
             onChange={(motion) => onChange({ motion })}
           />
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel glass glass--sheen">
         <header className="panel__head">
           <div>
-            <h2 className="panel__title">Security</h2>
-            <p className="panel__hint">
-              Described here so the plan is visible; no control is offered until
-              the subsystem behind it exists.
-            </p>
+            <h2 className="panel__title">{t("settings.security")}</h2>
+            <p className="panel__hint">{t("settings.securityHint")}</p>
           </div>
         </header>
 
-        <Callout tone="security" title="No secrets are stored today">
-          This build keeps connection metadata in memory and asks for no
-          credential of any kind. Nothing is written to disk except the
-          appearance preferences above.
+        <Callout tone="security" title={t("settings.security.title")}>
+          {t("settings.security.body")}
         </Callout>
 
         <ul className="planned-list">
-          {plannedSecuritySettings.map((entry) => (
-            <li className="planned-list__item" key={entry.label}>
+          {plannedSecurity.map((entry) => (
+            <li className="planned-list__item" key={entry.titleKey}>
               <div className="planned-list__text">
-                <strong>{entry.label}</strong>
-                <small>{entry.detail}</small>
+                <strong>{t(entry.titleKey)}</strong>
+                <small>{t(entry.detailKey)}</small>
               </div>
-              <Chip tone="planned">Milestone {entry.milestone}</Chip>
+              <Chip tone="planned">{t("common.comingSoon")}</Chip>
             </li>
           ))}
         </ul>
       </section>
 
-      <section className="panel">
+      <section className="panel glass glass--sheen">
         <header className="panel__head">
           <div>
-            <h2 className="panel__title">About</h2>
-            <p className="panel__hint">Reported by the running build.</p>
+            <h2 className="panel__title">{t("settings.about")}</h2>
+            <p className="panel__hint">{t("settings.aboutHint")}</p>
           </div>
         </header>
 
         <dl className="field-list">
           <div className="field-row">
-            <dt className="field-row__label">Application</dt>
+            <dt className="field-row__label">
+              {t("settings.about.application")}
+            </dt>
             <dd className="field-row__value">
-              {summary?.appName ?? "LatticeTerm"}
+              {summary?.appName ?? t("common.appName")}
             </dd>
           </div>
           <div className="field-row">
-            <dt className="field-row__label">Version</dt>
-            <dd className="field-row__value mono">
-              {summary?.version ?? "unknown"}
-            </dd>
+            <dt className="field-row__label">{t("settings.about.version")}</dt>
+            <dd className="field-row__value mono">{summary?.version ?? "—"}</dd>
           </div>
           <div className="field-row">
-            <dt className="field-row__label">Runtime</dt>
+            <dt className="field-row__label">{t("settings.about.runtime")}</dt>
             <dd className="field-row__value">
               {host === "tauri"
-                ? "Tauri desktop window"
+                ? t("settings.about.runtime.tauri")
                 : host === "browser"
-                  ? "Browser preview (no desktop backend)"
-                  : "Detecting…"}
+                  ? t("settings.about.runtime.browser")
+                  : t("common.detecting")}
             </dd>
           </div>
           <div className="field-row">
-            <dt className="field-row__label">Credential store</dt>
+            <dt className="field-row__label">
+              {t("settings.about.credentialStore")}
+            </dt>
             <dd className="field-row__value">
               {summary?.credentialStorageReady ? (
-                <Chip tone="ok">Ready</Chip>
+                <Chip tone="ok">{t("settings.about.credentialStore.ready")}</Chip>
               ) : (
-                <Chip tone="planned">Not implemented</Chip>
+                <Chip tone="planned">
+                  {t("settings.about.credentialStore.pending")}
+                </Chip>
               )}
             </dd>
           </div>
           <div className="field-row">
-            <dt className="field-row__label">Licence</dt>
+            <dt className="field-row__label">{t("settings.about.license")}</dt>
             <dd className="field-row__value">Mozilla Public License 2.0</dd>
           </div>
         </dl>

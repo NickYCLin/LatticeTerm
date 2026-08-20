@@ -1,4 +1,4 @@
-/* Buttons, inputs, badges, callouts and the other shared controls. */
+/* Buttons, inputs, badges, callouts and other shared controls. */
 
 /* Buttons ---------------------------------------------------------------- */
 
@@ -8,35 +8,38 @@
   justify-content: center;
   gap: var(--space-2);
   height: var(--control-height);
-  padding: 0 var(--space-4);
+  padding: 0 var(--space-5);
   border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-pill);
   font-size: var(--text-sm);
-  font-weight: 550;
+  font-weight: 600;
   white-space: nowrap;
   transition:
     background-color var(--duration-fast) var(--ease),
     border-color var(--duration-fast) var(--ease),
-    color var(--duration-fast) var(--ease);
+    color var(--duration-fast) var(--ease),
+    box-shadow var(--duration-fast) var(--ease),
+    transform var(--duration-fast) var(--ease);
+}
+
+.button:active {
+  transform: translateY(1px);
 }
 
 .button--sm {
-  height: 1.625rem;
-  padding: 0 var(--space-3);
+  height: 1.875rem;
+  padding: 0 var(--space-4);
   font-size: var(--text-xs);
 }
 
 .button--primary {
-  background: var(--accent);
+  background: linear-gradient(140deg, var(--accent-hover), var(--accent-press));
   color: var(--text-on-accent);
+  box-shadow: 0 6px 18px var(--accent-glow);
 }
 
 .button--primary:hover {
-  background: var(--accent-hover);
-}
-
-.button--primary:active {
-  background: var(--accent-press);
+  background: linear-gradient(140deg, var(--accent), var(--accent));
 }
 
 .button--secondary {
@@ -94,8 +97,9 @@
 }
 
 .icon-button--sm {
-  width: 1.625rem;
-  height: 1.625rem;
+  width: 1.875rem;
+  height: 1.875rem;
+  border-radius: var(--radius-sm);
 }
 
 .icon-button--danger:hover {
@@ -121,7 +125,7 @@
   align-items: baseline;
   gap: var(--space-2);
   font-size: var(--text-xs);
-  font-weight: 550;
+  font-weight: 600;
   color: var(--text-muted);
 }
 
@@ -132,16 +136,17 @@
 }
 
 .input {
-  height: 2.25rem;
+  height: 2.5rem;
   padding: 0 var(--space-4);
   width: 100%;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
-  background: var(--canvas);
+  background: var(--surface-hover);
   color: var(--text);
   transition:
     border-color var(--duration-fast) var(--ease),
-    box-shadow var(--duration-fast) var(--ease);
+    box-shadow var(--duration-fast) var(--ease),
+    background-color var(--duration-fast) var(--ease);
 }
 
 .input::placeholder {
@@ -154,6 +159,7 @@
 
 .input:focus {
   border-color: var(--accent);
+  background: var(--surface-active);
   box-shadow: 0 0 0 3px var(--accent-soft);
   outline: none;
 }
@@ -198,11 +204,11 @@
 }
 
 .select select {
-  height: 1.75rem;
+  height: 1.875rem;
   padding: 0 var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: var(--surface-raised);
   color: var(--text);
 }
 
@@ -212,11 +218,11 @@
 
 .segmented {
   display: inline-flex;
-  padding: 2px;
+  padding: 3px;
   gap: 2px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--canvas);
+  border-radius: var(--radius-pill);
+  background: var(--surface-hover);
   flex-wrap: wrap;
 }
 
@@ -224,9 +230,9 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  height: 1.75rem;
+  height: 1.875rem;
   padding: 0 var(--space-4);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   font-size: var(--text-xs);
   color: var(--text-muted);
   transition:
@@ -243,7 +249,7 @@
   background: var(--surface-raised);
   color: var(--text);
   box-shadow: var(--shadow-1);
-  font-weight: 550;
+  font-weight: 600;
 }
 
 .checkbox {
@@ -265,10 +271,10 @@
 .checkbox__box {
   display: grid;
   place-items: center;
-  width: 1.0625rem;
-  height: 1.0625rem;
+  width: 1.125rem;
+  height: 1.125rem;
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
+  border-radius: 6px;
   color: transparent;
   transition:
     background-color var(--duration-fast) var(--ease),
@@ -292,11 +298,11 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  height: 1.25rem;
+  height: 1.375rem;
   padding: 0 var(--space-3);
   border-radius: var(--radius-pill);
   font-size: var(--text-2xs);
-  font-weight: 550;
+  font-weight: 600;
   white-space: nowrap;
   background: var(--badge-bg, var(--surface-active));
   color: var(--badge-color, var(--text-muted));
@@ -311,17 +317,10 @@
 }
 
 .badge--tag {
-  font-weight: 400;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-weight: 500;
   background: transparent;
   border: 1px solid var(--line);
   color: var(--text-faint);
-}
-
-.badge--protocol {
-  background: var(--tile-soft, var(--surface-active));
-  color: var(--tile-color, var(--text-muted));
 }
 
 .tone-neutral {
@@ -353,7 +352,7 @@
   --badge-color: var(--planned);
 }
 
-/* Environments and protocols share these variables everywhere they appear. */
+/* Environments and protocols share these variables wherever they appear. */
 .env-production {
   --badge-color: var(--env-production);
   --badge-bg: var(--env-production-soft);
@@ -391,8 +390,8 @@
 .protocol-tile {
   display: grid;
   place-items: center;
-  width: 2rem;
-  height: 2rem;
+  width: 2.5rem;
+  height: 2.5rem;
   flex: none;
   border-radius: var(--radius-md);
   border: 1px solid var(--line);
@@ -401,25 +400,27 @@
 }
 
 .protocol-tile--sm {
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 1.75rem;
+  height: 1.75rem;
   border-radius: var(--radius-sm);
 }
 
 .protocol-tile--lg {
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 3rem;
+  height: 3rem;
+  border-radius: var(--radius-md);
 }
 
 .filter-chip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  height: 1.5rem;
-  padding: 0 var(--space-3);
+  height: 1.75rem;
+  padding: 0 var(--space-4);
   border: 1px solid var(--line);
   border-radius: var(--radius-pill);
   font-size: var(--text-2xs);
+  font-weight: 500;
   color: var(--text-muted);
   transition:
     background-color var(--duration-fast) var(--ease),
@@ -436,7 +437,7 @@
   background: var(--tile-soft, var(--badge-bg, var(--accent-soft)));
   border-color: currentColor;
   color: var(--tile-color, var(--badge-color, var(--accent)));
-  font-weight: 550;
+  font-weight: 600;
 }
 
 .kbd-group {
@@ -448,12 +449,12 @@
 .kbd {
   display: inline-grid;
   place-items: center;
-  min-width: 1.125rem;
-  height: 1.125rem;
-  padding: 0 0.25rem;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.3rem;
   border: 1px solid var(--line-strong);
   border-bottom-width: 2px;
-  border-radius: 4px;
+  border-radius: 5px;
   background: var(--surface-raised);
   font-family: var(--font-ui);
   font-size: 0.625rem;
@@ -467,7 +468,6 @@
   gap: var(--space-4);
   padding: var(--space-4) var(--space-5);
   border: 1px solid var(--callout-line, var(--line));
-  border-left-width: 2px;
   border-radius: var(--radius-md);
   background: var(--callout-bg, var(--surface));
 }
@@ -478,7 +478,7 @@
   --callout-color: var(--info);
 }
 .callout--security {
-  --callout-line: var(--accent);
+  --callout-line: var(--accent-line);
   --callout-bg: var(--accent-soft);
   --callout-color: var(--accent);
 }
@@ -501,7 +501,7 @@
 .callout__icon {
   display: flex;
   color: var(--callout-color);
-  padding-top: 1px;
+  padding-top: 2px;
 }
 
 .callout__body {
@@ -513,14 +513,14 @@
 
 .callout__title {
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 650;
   color: var(--text);
 }
 
 .callout__text {
   font-size: var(--text-xs);
   color: var(--text-muted);
-  line-height: 1.55;
+  line-height: 1.6;
 }
 
 .callout__actions {
@@ -545,38 +545,36 @@
 .empty-state__icon {
   display: grid;
   place-items: center;
-  width: 3rem;
-  height: 3rem;
-  margin-bottom: var(--space-2);
+  width: 4rem;
+  height: 4rem;
+  margin-bottom: var(--space-3);
   border-radius: var(--radius-lg);
   border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text-faint);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .empty-state__title {
   font-size: var(--text-lg);
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .empty-state__text {
-  max-width: 34rem;
+  max-width: 32rem;
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
 .empty-state__actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: var(--space-3);
-  margin-top: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 .empty-state__footnote {
-  margin-top: var(--space-2);
+  margin-top: var(--space-3);
   font-size: var(--text-2xs);
-  color: var(--text-faint);
-}
-
-.text-faint {
   color: var(--text-faint);
 }

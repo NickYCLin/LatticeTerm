@@ -1,105 +1,100 @@
 /**
  * Application shell.
  *
- * Frame from the design brief: global rail, resource sidebar, workspace column
- * and status bar. This file owns navigation, overlays and shortcuts; the data
- * itself lives in `useWorkspace`, and each area renders its own view.
+ * Rail, sidebar, workspace column and status bar. This file owns navigation,
+ * overlays and shortcuts; the data lives in `useWorkspace`, the language in
+ * `I18nProvider`, and each area renders its own view.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { findNavigationItem, navigationItems, type ViewId } from "./app/navigation";
-import { usePreferences } from "./app/preferences";
+import {
+  findNavigationItem,
+  navigationItems,
+  type ViewId,
+} from "./app/navigation";
+import { usePreferences, type PreferencesValue } from "./app/preferences";
+import { findTheme, oppositeTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
+import { useWindowTheme } from "./app/useWindowTheme";
 import { useWorkspace } from "./app/useWorkspace";
-import { draftFromProfile, type ConnectionDraft } from "./domain/connection";
+import type { ConnectionDraft } from "./domain/connection";
+import { I18nProvider, localeCatalog, useI18n } from "./i18n";
 import { NavRail } from "./components/shell/NavRail";
 import { ResourceSidebar } from "./components/shell/ResourceSidebar";
 import { StatusBar } from "./components/shell/StatusBar";
 import { ViewHeader } from "./components/shell/ViewHeader";
 import { ConnectionInspector } from "./components/connections/ConnectionInspector";
-import { CommandPalette, type Command } from "./components/overlays/CommandPalette";
+import {
+  CommandPalette,
+  type Command,
+} from "./components/overlays/CommandPalette";
 import { ConfirmDialog } from "./components/overlays/ConfirmDialog";
 import { ConnectionDrawer } from "./components/overlays/ConnectionDrawer";
 import { ConnectionsView } from "./views/ConnectionsView";
 import { ActivityView } from "./views/ActivityView";
 import { PlannedView, type PlannedArea } from "./views/PlannedView";
 import { SettingsView } from "./views/SettingsView";
-import {
-  ImportIcon,
-  PlusIcon,
-  TunnelIcon,
-  VaultIcon,
-} from "./components/icons";
+import { PlusIcon, TunnelIcon, VaultIcon } from "./components/icons";
 import "./styles/index.css";
 
 const plannedAreas: Record<"tunnels" | "vault", PlannedArea> = {
   tunnels: {
-    milestone: 4,
-    summary:
-      "Port forwarding for the hosts you already keep here: local, remote and dynamic tunnels, each showing where it binds and which session depends on it.",
-    icon: <TunnelIcon size={22} />,
-    boundary:
-      "A tunnel needs a live SSH session, so this area opens after the SSH engine and the credential store are in place. Until then no forwarding of any kind is started.",
+    summaryKey: "planned.tunnels.summary",
+    boundaryKey: "planned.tunnels.boundary",
+    icon: <TunnelIcon size={24} />,
     capabilities: [
       {
-        title: "Local, remote and dynamic forwarding",
-        detail:
-          "Each type shown with its source, destination and bind scope, in the direction data actually travels.",
+        titleKey: "planned.tunnels.cap1.title",
+        detailKey: "planned.tunnels.cap1.detail",
       },
       {
-        title: "Live state per tunnel",
-        detail:
-          "Which sessions use it, how long it has been up, and whether it is starting, listening or stopped.",
+        titleKey: "planned.tunnels.cap2.title",
+        detailKey: "planned.tunnels.cap2.detail",
       },
       {
-        title: "Failures that name the cause",
-        detail:
-          "Port already in use, SSH session dropped, or permission denied on a privileged port — never a bare error.",
+        titleKey: "planned.tunnels.cap3.title",
+        detailKey: "planned.tunnels.cap3.detail",
       },
     ],
   },
   vault: {
-    milestone: 2,
-    summary:
-      "One place for the things that must stay secret: SSH keys, saved passwords, jump host credentials, and the host fingerprints you have chosen to trust.",
-    icon: <VaultIcon size={22} />,
-    boundary:
-      "Secrets go to the operating system credential store, and host trust to a strict known_hosts check. Neither exists yet, which is why this build asks for no credential anywhere.",
+    summaryKey: "planned.vault.summary",
+    boundaryKey: "planned.vault.boundary",
+    icon: <VaultIcon size={24} />,
     capabilities: [
       {
-        title: "Explicit lock state",
-        detail:
-          "Locked, unlocking, unlocked, auto-lock imminent, unavailable and recovery required, each visible at a glance.",
+        titleKey: "planned.vault.cap1.title",
+        detailKey: "planned.vault.cap1.detail",
       },
       {
-        title: "Credentials with references",
-        detail:
-          "Every item shows which connections use it, so nothing is deleted blindly.",
+        titleKey: "planned.vault.cap2.title",
+        detailKey: "planned.vault.cap2.detail",
       },
       {
-        title: "Host trust decisions",
-        detail:
-          "Full fingerprints, comparable and copyable, with first-connect trust and changed-key warnings kept clearly apart.",
+        titleKey: "planned.vault.cap3.title",
+        detailKey: "planned.vault.cap3.detail",
       },
       {
-        title: "Encrypted import and export",
-        detail:
-          "Move a vault between machines without its contents passing through plain files.",
+        titleKey: "planned.vault.cap4.title",
+        detailKey: "planned.vault.cap4.detail",
       },
     ],
   },
 };
 
-export default function App() {
-  const { preferences, update } = usePreferences();
+function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
+  const { t } = useI18n();
   const workspace = useWorkspace();
   const runtime = useRuntimeSummary();
 
+  useWindowTheme(findTheme(activeTheme).isDark);
+
   const [view, setView] = useState<ViewId>("connections");
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [drawer, setDrawer] = useState<{ open: boolean; profileId: string | null }>(
-    { open: false, profileId: null },
-  );
+  const [drawer, setDrawer] = useState<{
+    open: boolean;
+    profileId: string | null;
+  }>({ open: false, profileId: null });
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
@@ -120,7 +115,6 @@ export default function App() {
     duplicateProfile,
     removeProfile,
     loadSamples,
-    clearActivity,
   } = workspace;
 
   const editing = useMemo(
@@ -143,6 +137,12 @@ export default function App() {
     setDrawer({ open: true, profileId: id });
   }, []);
 
+  const focusSearch = useCallback(() => {
+    setView("connections");
+    update({ sidebarCollapsed: false });
+    window.setTimeout(() => searchRef.current?.focus(), 0);
+  }, [update]);
+
   const saveDraft = useCallback(
     (draft: ConnectionDraft) => {
       if (drawer.profileId) updateProfile(drawer.profileId, draft);
@@ -152,52 +152,75 @@ export default function App() {
     [drawer.profileId, addProfile, updateProfile],
   );
 
-  const resolvedTheme =
-    (document.documentElement.dataset.theme as "dark" | "light") ?? "dark";
-
   const commands = useMemo<Command[]>(() => {
     const entries: Command[] = navigationItems.map((item) => ({
       id: `view:${item.id}`,
-      label: `Go to ${item.label}`,
-      hint: item.description,
-      group: "Navigate",
+      label: t("palette.goTo", { name: t(item.labelKey) }),
+      hint: t(item.descriptionKey),
+      group: t("palette.group.navigate"),
       run: () => setView(item.id),
     }));
 
     entries.push(
       {
         id: "action:new",
-        label: "Add connection",
-        hint: "Open the new connection form",
-        group: "Actions",
+        label: t("palette.command.add"),
+        hint: t("palette.command.addHint"),
+        group: t("palette.group.actions"),
         keys: ["N"],
         run: openCreate,
       },
       {
         id: "action:search",
-        label: "Search connections",
-        hint: "Focus the sidebar search field",
-        group: "Actions",
+        label: t("palette.command.search"),
+        hint: t("palette.command.searchHint"),
+        group: t("palette.group.actions"),
         keys: ["/"],
-        run: () => {
-          setView("connections");
-          update({ sidebarCollapsed: false });
-          window.setTimeout(() => searchRef.current?.focus(), 0);
-        },
+        run: focusSearch,
       },
-      {
-        id: "action:theme",
-        label: `Switch to ${resolvedTheme === "dark" ? "light" : "dark"} theme`,
-        group: "Appearance",
-        run: () => update({ theme: resolvedTheme === "dark" ? "light" : "dark" }),
-      },
+    );
+
+    if (profiles.length === 0) {
+      entries.push({
+        id: "action:samples",
+        label: t("palette.command.samples"),
+        hint: t("palette.command.samplesHint"),
+        group: t("palette.group.actions"),
+        run: loadSamples,
+      });
+    }
+
+    // Every theme is reachable from the keyboard, not only the two-way toggle.
+    for (const theme of themeCatalog) {
+      if (theme.id === preferences.theme) continue;
+      entries.push({
+        id: `theme:${theme.id}`,
+        label: t("palette.command.theme", { name: t(theme.labelKey) }),
+        group: t("palette.group.appearance"),
+        run: () => update({ theme: theme.id }),
+      });
+    }
+
+    for (const locale of localeCatalog) {
+      if (locale.id === preferences.locale) continue;
+      entries.push({
+        id: `locale:${locale.id}`,
+        label: t("palette.command.language", { name: locale.label }),
+        group: t("palette.group.appearance"),
+        run: () => update({ locale: locale.id }),
+      });
+    }
+
+    entries.push(
       {
         id: "action:density",
-        label:
-          preferences.density === "compact"
-            ? "Use comfortable density"
-            : "Use compact density",
-        group: "Appearance",
+        label: t("palette.command.density", {
+          name:
+            preferences.density === "compact"
+              ? t("settings.density.comfortable")
+              : t("settings.density.compact"),
+        }),
+        group: t("palette.group.appearance"),
         run: () =>
           update({
             density:
@@ -206,56 +229,27 @@ export default function App() {
       },
       {
         id: "action:sidebar",
-        label: preferences.sidebarCollapsed ? "Show sidebar" : "Hide sidebar",
-        group: "Appearance",
+        label: preferences.sidebarCollapsed
+          ? t("palette.command.sidebar.show")
+          : t("palette.command.sidebar.hide"),
+        group: t("palette.group.appearance"),
         keys: ["Ctrl", "B"],
         run: () => update({ sidebarCollapsed: !preferences.sidebarCollapsed }),
       },
     );
 
-    if (filterActive) {
-      entries.push({
-        id: "action:reset-filter",
-        label: "Reset connection filters",
-        hint: "Clear current search, environment and tag filters",
-        group: "Actions",
-        run: resetFilter,
-      });
-    }
-
-    if (profiles.length === 0) {
-      entries.push({
-        id: "action:samples",
-        label: "Load sample workspace",
-        hint: "Six example profiles using documentation hostnames",
-        group: "Actions",
-        run: loadSamples,
-      });
-    }
-
-    if (workspace.activity.length > 0) {
-      entries.push({
-        id: "action:clear-activity",
-        label: "Clear session activity log",
-        hint: "Remove all transient activity entries from this window",
-        group: "Actions",
-        run: clearActivity,
-      });
-    }
-
     return entries;
   }, [
+    t,
     openCreate,
+    focusSearch,
     update,
-    resolvedTheme,
+    preferences.theme,
+    preferences.locale,
     preferences.density,
     preferences.sidebarCollapsed,
-    filterActive,
-    resetFilter,
     profiles.length,
     loadSamples,
-    workspace.activity.length,
-    clearActivity,
   ]);
 
   // Global shortcuts. Anything typed into a field is left alone.
@@ -284,9 +278,7 @@ export default function App() {
 
       if (event.key === "/") {
         event.preventDefault();
-        setView("connections");
-        update({ sidebarCollapsed: false });
-        window.setTimeout(() => searchRef.current?.focus(), 0);
+        focusSearch();
       } else if (event.key.toLowerCase() === "n") {
         event.preventDefault();
         openCreate();
@@ -295,7 +287,7 @@ export default function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [openCreate, update, preferences.sidebarCollapsed]);
+  }, [openCreate, focusSearch, update, preferences.sidebarCollapsed]);
 
   const item = findNavigationItem(view);
   const showSidebar = view === "connections" && !preferences.sidebarCollapsed;
@@ -307,11 +299,8 @@ export default function App() {
       <NavRail
         current={view}
         onSelect={setView}
-        theme={preferences.theme}
-        resolvedTheme={resolvedTheme}
-        onToggleTheme={() =>
-          update({ theme: resolvedTheme === "dark" ? "light" : "dark" })
-        }
+        activeTheme={activeTheme}
+        onToggleTheme={() => update({ theme: oppositeTheme(activeTheme) })}
       />
 
       {showSidebar && (
@@ -319,6 +308,7 @@ export default function App() {
           ref={searchRef}
           filter={filter}
           onFilterChange={setFilter}
+          onReset={resetFilter}
           filterActive={filterActive}
           groups={groups}
           tags={tags}
@@ -330,41 +320,29 @@ export default function App() {
 
       <main className="workspace">
         <ViewHeader
-          title={item.label}
-          description={item.description}
+          title={t(item.labelKey)}
+          description={t(item.descriptionKey)}
           sidebarCollapsed={preferences.sidebarCollapsed}
           showSidebarToggle={view === "connections"}
           onToggleSidebar={() =>
             update({ sidebarCollapsed: !preferences.sidebarCollapsed })
           }
           actions={
-            view === "connections" ? (
-              <>
-                {profiles.length === 0 && (
-                  <button
-                    type="button"
-                    className="button button--ghost"
-                    onClick={loadSamples}
-                  >
-                    <ImportIcon size={14} />
-                    Load samples
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="button button--primary"
-                  onClick={openCreate}
-                >
-                  <PlusIcon size={14} />
-                  Add connection
-                </button>
-              </>
+            view === "connections" && profiles.length > 0 ? (
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={openCreate}
+              >
+                <PlusIcon size={15} />
+                {t("connections.add")}
+              </button>
             ) : undefined
           }
         />
 
         <div className="workspace__body">
-          <div className="workspace__content">
+          <div className="workspace__content glass glass--sheen">
             {view === "connections" && (
               <ConnectionsView
                 workspace={workspace}
@@ -417,9 +395,10 @@ export default function App() {
 
       {deleting && (
         <ConfirmDialog
-          title={`Delete ${deleting.name}?`}
-          body={`This removes the profile for ${draftFromProfile(deleting).hostname} from this workspace. No remote system is affected.`}
-          confirmLabel={`Delete ${deleting.name}`}
+          title={t("confirm.delete.title", { name: deleting.name })}
+          body={t("confirm.delete.body", { host: deleting.hostname })}
+          confirmLabel={t("confirm.delete.confirm", { name: deleting.name })}
+          cancelLabel={t("common.cancel")}
           onConfirm={() => {
             removeProfile(deleting.id);
             setPendingDelete(null);
@@ -440,5 +419,20 @@ export default function App() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Preferences are read once, here, and handed down: the language has to be
+ * settled before anything below renders, and a second copy of the state would
+ * quietly diverge from this one.
+ */
+export default function App() {
+  const preferences = usePreferences();
+
+  return (
+    <I18nProvider locale={preferences.preferences.locale}>
+      <Workspace {...preferences} />
+    </I18nProvider>
   );
 }

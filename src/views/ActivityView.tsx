@@ -1,222 +1,209 @@
 /**
- * Activity: what changed in this workspace session.
+ * Activity: what changed while this window has been open.
  *
- * Real entries, not a mock feed — every line was produced by something the
- * user did. Connection results will join this list once protocol engines
- * exist; commands, output and credentials never will.
+ * Real entries, not a mock feed — every line came from something the user did.
+ * Connection results will join this list once sessions exist; commands, output
+ * and credentials never will.
  */
 
 import { useMemo, useState } from "react";
+import type { Workspace } from "../app/useWorkspace";
 import {
-  activityLabels,
+  activityKindLabelKey,
+  activityKindList,
   exportActivityLogText,
   filterActivity,
+  type ActivityEntry,
   type ActivityKind,
 } from "../domain/activity";
-import type { Workspace } from "../app/useWorkspace";
+import { useI18n } from "../i18n";
 import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
-import {
-  ActivityIcon,
-  ExportIcon,
-  SearchIcon,
-  TrashIcon,
-} from "../components/icons";
-
-const timeFormat = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-});
-
-const kindFilterOptions: { value: ActivityKind | "all"; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "created", label: "Added" },
-  { value: "updated", label: "Updated" },
-  { value: "deleted", label: "Removed" },
-  { value: "workspace", label: "Workspace" },
-];
+import { ActivityIcon, ExportIcon, SearchIcon, TrashIcon } from "../components/icons";
 
 export function ActivityView({ workspace }: { workspace: Workspace }) {
+  const { t, tag } = useI18n();
   const { activity, clearActivity } = workspace;
   const [confirming, setConfirming] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [kindFilter, setKindFilter] = useState<ActivityKind | "all">("all");
+  const [search, setSearch] = useState("");
+  const [kind, setKind] = useState<ActivityKind | "all">("all");
 
-  const filteredEntries = useMemo(
-    () => filterActivity(activity, searchQuery, kindFilter),
-    [activity, searchQuery, kindFilter],
+  const timeFormat = useMemo(
+    () =>
+      new Intl.DateTimeFormat(tag, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }),
+    [tag],
   );
 
-  function handleExportLog() {
-    if (activity.length === 0) return;
-    const text = exportActivityLogText(activity);
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `latticeterm-activity-${new Date().toISOString().slice(0, 10)}.log`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  /** Headline for an entry: user data if there is any, otherwise our wording. */
+  const title = (entry: ActivityEntry) =>
+    entry.subject ?? (entry.titleKey ? t(entry.titleKey) : "");
+
+  const detail = (entry: ActivityEntry) =>
+    entry.detail ?? (entry.note ? t(entry.note.key, entry.note.values) : "");
+
+  const searchText = (entry: ActivityEntry) =>
+    `${t(activityKindLabelKey(entry.kind))} ${title(entry)} ${detail(entry)}`;
+
+  const visible = useMemo(
+    () => filterActivity(activity, search, kind, searchText),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activity, search, kind, t],
+  );
+
+  const filtering = search.trim() !== "" || kind !== "all";
+
+  if (activity.length === 0) {
+    return (
+      <div className="stack">
+        <Callout tone="info" title={t("activity.note.title")}>
+          {t("activity.note.body")}
+        </Callout>
+        <EmptyState
+          icon={<ActivityIcon size={26} />}
+          title={t("activity.empty.title")}
+          description={t("activity.empty.body")}
+        />
+      </div>
+    );
   }
 
   return (
     <div className="stack">
-      <Callout tone="info" title="Session log only">
-        These entries describe changes to connection profiles in this window.
-        They are held in memory, contain no credentials or command output, and
-        disappear when LatticeTerm closes. Connection results and failure stages
-        join this view when the SSH engine lands in milestone 1.
+      <Callout tone="info" title={t("activity.note.title")}>
+        {t("activity.note.body")}
       </Callout>
 
-      {activity.length === 0 ? (
-        <EmptyState
-          icon={<ActivityIcon size={22} />}
-          title="Nothing has happened yet"
-          description="Add, edit or remove a connection and it will be recorded here with a timestamp."
-        />
-      ) : (
-        <section className="panel">
-          <header className="panel__head">
-            <div>
-              <h2 className="panel__title">Session activity</h2>
-              <p className="panel__hint">
-                {filteredEntries.length} of {activity.length} entr
-                {activity.length === 1 ? "y" : "ies"}, newest first
-              </p>
-            </div>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
-                type="button"
-                className="button button--ghost button--sm"
-                onClick={handleExportLog}
-                title="Export session activity log as text file"
-              >
-                <ExportIcon size={14} />
-                Export log
-              </button>
-              <button
-                type="button"
-                className="button button--ghost button--danger button--sm"
-                onClick={() => setConfirming(true)}
-              >
-                <TrashIcon size={14} />
-                Clear log
-              </button>
-            </div>
-          </header>
+      <section className="panel glass glass--sheen">
+        <header className="panel__head">
+          <div>
+            <h2 className="panel__title">{t("activity.title")}</h2>
+            <p className="panel__hint">
+              {filtering
+                ? t("activity.countFiltered", {
+                    visible: visible.length,
+                    total: activity.length,
+                  })
+                : t("activity.count", { count: activity.length })}
+            </p>
+          </div>
+          <div className="panel__actions">
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              onClick={() =>
+                exportLog(
+                  exportActivityLogText(
+                    activity,
+                    (entry) =>
+                      `[${t(activityKindLabelKey(entry.kind))}] ${title(entry)}${
+                        detail(entry) ? ` (${detail(entry)})` : ""
+                      }`,
+                  ),
+                )
+              }
+            >
+              <ExportIcon size={14} />
+              {t("activity.export")}
+            </button>
+            <button
+              type="button"
+              className="button button--ghost button--danger button--sm"
+              onClick={() => setConfirming(true)}
+            >
+              <TrashIcon size={14} />
+              {t("activity.clear")}
+            </button>
+          </div>
+        </header>
+
+        <div className="activity-toolbar">
+          <label className="activity-search">
+            <SearchIcon size={14} />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.currentTarget.value)}
+              placeholder={t("activity.searchPlaceholder")}
+              aria-label={t("activity.searchPlaceholder")}
+            />
+          </label>
 
           <div
-            style={{
-              padding: "0.75rem 1rem",
-              borderBottom: "1px solid var(--border)",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "0.75rem",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
+            className="segmented"
+            role="radiogroup"
+            aria-label={t("activity.title")}
           >
-            <div
-              style={{
-                position: "relative",
-                display: "flex",
-                alignItems: "center",
-                flex: "1 1 200px",
-                maxWidth: "320px",
-              }}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={kind === "all"}
+              className={`segmented__option${kind === "all" ? " is-selected" : ""}`}
+              onClick={() => setKind("all")}
             >
-              <span
-                style={{
-                  position: "absolute",
-                  left: "0.5rem",
-                  color: "var(--text-faint)",
-                  display: "flex",
-                }}
-                aria-hidden="true"
-              >
-                <SearchIcon size={14} />
-              </span>
-              <input
-                className="input"
-                style={{ paddingLeft: "1.75rem", height: "1.75rem", fontSize: "0.8125rem" }}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search activity..."
-                aria-label="Search activity"
-              />
-            </div>
-
-            <div
-              className="segmented"
-              role="radiogroup"
-              aria-label="Filter activity by kind"
-            >
-              {kindFilterOptions.map((opt) => (
-                <button
-                  type="button"
-                  key={opt.value}
-                  role="radio"
-                  aria-checked={kindFilter === opt.value}
-                  className={`segmented__option${
-                    kindFilter === opt.value ? " is-selected" : ""
-                  }`}
-                  onClick={() => setKindFilter(opt.value)}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {filteredEntries.length === 0 ? (
-            <div style={{ padding: "2rem", textAlign: "center" }}>
-              <p style={{ color: "var(--text-muted)", marginBottom: "0.75rem" }}>
-                No activity entries match your filter.
-              </p>
+              {t("activity.filter.all")}
+            </button>
+            {activityKindList.map((value) => (
               <button
                 type="button"
-                className="button button--secondary button--sm"
-                onClick={() => {
-                  setSearchQuery("");
-                  setKindFilter("all");
-                }}
+                key={value}
+                role="radio"
+                aria-checked={kind === value}
+                className={`segmented__option${kind === value ? " is-selected" : ""}`}
+                onClick={() => setKind(value)}
               >
-                Reset activity filter
+                {t(activityKindLabelKey(value))}
               </button>
-            </div>
-          ) : (
-            <ul className="activity-list">
-              {filteredEntries.map((entry) => (
-                <li className="activity-row" key={entry.id}>
-                  <span className={`activity-row__kind kind-${entry.kind}`}>
-                    {activityLabels[entry.kind]}
-                  </span>
-                  <span className="activity-row__message truncate">
-                    {entry.message}
-                  </span>
-                  {entry.detail && (
-                    <span className="activity-row__detail mono truncate">
-                      {entry.detail}
-                    </span>
-                  )}
-                  <time className="activity-row__time mono">
-                    {timeFormat.format(entry.at)}
-                  </time>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
+            ))}
+          </div>
+        </div>
+
+        {visible.length === 0 ? (
+          <div className="activity-empty">
+            <p>{t("activity.noMatch")}</p>
+            <button
+              type="button"
+              className="button button--secondary button--sm"
+              onClick={() => {
+                setSearch("");
+                setKind("all");
+              }}
+            >
+              {t("activity.resetFilter")}
+            </button>
+          </div>
+        ) : (
+          <ul className="activity-list">
+            {visible.map((entry) => (
+              <li className="activity-row" key={entry.id}>
+                <span className={`activity-row__kind kind-${entry.kind}`}>
+                  {t(activityKindLabelKey(entry.kind))}
+                </span>
+                <span className="activity-row__message truncate">
+                  {title(entry)}
+                </span>
+                <span className="activity-row__detail mono truncate">
+                  {detail(entry)}
+                </span>
+                <time className="activity-row__time mono">
+                  {timeFormat.format(entry.at)}
+                </time>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {confirming && (
         <ConfirmDialog
-          title="Clear the session log?"
-          body={`This removes all ${activity.length} entries from this window. Connection profiles are not affected.`}
-          confirmLabel={`Clear ${activity.length} entries`}
+          title={t("activity.confirmClear.title")}
+          body={t("activity.confirmClear.body", { count: activity.length })}
+          confirmLabel={t("activity.confirmClear.confirm", {
+            count: activity.length,
+          })}
+          cancelLabel={t("common.cancel")}
           onConfirm={() => {
             clearActivity();
             setConfirming(false);
@@ -226,4 +213,17 @@ export function ActivityView({ workspace }: { workspace: Workspace }) {
       )}
     </div>
   );
+}
+
+function exportLog(content: string) {
+  const url = URL.createObjectURL(
+    new Blob([content], { type: "text/plain;charset=utf-8" }),
+  );
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `latticeterm-activity-${new Date().toISOString().slice(0, 10)}.log`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }

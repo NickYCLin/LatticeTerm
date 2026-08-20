@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { connectionTarget, type ConnectionProfile } from "../../domain/connection";
 import { matchesSearch } from "../../domain/query";
+import { useI18n } from "../../i18n";
 import { ProtocolTile } from "../common/Badge";
 import { Kbd } from "../common/Callout";
 import { SearchIcon } from "../icons";
@@ -35,6 +36,7 @@ export function CommandPalette({
   onSelectProfile: (profile: ConnectionProfile) => void;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
@@ -58,13 +60,13 @@ export function CommandPalette({
         id: `profile:${profile.id}`,
         label: profile.name,
         hint: connectionTarget(profile),
-        group: "Connections",
+        group: t("palette.group.connections"),
         icon: <ProtocolTile protocol={profile.protocol} size="sm" />,
         run: () => onSelectProfile(profile),
       }));
 
     return [...matchedProfiles, ...matchedCommands];
-  }, [commands, profiles, query, onSelectProfile]);
+  }, [commands, profiles, query, onSelectProfile, t]);
 
   useEffect(() => {
     setActive(0);
@@ -122,8 +124,8 @@ export function CommandPalette({
             ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search connections and commands"
-            aria-label="Search connections and commands"
+            placeholder={t("palette.placeholder")}
+            aria-label={t("palette.placeholder")}
             aria-controls="palette-list"
             autoCapitalize="none"
             autoCorrect="off"
@@ -133,9 +135,7 @@ export function CommandPalette({
         </div>
 
         {entries.length === 0 ? (
-          <p className="palette__empty">
-            Nothing matches <strong>{query}</strong>.
-          </p>
+          <p className="palette__empty">{t("palette.empty", { query })}</p>
         ) : (
           <ul className="palette__list" id="palette-list" ref={listRef} role="listbox">
             {entries.map((entry, index) => {
@@ -176,13 +176,13 @@ export function CommandPalette({
 
         <footer className="palette__foot">
           <span>
-            <Kbd keys={["↑", "↓"]} /> navigate
+            <Kbd keys={["↑", "↓"]} /> {t("palette.navigate")}
           </span>
           <span>
-            <Kbd keys={["Enter"]} /> run
+            <Kbd keys={["Enter"]} /> {t("palette.run")}
           </span>
           <span>
-            <Kbd keys={["Esc"]} /> dismiss
+            <Kbd keys={["Esc"]} /> {t("palette.dismiss")}
           </span>
         </footer>
       </div>
