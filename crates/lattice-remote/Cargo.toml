@@ -17,7 +17,8 @@ tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-
 image = { version = "0.25", default-features = false, features = ["jpeg"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
-xcap = { version = "0.9.8", optional = true }
+# xcap 0.9 uses pipewire-rs 0.10 APIs newer than Ubuntu 22.04 headers.
+xcap = { version = "=0.7.1", optional = true }
 
 [[bin]]
 name = "lattice-agent"
