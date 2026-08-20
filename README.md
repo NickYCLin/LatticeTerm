@@ -20,6 +20,7 @@ LatticeTerm 是一套現代、安全且跨平台的遠端連線工作空間，�
 - **SSH 連線**：以純 Rust 的 russh 實作，可建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼只用於當次連線，不會儲存。
 - **Lattice Remote（唯讀 v1）**：自建 Agent 擷取完整主螢幕，以 Noise XXpsk3 與一次性八位數配對碼建立端對端加密直連；目前不注入鍵盤或滑鼠。
 - **Web RDP Canvas**：IronRDP 原生 engine 以 TLS/NLA 連到 Windows，畫面繪入內嵌 Canvas，並支援滑鼠、滾輪與鍵盤。密碼只經本機 stdin 傳給隔離 engine。
+- **使用者控制的截圖與錄影**：Lattice Remote 與 Web RDP 都可手動擷取 PNG，或開始、停止並下載遠端 Canvas 錄影；不會自動錄製或上傳。
 - **跨平台支援**：支援 Windows、Linux 與 macOS。
 
 ## 📥 下載與安裝 (Downloads)

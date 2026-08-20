@@ -29,6 +29,7 @@ LatticeTerm has not published a stable release. Security fixes currently target 
 - Lattice Remote Agent captures the primary display only after an eight-digit pairing code is shown locally. The stream uses Noise XXpsk3 with ChaChaPoly and BLAKE2s; version 1 is view-only and the Agent binds to loopback unless a LAN address is explicitly supplied.
 - Web RDP runs IronRDP in an isolated child process. The password is sent once over stdin, never appears in process arguments or persistent state, and the browser surface receives display frames rather than network credentials.
 - Web RDP enforces TLS certificate validation. A self-signed certificate is rejected first; the UI may retry only with the exact SHA-256 certificate fingerprint explicitly approved for that attempt. NLA/CredSSP is required and legacy graphical TLS login is disabled.
+- Screenshots and recordings are initiated explicitly in the session toolbar and are produced from the remote Canvas only. Media stays in WebView memory until the user downloads it; LatticeTerm does not upload or persist captures in application storage.
 - Credential persistence, private-key import, Stronghold integration, OS keychain integration, SFTP, and VNC are not implemented.
 - Tauri IPC exposes scoped profile-storage, SSH-session, Lattice Remote, Web RDP input/session, trusted-host, runtime-summary, and updater operations; it does not expose arbitrary filesystem access.
 - Logs and screenshots must not contain secrets or private infrastructure details.

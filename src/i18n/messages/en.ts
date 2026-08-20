@@ -461,6 +461,18 @@ export const en: Messages = {
   "rdp.session.waitingTitle": "Waiting for the RDP display",
   "rdp.session.waitingBody": "Login is established; the remote desktop is preparing its first Canvas frame.",
 
+  // Remote Canvas capture -------------------------------------------------
+  "capture.controlsLabel": "Screenshot and recording controls",
+  "capture.screenshot": "Screenshot",
+  "capture.start": "Start recording",
+  "capture.stop": "Stop and download",
+  "capture.localOnly":
+    "Only the remote Canvas is captured. The file is downloaded on this device and is never uploaded. Long recordings use more memory.",
+  "capture.unsupported": "This system WebView does not support Canvas recording.",
+  "capture.screenshotFailed": "A screenshot could not be created from the current frame.",
+  "capture.recordingFailed":
+    "The recording could not be completed. Check the system media encoder support.",
+
   // Key Vault -------------------------------------------------------------
   "vault.title": "Host trust and credential vault",
   "vault.status.ready": "Host trust active",

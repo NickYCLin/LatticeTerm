@@ -3,6 +3,7 @@ import type { KeyboardEvent, MouseEvent, WheelEvent } from "react";
 import type { RdpApi, RdpInput, RdpSessionSummary } from "../../app/useRdpSessions";
 import { useI18n } from "../../i18n";
 import { ScreenShareIcon, ShieldIcon } from "../icons";
+import { CanvasCaptureControls } from "../remote/CanvasCaptureControls";
 
 const extended = (code: number) => 0xe000 | code;
 
@@ -223,6 +224,11 @@ export function RdpPane({ session, rdp }: { session: RdpSessionSummary; rdp: Rdp
         <span className="remote-toolbar__resolution mono">
           {session.width} × {session.height}
         </span>
+        <CanvasCaptureControls
+          canvasRef={canvasRef}
+          ready={session.frame !== null}
+          label={session.username + "@" + session.host}
+        />
         <span className="badge tone-ok">{t("rdp.session.interactive")}</span>
       </div>
 

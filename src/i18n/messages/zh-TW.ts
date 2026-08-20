@@ -428,6 +428,16 @@ export const zhTW = {
   "rdp.session.waitingTitle": "正在等待 RDP 畫面",
   "rdp.session.waitingBody": "登入已建立，遠端桌面正在準備第一個 Canvas 畫面。",
 
+  // 遠端畫面擷取 ----------------------------------------------------------
+  "capture.controlsLabel": "截圖與錄影控制",
+  "capture.screenshot": "截圖",
+  "capture.start": "開始錄影",
+  "capture.stop": "停止並下載",
+  "capture.localOnly": "只擷取遠端畫布；檔案由此裝置下載，不會上傳。長時間錄影會使用較多記憶體。",
+  "capture.unsupported": "目前的系統 WebView 不支援 Canvas 錄影。",
+  "capture.screenshotFailed": "無法從目前畫面建立截圖。",
+  "capture.recordingFailed": "無法完成這段錄影，請檢查系統媒體編碼支援。",
+
   // 金鑰保管庫 ------------------------------------------------------------
   "vault.title": "主機信任與認證保管庫",
   "vault.status.ready": "主機信任已啟用",

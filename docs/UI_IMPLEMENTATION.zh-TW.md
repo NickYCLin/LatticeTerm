@@ -153,6 +153,7 @@
 - 密碼只出現在連線對話框、單次 Tauri IPC 與 engine 記憶體，不寫入 profile、事件、程序參數或磁碟。
 - TLS 預設嚴格驗證；自簽憑證第一次必定拒絕並回傳 SHA-256 指紋，只有使用者明確核對後才能針對同一指紋重試一次。
 - React 端以真正的 `<canvas>` 繪圖，輸入轉為 RDP FastPath；Canvas 失焦、離開或卸載時會釋放所有按鍵與滑鼠按鈕。
+- `CanvasCaptureControls` 同時供 Lattice Remote 與 Web RDP 使用。使用者可手動輸出 PNG，或以 `canvas.captureStream` 和 `MediaRecorder` 開始、停止並下載 WebM／MP4；只錄遠端畫布、不錄 UI、不自動啟動，也不上傳。
 
 ---
 

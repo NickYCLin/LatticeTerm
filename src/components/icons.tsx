@@ -312,6 +312,26 @@ export const ScreenShareIcon: Glyph = (props) => (
   </Icon>
 );
 
+export const CameraIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M5.25 4.25 6.1 2.8h3.8l.85 1.45h1.75A1.5 1.5 0 0 1 14 5.75v6A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5V5.75a1.5 1.5 0 0 1 1.5-1.5z" />
+    <circle cx="8" cy="8.5" r="2.5" />
+  </Icon>
+);
+
+export const RecordIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <circle cx="8" cy="8" r="5.5" />
+    <circle cx="8" cy="8" r="2.75" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
+export const StopIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <rect x="3.25" y="3.25" width="9.5" height="9.5" rx="1.25" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
 export const TransferIcon: Glyph = (props) => (
   <Icon {...props}>
     <path d="m4.5 4.5 7 7M11.5 4.5v7h-7" />
