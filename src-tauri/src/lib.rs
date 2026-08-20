@@ -1,7 +1,13 @@
 pub mod domain;
 pub mod storage;
 
+use crate::domain::ConnectionProfile;
+use crate::storage::{InMemoryStorage, Storage};
 use serde::Serialize;
+use std::sync::Mutex;
+use tauri::State;
+
+type AppStorage = Mutex<InMemoryStorage>;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,10 +28,39 @@ fn runtime_summary() -> RuntimeSummary {
     }
 }
 
+#[tauri::command]
+fn list_connection_profiles(
+    storage: State<'_, AppStorage>,
+) -> Result<Vec<ConnectionProfile>, String> {
+    let guard = storage.lock().map_err(|e| e.to_string())?;
+    guard.list_profiles().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_connection_profile(
+    profile: ConnectionProfile,
+    storage: State<'_, AppStorage>,
+) -> Result<(), String> {
+    let mut guard = storage.lock().map_err(|e| e.to_string())?;
+    guard.insert_profile(profile).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_connection_profile(id: String, storage: State<'_, AppStorage>) -> Result<bool, String> {
+    let mut guard = storage.lock().map_err(|e| e.to_string())?;
+    guard.delete_profile(&id).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![runtime_summary])
+        .manage(Mutex::new(InMemoryStorage::new()))
+        .invoke_handler(tauri::generate_handler![
+            runtime_summary,
+            list_connection_profiles,
+            save_connection_profile,
+            delete_connection_profile
+        ])
         .run(tauri::generate_context!())
         .expect("error while running LatticeTerm");
 }

@@ -70,6 +70,11 @@ export function ConnectionDrawer({
   const [tagInput, setTagInput] = useState((initial.tags ?? []).join(", "));
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [testNotice, setTestNotice] = useState<{
+    tone: "info" | "warn";
+    title: string;
+    message: string;
+  } | null>(null);
 
   const formId = useId();
   const nameRef = useRef<HTMLInputElement>(null);
@@ -487,6 +492,39 @@ export function ConnectionDrawer({
                 {candidate.favorite && <Chip tone="accent">Favorite</Chip>}
               </div>
             </div>
+
+            <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.5rem" }}>
+              <button
+                type="button"
+                className="button button--secondary button--sm"
+                onClick={() => {
+                  const next = { ...draft, tags: parseTags(tagInput) };
+                  const found = validateConnectionDraft(next);
+                  if (Object.keys(found).length > 0) {
+                    setErrors(found);
+                    setTestNotice({
+                      tone: "warn",
+                      title: "Validation check failed",
+                      message: "Please correct the form errors before testing.",
+                    });
+                  } else {
+                    setTestNotice({
+                      tone: "info",
+                      title: "Configuration preflight valid",
+                      message: `Target syntax, port (${draft.port}) and protocol (${findProtocol(draft.protocol).name}) are valid. Engine execution connects in Milestone ${findProtocol(draft.protocol).milestone}.`,
+                    });
+                  }
+                }}
+              >
+                Test configuration
+              </button>
+            </div>
+
+            {testNotice && (
+              <Callout tone={testNotice.tone} title={testNotice.title}>
+                {testNotice.message}
+              </Callout>
+            )}
 
             {duplicate && (
               <Callout tone="warn" title="Another profile uses this target">
