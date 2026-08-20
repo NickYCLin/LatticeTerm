@@ -16,8 +16,7 @@
 
 use latticeterm_lib::hostkeys::HostTrustStore;
 use latticeterm_lib::ssh::{
-    connect, disconnect, send, AuthMethod, ConnectOutcome, ConnectRequest, SessionSink,
-    SshRegistry,
+    connect, disconnect, send, AuthMethod, ConnectOutcome, ConnectRequest, SessionSink, SshRegistry,
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -101,13 +100,7 @@ async fn an_untrusted_host_is_refused_then_accepted_once_trusted() {
     let collector = Arc::new(Collector::default());
 
     // First contact: nothing is trusted, so no session may exist yet.
-    let first = connect(
-        sink(&collector),
-        Arc::clone(&registry),
-        None,
-        request(),
-    )
-    .await;
+    let first = connect(sink(&collector), Arc::clone(&registry), None, request()).await;
 
     let (algorithm, fingerprint) = match first {
         ConnectOutcome::HostUnknown {
@@ -175,13 +168,7 @@ async fn a_wrong_password_is_reported_as_a_failed_sign_in() {
     let collector = Arc::new(Collector::default());
 
     // Trust the host first, so the only thing left to fail is the password.
-    let probe = connect(
-        sink(&collector),
-        Arc::clone(&registry),
-        None,
-        request(),
-    )
-    .await;
+    let probe = connect(sink(&collector), Arc::clone(&registry), None, request()).await;
     let (algorithm, fingerprint) = match probe {
         ConnectOutcome::HostUnknown {
             algorithm,
@@ -200,13 +187,7 @@ async fn a_wrong_password_is_reported_as_a_failed_sign_in() {
         password: "definitely-not-the-password".into(),
     };
 
-    let outcome = connect(
-        sink(&collector),
-        Arc::clone(&registry),
-        Some(record),
-        wrong,
-    )
-    .await;
+    let outcome = connect(sink(&collector), Arc::clone(&registry), Some(record), wrong).await;
 
     assert!(
         matches!(outcome, ConnectOutcome::AuthFailed),
@@ -270,13 +251,7 @@ async fn an_unreachable_port_reports_the_transport_failure() {
     // reported as a transport problem rather than a trust question.
     unreachable.port = 1;
 
-    let outcome = connect(
-        sink(&collector),
-        Arc::clone(&registry),
-        None,
-        unreachable,
-    )
-    .await;
+    let outcome = connect(sink(&collector), Arc::clone(&registry), None, unreachable).await;
 
     match outcome {
         ConnectOutcome::Failed { stage, .. } => assert_eq!(stage, "connect"),
