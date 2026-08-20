@@ -437,7 +437,8 @@ pub async fn input(
     let record = registry
         .get(session_id)?
         .ok_or_else(|| "RDP session not found.".to_string())?;
-    write_line(&mut record.stdin.lock().await, &request).await
+    let mut stdin = record.stdin.lock().await;
+    write_line(&mut *stdin, &request).await
 }
 
 pub async fn disconnect(
@@ -446,10 +447,13 @@ pub async fn disconnect(
     session_id: &str,
 ) -> Result<(), String> {
     if let Some(record) = registry.remove(session_id)? {
-        if write_line(&mut record.stdin.lock().await, &EngineCommand::Close)
-            .await
-            .is_err()
-        {
+        let close_failed = {
+            let mut stdin = record.stdin.lock().await;
+            write_line(&mut *stdin, &EngineCommand::Close)
+                .await
+                .is_err()
+        };
+        if close_failed {
             record.abort.abort();
         }
         let _ = app.emit(
