@@ -3,36 +3,38 @@
  *
  * This module deliberately has no field for a password, passphrase, private
  * key or token. Secrets belong to the OS credential store, which is a later
- * milestone; keeping the shape secret-free means a profile can be logged,
+ * milestone; keeping the shape secret-free means an entry can be logged,
  * exported or shown in a screenshot without leaking anything.
+ *
+ * Nothing here holds display text. Validation reports message keys and their
+ * parameters, and the interface decides what language to render them in.
  */
+
+import type { MessageKey } from "../i18n/messages/zh-TW";
 
 export const protocolCatalog = [
   {
     id: "ssh",
-    name: "SSH",
-    summary: "Interactive shell session",
+    /** Protocol acronyms stay untranslated; the description is localised. */
+    acronym: "SSH",
     defaultPort: 22,
     milestone: 1,
   },
   {
     id: "sftp",
-    name: "SFTP",
-    summary: "Browse and transfer files",
+    acronym: "SFTP",
     defaultPort: 22,
     milestone: 3,
   },
   {
     id: "rdp",
-    name: "RDP",
-    summary: "Windows remote desktop",
+    acronym: "RDP",
     defaultPort: 3389,
     milestone: 4,
   },
   {
     id: "vnc",
-    name: "VNC",
-    summary: "Cross-platform screen sharing",
+    acronym: "VNC",
     defaultPort: 5900,
     milestone: 5,
   },
@@ -43,13 +45,13 @@ export type Protocol = (typeof protocolCatalog)[number]["id"];
 export type ProtocolDefinition = (typeof protocolCatalog)[number];
 
 export const environmentCatalog = [
-  { id: "production", label: "Production", hint: "Live systems" },
-  { id: "staging", label: "Staging", hint: "Pre-release systems" },
-  { id: "development", label: "Development", hint: "Build and test systems" },
-  { id: "unassigned", label: "Unassigned", hint: "No environment set" },
+  "production",
+  "staging",
+  "development",
+  "unassigned",
 ] as const;
 
-export type Environment = (typeof environmentCatalog)[number]["id"];
+export type Environment = (typeof environmentCatalog)[number];
 
 export const UNGROUPED = "Ungrouped";
 
@@ -90,16 +92,40 @@ export interface ConnectionProfile {
   favorite: boolean;
 }
 
-export type ValidationErrors = Partial<
-  Record<keyof ConnectionDraft, string> & { tags: string }
->;
+/** A validation failure, expressed as something the interface can translate. */
+export interface ValidationIssue {
+  key: MessageKey;
+  values?: Record<string, string | number>;
+}
+
+export type ValidationField =
+  | "name"
+  | "hostname"
+  | "username"
+  | "port"
+  | "group"
+  | "tags";
+
+export type ValidationErrors = Partial<Record<ValidationField, ValidationIssue>>;
 
 export function findProtocol(protocol: Protocol): ProtocolDefinition {
   return protocolCatalog.find((entry) => entry.id === protocol)!;
 }
 
-export function findEnvironment(environment: Environment) {
-  return environmentCatalog.find((entry) => entry.id === environment)!;
+export function protocolLabelKey(protocol: Protocol): MessageKey {
+  return `protocol.${protocol}` as MessageKey;
+}
+
+export function protocolSummaryKey(protocol: Protocol): MessageKey {
+  return `protocol.${protocol}.summary` as MessageKey;
+}
+
+export function environmentLabelKey(environment: Environment): MessageKey {
+  return `environment.${environment}` as MessageKey;
+}
+
+export function environmentHintKey(environment: Environment): MessageKey {
+  return `environment.${environment}.hint` as MessageKey;
 }
 
 export function emptyDraft(protocol: Protocol = "ssh"): ConnectionDraft {
@@ -161,47 +187,68 @@ export function validateConnectionDraft(
   const tags = parseTags(draft.tags ?? []);
 
   if (!name) {
-    errors.name = "Enter a display name.";
+    errors.name = { key: "validation.nameRequired" };
   } else if (name.length > limits.nameLength) {
-    errors.name = `Use ${limits.nameLength} characters or fewer.`;
+    errors.name = {
+      key: "validation.nameTooLong",
+      values: { max: limits.nameLength },
+    };
   }
 
   if (!hostname) {
-    errors.hostname = "Enter a hostname or IP address.";
+    errors.hostname = { key: "validation.hostRequired" };
   } else if (/\s/.test(hostname)) {
-    errors.hostname = "Hostnames cannot contain spaces.";
+    errors.hostname = { key: "validation.hostSpaces" };
   } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(hostname)) {
-    errors.hostname = "Enter the host only, without a scheme such as ssh://.";
+    errors.hostname = { key: "validation.hostScheme" };
   } else if (hostname.includes("/")) {
-    errors.hostname = "Enter the host only, without a path.";
+    errors.hostname = { key: "validation.hostPath" };
   } else if (hostname.includes("@")) {
-    errors.hostname = "Put the account in the username field, not the host.";
+    errors.hostname = { key: "validation.hostAccount" };
   } else if (!hostPattern.test(hostname)) {
-    errors.hostname = "Use letters, digits, dots, colons or hyphens.";
+    errors.hostname = { key: "validation.hostChars" };
   } else if (hostname.length > limits.hostnameLength) {
-    errors.hostname = `Use ${limits.hostnameLength} characters or fewer.`;
+    errors.hostname = {
+      key: "validation.hostTooLong",
+      values: { max: limits.hostnameLength },
+    };
   }
 
   if (/\s/.test(username)) {
-    errors.username = "Usernames cannot contain spaces.";
+    errors.username = { key: "validation.usernameSpaces" };
   } else if (username.length > limits.usernameLength) {
-    errors.username = `Use ${limits.usernameLength} characters or fewer.`;
+    errors.username = {
+      key: "validation.usernameTooLong",
+      values: { max: limits.usernameLength },
+    };
   }
 
   if (!Number.isInteger(draft.port)) {
-    errors.port = "Enter a whole number.";
+    errors.port = { key: "validation.portInteger" };
   } else if (draft.port < limits.minPort || draft.port > limits.maxPort) {
-    errors.port = `Use a port between ${limits.minPort} and ${limits.maxPort}.`;
+    errors.port = {
+      key: "validation.portRange",
+      values: { min: limits.minPort, max: limits.maxPort },
+    };
   }
 
   if (group.length > limits.groupLength) {
-    errors.group = `Use ${limits.groupLength} characters or fewer.`;
+    errors.group = {
+      key: "validation.groupTooLong",
+      values: { max: limits.groupLength },
+    };
   }
 
   if (tags.length > limits.tagCount) {
-    errors.tags = `Use ${limits.tagCount} tags or fewer.`;
+    errors.tags = {
+      key: "validation.tagsTooMany",
+      values: { max: limits.tagCount },
+    };
   } else if (tags.some((tag) => tag.length > limits.tagLength)) {
-    errors.tags = `Each tag must be ${limits.tagLength} characters or fewer.`;
+    errors.tags = {
+      key: "validation.tagTooLong",
+      values: { max: limits.tagLength },
+    };
   }
 
   return errors;
@@ -234,7 +281,7 @@ export function connectionTarget(profile: ConnectionProfile): string {
 }
 
 /**
- * Two profiles addressing the same service. Reported as a non-blocking notice
+ * Two entries addressing the same service. Reported as a non-blocking notice
  * rather than a validation error: intentional duplicates are legitimate, for
  * example the same host reached through different jump hosts.
  */

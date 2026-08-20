@@ -50,7 +50,7 @@ describe("export & import", () => {
     const json = serializeProfiles([profile1, profile2]);
     const result = parseAndValidateImport(json);
 
-    expect(result.errors).toHaveLength(0);
+    expect(result.issues).toHaveLength(0);
     expect(result.skippedCount).toBe(0);
     expect(result.validProfiles).toHaveLength(2);
     expect(result.validProfiles[0].name).toBe("Gateway");
@@ -71,18 +71,18 @@ describe("export & import", () => {
     ];
     const result = parseAndValidateImport(JSON.stringify(rawArray));
 
-    expect(result.errors).toHaveLength(0);
+    expect(result.issues).toHaveLength(0);
     expect(result.validProfiles).toHaveLength(1);
     expect(result.validProfiles[0].name).toBe("Test SSH");
   });
 
   it("rejects invalid JSON syntax", () => {
     const result = parseAndValidateImport("{ not valid json");
-    expect(result.errors).toEqual(["Invalid JSON format."]);
+    expect(result.issues).toEqual([{ key: "transfer.error.json" }]);
     expect(result.validProfiles).toHaveLength(0);
   });
 
-  it("filters out invalid profiles and reports descriptive errors", () => {
+  it("skips invalid entries and reports why, as keys", () => {
     const invalidData = {
       version: 1,
       application: "LatticeTerm",
@@ -119,6 +119,24 @@ describe("export & import", () => {
     expect(result.validProfiles).toHaveLength(1);
     expect(result.validProfiles[0].name).toBe("Good");
     expect(result.skippedCount).toBe(3);
-    expect(result.errors.length).toBeGreaterThanOrEqual(3);
+    expect(result.issues.map((issue) => issue.key)).toEqual([
+      "transfer.error.invalidEntry",
+      "transfer.error.invalidEntry",
+      "transfer.error.unknownProtocol",
+    ]);
+
+    // The reason travels as a key too, so an import explains itself in any
+    // language rather than in whichever one produced the file.
+    expect(result.issues[0].fieldIssues).toEqual([
+      { key: "validation.nameRequired" },
+    ]);
+    expect(result.issues[1].fieldIssues).toEqual([
+      { key: "validation.hostSpaces" },
+    ]);
+    expect(result.issues[2].values).toEqual({
+      index: 4,
+      name: "Unknown Proto",
+      protocol: "telnet",
+    });
   });
 });

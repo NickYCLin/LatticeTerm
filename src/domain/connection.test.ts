@@ -126,9 +126,12 @@ describe("draft validation", () => {
         port: 70000,
       }),
     ).toEqual({
-      name: "Enter a display name.",
-      hostname: "Hostnames cannot contain spaces.",
-      port: "Use a port between 1 and 65535.",
+      name: { key: "validation.nameRequired" },
+      hostname: { key: "validation.hostSpaces" },
+      port: {
+        key: "validation.portRange",
+        values: { min: 1, max: 65535 },
+      },
     });
   });
 
@@ -149,13 +152,9 @@ describe("draft validation", () => {
       hostname: "gateway.example.com/admin",
     });
 
-    expect(scheme.hostname).toBe(
-      "Enter the host only, without a scheme such as ssh://.",
-    );
-    expect(account.hostname).toBe(
-      "Put the account in the username field, not the host.",
-    );
-    expect(path.hostname).toBe("Enter the host only, without a path.");
+    expect(scheme.hostname).toEqual({ key: "validation.hostScheme" });
+    expect(account.hostname).toEqual({ key: "validation.hostAccount" });
+    expect(path.hostname).toEqual({ key: "validation.hostPath" });
   });
 
   it("accepts IPv6 literals and rejects unusable characters", () => {
@@ -173,7 +172,7 @@ describe("draft validation", () => {
         name: "Edge",
         hostname: "gateway,example.com",
       }).hostname,
-    ).toBe("Use letters, digits, dots, colons or hyphens.");
+    ).toEqual({ key: "validation.hostChars" });
   });
 
   it("limits organisation metadata so rows stay readable", () => {
@@ -185,8 +184,11 @@ describe("draft validation", () => {
       tags: ["a", "b", "c", "d", "e", "f", "g"],
     });
 
-    expect(errors.username).toBe("Usernames cannot contain spaces.");
-    expect(errors.tags).toBe("Use 6 tags or fewer.");
+    expect(errors.username).toEqual({ key: "validation.usernameSpaces" });
+    expect(errors.tags).toEqual({
+      key: "validation.tagsTooMany",
+      values: { max: 6 },
+    });
   });
 
   it("accepts a complete draft", () => {

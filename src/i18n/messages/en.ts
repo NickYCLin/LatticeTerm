@@ -1,0 +1,420 @@
+/**
+ * English messages.
+ *
+ * Must provide every key defined by the Traditional Chinese catalogue, which
+ * is the source of truth; the `Messages` type makes a missing key a build
+ * error rather than a blank label at runtime.
+ */
+
+import type { Messages } from "./zh-TW";
+
+export const en: Messages = {
+  // Common ----------------------------------------------------------------
+  "common.appName": "LatticeTerm",
+  "common.save": "Save",
+  "common.cancel": "Cancel",
+  "common.close": "Close",
+  "common.delete": "Delete",
+  "common.edit": "Edit",
+  "common.duplicate": "Duplicate",
+  "common.reset": "Reset",
+  "common.search": "Search",
+  "common.export": "Export",
+  "common.import": "Import",
+  "common.clear": "Clear",
+  "common.notSet": "Not set",
+  "common.none": "None",
+  "common.optional": "Optional",
+  "common.comingSoon": "Coming soon",
+  "common.copy": "Copy",
+  "common.copied": "Copied",
+  "common.detecting": "Detecting…",
+
+  // Navigation ------------------------------------------------------------
+  "nav.connections": "Connections",
+  "nav.connections.desc": "Find, organise and edit remote hosts",
+  "nav.tunnels": "Tunnels",
+  "nav.tunnels.desc": "Local, remote and dynamic port forwarding",
+  "nav.vault": "Key vault",
+  "nav.vault.desc": "Keys, credentials and host trust",
+  "nav.activity": "Activity",
+  "nav.activity.desc": "Changes made while this window has been open",
+  "nav.settings": "Settings",
+  "nav.settings.desc": "Appearance, language and security preferences",
+
+  // Connection list -------------------------------------------------------
+  "connections.add": "Add connection",
+  "connections.loadSamples": "Load samples",
+  "connections.importJson": "Import file",
+  "connections.exportJson": "Export",
+  "connections.count": "{count} connections",
+  "connections.countFiltered": "Showing {visible} of {total} connections",
+  "connections.sortBy": "Sort by",
+  "connections.sort.name": "Name",
+  "connections.sort.hostname": "Hostname",
+  "connections.sort.environment": "Environment",
+  "connections.empty.title": "No connections yet",
+  "connections.empty.body":
+    "Add the hosts you want to reach and they will be one click away. LatticeTerm only keeps host details — it never asks for a password or a key.",
+  "connections.empty.footnote":
+    "Samples use documentation-only names and addresses, not real hosts.",
+  "connections.noResults.title": "No connections match",
+  "connections.noResults.body":
+    "Every host is still here — the current search and filters simply exclude them all.",
+  "connections.resetFilters": "Clear filters",
+  "connections.all": "All connections",
+  "connections.favorites": "Favorites",
+  "connections.groups": "Groups",
+  "connections.protocols": "Protocols",
+  "connections.environments": "Environments",
+  "connections.tags": "Tags",
+  "connections.ungrouped": "Ungrouped",
+  "connections.searchPlaceholder": "Search hosts, addresses or tags",
+  "connections.clearSearch": "Clear search",
+  "connections.shown": "{visible} of {total} shown",
+
+  // Connection card -------------------------------------------------------
+  "row.connect": "Connect",
+  "row.connectComingSoon": "Connecting is in development",
+  "row.addFavorite": "Add {name} to favorites",
+  "row.removeFavorite": "Remove {name} from favorites",
+  "row.edit": "Edit {name}",
+  "row.duplicate": "Duplicate {name}",
+  "row.delete": "Delete {name}",
+  "row.details": "Show details for {name}",
+
+  // Add and edit form -----------------------------------------------------
+  "form.addTitle": "New connection",
+  "form.editTitle": "Edit connection",
+  "form.addEyebrow": "Add",
+  "form.editEyebrow": "Edit",
+  "form.step.protocol": "How to connect",
+  "form.step.target": "Where the host is",
+  "form.step.organise": "How to organise it",
+  "form.step.auth": "Sign-in details",
+  "form.step.review": "Review",
+  "form.protocolHint":
+    "The usual port is filled in for you, and you can still change it.",
+  "form.name": "Display name",
+  "form.namePlaceholder": "For example: Production gateway",
+  "form.hostname": "Hostname or IP address",
+  "form.hostnamePlaceholder": "gateway.example.com",
+  "form.username": "Username",
+  "form.usernamePlaceholder": "For example: operator",
+  "form.port": "Port",
+  "form.environment": "Environment",
+  "form.group": "Group",
+  "form.groupPlaceholder": "For example: Core platform",
+  "form.tags": "Tags",
+  "form.tagsHint": "Comma separated",
+  "form.tagsPlaceholder": "edge, eu-west",
+  "form.favorite": "Add to favorites",
+  "form.organiseHint":
+    "Environment and group drive the ordering, and make production hosts obvious at a glance.",
+  "form.auth.title": "No password is requested here",
+  "form.auth.body":
+    "Credentials belong in the operating system's secure store, which is not built yet — so this form has no password, key or passphrase field at all.",
+  "form.review.unnamed": "Unnamed connection",
+  "form.review.noHost": "No host entered yet",
+  "form.duplicate.title": "Another connection uses the same target",
+  "form.duplicate.body":
+    "{name} already reaches {target} over {protocol}. Saving is fine if that is deliberate.",
+  "form.unsaved": "Unsaved changes",
+  "form.noChanges": "No changes yet",
+  "form.discard.question": "Discard your changes?",
+  "form.discard.keep": "Keep editing",
+  "form.discard.confirm": "Discard changes",
+  "form.submit.add": "Add connection",
+  "form.submit.save": "Save changes",
+
+  "form.test.button": "Check settings",
+  "form.test.valid.title": "The settings look right",
+  "form.test.valid.body":
+    "The address format, port {port} and protocol {protocol} are all valid. Whether it actually connects can only be tested once connections are built.",
+  "form.test.invalid.title": "Something is still wrong",
+  "form.test.invalid.body": "Fix the fields marked above, then check again.",
+
+  // Validation ------------------------------------------------------------
+  "validation.nameRequired": "Enter a display name.",
+  "validation.nameTooLong": "Use {max} characters or fewer.",
+  "validation.hostRequired": "Enter a hostname or IP address.",
+  "validation.hostSpaces": "Hostnames cannot contain spaces.",
+  "validation.hostScheme": "Enter the host only, without a prefix such as ssh://.",
+  "validation.hostPath": "Enter the host only, without a path.",
+  "validation.hostAccount": "Put the account in the username field.",
+  "validation.hostChars": "Use letters, digits, dots, colons or hyphens.",
+  "validation.hostTooLong": "Use {max} characters or fewer.",
+  "validation.usernameSpaces": "Usernames cannot contain spaces.",
+  "validation.usernameTooLong": "Use {max} characters or fewer.",
+  "validation.portInteger": "Enter a whole number.",
+  "validation.portRange": "Use a port between {min} and {max}.",
+  "validation.groupTooLong": "Use {max} characters or fewer.",
+  "validation.tagsTooMany": "Use {max} tags or fewer.",
+  "validation.tagTooLong": "Each tag must be {max} characters or fewer.",
+
+  // Delete confirmation ---------------------------------------------------
+  "confirm.delete.title": "Delete {name}?",
+  "confirm.delete.body":
+    "This removes the entry for {host} from this workspace. The remote machine is not touched.",
+  "confirm.delete.confirm": "Delete {name}",
+
+  // Inspector -------------------------------------------------------------
+  "inspector.tab.info": "Details",
+  "inspector.tab.metrics": "Host status",
+  "inspector.section.target": "Where the host is",
+  "inspector.host": "Hostname",
+  "inspector.port": "Port",
+  "inspector.username": "Username",
+  "inspector.environment": "Environment",
+  "inspector.group": "Group",
+  "inspector.tags": "Tags",
+  "inspector.services": "Services on this host",
+  "inspector.security.title": "No credentials are attached",
+  "inspector.security.body":
+    "This entry holds host details only. Keys, passwords and host trust arrive with the secure store.",
+  "inspector.close": "Close details",
+
+  // Host metrics ----------------------------------------------------------
+  "metrics.title": "Host resources",
+  "metrics.notConnected.title": "Not connected, so there is nothing to show",
+  "metrics.notConnected.body":
+    "CPU, memory and disk usage have to be reported by the remote host after a successful connection. Live figures appear here once SSH connections are working.",
+  "metrics.cpu": "Processor",
+  "metrics.memory": "Memory",
+  "metrics.swap": "Swap",
+  "metrics.disk": "Disk",
+  "metrics.uptime": "Uptime",
+  "metrics.load": "Load average",
+  "metrics.cores": "{count} cores",
+  "metrics.usedOfTotal": "{used} of {total}",
+  "metrics.percentUsed": "{percent}% used",
+  "metrics.mountpoint": "Mount point",
+  "metrics.refresh": "Refresh",
+  "metrics.lastUpdated": "Updated {time}",
+  "metrics.autoRefresh": "Auto refresh",
+  "metrics.uptimeValue": "{days}d {hours}h",
+  "metrics.uptimeHours": "{hours}h {minutes}m",
+
+  // Activity --------------------------------------------------------------
+  "activity.title": "Activity in this window",
+  "activity.note.title": "Only changes made in this window",
+  "activity.note.body":
+    "This records what you did to your connection entries. It never contains passwords, commands or session output, and it is cleared when you close the app.",
+  "activity.empty.title": "Nothing here yet",
+  "activity.empty.body":
+    "Add, edit or delete a connection and it will appear here with a timestamp.",
+  "activity.count": "{count} entries, newest first",
+  "activity.countFiltered": "Showing {visible} of {total} entries, newest first",
+  "activity.searchPlaceholder": "Search activity",
+  "activity.filter.all": "All",
+  "activity.export": "Export log",
+  "activity.clear": "Clear log",
+  "activity.noMatch": "No entries match the current filter.",
+  "activity.resetFilter": "Clear activity filter",
+  "activity.confirmClear.title": "Clear the activity log?",
+  "activity.confirmClear.body":
+    "This removes all {count} entries from this window. Your connections are not affected.",
+  "activity.confirmClear.confirm": "Clear {count} entries",
+  "activity.kind.created": "Connection added",
+  "activity.kind.updated": "Connection updated",
+  "activity.kind.deleted": "Connection deleted",
+  "activity.kind.workspace": "Workspace",
+  "activity.samplesLoaded": "Sample connections loaded",
+  "activity.samplesDetail": "{count} examples using documentation-only hostnames",
+  "activity.duplicatedFrom": "Duplicated from {name}",
+
+  // Settings --------------------------------------------------------------
+  "settings.appearance": "Appearance",
+  "settings.appearanceHint": "Applies immediately and is remembered.",
+  "settings.theme": "Theme",
+  "settings.themeHint": "Pick whichever is easiest on your eyes.",
+  "settings.language": "Language",
+  "settings.languageHint": "Language used across the interface.",
+  "settings.density": "Density",
+  "settings.densityHint":
+    "Compact fits more hosts on screen when you manage a lot of them.",
+  "settings.density.comfortable": "Comfortable",
+  "settings.density.compact": "Compact",
+  "settings.motion": "Motion",
+  "settings.motionHint": "Turn animation off if it bothers you.",
+  "settings.motion.system": "Follow system",
+  "settings.motion.reduced": "Reduce motion",
+  "settings.security": "Security",
+  "settings.securityHint":
+    "These are still in development, so the plan is described rather than offered as a half-built switch.",
+  "settings.security.title": "Nothing secret is stored today",
+  "settings.security.body":
+    "This build keeps connection details in memory, asks for no credentials, and writes nothing to disk apart from the appearance preferences above.",
+  "settings.security.autoLock": "Auto-lock the vault",
+  "settings.security.autoLockDetail":
+    "Lock after a period of inactivity, and when the app loses focus.",
+  "settings.security.hostKey": "Host key verification policy",
+  "settings.security.hostKeyDetail":
+    "Strict known-host checking, with an explicit trust decision on first connect.",
+  "settings.security.clipboard": "Clipboard clearing",
+  "settings.security.clipboardDetail":
+    "Clear copied secrets after a countdown, with an option to clear immediately.",
+  "settings.security.backup": "Encrypted backup and recovery",
+  "settings.security.backupDetail":
+    "Export and restore local data without producing a plain-text file.",
+  "settings.about": "About",
+  "settings.aboutHint": "Reported by the running build.",
+  "settings.about.application": "Application",
+  "settings.about.version": "Version",
+  "settings.about.runtime": "Runtime",
+  "settings.about.runtime.tauri": "Desktop window",
+  "settings.about.runtime.browser": "Browser preview (no desktop backend)",
+  "settings.about.credentialStore": "Credential store",
+  "settings.about.credentialStore.ready": "Available",
+  "settings.about.credentialStore.pending": "Not built yet",
+  "settings.about.license": "Licence",
+
+  // Themes ----------------------------------------------------------------
+  "theme.system": "Follow system",
+  "theme.dark": "Dark",
+  "theme.light": "Light",
+  "theme.midnight": "Midnight",
+  "theme.graphite": "Graphite",
+  "theme.sand": "Sand",
+  "theme.contrast": "High contrast",
+  "theme.system.hint": "Switches with your operating system",
+  "theme.dark.hint": "The default mint-on-dark palette",
+  "theme.light.hint": "For bright rooms",
+  "theme.midnight.hint": "A cooler, bluer dark palette",
+  "theme.graphite.hint": "A neutral grey dark palette",
+  "theme.sand.hint": "Warm and low in blue light",
+  "theme.contrast.hint": "Stronger contrast for low vision or bright sunlight",
+
+  // Command palette -------------------------------------------------------
+  "palette.placeholder": "Search connections and commands",
+  "palette.empty": "Nothing matches “{query}”.",
+  "palette.navigate": "navigate",
+  "palette.run": "run",
+  "palette.dismiss": "dismiss",
+  "palette.group.connections": "Connections",
+  "palette.group.navigate": "Go to",
+  "palette.group.actions": "Actions",
+  "palette.group.appearance": "Appearance",
+  "palette.goTo": "Go to {name}",
+  "palette.command.add": "Add connection",
+  "palette.command.addHint": "Open the new connection form",
+  "palette.command.search": "Search connections",
+  "palette.command.searchHint": "Focus the search field",
+  "palette.command.theme": "Switch theme: {name}",
+  "palette.command.language": "Switch language: {name}",
+  "palette.command.density": "Use {name} density",
+  "palette.command.sidebar.show": "Show sidebar",
+  "palette.command.sidebar.hide": "Hide sidebar",
+  "palette.command.samples": "Load sample connections",
+  "palette.command.samplesHint": "Six examples using documentation-only hostnames",
+
+  // Status bar ------------------------------------------------------------
+  "status.connections": "{count} connections",
+  "status.connectionsFiltered": "{visible} of {total} connections",
+  "status.inMemory": "In memory only, cleared when you close the app",
+  "status.vault": "Vault: {state}",
+  "status.vault.locked": "Not built yet",
+  "status.vault.ready": "Unlocked",
+  "status.palette": "Command palette",
+
+  // Planned areas ---------------------------------------------------------
+  "planned.badge": "In development",
+  "planned.notReady": "Not available yet",
+  "planned.whatItDoes": "What this area will do",
+  "planned.whatItDoesHint":
+    "Written down so the plan is clear — not a claim that it works today.",
+  "planned.boundary": "Security first",
+  "planned.tunnels.summary":
+    "Port forwarding for the hosts you already keep here: local, remote and dynamic tunnels, each showing where it goes and which connection uses it.",
+  "planned.tunnels.boundary":
+    "A tunnel rides on an established SSH connection, so this opens once connections and the secure store are done. Until then nothing is forwarded.",
+  "planned.tunnels.cap1.title": "All three kinds at a glance",
+  "planned.tunnels.cap1.detail":
+    "Local, remote and dynamic forwarding each show their source, destination and bind scope.",
+  "planned.tunnels.cap2.title": "Live state per tunnel",
+  "planned.tunnels.cap2.detail":
+    "Who is using it, how long it has been up, and whether it is starting, listening or stopped.",
+  "planned.tunnels.cap3.title": "Errors you can act on",
+  "planned.tunnels.cap3.detail":
+    "It says whether the port is taken, the connection dropped, or permission was denied.",
+  "planned.vault.summary":
+    "One place for what must stay secret: SSH keys, saved passwords, jump host credentials, and the host fingerprints you have trusted.",
+  "planned.vault.boundary":
+    "Secrets go to the operating system credential store and host trust uses strict checking. Neither exists yet, which is why nothing asks you for a credential today.",
+  "planned.vault.cap1.title": "Lock state you can see",
+  "planned.vault.cap1.detail":
+    "Locked, unlocking, unlocked, about to auto-lock and recovery required are all distinct.",
+  "planned.vault.cap2.title": "Know what uses each item",
+  "planned.vault.cap2.detail":
+    "Every credential lists the connections that reference it, so nothing is deleted blindly.",
+  "planned.vault.cap3.title": "Host trust you can verify",
+  "planned.vault.cap3.detail":
+    "Full, copyable fingerprints, with first connection and changed keys handled separately.",
+  "planned.vault.cap4.title": "Encrypted import and export",
+  "planned.vault.cap4.detail":
+    "Move a vault between machines without writing a plain-text file.",
+
+  // Host trust dialogs ----------------------------------------------------
+  "security.verify.title": "Check the host fingerprint",
+  "security.verify.body":
+    "The identity of {target} cannot be confirmed automatically. Compare the fingerprint below with the one on the host before you continue.",
+  "security.algorithm": "Key algorithm",
+  "security.fingerprint": "Fingerprint",
+  "security.trustOnce": "Trust once",
+  "security.trustAndSave": "Trust and remember",
+  "security.verifyHint": "Run ssh-keygen -lf on the host to see its fingerprint.",
+  "security.changed.title": "This host's identity has changed",
+  "security.changed.body":
+    "The key this host offered is different from the one you trusted before. It may have been rebuilt or re-keyed — or the connection may be intercepted. Do not continue until you know which.",
+  "security.changed.expected": "What you trusted before",
+  "security.changed.received": "What arrived this time",
+  "security.changed.abort": "Stop connecting",
+  "security.changed.override": "I have verified it — update the trusted key",
+  "security.changed.overrideConfirm": "Replace the trusted key?",
+  "security.changed.checklist":
+    "Ask whoever runs the host whether the key really changed.",
+
+  // Import and export -----------------------------------------------------
+  "transfer.import.success": "Import complete",
+  "transfer.import.successBody": "{count} connections were imported.",
+  "transfer.import.partial": "Imported, with some entries skipped",
+  "transfer.import.partialBody": "{errors} ({skipped} invalid entries skipped)",
+  "transfer.import.failed": "Import failed",
+  "transfer.import.failedBody": "No usable connections were found in the file.",
+  "transfer.export.hint":
+    "The exported file contains host details only, never secrets.",
+  "transfer.error.json": "The file is not valid JSON.",
+  "transfer.error.notObject": "Imported data must be a JSON object.",
+  "transfer.error.noProfiles": "No array of connections was found in the data.",
+  "transfer.error.foreignApp": "This file came from another application ({app}).",
+  "transfer.error.notObjectItem": "Entry {index}: not an object.",
+  "transfer.error.unknownProtocol":
+    "Entry {index} ({name}): unsupported protocol “{protocol}”.",
+  "transfer.error.invalidEntry": "Entry {index} ({name}): {reasons}",
+  "transfer.unnamed": "unnamed",
+
+  // Protocols and environments --------------------------------------------
+  "protocol.ssh": "SSH terminal",
+  "protocol.ssh.summary": "Text-based remote access",
+  "protocol.sftp": "SFTP transfer",
+  "protocol.sftp.summary": "Browse and move files",
+  "protocol.rdp": "RDP remote desktop",
+  "protocol.rdp.summary": "Windows graphical desktop",
+  "protocol.vnc": "VNC screen sharing",
+  "protocol.vnc.summary": "Cross-platform screen control",
+  "environment.production": "Production",
+  "environment.staging": "Staging",
+  "environment.development": "Development",
+  "environment.unassigned": "Unassigned",
+  "environment.production.hint": "Systems serving real users",
+  "environment.staging.hint": "Systems used to verify releases",
+  "environment.development.hint": "Systems used to build and experiment",
+  "environment.unassigned.hint": "No environment set",
+
+  // Accessibility ---------------------------------------------------------
+  "a11y.primaryNav": "Primary",
+  "a11y.toggleSidebar.show": "Show sidebar",
+  "a11y.toggleSidebar.hide": "Hide sidebar",
+  "a11y.switchTheme": "Switch theme",
+  "a11y.searchConnections": "Search connections",
+};

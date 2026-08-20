@@ -1,28 +1,37 @@
 /**
- * Activity entries for the current preview session.
+ * Activity entries for the current session.
  *
- * Only workspace bookkeeping is recorded: which profile changed and how.
+ * Only workspace bookkeeping is recorded: which entry changed and how.
  * Commands, output, credentials and fingerprints are never eligible, and the
- * log is in-memory, so closing the app clears it.
+ * log is in memory, so closing the app clears it.
+ *
+ * Entries hold data and message keys, never rendered sentences, so the same
+ * log reads correctly after the user switches language.
  */
 
+import type { MessageKey } from "../i18n/messages/zh-TW";
+
 export type ActivityKind = "created" | "updated" | "deleted" | "workspace";
+
+export interface TranslatableNote {
+  key: MessageKey;
+  values?: Record<string, string | number>;
+}
 
 export interface ActivityEntry {
   id: string;
   kind: ActivityKind;
-  message: string;
-  detail?: string;
   /** Milliseconds since the epoch; formatted at render time. */
   at: number;
+  /** User data, such as a connection name. Shown as typed. */
+  subject?: string;
+  /** Used when the headline is our own wording rather than user data. */
+  titleKey?: MessageKey;
+  /** Literal data detail, such as `user@host:port`. */
+  detail?: string;
+  /** Detail that is our wording and therefore needs translating. */
+  note?: TranslatableNote;
 }
-
-export const activityLabels: Record<ActivityKind, string> = {
-  created: "Profile added",
-  updated: "Profile updated",
-  deleted: "Profile removed",
-  workspace: "Workspace",
-};
 
 export const activityKindList: ActivityKind[] = [
   "created",
@@ -31,14 +40,16 @@ export const activityKindList: ActivityKind[] = [
   "workspace",
 ];
 
+export function activityKindLabelKey(kind: ActivityKind): MessageKey {
+  return `activity.kind.${kind}` as MessageKey;
+}
+
 export function createActivityEntry(
-  kind: ActivityKind,
-  message: string,
-  detail?: string,
+  entry: Omit<ActivityEntry, "id" | "at">,
   at: number = Date.now(),
   id: string = crypto.randomUUID(),
 ): ActivityEntry {
-  return { id, kind, message, detail, at };
+  return { ...entry, id, at };
 }
 
 /** Newest first, capped so a long session cannot grow without bound. */
@@ -50,73 +61,46 @@ export function appendActivity(
   return [entry, ...entries].slice(0, limit);
 }
 
-/** Filters activity entries by search term and kind. */
+/**
+ * Filters by kind and by free text. The caller supplies the rendered text for
+ * an entry, so search matches what is actually on screen in the current
+ * language rather than an internal key.
+ */
 export function filterActivity(
   entries: ActivityEntry[],
   searchQuery: string,
-  kindFilter: ActivityKind | "all" = "all",
+  kindFilter: ActivityKind | "all",
+  renderText: (entry: ActivityEntry) => string,
 ): ActivityEntry[] {
   const query = searchQuery.trim().toLowerCase();
 
   return entries.filter((entry) => {
-    if (kindFilter !== "all" && entry.kind !== kindFilter) {
-      return false;
-    }
-
+    if (kindFilter !== "all" && entry.kind !== kindFilter) return false;
     if (!query) return true;
-
-    const label = activityLabels[entry.kind].toLowerCase();
-    const message = entry.message.toLowerCase();
-    const detail = (entry.detail ?? "").toLowerCase();
-
-    return (
-      label.includes(query) ||
-      message.includes(query) ||
-      detail.includes(query)
-    );
+    return renderText(entry).toLowerCase().includes(query);
   });
 }
 
 /**
- * Formats activity entries into a clean, human-readable plain text log.
- * Guaranteed to be free of credentials and secrets.
+ * Plain-text log for export. The caller renders each entry, keeping this
+ * function free of both display text and language decisions.
  */
-export function exportActivityLogText(entries: ActivityEntry[]): string {
-  const lines: string[] = [
-    `# LatticeTerm Activity Log`,
-    `# Exported At: ${new Date().toISOString()}`,
-    `# Total Entries: ${entries.length}`,
-    `# Note: In-memory session log only. No secrets or credentials are recorded.`,
-    `--------------------------------------------------------------------------------`,
+export function exportActivityLogText(
+  entries: ActivityEntry[],
+  renderLine: (entry: ActivityEntry) => string,
+  exportedAt: string = new Date().toISOString(),
+): string {
+  const lines = [
+    "# LatticeTerm activity log",
+    `# Exported at: ${exportedAt}`,
+    `# Entries: ${entries.length}`,
+    "# In-memory session log. No credentials or command output are recorded.",
+    "-".repeat(72),
   ];
 
   for (const entry of entries) {
-    const time = new Date(entry.at).toISOString();
-    const kind = activityLabels[entry.kind].padEnd(16, " ");
-    const detail = entry.detail ? ` (${entry.detail})` : "";
-    lines.push(`[${time}] [${kind}] ${entry.message}${detail}`);
+    lines.push(`[${new Date(entry.at).toISOString()}] ${renderLine(entry)}`);
   }
 
   return lines.join("\n");
-}
-
-/**
- * Serializes activity entries to structured JSON format.
- */
-export function exportActivityLogJson(entries: ActivityEntry[]): string {
-  const data = {
-    application: "LatticeTerm",
-    exportedAt: new Date().toISOString(),
-    totalEntries: entries.length,
-    entries: entries.map((e) => ({
-      id: e.id,
-      kind: e.kind,
-      kindLabel: activityLabels[e.kind],
-      message: e.message,
-      detail: e.detail ?? null,
-      timestamp: new Date(e.at).toISOString(),
-    })),
-  };
-
-  return JSON.stringify(data, null, 2);
 }
