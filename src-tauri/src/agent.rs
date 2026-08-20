@@ -25,6 +25,7 @@ const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 const MAX_BROADCAST_TARGETS: usize = 32;
+pub const MAX_SAVED_AGENT_PLANS: usize = 32;
 const MAX_REPORT_BYTES: u64 = 4096;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REPORT_RETRIES: usize = 5;
@@ -159,6 +160,39 @@ pub struct AgentLaunchRequest {
     pub working_directory: String,
     pub cols: u32,
     pub rows: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLaunchPlanDraft {
+    pub definition_id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub executable: String,
+    #[serde(default)]
+    pub arguments: Vec<String>,
+    pub working_directory: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLaunchPlan {
+    pub id: String,
+    pub definition_id: String,
+    pub label: String,
+    pub executable: String,
+    pub arguments: Vec<String>,
+    pub working_directory: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRestoreOutcome {
+    pub plan_id: String,
+    pub label: String,
+    pub session: Option<AgentSessionSummary>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -677,17 +711,126 @@ fn validate_text(value: &str, field: &str, max_bytes: usize) -> Result<String, S
     Ok(trimmed.to_string())
 }
 
-fn resolve_launch(
-    request: &AgentLaunchRequest,
-) -> Result<(String, String, PathBuf, Vec<String>, PathBuf), String> {
-    if request.arguments.len() > MAX_ARGUMENTS {
+fn validate_arguments(arguments: &[String]) -> Result<Vec<String>, String> {
+    if arguments.len() > MAX_ARGUMENTS {
         return Err(format!("At most {MAX_ARGUMENTS} arguments are allowed."));
     }
-    for argument in &request.arguments {
+    for argument in arguments {
         if argument.len() > MAX_ARGUMENT_BYTES || argument.chars().any(char::is_control) {
             return Err("An argument is too long or contains control characters.".to_string());
         }
     }
+    Ok(arguments.to_vec())
+}
+
+fn looks_like_sensitive_argument(argument: &str) -> bool {
+    let lower = argument.trim().to_ascii_lowercase();
+    let option = lower.split('=').next().unwrap_or_default();
+    if matches!(
+        option,
+        "--password" | "--passphrase" | "--token" | "--api-key" | "--apikey" | "--secret"
+    ) {
+        return true;
+    }
+
+    let Some((name, _)) = lower.split_once('=') else {
+        return false;
+    };
+    let name = name.trim_matches('-');
+    matches!(
+        name,
+        "password" | "passphrase" | "token" | "api_key" | "apikey" | "secret"
+    ) || name.ends_with("_password")
+        || name.ends_with("_passphrase")
+        || name.ends_with("_token")
+        || name.ends_with("_api_key")
+        || name.ends_with("_secret")
+}
+
+pub fn normalize_launch_plan(
+    id: String,
+    draft: AgentLaunchPlanDraft,
+) -> Result<AgentLaunchPlan, String> {
+    let id = validate_text(&id, "Launch plan ID", 128)?;
+    let definition_id = validate_text(&draft.definition_id, "Agent type", 64)?;
+    let (default_label, executable) = if definition_id == "custom" {
+        (
+            validate_text(&draft.label, "Agent label", 80)?,
+            validate_text(&draft.executable, "Executable", 512)?,
+        )
+    } else {
+        let spec = AGENTS
+            .iter()
+            .find(|agent| agent.id == definition_id)
+            .ok_or_else(|| "Unknown agent type.".to_string())?;
+        (spec.label.to_string(), spec.executable.to_string())
+    };
+    let label = if draft.label.trim().is_empty() {
+        default_label
+    } else {
+        validate_text(&draft.label, "Agent label", 80)?
+    };
+    let arguments = validate_arguments(&draft.arguments)?;
+    if arguments
+        .iter()
+        .any(|argument| looks_like_sensitive_argument(argument))
+    {
+        return Err(
+            "Saved launch plans cannot contain password, token, API key, passphrase, or secret arguments."
+                .to_string(),
+        );
+    }
+    let working_directory = PathBuf::from(validate_text(
+        &draft.working_directory,
+        "Working directory",
+        4096,
+    )?)
+    .canonicalize()
+    .map_err(|error| format!("Cannot open the working directory: {error}"))?;
+    if !working_directory.is_dir() {
+        return Err("Working directory is not a directory.".to_string());
+    }
+
+    Ok(AgentLaunchPlan {
+        id,
+        definition_id,
+        label,
+        executable,
+        arguments,
+        working_directory: working_directory.display().to_string(),
+    })
+}
+
+pub fn launch_request_from_plan(
+    plan: &AgentLaunchPlan,
+    cols: u32,
+    rows: u32,
+) -> Result<AgentLaunchRequest, String> {
+    let validated = normalize_launch_plan(
+        plan.id.clone(),
+        AgentLaunchPlanDraft {
+            definition_id: plan.definition_id.clone(),
+            label: plan.label.clone(),
+            executable: plan.executable.clone(),
+            arguments: plan.arguments.clone(),
+            working_directory: plan.working_directory.clone(),
+        },
+    )?;
+    Ok(AgentLaunchRequest {
+        definition_id: validated.definition_id,
+        label: validated.label,
+        executable: validated.executable,
+        arguments: validated.arguments,
+        working_directory: validated.working_directory,
+        cols,
+        rows,
+    })
+}
+
+fn resolve_launch(
+    request: &AgentLaunchRequest,
+) -> Result<(String, String, PathBuf, Vec<String>, PathBuf), String> {
+    let arguments = validate_arguments(&request.arguments)?;
 
     let definition_id = validate_text(&request.definition_id, "Agent type", 64)?;
     let (default_label, command) = if definition_id == "custom" {
@@ -725,7 +868,7 @@ fn resolve_launch(
         definition_id,
         label,
         executable,
-        request.arguments.clone(),
+        arguments,
         working_directory,
     ))
 }
@@ -1058,6 +1201,45 @@ mod tests {
     fn input_decoder_rejects_oversized_events() {
         let encoded = encode(&vec![0_u8; MAX_INPUT_BYTES + 1]);
         assert!(decode(&encoded).unwrap_err().contains("at most"));
+    }
+
+    #[test]
+    fn launch_plans_normalize_paths_and_reject_secret_arguments() {
+        let directory = std::env::current_dir().unwrap();
+        let plan = normalize_launch_plan(
+            "agent-plan-safe".to_string(),
+            AgentLaunchPlanDraft {
+                definition_id: "codex".to_string(),
+                label: "Review agent".to_string(),
+                executable: String::new(),
+                arguments: vec!["--full-auto".to_string()],
+                working_directory: directory.display().to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(plan.executable, "codex");
+        assert_eq!(
+            PathBuf::from(&plan.working_directory),
+            directory.canonicalize().unwrap()
+        );
+        let mut tampered = plan.clone();
+        tampered.arguments = vec!["--token=manually-injected".to_string()];
+        assert!(launch_request_from_plan(&tampered, 80, 24).is_err());
+
+        for argument in ["--api-key", "--token=secret", "SERVICE_PASSWORD=value"] {
+            let error = normalize_launch_plan(
+                "agent-plan-secret".to_string(),
+                AgentLaunchPlanDraft {
+                    definition_id: "custom".to_string(),
+                    label: "Unsafe agent".to_string(),
+                    executable: "/bin/echo".to_string(),
+                    arguments: vec![argument.to_string()],
+                    working_directory: directory.display().to_string(),
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains("cannot contain"));
+        }
     }
 
     #[test]
