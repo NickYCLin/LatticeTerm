@@ -32,11 +32,7 @@
           "path": "src-tauri/Cargo.toml",
           "jsonpath": "$.package.version"
         },
-        {
-          "type": "toml",
-          "path": "src-tauri/Cargo.lock",
-          "jsonpath": "$.package[?(@.name=='lattice-term')].version"
-        }
+        "src-tauri/Cargo.lock"
       ]
     }
   }
