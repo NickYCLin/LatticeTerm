@@ -48,3 +48,4 @@ src-tauri/icons/ios/
 
 # Built and bundled by scripts/build-rdp-engine.mjs.
 src-tauri/binaries/lattice-rdp-engine-*
+src-tauri/binaries/lattice-agent-*

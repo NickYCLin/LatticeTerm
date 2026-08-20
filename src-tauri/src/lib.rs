@@ -2,6 +2,7 @@ pub mod domain;
 pub mod hostkeys;
 pub mod rdp;
 pub mod remote;
+pub mod remote_host;
 pub mod ssh;
 pub mod storage;
 
@@ -13,6 +14,7 @@ use crate::rdp::{
 use crate::remote::{
     RemoteConnectOutcome, RemoteConnectRequest, RemoteRegistry, RemoteSessionSummary,
 };
+use crate::remote_host::{RemoteHostRegistry, RemoteHostStartRequest, RemoteHostStatus};
 use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
 use serde::Serialize;
@@ -193,6 +195,30 @@ fn remote_sessions(registry: State<'_, Arc<RemoteRegistry>>) -> Vec<RemoteSessio
 }
 
 #[tauri::command]
+async fn remote_host_start(
+    app: AppHandle,
+    request: RemoteHostStartRequest,
+    registry: State<'_, Arc<RemoteHostRegistry>>,
+) -> Result<RemoteHostStatus, String> {
+    crate::remote_host::start(app, Arc::clone(registry.inner()), request).await
+}
+
+#[tauri::command]
+async fn remote_host_stop(
+    app: AppHandle,
+    registry: State<'_, Arc<RemoteHostRegistry>>,
+) -> Result<(), String> {
+    crate::remote_host::stop(&app, registry.inner()).await
+}
+
+#[tauri::command]
+fn remote_host_status(
+    registry: State<'_, Arc<RemoteHostRegistry>>,
+) -> Result<Option<RemoteHostStatus>, String> {
+    registry.status()
+}
+
+#[tauri::command]
 async fn rdp_connect(
     app: AppHandle,
     request: RdpConnectRequest,
@@ -289,6 +315,7 @@ pub fn run() {
             app.manage(trust);
             app.manage(Arc::new(SshRegistry::new()));
             app.manage(Arc::new(RemoteRegistry::new()));
+            app.manage(Arc::new(RemoteHostRegistry::new()));
             app.manage(Arc::new(RdpRegistry::new()));
             Ok(())
         })
@@ -306,6 +333,9 @@ pub fn run() {
             remote_connect,
             remote_disconnect,
             remote_sessions,
+            remote_host_start,
+            remote_host_stop,
+            remote_host_status,
             rdp_connect,
             rdp_input,
             rdp_disconnect,

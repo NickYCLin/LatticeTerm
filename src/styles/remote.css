@@ -220,6 +220,90 @@
   justify-self: start;
 }
 
+.remote-host-dialog {
+  max-width: 42rem;
+}
+
+.remote-host-active {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.remote-host-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.remote-host-state > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.remote-host-state small,
+.remote-host-value > span,
+.remote-host-expiry {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.remote-host-state__dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 0.3rem var(--warn-soft);
+}
+
+.remote-host-state__dot.state-streaming {
+  background: var(--ok);
+  box-shadow: 0 0 0 0.3rem var(--ok-soft);
+}
+
+.remote-host-share-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.remote-host-value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.remote-host-value > span {
+  grid-column: 1 / -1;
+}
+
+.remote-host-value code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.remote-host-value--code code {
+  color: var(--accent);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.remote-host-expiry {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
 @keyframes capture-recording {
   50% {
     opacity: 0.35;
@@ -244,6 +328,10 @@
 }
 
 @media (max-width: 48rem) {
+  .remote-host-share-grid {
+    grid-template-columns: 1fr;
+  }
+
   .remote-toolbar__status,
   .remote-toolbar__resolution {
     display: none;

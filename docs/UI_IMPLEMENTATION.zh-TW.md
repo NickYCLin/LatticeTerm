@@ -145,6 +145,8 @@
 
 - `crates/lattice-remote` 定義版本化二進位訊息、分塊畫面與 Noise `XXpsk3_25519_ChaChaPoly_BLAKE2s` 傳輸。
 - `lattice-agent` 預設只監聽 `127.0.0.1:44900`；分享區域為完整主螢幕，使用者必須在被控端看到並提供一次性八位數配對碼；配對碼五分鐘後失效，連續五次失敗即停止。
+- `RemoteHostDialog` 提供「分享這台裝置」的明確開始／停止操作，可指定 loopback 或特定 LAN IP、連接埠與 1–10 FPS；萬用與 multicast 位址會由原生層拒絕。
+- Tauri 以 NDJSON 事件管理每次分享的 sidecar 生命週期。配對成功後立即從 UI 狀態移除配對碼；關閉對話框可選擇讓分享留在背景，但停止分享或應用程式結束時會終止 Agent。
 - v1 僅傳送 JPEG 畫面，不接受任何輸入事件；UI 必須標示唯讀。
 
 ## 11. Web RDP Canvas

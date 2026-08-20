@@ -57,7 +57,7 @@ flowchart LR
 - 網頁預覽不顯示範例信任資料；信任檔讀不到時維持安全失敗，不退化成空清單。
 - 尚待整合 Tauri Stronghold 與系統金鑰庫（Keyring）。
 - 尚待實作認證資料的自動鎖定、解鎖與閒置保護機制。
-- 目前 SSH、Lattice Remote 配對碼與 RDP 密碼都只供單次連線使用；其中 RDP 密碼以 stdin 傳入每工作階段獨立的 engine，並未宣稱已完成持久化保管庫。
+- 目前 SSH、Lattice Remote 配對碼與 RDP 密碼都只供單次連線使用；內嵌 Lattice Remote 主機模式只把配對碼保留於程序與 WebView 記憶體並在配對後清除，RDP 密碼則以 stdin 傳入每工作階段獨立的 engine，兩者都未宣稱已完成持久化保管庫。
 - RDP 自簽憑證信任也是當次重試限定，不寫入 profile 或 `known_hosts.json`。
 
 ### Phase 3：加密備份與跨平台遷移
