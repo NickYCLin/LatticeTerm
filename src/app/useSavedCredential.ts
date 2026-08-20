@@ -194,7 +194,7 @@ export function useCredentialDeleteGuard(
   });
 
   useEffect(() => {
-    if (!profile) {
+    if (!profile || !("__TAURI_INTERNALS__" in window)) {
       setState({ mode: "clear", provider: null, detail: null });
       return;
     }
