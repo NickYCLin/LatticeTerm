@@ -31,7 +31,7 @@ export interface UpdateInfo {
   lastChecked: Date | null;
 }
 
-export function useAppUpdater(currentVersion = "0.1.0") {
+export function useAppUpdater(currentVersion = "0.2.0") {
   const [info, setInfo] = useState<UpdateInfo>({
     status: "idle",
     currentVersion,

@@ -372,7 +372,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           visibleCount={visibleProfiles.length}
           filterActive={filterActive}
           vaultReady={runtime.summary?.credentialStorageReady ?? false}
-          version={runtime.summary?.version ?? "0.1.0"}
+          version={runtime.summary?.version ?? "0.2.0"}
           storage={storage}
         />
       </main>

@@ -1,6 +1,6 @@
 [package]
 name = "lattice-term"
-version = "0.1.0"
+version = "0.2.0"
 description = "A secure, cross-platform workspace for SSH, SFTP, RDP, and remote desktop access."
 authors = ["NickYCLin"]
 edition = "2021"

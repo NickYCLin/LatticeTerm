@@ -322,7 +322,7 @@ export function SettingsView({
         <dl className="field-list">
           <div className="field-row">
             <dt className="field-row__label">{t("settings.updater.current")}</dt>
-            <dd className="field-row__value mono">{summary?.version ?? "0.1.0"}</dd>
+            <dd className="field-row__value mono">{summary?.version ?? "0.2.0"}</dd>
           </div>
           <div className="field-row">
             <dt className="field-row__label">{t("settings.updater.status")}</dt>

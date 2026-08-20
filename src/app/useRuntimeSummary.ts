@@ -24,7 +24,7 @@ export interface RuntimeState {
 
 const fallback: RuntimeSummary = {
   appName: "LatticeTerm",
-  version: "0.1.0",
+  version: "0.2.0",
   supportedProtocols: ["ssh", "sftp", "rdp", "vnc"],
   credentialStorageReady: false,
 };
