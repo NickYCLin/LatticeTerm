@@ -691,7 +691,11 @@ pub fn run() {
             app.manage(Arc::new(RemoteRegistry::new()));
             app.manage(Arc::new(RemoteHostRegistry::new()));
             app.manage(Arc::new(RdpRegistry::new()));
-            app.manage(Arc::new(AgentRegistry::new()));
+            let agent_registry = AgentRegistry::with_local_reporter(Arc::new(
+                crate::agent::EventSink(app.handle().clone()),
+            ))
+            .map_err(std::io::Error::other)?;
+            app.manage(agent_registry);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -19,9 +19,22 @@ import { useI18n } from "../i18n";
 import type { MessageKey } from "../i18n/messages/zh-TW";
 
 function stateKey(session: AgentSessionSummary): MessageKey {
-  return session.state === "needsAttention"
-    ? "agents.state.needsAttention"
-    : "agents.state.working";
+  switch (session.state) {
+    case "needsAttention":
+      return "agents.state.needsAttention";
+    case "idle":
+      return "agents.state.idle";
+    case "done":
+      return "agents.state.done";
+    default:
+      return "agents.state.working";
+  }
+}
+
+function stateTone(session: AgentSessionSummary): string {
+  if (session.state === "needsAttention") return "tone-warn";
+  if (session.state === "idle") return "tone-neutral";
+  return "tone-ok";
 }
 
 export function AgentsView({
@@ -283,15 +296,18 @@ export function AgentsView({
                   <strong>{session.label}</strong>
                   <span className="mono">{session.workingDirectory}</span>
                 </div>
-                <span
-                  className={`badge ${
-                    session.state === "needsAttention"
-                      ? "tone-warn"
-                      : "tone-ok"
-                  }`}
-                >
-                  {t(stateKey(session))}
-                </span>
+                <div className="agent-session-row__status">
+                  <span className={`badge ${stateTone(session)}`}>
+                    {t(stateKey(session))}
+                  </span>
+                  <span className="agent-state-source">
+                    {t(
+                      session.stateSource === "integration"
+                        ? "agents.state.source.integration"
+                        : "agents.state.source.heuristic",
+                    )}
+                  </span>
+                </div>
                 <button
                   type="button"
                   className="button button--ghost button--sm"

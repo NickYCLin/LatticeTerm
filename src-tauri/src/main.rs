@@ -2,5 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if let Some(code) = latticeterm_lib::agent::run_reporter_cli(std::env::args_os().skip(1)) {
+        std::process::exit(code);
+    }
     latticeterm_lib::run()
 }
