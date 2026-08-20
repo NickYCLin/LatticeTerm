@@ -1,8 +1,8 @@
 /**
  * Security & host trust domain models and helpers.
  *
- * Implements strict host key trust checking and fingerprint verification
- * rules as specified in the storage and UI/UX design briefs.
+ * Implements strict host key trust checking, fingerprint verification,
+ * and Key Vault reference models as specified in the storage and UI/UX briefs.
  */
 
 export type KeyAlgorithm =
@@ -15,12 +15,29 @@ export type KeyAlgorithm =
   | "ssh-rsa";
 
 export interface HostFingerprint {
+  id: string;
   host: string;
   port: number;
   algorithm: KeyAlgorithm | string;
   fingerprint: string;
-  firstSeenAt?: number;
-  lastSeenAt?: number;
+  firstSeenAt: number;
+  lastSeenAt: number;
+}
+
+export interface CredentialReference {
+  id: string;
+  name: string;
+  type: "ssh-key" | "agent" | "password" | "certificate";
+  comment?: string;
+  createdAt: number;
+}
+
+export interface VaultState {
+  isLocked: boolean;
+  autoLockMinutes: number;
+  systemKeyringAvailable: boolean;
+  knownHosts: HostFingerprint[];
+  credentials: CredentialReference[];
 }
 
 export type HostTrustDecision = "trust_once" | "trust_and_save" | "reject";
@@ -64,4 +81,46 @@ export function hostTargetKey(host: string, port: number = 22): string {
     return cleanHost;
   }
   return `[${cleanHost}]:${port}`;
+}
+
+export function sampleKnownHosts(): HostFingerprint[] {
+  return [
+    {
+      id: "host-trust-1",
+      host: "gateway.example.com",
+      port: 22,
+      algorithm: "ssh-ed25519",
+      fingerprint: "SHA256:uNiVztksCsDhccWphiWmKdqiUVeyDNAd5NNIzAVqpHg",
+      firstSeenAt: Date.now() - 86400000 * 5,
+      lastSeenAt: Date.now() - 3600000 * 2,
+    },
+    {
+      id: "host-trust-2",
+      host: "staging-cluster.example.org",
+      port: 2222,
+      algorithm: "ecdsa-sha2-nistp256",
+      fingerprint: "SHA256:4e1K9mPzYq2vL7wR8sT3uX6yB0cE5fH1jN4aG7kM9pQ",
+      firstSeenAt: Date.now() - 86400000 * 12,
+      lastSeenAt: Date.now() - 86400000 * 1,
+    },
+  ];
+}
+
+export function sampleCredentials(): CredentialReference[] {
+  return [
+    {
+      id: "cred-1",
+      name: "Personal ED25519 Key",
+      type: "ssh-key",
+      comment: "id_ed25519_2026",
+      createdAt: Date.now() - 86400000 * 30,
+    },
+    {
+      id: "cred-2",
+      name: "Production Bastion Agent",
+      type: "agent",
+      comment: "SSH_AUTH_SOCK",
+      createdAt: Date.now() - 86400000 * 14,
+    },
+  ];
 }

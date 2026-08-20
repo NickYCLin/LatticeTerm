@@ -52,7 +52,7 @@ export const navigationItems: NavigationItem[] = [
     labelKey: "nav.vault",
     descriptionKey: "nav.vault.desc",
     icon: VaultIcon,
-    status: "planned",
+    status: "available",
   },
   {
     id: "activity",

@@ -32,12 +32,13 @@ import { ConfirmDialog } from "./components/overlays/ConfirmDialog";
 import { ConnectionDrawer } from "./components/overlays/ConnectionDrawer";
 import { ConnectionsView } from "./views/ConnectionsView";
 import { ActivityView } from "./views/ActivityView";
+import { VaultView } from "./views/VaultView";
 import { PlannedView, type PlannedArea } from "./views/PlannedView";
 import { SettingsView } from "./views/SettingsView";
-import { PlusIcon, TunnelIcon, VaultIcon } from "./components/icons";
+import { PlusIcon, TunnelIcon } from "./components/icons";
 import "./styles/index.css";
 
-const plannedAreas: Record<"tunnels" | "vault", PlannedArea> = {
+const plannedAreas: Record<"tunnels", PlannedArea> = {
   tunnels: {
     summaryKey: "planned.tunnels.summary",
     boundaryKey: "planned.tunnels.boundary",
@@ -54,29 +55,6 @@ const plannedAreas: Record<"tunnels" | "vault", PlannedArea> = {
       {
         titleKey: "planned.tunnels.cap3.title",
         detailKey: "planned.tunnels.cap3.detail",
-      },
-    ],
-  },
-  vault: {
-    summaryKey: "planned.vault.summary",
-    boundaryKey: "planned.vault.boundary",
-    icon: <VaultIcon size={24} />,
-    capabilities: [
-      {
-        titleKey: "planned.vault.cap1.title",
-        detailKey: "planned.vault.cap1.detail",
-      },
-      {
-        titleKey: "planned.vault.cap2.title",
-        detailKey: "planned.vault.cap2.detail",
-      },
-      {
-        titleKey: "planned.vault.cap3.title",
-        detailKey: "planned.vault.cap3.detail",
-      },
-      {
-        titleKey: "planned.vault.cap4.title",
-        detailKey: "planned.vault.cap4.detail",
       },
     ],
   },
@@ -352,7 +330,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
               />
             )}
             {view === "tunnels" && <PlannedView area={plannedAreas.tunnels} />}
-            {view === "vault" && <PlannedView area={plannedAreas.vault} />}
+            {view === "vault" && <VaultView workspace={workspace} />}
             {view === "activity" && <ActivityView workspace={workspace} />}
             {view === "settings" && (
               <SettingsView
