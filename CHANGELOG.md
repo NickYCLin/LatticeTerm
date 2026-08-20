@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.3.0...v0.4.0) (2026-08-20)
+
+
+### 新功能
+
+* **agent:** 加入安全批次提示傳輸 ([fcaaf4c](https://github.com/NickYCLin/LatticeTerm/commit/fcaaf4cfbe317be74a9a5f5bb47102fe466175e6))
+* **agent:** 加入批次提示操作介面 ([7d9c714](https://github.com/NickYCLin/LatticeTerm/commit/7d9c7143e74328063a8901b7b6cd5b880e6ff6c1))
+
 ## [0.3.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.2.0...v0.3.0) (2026-08-20)
 
 
