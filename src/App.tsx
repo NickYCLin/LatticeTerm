@@ -16,9 +16,10 @@ import { usePreferences, type PreferencesValue } from "./app/preferences";
 import { findTheme, oppositeTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
 import { useStorageStatus } from "./app/useStorageStatus";
+import { useSshSessions } from "./app/useSshSessions";
 import { useWindowTheme } from "./app/useWindowTheme";
 import { useWorkspace } from "./app/useWorkspace";
-import type { ConnectionDraft } from "./domain/connection";
+import type { ConnectionDraft, ConnectionProfile } from "./domain/connection";
 import { I18nProvider, localeCatalog, useI18n } from "./i18n";
 import { NavRail } from "./components/shell/NavRail";
 import { ResourceSidebar } from "./components/shell/ResourceSidebar";
@@ -32,6 +33,8 @@ import {
 import { ConfirmDialog } from "./components/overlays/ConfirmDialog";
 import { ConnectionDrawer } from "./components/overlays/ConnectionDrawer";
 import { ConnectionsView } from "./views/ConnectionsView";
+import { TerminalView } from "./views/TerminalView";
+import { ConnectFlow } from "./components/terminal/ConnectFlow";
 import { ActivityView } from "./views/ActivityView";
 import { VaultView } from "./views/VaultView";
 import { PlannedView, type PlannedArea } from "./views/PlannedView";
@@ -66,6 +69,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const workspace = useWorkspace();
   const runtime = useRuntimeSummary();
   const storage = useStorageStatus();
+  const ssh = useSshSessions();
 
   useWindowTheme(findTheme(activeTheme).isDark);
 
@@ -76,6 +80,10 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     profileId: string | null;
   }>({ open: false, profileId: null });
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [connectTarget, setConnectTarget] = useState<ConnectionProfile | null>(
+    null,
+  );
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -329,6 +337,15 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 onCreate={openCreate}
                 onEdit={openEdit}
                 onDelete={setPendingDelete}
+                onConnect={setConnectTarget}
+              />
+            )}
+            {view === "terminal" && (
+              <TerminalView
+                ssh={ssh}
+                activeSessionId={activeSessionId}
+                onSelect={setActiveSessionId}
+                theme={activeTheme}
               />
             )}
             {view === "tunnels" && <PlannedView area={plannedAreas.tunnels} />}
@@ -386,6 +403,19 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
             setPendingDelete(null);
           }}
           onCancel={() => setPendingDelete(null)}
+        />
+      )}
+
+      {connectTarget && (
+        <ConnectFlow
+          profile={connectTarget}
+          ssh={ssh}
+          onConnected={(sessionId) => {
+            setConnectTarget(null);
+            setActiveSessionId(sessionId);
+            setView("terminal");
+          }}
+          onCancel={() => setConnectTarget(null)}
         />
       )}
 

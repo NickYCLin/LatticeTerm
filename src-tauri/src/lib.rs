@@ -1,13 +1,35 @@
 pub mod domain;
+pub mod hostkeys;
+pub mod ssh;
 pub mod storage;
 
 use crate::domain::ConnectionProfile;
+use crate::hostkeys::{HostKeyRecord, HostTrustStore};
+use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
 use serde::Serialize;
-use std::sync::Mutex;
-use tauri::{Manager, State};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Manager, State};
 
 type AppStorage = Mutex<FileStorage>;
+
+/// The trust store, or the reason it could not be opened.
+///
+/// An unreadable trust file must never degrade into an empty one: that would
+/// turn every already-trusted host back into a fresh prompt and hide a changed
+/// key among them. Connecting is refused instead, with the reason attached.
+pub enum TrustState {
+    Ready(Mutex<HostTrustStore>),
+    Unavailable(String),
+}
+
+fn now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,9 +98,116 @@ fn delete_connection_profile(id: String, storage: State<'_, AppStorage>) -> Resu
     guard.delete_profile(&id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn ssh_connect(
+    app: AppHandle,
+    request: ConnectRequest,
+    trust: State<'_, TrustState>,
+    registry: State<'_, Arc<SshRegistry>>,
+) -> Result<ConnectOutcome, String> {
+    // The trust lookup happens up front, so the store's lock is never held
+    // across the connection attempt.
+    let known: Option<HostKeyRecord> = match trust.inner() {
+        TrustState::Unavailable(reason) => {
+            return Ok(ConnectOutcome::Failed {
+                stage: "trust",
+                detail: reason.clone(),
+            })
+        }
+        TrustState::Ready(store) => {
+            let guard = store.lock().map_err(|e| e.to_string())?;
+            crate::ssh::known_record(&guard, &request.hostname, request.port)
+        }
+    };
+
+    Ok(crate::ssh::connect(
+        Arc::new(EventSink(app)),
+        Arc::clone(registry.inner()),
+        known,
+        request,
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn ssh_send(
+    session_id: String,
+    data: String,
+    registry: State<'_, Arc<SshRegistry>>,
+) -> Result<(), String> {
+    crate::ssh::send(registry.inner(), &session_id, &data).await
+}
+
+#[tauri::command]
+async fn ssh_resize(
+    session_id: String,
+    cols: u32,
+    rows: u32,
+    registry: State<'_, Arc<SshRegistry>>,
+) -> Result<(), String> {
+    crate::ssh::resize(registry.inner(), &session_id, cols, rows).await
+}
+
+#[tauri::command]
+async fn ssh_disconnect(
+    session_id: String,
+    registry: State<'_, Arc<SshRegistry>>,
+) -> Result<(), String> {
+    crate::ssh::disconnect(registry.inner(), &session_id).await
+}
+
+#[tauri::command]
+fn ssh_sessions(registry: State<'_, Arc<SshRegistry>>) -> Vec<SessionSummary> {
+    registry.list()
+}
+
+/// Records a key the user has just compared and accepted.
+#[tauri::command]
+fn ssh_trust_host(
+    host: String,
+    port: u16,
+    algorithm: String,
+    fingerprint: String,
+    trust: State<'_, TrustState>,
+) -> Result<HostKeyRecord, String> {
+    match trust.inner() {
+        TrustState::Unavailable(reason) => Err(reason.clone()),
+        TrustState::Ready(store) => {
+            let mut guard = store.lock().map_err(|e| e.to_string())?;
+            guard
+                .trust(&host, port, &algorithm, &fingerprint, now_seconds())
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn ssh_known_hosts(trust: State<'_, TrustState>) -> Result<Vec<HostKeyRecord>, String> {
+    match trust.inner() {
+        TrustState::Unavailable(reason) => Err(reason.clone()),
+        TrustState::Ready(store) => {
+            let guard = store.lock().map_err(|e| e.to_string())?;
+            Ok(guard.records())
+        }
+    }
+}
+
+#[tauri::command]
+fn ssh_forget_host(host: String, port: u16, trust: State<'_, TrustState>) -> Result<bool, String> {
+    match trust.inner() {
+        TrustState::Unavailable(reason) => Err(reason.clone()),
+        TrustState::Ready(store) => {
+            let mut guard = store.lock().map_err(|e| e.to_string())?;
+            guard.forget(&host, port).map_err(|e| e.to_string())
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Connection data belongs beside the app's other data, not next to
             // the executable, so it survives an update and follows the user
@@ -86,6 +215,16 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             let storage = FileStorage::open(&dir)?;
             app.manage(Mutex::new(storage));
+
+            // A trust store that cannot be read is carried as a reason rather
+            // than a panic: the app still runs, and connecting explains why it
+            // will not proceed.
+            let trust = match HostTrustStore::open(&dir) {
+                Ok(store) => TrustState::Ready(Mutex::new(store)),
+                Err(error) => TrustState::Unavailable(error.to_string()),
+            };
+            app.manage(trust);
+            app.manage(Arc::new(SshRegistry::new()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -93,7 +232,15 @@ pub fn run() {
             storage_status,
             list_connection_profiles,
             save_connection_profile,
-            delete_connection_profile
+            delete_connection_profile,
+            ssh_connect,
+            ssh_send,
+            ssh_resize,
+            ssh_disconnect,
+            ssh_sessions,
+            ssh_trust_host,
+            ssh_known_hosts,
+            ssh_forget_host
         ])
         .run(tauri::generate_context!())
         .expect("error while running LatticeTerm");

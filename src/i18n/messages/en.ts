@@ -268,6 +268,20 @@ export const en: Messages = {
   "settings.about.credentialStore.ready": "Available",
   "settings.about.credentialStore.pending": "Not built yet",
   "settings.about.license": "Licence",
+  "settings.updater": "Software Updates",
+  "settings.updaterHint": "Check for updates from GitHub Releases and update directly in-app without reinstalling.",
+  "settings.updater.current": "Current version",
+  "settings.updater.status": "Update status",
+  "settings.updater.check": "Check for updates",
+  "settings.updater.checking": "Checking for updates...",
+  "settings.updater.upToDate": "You are up to date",
+  "settings.updater.available": "New version {version} available",
+  "settings.updater.download": "Download & Install Update",
+  "settings.updater.downloading": "Downloading update ({percent}%)...",
+  "settings.updater.downloaded": "Update downloaded, click to restart and apply",
+  "settings.updater.relaunch": "Restart & Apply Update",
+  "settings.updater.error": "Update check failed: {error}",
+  "settings.updater.releaseNotes": "Release notes",
 
   // Themes ----------------------------------------------------------------
   "theme.system": "Follow system",
@@ -365,6 +379,39 @@ export const en: Messages = {
   "planned.vault.cap4.title": "Encrypted import and export",
   "planned.vault.cap4.detail":
     "Move a vault between machines without writing a plain-text file.",
+
+  // Connect flow ----------------------------------------------------------
+  "connect.title": "Connect to {name}",
+  "connect.target": "{user}@{host}:{port}",
+  "connect.password": "Password",
+  "connect.passwordHint":
+    "Used for this connection only. It is not saved and never written to a file.",
+  "connect.submit": "Connect",
+  "connect.connecting": "Connecting…",
+  "connect.authFailed": "That username or password was not accepted. Try again.",
+  "connect.noUsername":
+    "This connection has no username yet. Edit it first, then connect.",
+  "connect.failed.title": "Could not reach this host",
+  "connect.failed.body": "Failed while {stage}: {detail}",
+  "connect.stage.connect": "opening the connection",
+  "connect.stage.authenticate": "signing in",
+  "connect.stage.channel": "opening a channel",
+  "connect.stage.pty": "requesting a terminal",
+  "connect.stage.shell": "starting the shell",
+  "connect.stage.trust": "reading trusted host keys",
+  "connect.stage.invoke": "calling the backend",
+  "connect.trusted": "Key remembered. Reconnecting…",
+
+  // Terminal --------------------------------------------------------------
+  "terminal.title": "Terminal",
+  "terminal.desc": "Sessions that are currently open",
+  "terminal.disconnect": "Disconnect",
+  "terminal.backToList": "Back to connections",
+  "terminal.closed": "Session ended ({reason})",
+  "terminal.reconnect": "Reconnect",
+  "terminal.empty.title": "No session is open",
+  "terminal.empty.body":
+    "Pick a host in the connection list and press Connect to open a terminal here.",
 
   // Host trust dialogs ----------------------------------------------------
   "security.verify.title": "Check the host fingerprint",

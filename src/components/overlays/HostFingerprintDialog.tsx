@@ -19,7 +19,11 @@ export function HostFingerprintDialog({
   onCancel,
 }: {
   fingerprint: HostFingerprint;
-  onTrustOnce: () => void;
+  /**
+   * Offered only where a session-scoped trust actually exists. Omitting it
+   * hides the button rather than quietly making it persist the key.
+   */
+  onTrustOnce?: () => void;
   onTrustAndSave: () => void;
   onCancel: () => void;
 }) {
@@ -102,13 +106,15 @@ export function HostFingerprintDialog({
           >
             {t("common.cancel")}
           </button>
-          <button
-            type="button"
-            className="button button--secondary"
-            onClick={onTrustOnce}
-          >
-            {t("security.trustOnce")}
-          </button>
+          {onTrustOnce && (
+            <button
+              type="button"
+              className="button button--secondary"
+              onClick={onTrustOnce}
+            >
+              {t("security.trustOnce")}
+            </button>
+          )}
           <button
             type="button"
             className="button button--primary"

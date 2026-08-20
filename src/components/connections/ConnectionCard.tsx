@@ -14,7 +14,13 @@ import {
 } from "../../domain/connection";
 import { useI18n } from "../../i18n";
 import { EnvironmentBadge, ProtocolTile, TagChip } from "../common/Badge";
-import { DuplicateIcon, EditIcon, StarIcon, TrashIcon } from "../icons";
+import {
+  DuplicateIcon,
+  EditIcon,
+  StarIcon,
+  TerminalIcon,
+  TrashIcon,
+} from "../icons";
 
 export function ConnectionCard({
   profile,
@@ -24,6 +30,7 @@ export function ConnectionCard({
   onDuplicate,
   onDelete,
   onToggleFavorite,
+  onConnect,
 }: {
   profile: ConnectionProfile;
   selected: boolean;
@@ -32,6 +39,8 @@ export function ConnectionCard({
   onDuplicate: () => void;
   onDelete: () => void;
   onToggleFavorite: () => void;
+  /** Provided only for protocols that can actually open a session today. */
+  onConnect?: () => void;
 }) {
   const { t } = useI18n();
   const protocol = findProtocol(profile.protocol);
@@ -87,12 +96,23 @@ export function ConnectionCard({
       </div>
 
       <div className="connection-card__foot">
-        <span
-          className="connection-card__connect"
-          title={t("row.connectComingSoon")}
-        >
-          {t("row.connect")} · {t("common.comingSoon")}
-        </span>
+        {onConnect ? (
+          <button
+            type="button"
+            className="button button--primary button--sm connection-card__go"
+            onClick={onConnect}
+          >
+            <TerminalIcon size={13} />
+            {t("row.connect")}
+          </button>
+        ) : (
+          <span
+            className="connection-card__connect"
+            title={t("row.connectComingSoon")}
+          >
+            {t("row.connect")} · {t("common.comingSoon")}
+          </span>
+        )}
 
         <div className="connection-card__actions">
           <button

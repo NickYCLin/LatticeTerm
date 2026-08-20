@@ -19,6 +19,7 @@ import type { MessageKey } from "../i18n";
 import { Chip } from "../components/common/Badge";
 import { Callout } from "../components/common/Callout";
 import { CheckIcon } from "../components/icons";
+import { useAppUpdater } from "../app/useAppUpdater";
 
 interface Choice<T> {
   value: T;
@@ -106,6 +107,7 @@ export function SettingsView({
 }) {
   const { t } = useI18n();
   const { summary, host } = runtime;
+  const updater = useAppUpdater(summary?.version);
 
   return (
     <div className="stack">
@@ -307,6 +309,117 @@ export function SettingsView({
             <dd className="field-row__value">Mozilla Public License 2.0</dd>
           </div>
         </dl>
+      </section>
+
+      <section className="panel glass glass--sheen">
+        <header className="panel__head">
+          <div>
+            <h2 className="panel__title">{t("settings.updater")}</h2>
+            <p className="panel__hint">{t("settings.updaterHint")}</p>
+          </div>
+        </header>
+
+        <dl className="field-list">
+          <div className="field-row">
+            <dt className="field-row__label">{t("settings.updater.current")}</dt>
+            <dd className="field-row__value mono">{summary?.version ?? "0.1.0"}</dd>
+          </div>
+          <div className="field-row">
+            <dt className="field-row__label">{t("settings.updater.status")}</dt>
+            <dd className="field-row__value">
+              {updater.status === "checking" && (
+                <Chip tone="info">{t("settings.updater.checking")}</Chip>
+              )}
+              {updater.status === "up-to-date" && (
+                <Chip tone="ok">{t("settings.updater.upToDate")}</Chip>
+              )}
+              {updater.status === "available" && (
+                <Chip tone="warn">
+                  {t("settings.updater.available", {
+                    version: updater.availableVersion ?? "",
+                  })}
+                </Chip>
+              )}
+              {updater.status === "downloading" && (
+                <Chip tone="info">
+                  {t("settings.updater.downloading", {
+                    percent: updater.progressPercent,
+                  })}
+                </Chip>
+              )}
+              {updater.status === "downloaded" && (
+                <Chip tone="ok">{t("settings.updater.downloaded")}</Chip>
+              )}
+              {updater.status === "error" && (
+                <Chip tone="danger">
+                  {t("settings.updater.error", { error: updater.error ?? "" })}
+                </Chip>
+              )}
+              {updater.status === "idle" && (
+                <span className="text-muted">—</span>
+              )}
+            </dd>
+          </div>
+        </dl>
+
+        {updater.status === "available" && (
+          <div className="stack" style={{ gap: "var(--space-3)", marginTop: "var(--space-4)" }}>
+            <Callout
+              tone="info"
+              title={t("settings.updater.available", {
+                version: updater.availableVersion ?? "",
+              })}
+            >
+              {updater.releaseNotes ? (
+                <div>
+                  <strong>{t("settings.updater.releaseNotes")}：</strong>
+                  <p style={{ marginTop: "var(--space-2)", whiteSpace: "pre-wrap" }}>
+                    {updater.releaseNotes}
+                  </p>
+                </div>
+              ) : null}
+            </Callout>
+
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={() => void updater.downloadAndInstall()}
+            >
+              {t("settings.updater.download")}
+            </button>
+          </div>
+        )}
+
+        {updater.status === "downloaded" && (
+          <div className="stack" style={{ gap: "var(--space-3)", marginTop: "var(--space-4)" }}>
+            <Callout tone="info" title={t("settings.updater.downloaded")}>
+              <p>{t("settings.updater.relaunch")}</p>
+            </Callout>
+
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={() => void updater.relaunchApp()}
+            >
+              {t("settings.updater.relaunch")}
+            </button>
+          </div>
+        )}
+
+        {updater.status !== "available" && updater.status !== "downloaded" && (
+          <div style={{ marginTop: "var(--space-4)" }}>
+            <button
+              type="button"
+              className="button button--ghost"
+              disabled={updater.status === "checking" || updater.status === "downloading"}
+              onClick={() => void updater.checkForUpdates()}
+            >
+              {updater.status === "checking"
+                ? t("settings.updater.checking")
+                : t("settings.updater.check")}
+            </button>
+          </div>
+        )}
       </section>
     </div>
   );

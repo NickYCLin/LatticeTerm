@@ -730,3 +730,87 @@
     display: none;
   }
 }
+
+/* Terminal ---------------------------------------------------------------- */
+
+.terminal-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.session-tabs {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) 0;
+  overflow-x: auto;
+}
+
+.session-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-bottom: none;
+  background: var(--surface-hover);
+  max-width: 16rem;
+}
+
+.session-tab.is-active {
+  background: var(--surface-solid);
+  border-color: var(--accent-line);
+}
+
+.session-tab__label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: 2.125rem;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.session-tab.is-active .session-tab__label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.terminal-stack {
+  flex: 1;
+  min-height: 0;
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.terminal-slot,
+.terminal-slot > .terminal-pane {
+  height: 100%;
+}
+
+.terminal-slot[hidden] {
+  display: none;
+}
+
+/*
+ * The terminal owns its own background: xterm paints the canvas, so a
+ * translucent surface underneath would show through the glyphs.
+ */
+.terminal-pane {
+  height: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: 0 var(--radius-md) var(--radius-md) var(--radius-md);
+  background: var(--surface-solid);
+  overflow: hidden;
+}
+
+.terminal-pane .xterm {
+  height: 100%;
+}
+
+.connection-card__go {
+  pointer-events: auto;
+}

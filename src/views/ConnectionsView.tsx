@@ -9,7 +9,7 @@
 import { useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import type { Workspace } from "../app/useWorkspace";
-import { UNGROUPED } from "../domain/connection";
+import { UNGROUPED, type ConnectionProfile } from "../domain/connection";
 import type { SortOrder } from "../domain/query";
 import { parseAndValidateImport, serializeProfiles } from "../domain/export";
 import type { ImportIssue } from "../domain/export";
@@ -58,11 +58,13 @@ export function ConnectionsView({
   onCreate,
   onEdit,
   onDelete,
+  onConnect,
 }: {
   workspace: Workspace;
   onCreate: () => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
+  onConnect: (profile: ConnectionProfile) => void;
 }) {
   const { t } = useI18n();
   const {
@@ -307,6 +309,11 @@ export function ConnectionsView({
                     onDuplicate={() => duplicateProfile(profile.id)}
                     onDelete={() => onDelete(profile.id)}
                     onToggleFavorite={() => toggleFavorite(profile.id)}
+                    onConnect={
+                      profile.protocol === "ssh"
+                        ? () => onConnect(profile)
+                        : undefined
+                    }
                   />
                 ))}
               </ul>

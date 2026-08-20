@@ -10,6 +10,7 @@ import {
   ActivityIcon,
   ConnectionsIcon,
   SettingsIcon,
+  TerminalIcon,
   TunnelIcon,
   VaultIcon,
   type IconProps,
@@ -19,6 +20,7 @@ import type { ReactElement } from "react";
 
 export type ViewId =
   | "connections"
+  | "terminal"
   | "tunnels"
   | "vault"
   | "activity"
@@ -38,6 +40,13 @@ export const navigationItems: NavigationItem[] = [
     labelKey: "nav.connections",
     descriptionKey: "nav.connections.desc",
     icon: ConnectionsIcon,
+    status: "available",
+  },
+  {
+    id: "terminal",
+    labelKey: "terminal.title",
+    descriptionKey: "terminal.desc",
+    icon: TerminalIcon,
     status: "available",
   },
   {
