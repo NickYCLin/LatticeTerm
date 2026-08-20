@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod credentials;
 pub mod domain;
 pub mod hostkeys;
@@ -8,6 +9,7 @@ pub mod sftp;
 pub mod ssh;
 pub mod storage;
 
+use crate::agent::{AgentDefinition, AgentLaunchRequest, AgentRegistry, AgentSessionSummary};
 use crate::credentials::{CredentialKind, CredentialStoreStatus};
 use crate::domain::{ConnectionProfile, Protocol};
 use crate::hostkeys::{HostKeyRecord, HostTrustStore};
@@ -75,6 +77,68 @@ fn runtime_summary() -> RuntimeSummary {
         supported_protocols: ["ssh", "sftp", "rdp", "lattice"],
         credential_storage_ready: crate::credentials::status().ready,
     }
+}
+
+#[tauri::command]
+fn agent_catalog() -> Vec<AgentDefinition> {
+    crate::agent::catalog()
+}
+
+#[tauri::command]
+fn agent_default_working_directory() -> Result<String, String> {
+    crate::agent::default_working_directory()
+}
+
+#[tauri::command]
+fn agent_launch(
+    app: AppHandle,
+    request: AgentLaunchRequest,
+    registry: State<'_, Arc<AgentRegistry>>,
+) -> Result<AgentSessionSummary, String> {
+    crate::agent::launch(
+        Arc::new(crate::agent::EventSink(app)),
+        Arc::clone(registry.inner()),
+        request,
+    )
+}
+
+#[tauri::command]
+fn agent_send(
+    app: AppHandle,
+    session_id: String,
+    data: String,
+    registry: State<'_, Arc<AgentRegistry>>,
+) -> Result<(), String> {
+    crate::agent::send(
+        &crate::agent::EventSink(app),
+        registry.inner(),
+        &session_id,
+        &data,
+    )
+}
+
+#[tauri::command]
+fn agent_resize(
+    session_id: String,
+    cols: u32,
+    rows: u32,
+    registry: State<'_, Arc<AgentRegistry>>,
+) -> Result<(), String> {
+    crate::agent::resize(registry.inner(), &session_id, cols, rows)
+}
+
+#[tauri::command]
+fn agent_disconnect(
+    app: AppHandle,
+    session_id: String,
+    registry: State<'_, Arc<AgentRegistry>>,
+) -> Result<(), String> {
+    crate::agent::disconnect(&crate::agent::EventSink(app), registry.inner(), &session_id)
+}
+
+#[tauri::command]
+fn agent_sessions(registry: State<'_, Arc<AgentRegistry>>) -> Vec<AgentSessionSummary> {
+    registry.list()
 }
 
 /// Where connection data lives, and whether anything had to be rescued on the
@@ -627,10 +691,18 @@ pub fn run() {
             app.manage(Arc::new(RemoteRegistry::new()));
             app.manage(Arc::new(RemoteHostRegistry::new()));
             app.manage(Arc::new(RdpRegistry::new()));
+            app.manage(Arc::new(AgentRegistry::new()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             runtime_summary,
+            agent_catalog,
+            agent_default_working_directory,
+            agent_launch,
+            agent_send,
+            agent_resize,
+            agent_disconnect,
+            agent_sessions,
             credential_status,
             credential_exists,
             credential_delete,

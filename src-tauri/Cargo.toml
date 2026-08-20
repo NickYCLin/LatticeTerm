@@ -35,3 +35,4 @@ tauri-plugin-process = "2"
 lattice-remote = { path = "../crates/lattice-remote" }
 keyring = "4.1.6"
 zeroize = "1.9.0"
+portable-pty = "0.9.0"
