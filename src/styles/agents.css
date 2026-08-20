@@ -1,0 +1,326 @@
+/* Local AI CLI fleet dashboard and running-agent roster. */
+
+.agents-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-6);
+}
+
+.agents-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-8);
+  padding: var(--space-7);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 92% 15%, var(--accent-soft), transparent 36%),
+    var(--surface-raised);
+}
+
+.agents-hero h2,
+.agents-section-heading h3 {
+  margin: var(--space-2) 0 0;
+  color: var(--text);
+}
+
+.agents-hero h2 {
+  font-size: var(--text-2xl);
+}
+
+.agents-hero p,
+.agents-section-heading p {
+  max-width: 52rem;
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+}
+
+.agents-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(5.5rem, 1fr));
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-solid);
+  overflow: hidden;
+}
+
+.agents-stats > div {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 5.5rem;
+  padding: var(--space-4) var(--space-5);
+  text-align: right;
+}
+
+.agents-stats > div + div {
+  border-left: 1px solid var(--line);
+}
+
+.agents-stats dt {
+  color: var(--text-faint);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+
+.agents-stats dd {
+  margin: 0;
+  color: var(--text);
+  font: 650 var(--text-xl) / 1 var(--font-mono);
+}
+
+.agents-stats .is-attention dd {
+  color: var(--warn);
+}
+
+.agents-directory,
+.agents-custom,
+.agents-running {
+  display: grid;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-hover);
+}
+
+.agents-section-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.agents-cwd {
+  max-width: 54rem;
+}
+
+.agents-field-hint {
+  color: var(--text-faint);
+  font-size: var(--text-2xs);
+  line-height: var(--leading);
+}
+
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  gap: var(--card-gap);
+}
+
+.agent-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+  padding: var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    transform var(--duration-fast) var(--ease);
+}
+
+.agent-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+
+.agent-card.is-missing {
+  opacity: 0.64;
+}
+
+.agent-card__icon {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.agent-card__body {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.agent-card__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.agent-card__title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-card code,
+.agent-card__path {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-card__path {
+  color: var(--text-faint);
+}
+
+.agent-card > .button {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
+
+.agents-custom__fields {
+  display: grid;
+  grid-template-columns: minmax(11rem, 0.7fr) minmax(15rem, 1fr) minmax(18rem, 1.3fr) auto;
+  align-items: end;
+  gap: var(--space-4);
+}
+
+.agents-custom__arguments textarea {
+  height: 5.5rem;
+  min-height: 5.5rem;
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.agents-custom__fields > .button {
+  margin-bottom: 1.55rem;
+}
+
+.agents-running__empty {
+  margin: 0;
+  padding: var(--space-5);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-faint);
+  text-align: center;
+  font-size: var(--text-sm);
+}
+
+.agent-session-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.agent-session-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.agent-state-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 0.2rem var(--ok-soft);
+}
+
+.agent-state-dot.state-needsAttention {
+  background: var(--warn);
+  box-shadow: 0 0 0 0.2rem var(--warn-soft);
+}
+
+.agent-session-row__main {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.agent-session-row__main span {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-terminal {
+  padding: var(--space-3);
+}
+
+@media (max-width: 76rem) {
+  .agents-hero {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .agents-stats {
+    justify-self: stretch;
+  }
+
+  .agents-stats > div {
+    text-align: left;
+  }
+
+  .agents-custom__fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agents-custom__arguments {
+    grid-column: 1 / -1;
+  }
+
+  .agents-custom__fields > .button {
+    justify-self: start;
+    margin-bottom: 0;
+  }
+}
+
+@media (max-width: 50rem) {
+  .agents-view {
+    padding: var(--space-4);
+  }
+
+  .agents-hero,
+  .agents-directory,
+  .agents-custom,
+  .agents-running {
+    padding: var(--space-5);
+  }
+
+  .agents-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .agents-stats > div + div {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .agents-custom__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-session-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .agent-session-row > .badge {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+}

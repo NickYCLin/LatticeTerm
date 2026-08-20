@@ -2,29 +2,34 @@
 
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
+import type { AgentApi } from "../app/useAgentSessions";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
 import { useI18n } from "../i18n";
 import { EmptyState } from "../components/common/Callout";
 import {
+  AgentIcon,
   CloseIcon,
   ScreenShareIcon,
   TerminalIcon,
   TransferIcon,
 } from "../components/icons";
+import { AgentTerminalPane } from "../components/agents/AgentTerminalPane";
 import { RemotePane } from "../components/remote/RemotePane";
 import { RdpPane } from "../components/rdp/RdpPane";
 import { SftpPane } from "../components/sftp/SftpPane";
 import { TerminalPane } from "../components/terminal/TerminalPane";
 
 type SessionRef =
+  | { kind: "agent"; sessionId: string; label: string }
   | { kind: "ssh"; sessionId: string; label: string }
   | { kind: "sftp"; sessionId: string; label: string }
   | { kind: "remote"; sessionId: string; label: string }
   | { kind: "rdp"; sessionId: string; label: string };
 
 export function SessionsView({
+  agents,
   ssh,
   sftp,
   remote,
@@ -33,6 +38,7 @@ export function SessionsView({
   onSelect,
   theme,
 }: {
+  agents: AgentApi;
   ssh: SshApi;
   sftp: SftpApi;
   remote: RemoteApi;
@@ -43,6 +49,11 @@ export function SessionsView({
 }) {
   const { t } = useI18n();
   const sessions: SessionRef[] = [
+    ...agents.sessions.map((session) => ({
+      kind: "agent" as const,
+      sessionId: session.sessionId,
+      label: session.label,
+    })),
     ...ssh.sessions.map((session) => ({
       kind: "ssh" as const,
       sessionId: session.sessionId,
@@ -79,7 +90,8 @@ export function SessionsView({
     sessions.find((session) => session.sessionId === activeSessionId) ?? sessions[0];
 
   async function close(session: SessionRef) {
-    if (session.kind === "ssh") await ssh.disconnect(session.sessionId);
+    if (session.kind === "agent") await agents.disconnect(session.sessionId);
+    else if (session.kind === "ssh") await ssh.disconnect(session.sessionId);
     else if (session.kind === "sftp") await sftp.disconnect(session.sessionId);
     else if (session.kind === "remote") await remote.disconnect(session.sessionId);
     else await rdp.disconnect(session.sessionId);
@@ -92,7 +104,9 @@ export function SessionsView({
         {sessions.map((session) => {
           const selected = session.sessionId === active.sessionId;
           const Glyph =
-            session.kind === "ssh"
+            session.kind === "agent"
+              ? AgentIcon
+              : session.kind === "ssh"
               ? TerminalIcon
               : session.kind === "sftp"
                 ? TransferIcon
@@ -127,6 +141,20 @@ export function SessionsView({
       </div>
 
       <div className="terminal-stack">
+        {agents.sessions.map((session) => (
+          <div
+            className="terminal-slot"
+            key={session.sessionId}
+            hidden={session.sessionId !== active.sessionId}
+          >
+            <AgentTerminalPane
+              sessionId={session.sessionId}
+              agents={agents}
+              theme={theme}
+              onClosed={() => onSelect(null)}
+            />
+          </div>
+        ))}
         {ssh.sessions.map((session) => (
           <div
             className="terminal-slot"

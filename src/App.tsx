@@ -16,6 +16,7 @@ import { usePreferences, type PreferencesValue } from "./app/preferences";
 import { findTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
 import { useStorageStatus } from "./app/useStorageStatus";
+import { useAgentSessions } from "./app/useAgentSessions";
 import { useSshSessions } from "./app/useSshSessions";
 import { useSftpSessions } from "./app/useSftpSessions";
 import { useRemoteSessions } from "./app/useRemoteSessions";
@@ -38,6 +39,7 @@ import {
 import { ConfirmDialog } from "./components/overlays/ConfirmDialog";
 import { ConnectionDrawer } from "./components/overlays/ConnectionDrawer";
 import { ConnectionsView } from "./views/ConnectionsView";
+import { AgentsView } from "./views/AgentsView";
 import { SessionsView } from "./views/SessionsView";
 import { ConnectFlow } from "./components/terminal/ConnectFlow";
 import { RemoteConnectFlow } from "./components/remote/RemoteConnectFlow";
@@ -78,6 +80,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const workspace = useWorkspace();
   const runtime = useRuntimeSummary();
   const storage = useStorageStatus();
+  const agents = useAgentSessions();
   const ssh = useSshSessions();
   const sftp = useSftpSessions();
   const remote = useRemoteSessions();
@@ -378,6 +381,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
             )}
             {view === "terminal" && (
               <SessionsView
+                agents={agents}
                 ssh={ssh}
                 sftp={sftp}
                 remote={remote}
@@ -385,6 +389,15 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 activeSessionId={activeSessionId}
                 onSelect={setActiveSessionId}
                 theme={activeTheme}
+              />
+            )}
+            {view === "agents" && (
+              <AgentsView
+                agents={agents}
+                onOpen={(sessionId) => {
+                  setActiveSessionId(sessionId);
+                  setView("terminal");
+                }}
               />
             )}
             {view === "tunnels" && <PlannedView area={plannedAreas.tunnels} />}
