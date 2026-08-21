@@ -9,6 +9,65 @@
 import { useCallback, useState } from "react";
 import { APP_VERSION } from "./version";
 
+export type UpdaterDownloadEvent =
+  | { event: "Started"; data: { contentLength?: number } }
+  | { event: "Progress"; data: { chunkLength: number } }
+  | { event: "Finished" };
+
+interface InstallableUpdate {
+  version: string;
+  date?: string;
+  body?: string;
+  downloadAndInstall: (
+    onEvent?: (event: UpdaterDownloadEvent) => void,
+  ) => Promise<void>;
+}
+
+export interface UpdateDownloadProgress {
+  status: "downloading" | "installing";
+  downloadedBytes: number;
+  totalBytes: number;
+  progressPercent: number;
+}
+
+export function nextDownloadProgress(
+  current: UpdateDownloadProgress,
+  event: UpdaterDownloadEvent,
+): UpdateDownloadProgress {
+  if (event.event === "Started") {
+    return {
+      status: "downloading",
+      downloadedBytes: 0,
+      totalBytes: Math.max(0, event.data.contentLength ?? 0),
+      progressPercent: 0,
+    };
+  }
+  if (event.event === "Finished") {
+    return {
+      ...current,
+      status: "installing",
+      progressPercent: 100,
+    };
+  }
+
+  const downloadedBytes =
+    current.downloadedBytes + Math.max(0, event.data.chunkLength);
+  const progressPercent =
+    current.totalBytes > 0
+      ? Math.min(100, Math.round((downloadedBytes / current.totalBytes) * 100))
+      : 0;
+  return { ...current, downloadedBytes, progressPercent };
+}
+
+export async function installUpdateAndRelaunch(
+  update: InstallableUpdate,
+  relaunch: () => Promise<void>,
+  onEvent: (event: UpdaterDownloadEvent) => void,
+): Promise<void> {
+  await update.downloadAndInstall(onEvent);
+  await relaunch();
+}
+
 export type UpdateStatus =
   | "idle"
   | "checking"
@@ -46,7 +105,8 @@ export function useAppUpdater(currentVersion = APP_VERSION) {
     lastChecked: null,
   });
 
-  const [pendingUpdate, setPendingUpdate] = useState<any>(null);
+  const [pendingUpdate, setPendingUpdate] =
+    useState<InstallableUpdate | null>(null);
 
   const checkForUpdates = useCallback(async () => {
     setInfo((prev) => ({
@@ -59,7 +119,7 @@ export function useAppUpdater(currentVersion = APP_VERSION) {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
 
-      if (update && update.available) {
+      if (update) {
         setPendingUpdate(update);
         setInfo((prev) => ({
           ...prev,
@@ -76,24 +136,22 @@ export function useAppUpdater(currentVersion = APP_VERSION) {
           ...prev,
           status: "up-to-date",
           availableVersion: null,
+          releaseDate: null,
+          releaseNotes: null,
           lastChecked: new Date(),
           error: null,
         }));
       }
     } catch (err: unknown) {
-      const errorMessage =
-        err instanceof Error ? err.message : String(err);
-      // Being offline is a normal state, not a failure; anything else must
-      // surface as an error, or the settings page silently claims the app is
-      // up to date while the check never actually worked.
-      const offline =
-        errorMessage.includes("failed to get update") ||
-        errorMessage.includes("could not connect");
+      setPendingUpdate(null);
       setInfo((prev) => ({
         ...prev,
-        status: offline ? "up-to-date" : "error",
+        status: "error",
+        availableVersion: null,
+        releaseDate: null,
+        releaseNotes: null,
         lastChecked: new Date(),
-        error: offline ? null : errorMessage,
+        error: err instanceof Error ? err.message : String(err),
       }));
     }
   }, []);
@@ -109,53 +167,55 @@ export function useAppUpdater(currentVersion = APP_VERSION) {
       totalBytes: 0,
     }));
 
-    try {
-      let downloaded = 0;
-      let total = 0;
+    let installed = false;
+    let progress: UpdateDownloadProgress = {
+      status: "downloading",
+      downloadedBytes: 0,
+      totalBytes: 0,
+      progressPercent: 0,
+    };
 
-      await pendingUpdate.downloadAndInstall((event: any) => {
-        if (event.event === "Started") {
-          total = event.data.contentLength ?? 0;
+    try {
+      await installUpdateAndRelaunch(
+        pendingUpdate,
+        async () => {
+          // downloadAndInstall resolves only after installation. Mark this
+          // before loading the process plugin so a relaunch failure offers a
+          // safe manual retry instead of claiming the install failed.
+          installed = true;
           setInfo((prev) => ({
             ...prev,
-            totalBytes: total,
-          }));
-        } else if (event.event === "Progress") {
-          downloaded += event.data.chunkLength ?? 0;
-          const percent = total > 0 ? Math.round((downloaded / total) * 100) : 0;
-          setInfo((prev) => ({
-            ...prev,
-            downloadedBytes: downloaded,
-            progressPercent: percent,
-          }));
-        } else if (event.event === "Finished") {
-          setInfo((prev) => ({
-            ...prev,
-            status: "downloaded",
+            status: "installing",
             progressPercent: 100,
           }));
-        }
-      });
-
-      setInfo((prev) => ({
-        ...prev,
-        status: "downloaded",
-      }));
+          const { relaunch } = await import("@tauri-apps/plugin-process");
+          await relaunch();
+        },
+        (event) => {
+          progress = nextDownloadProgress(progress, event);
+          setInfo((prev) => ({ ...prev, ...progress }));
+        },
+      );
     } catch (err: unknown) {
       setInfo((prev) => ({
         ...prev,
-        status: "error",
+        status: installed ? "downloaded" : "error",
         error: err instanceof Error ? err.message : String(err),
       }));
     }
   }, [pendingUpdate]);
 
   const relaunchApp = useCallback(async () => {
+    setInfo((prev) => ({ ...prev, status: "installing", error: null }));
     try {
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
-    } catch {
-      window.location.reload();
+    } catch (err: unknown) {
+      setInfo((prev) => ({
+        ...prev,
+        status: "downloaded",
+        error: err instanceof Error ? err.message : String(err),
+      }));
     }
   }, []);
 

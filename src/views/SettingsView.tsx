@@ -346,6 +346,9 @@ export function SettingsView({
                   })}
                 </Chip>
               )}
+              {updater.status === "installing" && (
+                <Chip tone="info">{t("settings.updater.installing")}</Chip>
+              )}
               {updater.status === "downloaded" && (
                 <Chip tone="ok">{t("settings.updater.downloaded")}</Chip>
               )}
@@ -396,6 +399,13 @@ export function SettingsView({
           <div className="stack" style={{ gap: "var(--space-3)", marginTop: "var(--space-4)" }}>
             <Callout tone="info" title={t("settings.updater.downloaded")}>
               <p>{t("settings.updater.relaunch")}</p>
+              {updater.error && (
+                <p>
+                  {t("settings.updater.relaunchError", {
+                    error: updater.error,
+                  })}
+                </p>
+              )}
             </Callout>
 
             <button
@@ -408,7 +418,9 @@ export function SettingsView({
           </div>
         )}
 
-        {updater.status !== "available" && updater.status !== "downloaded" && (
+        {updater.status !== "available" &&
+          updater.status !== "downloaded" &&
+          updater.status !== "installing" && (
           <div style={{ marginTop: "var(--space-4)" }}>
             <button
               type="button"

@@ -364,9 +364,11 @@ export const zhTW = {
   "settings.updater.autoRestartHint": "按下後會自動下載、在背景安裝並重新啟動程式，過程只會看到一條進度列。",
   "settings.updater.download": "下載並安裝更新",
   "settings.updater.downloading": "正在下載更新 ({percent}%)...",
-  "settings.updater.downloaded": "更新已下載完成，點擊以重新啟動並套用",
+  "settings.updater.installing": "正在安裝更新並準備重新啟動...",
+  "settings.updater.downloaded": "更新已安裝，請手動重新啟動完成套用",
   "settings.updater.relaunch": "重新啟動套用更新",
-  "settings.updater.error": "檢查更新失敗：{error}",
+  "settings.updater.relaunchError": "自動重新啟動失敗：{error}",
+  "settings.updater.error": "更新失敗：{error}",
   "settings.updater.releaseNotes": "更新內容說明",
 
   // 主題名稱 --------------------------------------------------------------
