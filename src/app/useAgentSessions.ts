@@ -8,6 +8,8 @@ export interface AgentDefinition {
   id: string;
   label: string;
   executable: string;
+  adapterVersion: number;
+  resumeSupported: boolean;
   installed: boolean;
   installedPath: string | null;
 }
@@ -28,6 +30,7 @@ export interface AgentLaunchRequest {
   label: string;
   executable: string;
   arguments: string[];
+  resumeSessionId: string | null;
   workingDirectory: string;
   cols: number;
   rows: number;
@@ -80,26 +83,32 @@ export function applyAgentStateEvent(
   );
 }
 
-const FALLBACK_CATALOG: AgentDefinition[] = [
-  ["codex", "OpenAI Codex", "codex"],
-  ["claude", "Claude Code", "claude"],
-  ["gemini", "Gemini CLI", "gemini"],
-  ["opencode", "OpenCode", "opencode"],
-  ["copilot", "GitHub Copilot CLI", "copilot"],
-  ["hermes", "Hermes Agent", "hermes"],
-  ["cursor", "Cursor Agent", "cursor-agent"],
-  ["aider", "Aider", "aider"],
-  ["qwen", "Qwen Code", "qwen"],
-  ["kimi", "Kimi Code CLI", "kimi"],
-  ["droid", "Factory Droid", "droid"],
-  ["grok", "Grok CLI", "grok"],
-].map(([id, label, executable]) => ({
+const FALLBACK_CATALOG_SOURCE: [string, string, string, boolean][] = [
+  ["codex", "OpenAI Codex", "codex", true],
+  ["claude", "Claude Code", "claude", true],
+  ["gemini", "Gemini CLI", "gemini", true],
+  ["opencode", "OpenCode", "opencode", false],
+  ["copilot", "GitHub Copilot CLI", "copilot", false],
+  ["hermes", "Hermes Agent", "hermes", true],
+  ["cursor", "Cursor Agent", "cursor-agent", false],
+  ["aider", "Aider", "aider", false],
+  ["qwen", "Qwen Code", "qwen", false],
+  ["kimi", "Kimi Code CLI", "kimi", false],
+  ["droid", "Factory Droid", "droid", false],
+  ["grok", "Grok CLI", "grok", false],
+];
+
+const FALLBACK_CATALOG: AgentDefinition[] = FALLBACK_CATALOG_SOURCE.map(
+  ([id, label, executable, resumeSupported]) => ({
   id,
   label,
   executable,
+  adapterVersion: 1,
+  resumeSupported,
   installed: false,
   installedPath: null,
-}));
+  }),
+);
 
 const MAX_PENDING_OUTPUT = 256 * 1024;
 export const MAX_AGENT_BROADCAST_TARGETS = 32;

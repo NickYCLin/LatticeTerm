@@ -13,7 +13,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const STORE_VERSION: u32 = 2;
+const STORE_VERSION: u32 = 3;
 const STORE_FILE: &str = "agent-workspaces.json";
 const TEMP_FILE: &str = "agent-workspaces.json.tmp";
 
@@ -282,6 +282,7 @@ mod tests {
                 "/bin/echo".to_string()
             },
             arguments: vec!["--version".to_string()],
+            resume_session_id: None,
             working_directory: directory.display().to_string(),
         }
     }
@@ -352,8 +353,32 @@ mod tests {
             vec!["agent-plan-second", "agent-plan-first"]
         );
         let raw = fs::read_to_string(directory.join(STORE_FILE)).unwrap();
-        assert!(raw.contains("\"version\": 2"));
+        assert!(raw.contains("\"version\": 3"));
         assert!(raw.contains("\"workspaceName\": \"Release crew\""));
+    }
+
+    #[test]
+    fn native_resume_ids_are_saved_only_when_explicitly_requested() {
+        let directory = temp_dir("native-resume");
+        let mut store = FileAgentPlanStore::open(&directory).unwrap();
+        let saved = store
+            .save(AgentLaunchPlanDraft {
+                definition_id: "hermes".to_string(),
+                label: String::new(),
+                executable: String::new(),
+                arguments: Vec::new(),
+                resume_session_id: Some("  architecture review  ".to_string()),
+                working_directory: directory.display().to_string(),
+            })
+            .unwrap();
+        assert_eq!(
+            saved.resume_session_id.as_deref(),
+            Some("architecture review")
+        );
+
+        let raw = fs::read_to_string(directory.join(STORE_FILE)).unwrap();
+        assert!(raw.contains("\"version\": 3"));
+        assert!(raw.contains("\"resumeSessionId\": \"architecture review\""));
     }
 
     #[test]

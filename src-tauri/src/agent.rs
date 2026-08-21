@@ -24,17 +24,36 @@ pub const EVENT_STATE: &str = "agent://state";
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 4096;
+const MAX_RESUME_SESSION_ID_BYTES: usize = 512;
 const MAX_BROADCAST_TARGETS: usize = 32;
 pub const MAX_SAVED_AGENT_PLANS: usize = 32;
 const MAX_REPORT_BYTES: u64 = 4096;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REPORT_RETRIES: usize = 5;
 
+const AGENT_ADAPTER_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy)]
+enum AgentResumeRecipe {
+    Subcommand,
+    Flag,
+}
+
+impl AgentResumeRecipe {
+    fn arguments(self, session_id: String) -> Vec<String> {
+        match self {
+            Self::Subcommand => vec!["resume".to_string(), session_id],
+            Self::Flag => vec!["--resume".to_string(), session_id],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AgentSpec {
     id: &'static str,
     label: &'static str,
     executable: &'static str,
+    resume_recipe: Option<AgentResumeRecipe>,
 }
 
 const AGENTS: [AgentSpec; 12] = [
@@ -42,61 +61,73 @@ const AGENTS: [AgentSpec; 12] = [
         id: "codex",
         label: "OpenAI Codex",
         executable: "codex",
+        resume_recipe: Some(AgentResumeRecipe::Subcommand),
     },
     AgentSpec {
         id: "claude",
         label: "Claude Code",
         executable: "claude",
+        resume_recipe: Some(AgentResumeRecipe::Flag),
     },
     AgentSpec {
         id: "gemini",
         label: "Gemini CLI",
         executable: "gemini",
+        resume_recipe: Some(AgentResumeRecipe::Flag),
     },
     AgentSpec {
         id: "opencode",
         label: "OpenCode",
         executable: "opencode",
+        resume_recipe: None,
     },
     AgentSpec {
         id: "copilot",
         label: "GitHub Copilot CLI",
         executable: "copilot",
+        resume_recipe: None,
     },
     AgentSpec {
         id: "hermes",
         label: "Hermes Agent",
         executable: "hermes",
+        resume_recipe: Some(AgentResumeRecipe::Flag),
     },
     AgentSpec {
         id: "cursor",
         label: "Cursor Agent",
         executable: "cursor-agent",
+        resume_recipe: None,
     },
     AgentSpec {
         id: "aider",
         label: "Aider",
         executable: "aider",
+        resume_recipe: None,
     },
     AgentSpec {
         id: "qwen",
         label: "Qwen Code",
         executable: "qwen",
+        resume_recipe: None,
     },
     AgentSpec {
         id: "kimi",
         label: "Kimi Code CLI",
         executable: "kimi",
+        resume_recipe: None,
     },
     AgentSpec {
         id: "droid",
         label: "Factory Droid",
         executable: "droid",
+        resume_recipe: None,
     },
     AgentSpec {
         id: "grok",
         label: "Grok CLI",
         executable: "grok",
+        resume_recipe: None,
     },
 ];
 
@@ -106,6 +137,8 @@ pub struct AgentDefinition {
     pub id: String,
     pub label: String,
     pub executable: String,
+    pub adapter_version: u32,
+    pub resume_supported: bool,
     pub installed: bool,
     pub installed_path: Option<String>,
 }
@@ -157,6 +190,8 @@ pub struct AgentLaunchRequest {
     pub executable: String,
     #[serde(default)]
     pub arguments: Vec<String>,
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
     pub working_directory: String,
     pub cols: u32,
     pub rows: u32,
@@ -172,6 +207,8 @@ pub struct AgentLaunchPlanDraft {
     pub executable: String,
     #[serde(default)]
     pub arguments: Vec<String>,
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
     pub working_directory: String,
 }
 
@@ -183,6 +220,8 @@ pub struct AgentLaunchPlan {
     pub label: String,
     pub executable: String,
     pub arguments: Vec<String>,
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
     pub working_directory: String,
 }
 
@@ -590,6 +629,8 @@ pub fn catalog() -> Vec<AgentDefinition> {
                 id: agent.id.to_string(),
                 label: agent.label.to_string(),
                 executable: agent.executable.to_string(),
+                adapter_version: AGENT_ADAPTER_VERSION,
+                resume_supported: agent.resume_recipe.is_some(),
                 installed: path.is_some(),
                 installed_path: path.map(|path| path.display().to_string()),
             }
@@ -723,6 +764,39 @@ fn validate_arguments(arguments: &[String]) -> Result<Vec<String>, String> {
     Ok(arguments.to_vec())
 }
 
+fn normalize_resume_session_id(
+    spec: Option<&AgentSpec>,
+    resume_session_id: Option<&str>,
+    arguments: &[String],
+) -> Result<Option<String>, String> {
+    let Some(resume_session_id) = resume_session_id else {
+        return Ok(None);
+    };
+    let spec = spec
+        .ok_or_else(|| "Native session restore is not available for custom agents.".to_string())?;
+    if spec.resume_recipe.is_none() {
+        return Err(format!(
+            "Native session restore is not available for {}.",
+            spec.label
+        ));
+    }
+    if !arguments.is_empty() {
+        return Err(
+            "Native session restore cannot be combined with additional launch arguments."
+                .to_string(),
+        );
+    }
+    let resume_session_id = validate_text(
+        resume_session_id,
+        "Native session ID or title",
+        MAX_RESUME_SESSION_ID_BYTES,
+    )?;
+    if resume_session_id.starts_with('-') {
+        return Err("Native session ID or title cannot begin with '-'.".to_string());
+    }
+    Ok(Some(resume_session_id))
+}
+
 fn looks_like_sensitive_argument(argument: &str) -> bool {
     let lower = argument.trim().to_ascii_lowercase();
     let option = lower.split('=').next().unwrap_or_default();
@@ -753,16 +827,14 @@ pub fn normalize_launch_plan(
 ) -> Result<AgentLaunchPlan, String> {
     let id = validate_text(&id, "Launch plan ID", 128)?;
     let definition_id = validate_text(&draft.definition_id, "Agent type", 64)?;
+    let spec = AGENTS.iter().find(|agent| agent.id == definition_id);
     let (default_label, executable) = if definition_id == "custom" {
         (
             validate_text(&draft.label, "Agent label", 80)?,
             validate_text(&draft.executable, "Executable", 512)?,
         )
     } else {
-        let spec = AGENTS
-            .iter()
-            .find(|agent| agent.id == definition_id)
-            .ok_or_else(|| "Unknown agent type.".to_string())?;
+        let spec = spec.ok_or_else(|| "Unknown agent type.".to_string())?;
         (spec.label.to_string(), spec.executable.to_string())
     };
     let label = if draft.label.trim().is_empty() {
@@ -771,6 +843,8 @@ pub fn normalize_launch_plan(
         validate_text(&draft.label, "Agent label", 80)?
     };
     let arguments = validate_arguments(&draft.arguments)?;
+    let resume_session_id =
+        normalize_resume_session_id(spec, draft.resume_session_id.as_deref(), &arguments)?;
     if arguments
         .iter()
         .any(|argument| looks_like_sensitive_argument(argument))
@@ -797,6 +871,7 @@ pub fn normalize_launch_plan(
         label,
         executable,
         arguments,
+        resume_session_id,
         working_directory: working_directory.display().to_string(),
     })
 }
@@ -813,6 +888,7 @@ pub fn launch_request_from_plan(
             label: plan.label.clone(),
             executable: plan.executable.clone(),
             arguments: plan.arguments.clone(),
+            resume_session_id: plan.resume_session_id.clone(),
             working_directory: plan.working_directory.clone(),
         },
     )?;
@@ -821,6 +897,7 @@ pub fn launch_request_from_plan(
         label: validated.label,
         executable: validated.executable,
         arguments: validated.arguments,
+        resume_session_id: validated.resume_session_id,
         working_directory: validated.working_directory,
         cols,
         rows,
@@ -830,21 +907,27 @@ pub fn launch_request_from_plan(
 fn resolve_launch(
     request: &AgentLaunchRequest,
 ) -> Result<(String, String, PathBuf, Vec<String>, PathBuf), String> {
-    let arguments = validate_arguments(&request.arguments)?;
+    let mut arguments = validate_arguments(&request.arguments)?;
 
     let definition_id = validate_text(&request.definition_id, "Agent type", 64)?;
+    let spec = AGENTS.iter().find(|agent| agent.id == definition_id);
     let (default_label, command) = if definition_id == "custom" {
         (
             validate_text(&request.label, "Agent label", 80)?,
             validate_text(&request.executable, "Executable", 512)?,
         )
     } else {
-        let spec = AGENTS
-            .iter()
-            .find(|agent| agent.id == definition_id)
-            .ok_or_else(|| "Unknown agent type.".to_string())?;
+        let spec = spec.ok_or_else(|| "Unknown agent type.".to_string())?;
         (spec.label.to_string(), spec.executable.to_string())
     };
+    if let Some(resume_session_id) =
+        normalize_resume_session_id(spec, request.resume_session_id.as_deref(), &arguments)?
+    {
+        arguments = spec
+            .and_then(|agent| agent.resume_recipe)
+            .expect("validated resume recipe")
+            .arguments(resume_session_id);
+    }
 
     let executable = find_executable(&command)
         .ok_or_else(|| format!("{default_label} is not installed or is not available on PATH."))?;
@@ -1186,6 +1269,78 @@ mod tests {
     }
 
     #[test]
+    fn native_resume_adapters_use_the_verified_cli_argument_shape() {
+        for (definition_id, expected) in [
+            ("codex", vec!["resume", "session-42"]),
+            ("claude", vec!["--resume", "session-42"]),
+            ("gemini", vec!["--resume", "session-42"]),
+            ("hermes", vec!["--resume", "session-42"]),
+        ] {
+            let spec = AGENTS
+                .iter()
+                .find(|agent| agent.id == definition_id)
+                .unwrap();
+            let session_id = normalize_resume_session_id(Some(spec), Some("  session-42  "), &[])
+                .unwrap()
+                .unwrap();
+            assert_eq!(spec.resume_recipe.unwrap().arguments(session_id), expected);
+        }
+
+        let definitions = catalog();
+        let supported: HashSet<_> = definitions
+            .iter()
+            .filter(|definition| definition.resume_supported)
+            .map(|definition| definition.id.as_str())
+            .collect();
+        assert_eq!(
+            supported,
+            HashSet::from(["codex", "claude", "gemini", "hermes"])
+        );
+        assert!(definitions
+            .iter()
+            .all(|definition| definition.adapter_version == AGENT_ADAPTER_VERSION));
+    }
+
+    #[test]
+    fn native_resume_rejects_ambiguous_or_unsupported_inputs() {
+        let codex = AGENTS.iter().find(|agent| agent.id == "codex").unwrap();
+        let opencode = AGENTS.iter().find(|agent| agent.id == "opencode").unwrap();
+
+        assert!(normalize_resume_session_id(None, Some("session-42"), &[])
+            .unwrap_err()
+            .contains("custom agents"));
+        assert!(
+            normalize_resume_session_id(Some(opencode), Some("session-42"), &[])
+                .unwrap_err()
+                .contains("OpenCode")
+        );
+        assert!(
+            normalize_resume_session_id(Some(codex), Some("-latest"), &[])
+                .unwrap_err()
+                .contains("cannot begin")
+        );
+        assert!(
+            normalize_resume_session_id(Some(codex), Some("bad\ntitle"), &[])
+                .unwrap_err()
+                .contains("control")
+        );
+        assert!(normalize_resume_session_id(
+            Some(codex),
+            Some("session-42"),
+            &["--full-auto".to_string()],
+        )
+        .unwrap_err()
+        .contains("cannot be combined"));
+        assert!(normalize_resume_session_id(
+            Some(codex),
+            Some(&"x".repeat(MAX_RESUME_SESSION_ID_BYTES + 1)),
+            &[],
+        )
+        .unwrap_err()
+        .contains("too long"));
+    }
+
+    #[test]
     fn attention_prompts_are_detected_conservatively() {
         assert_eq!(
             lifecycle_from_output(b"Permission required. Do you want to continue?"),
@@ -1213,6 +1368,7 @@ mod tests {
                 label: "Review agent".to_string(),
                 executable: String::new(),
                 arguments: vec!["--full-auto".to_string()],
+                resume_session_id: None,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -1234,12 +1390,34 @@ mod tests {
                     label: "Unsafe agent".to_string(),
                     executable: "/bin/echo".to_string(),
                     arguments: vec![argument.to_string()],
+                    resume_session_id: None,
                     working_directory: directory.display().to_string(),
                 },
             )
             .unwrap_err();
             assert!(error.contains("cannot contain"));
         }
+    }
+
+    #[test]
+    fn launch_plans_preserve_an_explicit_native_resume_id() {
+        let directory = std::env::current_dir().unwrap();
+        let plan = normalize_launch_plan(
+            "agent-plan-resume".to_string(),
+            AgentLaunchPlanDraft {
+                definition_id: "codex".to_string(),
+                label: String::new(),
+                executable: String::new(),
+                arguments: Vec::new(),
+                resume_session_id: Some("  session-42  ".to_string()),
+                working_directory: directory.display().to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(plan.resume_session_id.as_deref(), Some("session-42"));
+
+        let request = launch_request_from_plan(&plan, 80, 24).unwrap();
+        assert_eq!(request.resume_session_id.as_deref(), Some("session-42"));
     }
 
     #[test]
@@ -1284,6 +1462,7 @@ mod tests {
             label: "Reporter test".to_string(),
             executable,
             arguments,
+            resume_session_id: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -1334,6 +1513,7 @@ mod tests {
             label: "Test cat".to_string(),
             executable: "/bin/cat".to_string(),
             arguments: Vec::new(),
+            resume_session_id: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -1379,6 +1559,7 @@ mod tests {
                         label: label.to_string(),
                         executable: "/bin/cat".to_string(),
                         arguments: Vec::new(),
+                        resume_session_id: None,
                         working_directory: std::env::current_dir().unwrap().display().to_string(),
                         cols: 80,
                         rows: 24,
@@ -1437,6 +1618,7 @@ mod tests {
             label: "Test cat".to_string(),
             executable: "/bin/cat".to_string(),
             arguments: Vec::new(),
+            resume_session_id: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,

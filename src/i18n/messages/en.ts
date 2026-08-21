@@ -477,6 +477,26 @@ export const en: Messages = {
   "agents.path.missing": "No directly executable program was found on PATH",
   "agents.launching": "Launching…",
   "agents.launch": "Launch",
+  "agents.resume.eyebrow": "Native session restore",
+  "agents.resume.title": "Return to the CLI's existing context",
+  "agents.resume.body":
+    "Codex, Claude Code, Gemini CLI, and Hermes Agent are supported. LatticeTerm passes the session ID or title using each tool's documented syntax and opens the CLI in a new local terminal.",
+  "agents.resume.securityTitle": "You choose whether restore metadata is saved",
+  "agents.resume.securityBody":
+    "Resume alone does not write the identifier into LatticeTerm. It is stored with the working directory only when you choose Save restore item. LatticeTerm does not read CLI conversations, sign-in data, or model credentials.",
+  "agents.resume.cli": "CLI with restore support",
+  "agents.resume.adapterVersion":
+    "Built-in adapter v{version}; LatticeTerm creates the argument vector without a shell.",
+  "agents.resume.sessionId": "Session ID or title",
+  "agents.resume.sessionId.placeholder": "Paste the session ID or existing title shown by the CLI",
+  "agents.resume.sessionId.hint":
+    "Up to 512 bytes, with no control characters or leading hyphen. Additional launch arguments cannot be mixed in.",
+  "agents.resume.save": "Save restore item",
+  "agents.resume.launch": "Resume session",
+  "agents.resume.resuming": "Resuming…",
+  "agents.resume.savedTitle": "Restore item saved",
+  "agents.resume.savedBody":
+    "“{name}” can resume from this workspace next time. The identifier stays hidden in the list.",
   "agents.custom.eyebrow": "Custom adapter",
   "agents.custom.title": "Connect another LLM CLI",
   "agents.custom.body":
@@ -501,15 +521,15 @@ export const en: Messages = {
   "agents.workspace.renamedBody":
     "This safe launch workspace is now named “{name}”.",
   "agents.workspace.body":
-    "Save the CLI type, arguments, and working directory for multiple agents. When LatticeTerm opens again, you confirm before new processes are launched.",
+    "Save the CLI type, arguments, and working directory for multiple agents. Native session identifiers you explicitly save can be restored too, and startup still requires your confirmation.",
   "agents.workspace.save": "Save launch item",
   "agents.workspace.saving": "Saving…",
   "agents.workspace.restore": "Launch again",
   "agents.workspace.restoring": "Restoring…",
   "agents.workspace.restoreAll": "Restore all {count}",
-  "agents.workspace.securityTitle": "Only non-secret launch metadata is saved",
+  "agents.workspace.securityTitle": "Only launch metadata you explicitly choose is saved",
   "agents.workspace.securityBody":
-    "Up to {count} launch items may be saved. Prompts, terminal output, process IDs, reporter tokens, and model credentials are never stored. Password, token, API key, passphrase, and secret arguments are rejected.",
+    "Up to {count} launch items may be saved. A native session ID or title is written only when you choose Save. Prompts, terminal output, process IDs, reporter tokens, and model credentials are never stored, and secret arguments are rejected.",
   "agents.workspace.recoveryTitle": "The previous launch workspace could not be read",
   "agents.workspace.recoveryBody":
     "The original file was preserved at {path} instead of being overwritten. Reason: {detail}",
@@ -522,12 +542,14 @@ export const en: Messages = {
   "agents.workspace.empty":
     "No launch items are saved yet. Add a built-in or custom CLI above.",
   "agents.workspace.command": "{executable} · {count} arguments",
+  "agents.workspace.nativeResumeCommand":
+    "{executable} · native session restore saved",
   "agents.workspace.moveUp": "Move “{name}” up",
   "agents.workspace.moveDown": "Move “{name}” down",
   "agents.workspace.delete": "Delete launch item",
   "agents.workspace.confirmTitle": "Restore this launch workspace?",
   "agents.workspace.confirmBody":
-    "This immediately starts {count} new local CLI processes. Previous terminal content and processes are not restored.",
+    "This immediately starts {count} new local CLI processes. Items with a saved native session identifier ask their CLI to resume existing context; previous processes and terminal screens are not restored.",
   "agents.workspace.confirmAction": "Launch {count} agents",
   "agents.workspace.deleteTitle": "Delete “{name}”?",
   "agents.workspace.deleteBody":

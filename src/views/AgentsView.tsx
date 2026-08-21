@@ -62,6 +62,9 @@ export function AgentsView({
   const [customLabel, setCustomLabel] = useState("");
   const [customExecutable, setCustomExecutable] = useState("");
   const [customArguments, setCustomArguments] = useState("");
+  const [resumeDefinitionId, setResumeDefinitionId] = useState("");
+  const [resumeSessionId, setResumeSessionId] = useState("");
+  const [resumeNotice, setResumeNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [editingWorkspaceName, setEditingWorkspaceName] = useState(false);
@@ -123,6 +126,31 @@ export function AgentsView({
         .length,
     [agents.sessions],
   );
+  const resumeDefinitions = useMemo(
+    () => agents.catalog.filter((definition) => definition.resumeSupported),
+    [agents.catalog],
+  );
+  const resumeDefinition = useMemo(
+    () =>
+      resumeDefinitions.find(
+        (definition) => definition.id === resumeDefinitionId,
+      ) ?? null,
+    [resumeDefinitionId, resumeDefinitions],
+  );
+
+  useEffect(() => {
+    if (
+      resumeDefinitions.length > 0 &&
+      !resumeDefinitions.some(
+        (definition) => definition.id === resumeDefinitionId,
+      )
+    ) {
+      setResumeDefinitionId(
+        resumeDefinitions.find((definition) => definition.installed)?.id ??
+          resumeDefinitions[0].id,
+      );
+    }
+  }, [resumeDefinitionId, resumeDefinitions]);
 
   function launchDraft(
     definition: AgentDefinition | null,
@@ -133,6 +161,18 @@ export function AgentsView({
       label: custom ? customLabel : "",
       executable: custom ? customExecutable : "",
       arguments: custom ? splitAgentArguments(customArguments) : [],
+      resumeSessionId: null,
+      workingDirectory,
+    };
+  }
+
+  function nativeResumeDraft(definition: AgentDefinition) {
+    return {
+      definitionId: definition.id,
+      label: "",
+      executable: "",
+      arguments: [],
+      resumeSessionId: resumeSessionId.trim(),
       workingDirectory,
     };
   }
@@ -169,6 +209,42 @@ export function AgentsView({
     try {
       const plan = await agents.savePlan(launchDraft(definition, custom));
       setWorkspaceNotice({ saved: plan.label });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function launchNativeResume() {
+    if (!resumeDefinition) return;
+    const actionId = `resume:${resumeDefinition.id}`;
+    setLaunching(actionId);
+    setError(null);
+    setResumeNotice(null);
+    try {
+      const session = await agents.launch({
+        ...nativeResumeDraft(resumeDefinition),
+        cols: 120,
+        rows: 32,
+      });
+      onOpen(session.sessionId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setLaunching(null);
+    }
+  }
+
+  async function saveNativeResumePlan() {
+    if (!resumeDefinition) return;
+    const actionId = `resume:${resumeDefinition.id}`;
+    setSaving(actionId);
+    setError(null);
+    setResumeNotice(null);
+    try {
+      const plan = await agents.savePlan(nativeResumeDraft(resumeDefinition));
+      setResumeNotice(plan.label);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -443,6 +519,107 @@ export function AgentsView({
         </div>
       </section>
 
+      <section className="agents-resume">
+        <div className="agents-section-heading">
+          <div>
+            <span className="eyebrow">{t("agents.resume.eyebrow")}</span>
+            <h3>{t("agents.resume.title")}</h3>
+            <p>{t("agents.resume.body")}</p>
+          </div>
+        </div>
+
+        <Callout tone="security" title={t("agents.resume.securityTitle")}>
+          {t("agents.resume.securityBody")}
+        </Callout>
+
+        {resumeNotice && (
+          <Callout tone="info" title={t("agents.resume.savedTitle")}>
+            {t("agents.resume.savedBody", { name: resumeNotice })}
+          </Callout>
+        )}
+
+        <div className="agents-resume__fields">
+          <label className="field">
+            <span className="field__label">{t("agents.resume.cli")}</span>
+            <select
+              className="select"
+              value={resumeDefinitionId}
+              onChange={(event) => {
+                setResumeDefinitionId(event.currentTarget.value);
+                setResumeNotice(null);
+              }}
+              disabled={resumeDefinitions.length === 0}
+            >
+              {resumeDefinitions.map((definition) => (
+                <option value={definition.id} key={definition.id}>
+                  {definition.label} · {t(
+                    definition.installed
+                      ? "agents.installed"
+                      : "agents.notInstalled",
+                  )}
+                </option>
+              ))}
+            </select>
+            <span className="agents-field-hint">
+              {t("agents.resume.adapterVersion", {
+                version: resumeDefinition?.adapterVersion ?? 1,
+              })}
+            </span>
+          </label>
+          <label className="field agents-resume__session">
+            <span className="field__label">
+              {t("agents.resume.sessionId")}
+            </span>
+            <input
+              className="input mono"
+              value={resumeSessionId}
+              onChange={(event) => {
+                setResumeSessionId(event.currentTarget.value);
+                setResumeNotice(null);
+              }}
+              placeholder={t("agents.resume.sessionId.placeholder")}
+              maxLength={512}
+              spellCheck={false}
+            />
+            <span className="agents-field-hint">
+              {t("agents.resume.sessionId.hint")}
+            </span>
+          </label>
+          <div className="agents-resume__actions">
+            <button
+              type="button"
+              className="button button--ghost"
+              disabled={
+                saveDisabled ||
+                !resumeDefinition ||
+                !resumeSessionId.trim()
+              }
+              onClick={() => void saveNativeResumePlan()}
+            >
+              <MemoryIcon size={13} />
+              {saving === `resume:${resumeDefinition?.id}`
+                ? t("agents.workspace.saving")
+                : t("agents.resume.save")}
+            </button>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={
+                launchDisabled ||
+                !resumeDefinition?.installed ||
+                !resumeSessionId.trim()
+              }
+              onClick={() => void launchNativeResume()}
+            >
+              <PlayIcon size={13} />
+              {launching === `resume:${resumeDefinition?.id}`
+                ? t("agents.resume.resuming")
+                : t("agents.resume.launch")}
+            </button>
+          </div>
+        </div>
+      </section>
+
       <section className="agents-custom">
         <div className="agents-section-heading">
           <div>
@@ -685,10 +862,14 @@ export function AgentsView({
                   <strong>{plan.label}</strong>
                   <span className="mono">{plan.workingDirectory}</span>
                   <small>
-                    {t("agents.workspace.command", {
-                      executable: plan.executable,
-                      count: plan.arguments.length,
-                    })}
+                    {plan.resumeSessionId
+                      ? t("agents.workspace.nativeResumeCommand", {
+                          executable: plan.executable,
+                        })
+                      : t("agents.workspace.command", {
+                          executable: plan.executable,
+                          count: plan.arguments.length,
+                        })}
                   </small>
                 </div>
                 <div className="agent-plan-row__reorder">

@@ -12,7 +12,9 @@ Agent Fleet 讓 LatticeTerm 成為多個大型語言模型 CLI 的本機工作�
 flowchart LR
   UI["React Agent Fleet"] -->|"Tauri commands"| REG["Rust AgentRegistry"]
   UI -->|"保存／確認還原"| PLAN["agent-workspaces.json"]
-  PLAN -->|"重新驗證啟動資料"| REG
+  PLAN -->|"重新驗證啟動資料"| ADAPTER["Built-in Adapter Registry v1"]
+  UI -->|"原生 Session ID／標題"| ADAPTER
+  ADAPTER -->|"argument vector"| REG
   REG --> PTY["portable-pty"]
   PTY --> A["Codex / Claude / Gemini / ..."]
   PTY --> C["Custom CLI"]
@@ -31,6 +33,18 @@ flowchart LR
 - 支援 Adapter／hook 明確回報「工作中、等待輸入、閒置、完成」。UI 會顯示狀態來源；收到 Adapter 回報後，終端輸出 heuristic 不再覆蓋該工作階段的語意狀態。
 - 支援使用者明確勾選執行中的 Agent，經二次確認後將同一段提示送進最多 32 個獨立 PTY；每個目標逐一回報成功或失敗，提示內容不會保存。
 - 支援最多 32 個安全啟動項目，也可命名工作區及調整持久化順序。應用程式重啟後，使用者可逐項或整批確認，LatticeTerm 會重新驗證磁碟資料並依保存順序建立新的 CLI 程序；每項分別回報成功或失敗。
+- 版本化內建 Adapter v1 支援 Codex、Claude Code、Gemini CLI 與 Hermes Agent 的原生 Session 續接。使用者可只續接，或另行明確保存識別值供工作區下次還原；舊 PTY、程序與畫面不會被宣稱仍然存活。
+
+### 原生 Session 續接 Adapter v1
+
+| CLI | 由 LatticeTerm 建立的參數 | 依據 |
+| --- | --- | --- |
+| Codex | `codex resume <SESSION_ID_OR_NAME>` | [OpenAI Codex CLI reference](https://developers.openai.com/codex/cli/reference/) |
+| Claude Code | `claude --resume <SESSION_ID>` | [Anthropic CLI reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage) |
+| Gemini CLI | `gemini --resume <SESSION_UUID_OR_INDEX>` | [Gemini CLI session management](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/session-management.md) |
+| Hermes Agent | `hermes --resume <SESSION_ID_OR_TITLE>` | [Hermes session guide](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/sessions.md) |
+
+Adapter 會把識別值當成單一 argument，不經 shell；長度上限 512 bytes，拒絕控制字元、前導 `-` 與額外啟動參數。OpenCode 目前只有已確認的非互動 `run --session` 介面，尚未加入互動式 PTY 續接白名單。
 
 ## 語意 Reporter 協定
 
@@ -65,7 +79,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 - LatticeTerm 不讀取、不複製也不保存模型 API 金鑰；登入仍由各 CLI 自行處理。
 - CLI 以啟動 LatticeTerm 的使用者權限執行，不是沙箱。使用者只能加入自己信任的程式。
 - 執行中的工作階段只存在記憶體；使用者停止或應用程式結束／重啟時會終止已登記的 CLI。
-- 安全啟動工作區使用獨立的版本化 JSON；v2 可無損讀取 v1，並保存工作區名稱、項目順序、CLI 類型、標籤、可執行檔、明確參數與工作目錄。密碼、Token、API Key、Passphrase、Secret 參數會被拒絕；讀不到或版本不相容的原檔會先移到復原檔，不會直接覆寫。
+- 安全啟動工作區使用獨立的版本化 JSON；v3 可無損讀取 v1／v2，並保存工作區名稱、項目順序、CLI 類型、標籤、可執行檔、明確參數與工作目錄。原生 Session ID 或標題只在使用者明確保存續接項目時寫入。密碼、Token、API Key、Passphrase、Secret 參數會被拒絕；讀不到或版本不相容的原檔會先移到復原檔，不會直接覆寫。
 - 不保存終端輸出、提示內容、輸入歷史、程序 ID、Reporter 權杖或模型憑證。
 - Reporter 只監聽 loopback，訊息限制 4 KiB 且有讀寫逾時；每個工作階段使用獨立高熵權杖。權杖會存在該 CLI 的環境中，因此相同作業系統使用者權限的程序仍屬於信任邊界，但即使權杖外洩也只能變更該工作階段的顯示狀態。
 - Windows 目前只直接啟動 `.exe`／`.com`。需要 `.cmd`／`.bat` 的 npm shim 尚未經過 shell adapter 安全設計，因此不會被誤標為可用。
@@ -83,9 +97,10 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 | CLI 語意 Reporter | 已完成 | loopback、每 session 權杖、四種狀態與來源標示 |
 | 批次提示 | 已完成 | 明確選取、二次確認、最多 32 個目標與部分失敗回報 |
 | 啟動工作區命名／排序 | 已完成 | 名稱與順序由 Rust 驗證及原子保存，v1 資料可相容遷移 |
-| 工具專用語意 Adapter | 未完成 | 尚未內建各工具 hook、CLI session ID、token／cost 擷取 |
+| 原生 CLI Session 續接 | 已完成 | Adapter v1 支援 Codex、Claude Code、Gemini CLI、Hermes；保存由使用者明確選擇 |
+| 工具專用語意 Adapter | 部分完成 | 已有版本化續接 recipe；工具 hook、自動 session ID、token／cost 擷取仍未完成 |
 | 背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段 |
-| 跨重啟還原 | 部分完成 | 已有安全啟動工作區與明確確認的批次重新啟動；原程序、pane、輸出與 CLI restore ID 尚未還原 |
+| 跨重啟還原 | 部分完成 | 已有安全工作區、批次重新啟動與四種 CLI 原生脈絡續接；原程序、pane、輸出與自動 ID 擷取尚未完成 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 任務編排 | 部分完成 | broadcast prompt 已完成；依賴圖、佇列與排程仍待實作 |
 | 權限隔離 | 未完成 | 尚無每 Agent 容器、沙箱或檔案範圍策略 |
@@ -94,7 +109,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 
 ### 1. 語意 adapter
 
-Reporter 傳輸與狀態模型已完成。下一步定義版本化 adapter manifest，至少包含 executable、參數模板、工具 hook 安裝方式、CLI session ID 擷取與 restore 命令。優先替 Codex、Claude Code、Gemini CLI、OpenCode 與 Hermes 實作；沒有工具專用 Adapter 的 CLI 繼續使用保守 heuristic，也可由使用者自訂 hook 呼叫通用 Reporter。
+Reporter 傳輸、狀態模型與 Adapter v1 的四種原生 restore recipe 已完成。下一步擴充 manifest 的工具 hook 安裝方式與 CLI session ID 自動擷取，再加入 token／cost 等可觀測事件。只有官方確認可在互動式 PTY 安全續接的 CLI 才進入白名單；其他 CLI 繼續使用保守 heuristic，也可由使用者自訂 hook 呼叫通用 Reporter。
 
 ### 2. Lattice Agent daemon
 
