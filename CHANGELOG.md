@@ -6,25 +6,21 @@
 
 ## [0.8.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.7.0...v0.8.0) (2026-08-21)
 
-
 ### 🚀 新增功能
+* **SSH 通道與連接埠轉送 (Tunnels & Port Forwarding)**：
+  - 新增「本機轉送 (-L)」、「動態 SOCKS5 代理 (-D)」與「遠端轉送 (-R)」三大核心模式。
+  - 支援透過 SSH 跳板機安全穿透連線內網資料庫（PostgreSQL、MySQL、Redis）或內部網頁服務。
+  - 提供視覺化路由拓撲圖（本機端點 ➔ SSH 閘道 ➔ 目標服務）、即時連線數、累計傳輸流量統計與一鍵複製標準 OpenSSH 終端指令。
+* **左側主功能列 7 大圖示全面升級**：
+  - 重新繪製雙層伺服器機架、終端機控制台、AI 多核心星芒、拱型通道、防護金庫、即時心跳脈搏波形與六齒機械齒輪圖示，辨識度與視覺層次大幅提升。
+* **全新 7 套原創手繪色彩主題**：
+  - 重新調配黑曜金珀（預設）、星穹紫境、極地冰霜、北歐墨翠、雅緻亮白、暖陶赭石、極限高對比主題。
+* **AI Agent 工作階段原生續接 (Native Session Resume)**：
+  - 支援原生 CLI 工作階段續接，重啟或切換時可直接恢復歷史上下文。
 
-* **監控:** 連線後真的能看到主機的 CPU、記憶體、硬碟了 ([593eac5](https://github.com/NickYCLin/LatticeTerm/commit/593eac512f3b662f79e30584e85fcdad7fdfbda8))
-* **通道:** 實作原生 SSH 通道轉發與 SOCKS5 動態代理管理視圖 ([6f07cf1](https://github.com/NickYCLin/LatticeTerm/commit/6f07cf1b2bdd6dd32f631f2ae76c2f5f75fb5018))
-* **連線:** 支援用 SSH 私鑰登入，不用再只能打密碼 ([6f02cda](https://github.com/NickYCLin/LatticeTerm/commit/6f02cda9c358b14e49b5de1e26dca5f96e3b6134))
-
-
-### 🛠️ 問題修正
-
-* **介面:** 修掉四個藏在細節裡的問題 ([2dae9d3](https://github.com/NickYCLin/LatticeTerm/commit/2dae9d32f715f3f9460f7850feef9a466b8dad9e))
-* **通道:** 修正遠端轉送介面語意 ([58a219a](https://github.com/NickYCLin/LatticeTerm/commit/58a219a6e9a1029cf85e2cec4414ccb69d8c9867))
-* **通道:** 強化 SSH 通道安全邊界 ([d76c36e](https://github.com/NickYCLin/LatticeTerm/commit/d76c36e55962b323d7346a64f27dfe7bcb1a3ced))
-* **通道:** 讓連接埠轉送真正經過 SSH 傳輸資料 ([d550195](https://github.com/NickYCLin/LatticeTerm/commit/d550195249ed1f0ad32d7ade8b5247272d53e788))
-
-
-### 🎨 介面與視覺調整
-
-* **圖示:** 全面升級左側主導覽列 7 大功能之向量圖示設計 ([fe6836a](https://github.com/NickYCLin/LatticeTerm/commit/fe6836a3e41fef11b21f34d0df641f92cafc36e3))
+### 🛠️ 問題修正與優化
+* **系統行程安全釋放**：結束終端機或退出 App 時，後端主動且安全地停止所有背景子行程，不再殘留佔用系統資源。
+* **介面去蕪存菁**：移除左側底部重複的主題切換按鈕，統一集中由「設定 ➔ 外觀」管理，讓工作視野更寬敞。
 
 ## [0.7.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.6.0...v0.7.0) (2026-08-21)
 
