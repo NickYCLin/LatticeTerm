@@ -382,9 +382,11 @@ export const en: Messages = {
   "settings.updater.autoRestartHint": "The update downloads, installs in the background and restarts the app by itself — you will only see a short progress bar.",
   "settings.updater.download": "Download & Install Update",
   "settings.updater.downloading": "Downloading update ({percent}%)...",
-  "settings.updater.downloaded": "Update downloaded, click to restart and apply",
+  "settings.updater.installing": "Installing the update and preparing to restart...",
+  "settings.updater.downloaded": "Update installed; restart manually to finish applying it",
   "settings.updater.relaunch": "Restart & Apply Update",
-  "settings.updater.error": "Update check failed: {error}",
+  "settings.updater.relaunchError": "Automatic restart failed: {error}",
+  "settings.updater.error": "Update failed: {error}",
   "settings.updater.releaseNotes": "Release notes",
 
   // Themes ----------------------------------------------------------------
