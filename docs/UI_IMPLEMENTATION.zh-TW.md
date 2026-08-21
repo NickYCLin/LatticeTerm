@@ -21,11 +21,11 @@
 | **主機資源面板** | `HostMetricsPanel` | `src/components/connections/HostMetricsPanel.tsx` | CPU、記憶體、磁碟與開機時間的量表；尚未連線時顯示原因而非假數值。 |
 | **新增/編輯抽屜** | `ConnectionDrawer` | `src/components/overlays/ConnectionDrawer.tsx` | 抽屜式連線表單，支援即時驗證、Tab 焦點循環鎖定與重複目標提醒。 |
 | **命令面板** | `CommandPalette` | `src/components/overlays/CommandPalette.tsx` | `Ctrl` + `K` 全域命令面板，支援搜尋連線與執行全域快捷動作。 |
-| **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、SFTP 檔案、Lattice Remote 畫面與 Web RDP Canvas 分頁。 |
+| **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、SFTP 檔案、Lattice Remote、Web RDP 與 VNC Canvas 分頁。 |
 | **AI Agent Fleet** | `AgentsView` | `src/views/AgentsView.tsx` | 本機多 CLI 啟動、Reporter 狀態、批次提示，以及可命名排序的安全啟動工作區。 |
 | **SFTP 檔案工作區** | `SftpPane` | `src/components/sftp/SftpPane.tsx` | 遠端路徑瀏覽、上下載、建立資料夾、改名與確認刪除。 |
 | **Web RDP Canvas** | `RdpPane` | `src/components/rdp/RdpPane.tsx` | Canvas 畫面、座標縮放、滑鼠、滾輪、掃描碼鍵盤與失焦釋放。 |
-| **金鑰保管庫** | VaultView | src/views/VaultView.tsx | 直接管理 Rust 核心的主機信任資料與系統認證參照；可檢查、重新整理及確認刪除已保存密碼，但不讀取密碼內容。 |
+| **金鑰保管庫** | `VaultView` | `src/views/VaultView.tsx` | 管理 Rust 核心的主機信任、認證參照與 Argon2id／XChaCha20-Poly1305 加密保管庫；可建立、解鎖、鎖定、改主密碼及切換認證後端，但不把密碼內容交給前端。 |
 | **活動紀錄** | `ActivityView` | `src/views/ActivityView.tsx` | 活動日誌清單、關鍵字搜尋、事件類型篩選與純文字日誌匯出。 |
 | **設定檢視** | `SettingsView` | `src/views/SettingsView.tsx` | 外觀設定（主題、密度、動態效果）、安全機制說明與執行環境資訊。 |
 | **狀態列** | `StatusBar` | `src/components/shell/StatusBar.tsx` | 28 px 底部狀態列，顯示連線數、記憶體/儲存模式與認證儲存區就緒狀態。 |
@@ -46,7 +46,7 @@
 - **Preferences Hook (`src/app/preferences.ts`)**：
   - 管理主題（深色/淺色/跟隨系統）、密度（舒適/緊湊）與動態偏好，並同步至 DOM 與 localStorage。
 - **Agent Sessions Hook (`src/app/useAgentSessions.ts`)**：
-  - 管理本機 PTY 工作階段、語意狀態事件、批次提示，以及安全啟動工作區的名稱、順序與 v2 儲存 command。
+  - 管理本機 PTY 工作階段、語意狀態事件、原生 Session ID 擷取、批次提示，以及安全啟動工作區的名稱、順序與 v3 儲存 command。
 
 ---
 
@@ -164,8 +164,8 @@
 - Rust 核心以 `russh-sftp` 建立 SFTP v3 子系統，沿用 SSH 的嚴格主機指紋比對；未知主機必須先確認，金鑰變更直接阻擋。
 - `useSftpSessions` 管理工作階段與 Tauri IPC；`SftpPane` 顯示 canonical remote path、目錄優先排序、檔案大小、修改時間與權限。
 - 使用者可手動前往路徑、上一層、重新整理、建立空資料夾、上傳、下載、改名與刪除；同名覆寫及刪除都要再次確認，不提供遞迴刪除。
-- 每次上傳與下載上限 32 MiB。Rust 下載以「上限 + 1 byte」串流讀取，不信任伺服器回報的檔案大小；大型傳輸佇列留待後續版本。
-- `src-tauri/tests/sftp_live.rs` 可搭配拋棄式 OpenSSH 容器驗證拒絕未知主機、信任後登入與完整檔案生命週期。
+- 一般上下載走串流傳輸佇列：Rust 直接把下載寫入系統「下載」資料夾，上傳則以 4 MiB 有界分塊送入後端，並提供進度、取消與完成狀態。只有供小檔就地讀寫的舊 IPC 指令保留 32 MiB 防護上限。
+- `src-tauri/tests/sftp_live.rs` 可搭配拋棄式 OpenSSH 容器驗證拒絕未知主機、信任後登入與完整檔案生命週期；`src-tauri/tests/sftp_transfers_live.rs` 另驗證大型串流上傳、下載與取消。
 
 ---
 

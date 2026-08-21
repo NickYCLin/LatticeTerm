@@ -3,12 +3,12 @@
 LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作空間，用來統一管理本機 AI CLI、SSH、SFTP、RDP 與 VNC 連線，以 Tauri 2、Rust、React 與 TypeScript 建構。
 
 > [!NOTE]
-> LatticeTerm 目前處於開發初期階段，已提供 AI Agent Fleet、語意狀態 Reporter、SSH、SFTP、SSH Tunnel、Lattice Remote、Web RDP、主機信任與作業系統認證儲存；背景 Agent daemon、VNC、Relay 與 NAT 穿透等功能正依開發藍圖陸續接入。
+> LatticeTerm 目前處於開發初期階段，已提供 AI Agent Fleet、語意狀態 Reporter、SSH、SFTP、SSH Tunnel、Lattice Remote、Web RDP、VNC、主機信任、作業系統認證儲存與主密碼加密保管庫；背景 Agent daemon、Relay 與 NAT 穿透等功能正依開發藍圖陸續接入。
 
 ## 主要特色
 
 - **現代化桌面工作空間**：整合全域導覽列、資源側欄、工作區與即時狀態列。
-- **安全的連線管理**：連線設定檔不含密碼與私鑰；SSH/SFTP/RDP 驗證成功後可由使用者選擇保存密碼，交給 Windows Credential Manager、macOS Keychain 或 Linux Secret Service 隔離保管。
+- **安全的連線管理**：連線設定檔不含密碼與私鑰；SSH/SFTP/RDP/VNC 驗證成功後可由使用者選擇保存密碼，交給 Windows Credential Manager、macOS Keychain、Linux Secret Service，或以主密碼保護的本機加密保管庫隔離保存。
 - **真實主機信任管理**：Key Vault 直接讀寫桌面核心的 `known_hosts.json`，可搜尋、複製、新增及移除已驗證的 SHA-256 指紋。
 - **非機密設定安全匯出與匯入**：支援以標準 JSON 格式安全備份與移轉連線清單，自動過濾任何機密資訊。
 - **強大的組織與檢索**：支援全域關鍵字搜尋、多層群組、環境標籤（Production / Staging / Development）與常用釘選。
@@ -20,11 +20,11 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 - **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、OpenCode、Hermes 等本機 LLM CLI，也可安全指定自訂可執行檔與參數；通用 Reporter 讓工具 hook 明確回報狀態，並可在二次確認後將同一段提示送給多個已選 Agent。內建 Adapter 可用各 CLI 的原生格式續接 Codex、Claude Code、Gemini CLI 與 Hermes Session；是否把識別值存入可命名、排序的啟動工作區，完全由使用者分開決定。登入資料仍由各 CLI 自行管理。
 - **SSH 連線**：以純 Rust 的 russh 實作，可使用密碼或本機 OpenSSH 私鑰建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼預設只用於當次連線，使用者可在驗證成功後明確保存到系統認證儲存區，私鑰內容與密語不會保存至連線設定。
 - **SSH Tunnel**：可建立本機、遠端與 SOCKS5 動態轉送，顯示即時狀態與連線數；動態代理若未設定驗證只允許綁定 loopback，遠端轉送則依 SSH 伺服器的 GatewayPorts 政策生效。
-- **SFTP 檔案工作區**：沿用 SSH 主機指紋驗證與獨立的系統認證項目，可瀏覽遠端路徑、上下載、新增資料夾、重新命名及確認刪除。單次傳輸限制為 32 MiB，避免大型內容耗盡 WebView／IPC 記憶體。
+- **SFTP 檔案工作區**：沿用 SSH 主機指紋驗證與獨立的認證項目，可瀏覽遠端路徑、上下載、新增資料夾、重新命名及確認刪除；大型檔案經有界分塊與原生串流佇列傳輸，不把整個檔案塞進 WebView／IPC 記憶體。
 - **Lattice Remote（唯讀 v1）**：桌面版內建「分享這台裝置」，由使用者明確啟動自建 Agent 擷取完整主螢幕，以 Noise XXpsk3 與一次性八位數配對碼建立端對端加密直連；目前不注入鍵盤或滑鼠。
 - **Web RDP Canvas**：IronRDP 原生 engine 以 TLS/NLA 連到 Windows，畫面繪入內嵌 Canvas，並支援滑鼠、滾輪與鍵盤。密碼只經本機 stdin 傳給隔離 engine，也可在成功驗證後安全保存。
-- **使用者控制的截圖與錄影**：Lattice Remote 與 Web RDP 都可手動擷取 PNG，或開始、停止並下載遠端 Canvas 錄影；不會自動錄製或上傳。
-- **跨平台支援**：支援 Windows、Linux 與 macOS。
+- **使用者控制的截圖與錄影**：Lattice Remote、Web RDP 與 VNC 都可手動擷取 PNG，或開始、停止並下載遠端 Canvas 錄影；不會自動錄製或上傳。
+- **跨平台支援**：桌面版支援 Windows、Linux 與 macOS；Android 版已可建置執行共用的純 Rust 核心功能，需本機程序的 RDP／VNC／CLI Fleet 維持桌面限定。
 
 ## 📥 下載與安裝 (Downloads)
 
@@ -32,7 +32,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 
 | 平台 | 安裝包格式 | 系統支援 |
 |---|---|---|
-| **Windows** | `.msi` / `.exe` (NSIS) | Windows 10 / 11 (x64) |
+| **Windows** | `.exe` (NSIS) | Windows 10 / 11 (x64) |
 | **Linux** | `.deb` / `.AppImage` | Ubuntu、Debian 及通用 Linux 發行版 (x64 / arm64) |
 | **macOS** | `.dmg` / `.app` | macOS 12+ (Apple Silicon) |
 
@@ -45,10 +45,10 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 介面必須讓使用者一眼分辨「已經可用」與「還在開發」：
 
 - 尚未實作的功能標示為「即將推出」，不使用看起來可按、實際上停用的假按鈕。
-- AI Agent Fleet、SSH、SFTP、Lattice Remote 與 Web RDP 會啟動真正的工作階段；Agent Fleet 可保存安全啟動工作區，但不會假裝舊程序或終端內容可跨重啟存活。背景 Agent daemon、原工作階段重新 attach 與 VNC 仍明確標示開發狀態。
+- AI Agent Fleet、SSH、SFTP、Lattice Remote、Web RDP 與 VNC 會啟動真正的工作階段；Agent Fleet 可保存安全啟動工作區，但不會假裝舊程序或終端內容可跨重啟存活。背景 Agent daemon 與原工作階段重新 attach 仍明確標示開發狀態。
 - 主機資源分頁在監控資料尚未接入前直接說明原因，不顯示假的 CPU 或記憶體數字。
-- SSH/SFTP/RDP 密碼永遠不寫入連線設定檔；預設只供當次驗證，勾選後也只有驗證成功才會寫入作業系統認證儲存區。
-- Key Vault 的主機信任與認證分頁都顯示真正的本機狀態；認證分頁只列連線參照，不顯示密碼內容。
+- SSH/SFTP/RDP/VNC 密碼永遠不寫入連線設定檔；預設只供當次驗證，勾選後也只有驗證成功才會寫入使用者選擇的作業系統認證儲存區或已解鎖加密保管庫。
+- Key Vault 的主機信任、認證與加密保管庫分頁都顯示真正的本機狀態；認證分頁只列連線參照，不顯示密碼內容。
 - 狀態列由 Rust 核心回報認證儲存區的真實可用狀態，不用固定文案假裝就緒。
 
 ## 開發藍圖
@@ -58,7 +58,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 3. Lattice Remote 唯讀加密主螢幕與內嵌主機分享（已可用，後續增加 Relay/NAT 穿透、無人值守與顯式授權的輸入控制）
 4. 內嵌 Web RDP Canvas（已可用，持續強化封裝與憑證管理）
 5. SFTP 檔案瀏覽與安全傳輸、SSH Tunnel 本機／遠端轉送與 SOCKS5 代理設定、大型檔案串流佇列、VNC 畫面操作（皆可用）
-6. AI Agent Fleet 本機多 CLI PTY、安全語意 Reporter、批次提示、四種 CLI 原生 Session 續接與可命名排序的跨重啟安全啟動工作區（已可用）；自動 Session ID 擷取、工具 hook、背景 daemon、原程序重新 attach、依賴／佇列編排與遠端 attach 仍待完成
+6. AI Agent Fleet 本機多 CLI PTY、安全語意 Reporter、批次提示、四種 CLI 原生 Session 續接、自動 Session ID 擷取與可命名排序的跨重啟安全啟動工作區（已可用）；工具 hook 安裝、自動化 token／cost 觀測、背景 daemon、原程序重新 attach、依賴／佇列編排與遠端 attach 仍待完成
 7. 跨平台安裝檔打包、自動版號 Release PR、簽章更新包與自動更新機制（已可用；作業系統發行者簽章仍待憑證）
 8. Android 版本（已可建置執行：SSH／SFTP／通道／保管庫等核心可用，底部分頁列與終端機觸控鍵列；RDP／VNC／CLI Fleet 等需本機程序的功能為桌面限定）；iOS 需 macOS 建置環境，尚未開始
 
@@ -124,6 +124,7 @@ npm run check
 npm run build:sidecars
 cargo test --manifest-path crates/lattice-remote/Cargo.toml --features agent
 cargo test --manifest-path crates/lattice-rdp/Cargo.toml
+cargo test --manifest-path crates/lattice-vnc/Cargo.toml
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

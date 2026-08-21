@@ -139,6 +139,7 @@ jobs:
             src-tauri -> target
             crates/lattice-remote -> target
             crates/lattice-rdp -> target
+            crates/lattice-vnc -> target
 
       - name: Install frontend dependencies
         run: npm ci
