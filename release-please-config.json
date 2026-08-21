@@ -7,17 +7,55 @@
   "draft-pull-request": true,
   "pull-request-title-pattern": "chore${scope}: 發布${component} ${version}",
   "changelog-sections": [
-    { "type": "feat", "section": "🚀 新增功能" },
-    { "type": "fix", "section": "🛠️ 問題修正" },
-    { "type": "perf", "section": "⚡ 效能與體驗優化" },
-    { "type": "style", "section": "🎨 介面與視覺調整" },
-    { "type": "refactor", "section": "🧹 架構優化" },
-    { "type": "revert", "section": "⏪ 還原變更" },
-    { "type": "docs", "section": "📖 文件更新", "hidden": true },
-    { "type": "chore", "section": "維護", "hidden": true },
-    { "type": "test", "section": "測試", "hidden": true },
-    { "type": "build", "section": "建置", "hidden": true },
-    { "type": "ci", "section": "持續整合", "hidden": true }
+    {
+      "type": "feat",
+      "section": "🚀 新增功能"
+    },
+    {
+      "type": "fix",
+      "section": "🛠️ 問題修正"
+    },
+    {
+      "type": "perf",
+      "section": "⚡ 效能與體驗優化"
+    },
+    {
+      "type": "style",
+      "section": "🎨 介面與視覺調整"
+    },
+    {
+      "type": "refactor",
+      "section": "🧹 架構優化"
+    },
+    {
+      "type": "revert",
+      "section": "⏪ 還原變更"
+    },
+    {
+      "type": "docs",
+      "section": "📖 文件更新",
+      "hidden": true
+    },
+    {
+      "type": "chore",
+      "section": "維護",
+      "hidden": true
+    },
+    {
+      "type": "test",
+      "section": "測試",
+      "hidden": true
+    },
+    {
+      "type": "build",
+      "section": "建置",
+      "hidden": true
+    },
+    {
+      "type": "ci",
+      "section": "持續整合",
+      "hidden": true
+    }
   ],
   "packages": {
     ".": {
@@ -32,7 +70,8 @@
           "path": "src-tauri/Cargo.toml",
           "jsonpath": "$.package.version"
         }
-      ]
+      ],
+      "draft": true
     }
   }
 }

@@ -167,8 +167,45 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ needs.release-please.outputs.tag_name }}
-          releaseDraft: false
+          # The release stays a draft while installers upload; the publish job
+          # below flips it live only when every platform finished. Publishing
+          # first would leave a window where installed apps see a "latest"
+          # release whose latest.json does not exist yet.
+          releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
           retryAttempts: 2
+
+  publish-release:
+    name: Publish the finished release
+    needs: [release-please, build-release]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Flip the draft release live
+        uses: actions/github-script@v9
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        with:
+          script: |
+            const tag = process.env.TAG_NAME;
+            const releases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 30,
+            });
+            const release = releases.data.find((entry) => entry.tag_name === tag);
+            if (!release) throw new Error(`No release found for ${tag}`);
+            if (!release.draft) {
+              core.info(`${tag} is already published.`);
+              return;
+            }
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              draft: false,
+              make_latest: "true",
+            });
+            core.info(`Published ${tag}.`);
