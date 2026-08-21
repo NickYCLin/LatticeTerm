@@ -71,6 +71,7 @@ jobs:
             src-tauri -> target
             crates/lattice-remote -> target
             crates/lattice-rdp -> target
+            crates/lattice-vnc -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -86,18 +87,67 @@ jobs:
           cargo fmt --manifest-path src-tauri/Cargo.toml --check
           cargo fmt --manifest-path crates/lattice-remote/Cargo.toml --check
           cargo fmt --manifest-path crates/lattice-rdp/Cargo.toml --check
+          cargo fmt --manifest-path crates/lattice-vnc/Cargo.toml --check
 
       - name: Test Rust
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml
           cargo test --manifest-path crates/lattice-remote/Cargo.toml --features agent
           cargo test --manifest-path crates/lattice-rdp/Cargo.toml
+          cargo test --manifest-path crates/lattice-vnc/Cargo.toml
 
       - name: Lint Rust
         run: |
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
           cargo clippy --manifest-path crates/lattice-remote/Cargo.toml --features agent --all-targets -- -D warnings
           cargo clippy --manifest-path crates/lattice-rdp/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/lattice-vnc/Cargo.toml --all-targets -- -D warnings
 
       - name: Build Tauri application
         run: npm run tauri build -- --no-bundle
+
+  verify-android:
+    name: Android aarch64
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+          cache-dependency-path: |
+            src-tauri/gen/android/*.gradle*
+            src-tauri/gen/android/**/build.gradle.kts
+            src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Configure Android NDK
+        shell: bash
+        run: echo "NDK_HOME=$ANDROID_NDK" >> "$GITHUB_ENV"
+
+      - name: Cache Android Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: android-aarch64
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Android debug APK
+        run: npm run tauri android build -- --debug --apk --target aarch64
