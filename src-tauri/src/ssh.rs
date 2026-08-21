@@ -166,6 +166,9 @@ enum ClientInput {
 struct SessionEntry {
     summary: SessionSummary,
     input: mpsc::Sender<ClientInput>,
+    /// The connection itself, kept so other features — metrics probes, future
+    /// file transfers — can open their own channels on this session.
+    handle: Arc<client::Handle<TrustingHandler>>,
 }
 
 #[derive(Default)]
@@ -203,6 +206,18 @@ impl SshRegistry {
         if let Ok(mut guard) = self.sessions.lock() {
             guard.remove(session_id);
         }
+    }
+
+    /// The live connection behind a session, for opening additional channels.
+    pub(crate) fn session_handle(
+        &self,
+        session_id: &str,
+    ) -> Option<Arc<client::Handle<TrustingHandler>>> {
+        self.sessions
+            .lock()
+            .ok()?
+            .get(session_id)
+            .map(|entry| Arc::clone(&entry.handle))
     }
 }
 
@@ -344,6 +359,10 @@ pub async fn connect(
         return ConnectOutcome::AuthFailed;
     }
 
+    // Everything after authentication takes `&self`, so the handle can be
+    // shared: the registry keeps a clone for later channels on this session.
+    let session = Arc::new(session);
+
     let mut channel = match session.channel_open_session().await {
         Ok(channel) => channel,
         Err(error) => {
@@ -396,6 +415,7 @@ pub async fn connect(
             SessionEntry {
                 summary: summary.clone(),
                 input: input_tx,
+                handle: Arc::clone(&session),
             },
         );
     }

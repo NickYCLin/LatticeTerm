@@ -3,6 +3,7 @@ pub mod agent_plans;
 pub mod credentials;
 pub mod domain;
 pub mod hostkeys;
+pub mod metrics;
 pub mod rdp;
 pub mod remote;
 pub mod remote_host;
@@ -467,6 +468,14 @@ async fn ssh_disconnect(
     registry: State<'_, Arc<SshRegistry>>,
 ) -> Result<(), String> {
     crate::ssh::disconnect(registry.inner(), &session_id).await
+}
+
+#[tauri::command]
+async fn host_metrics(
+    session_id: String,
+    registry: State<'_, Arc<SshRegistry>>,
+) -> Result<crate::metrics::HostMetricsPayload, String> {
+    crate::metrics::collect_for_session(registry.inner(), &session_id).await
 }
 
 #[tauri::command]
@@ -936,6 +945,7 @@ pub fn run() {
             ssh_resize,
             ssh_disconnect,
             ssh_sessions,
+            host_metrics,
             sftp_connect,
             sftp_sessions,
             sftp_list,

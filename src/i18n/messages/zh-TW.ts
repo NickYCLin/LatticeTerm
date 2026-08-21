@@ -196,6 +196,7 @@ export const zhTW = {
   "metrics.notConnected.title": "尚未連線，看不到資源資訊",
   "metrics.notConnected.body":
     "CPU、記憶體與磁碟用量需要在連線成功後，由遠端主機回報。SSH 連線功能完成後，這裡就會顯示即時數值。",
+  "metrics.notSupported.body": "資源讀取需要 SSH 連線；這種連線類型目前不支援。",
   "metrics.cpu": "處理器",
   "metrics.memory": "記憶體",
   "metrics.swap": "置換空間",

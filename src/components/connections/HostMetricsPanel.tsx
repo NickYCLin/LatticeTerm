@@ -67,7 +67,11 @@ export function HostMetricsPanel({ state }: { state: MetricsState }) {
   const { t } = useI18n();
 
   if (state.status === "unavailable") {
-    return (
+    return state.reason === "not-supported" ? (
+      <Callout tone="info" title={t("metrics.title")}>
+        {t("metrics.notSupported.body")}
+      </Callout>
+    ) : (
       <Callout tone="info" title={t("metrics.notConnected.title")}>
         {t("metrics.notConnected.body")}
       </Callout>

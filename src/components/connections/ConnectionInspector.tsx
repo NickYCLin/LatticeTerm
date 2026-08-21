@@ -18,7 +18,7 @@ import {
   protocolSummaryKey,
   type ConnectionProfile,
 } from "../../domain/connection";
-import { initialMetricsState } from "../../domain/metrics";
+import type { MetricsState } from "../../domain/metrics";
 import { useI18n } from "../../i18n";
 import { Chip, EnvironmentBadge, ProtocolTile, TagChip } from "../common/Badge";
 import { Callout } from "../common/Callout";
@@ -36,12 +36,14 @@ function Field({ label, value }: { label: string; value: ReactNode }) {
 
 export function ConnectionInspector({
   profile,
+  metrics,
   onClose,
   onEdit,
   onDuplicate,
   onDelete,
 }: {
   profile: ConnectionProfile;
+  metrics: MetricsState;
   onClose: () => void;
   onEdit: () => void;
   onDuplicate: () => void;
@@ -184,7 +186,7 @@ export function ConnectionInspector({
             </Callout>
           </>
         ) : (
-          <HostMetricsPanel state={initialMetricsState} />
+          <HostMetricsPanel state={metrics} />
         )}
       </div>
 

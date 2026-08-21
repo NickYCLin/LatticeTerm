@@ -33,6 +33,7 @@ import { ResourceSidebar } from "./components/shell/ResourceSidebar";
 import { StatusBar } from "./components/shell/StatusBar";
 import { ViewHeader } from "./components/shell/ViewHeader";
 import { ConnectionInspector } from "./components/connections/ConnectionInspector";
+import { useHostMetrics } from "./app/useHostMetrics";
 import {
   CommandPalette,
   type Command,
@@ -286,6 +287,12 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const showSidebar = view === "connections" && !preferences.sidebarCollapsed;
   const showInspector =
     view === "connections" && selected !== null && preferences.inspectorOpen;
+  // Read resources only while the inspector can show them; passing null stops
+  // the polling the moment the panel closes.
+  const inspectorMetrics = useHostMetrics(
+    showInspector ? selected : null,
+    ssh.sessions,
+  );
 
   return (
     <div className="app">
@@ -402,6 +409,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           {showInspector && selected && (
             <ConnectionInspector
               profile={selected}
+              metrics={inspectorMetrics}
               onClose={() => setSelectedId(null)}
               onEdit={() => openEdit(selected.id)}
               onDuplicate={() => duplicateProfile(selected.id)}

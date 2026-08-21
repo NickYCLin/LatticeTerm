@@ -207,6 +207,7 @@ export const en: Messages = {
   "metrics.notConnected.title": "Not connected, so there is nothing to show",
   "metrics.notConnected.body":
     "CPU, memory and disk usage have to be reported by the remote host after a successful connection. Live figures appear here once SSH connections are working.",
+  "metrics.notSupported.body": "Resource readings need an SSH session; this connection type is not supported yet.",
   "metrics.cpu": "Processor",
   "metrics.memory": "Memory",
   "metrics.swap": "Swap",
