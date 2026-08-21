@@ -32,6 +32,7 @@ PR 的 CI 會驗證每一筆非合併提交的格式。若需明確指定下一�
 5. 檢視版本與 changelog，將 Release PR 標示為 ready 並合併。
 6. 下一次 `Release` workflow 建立 `vX.Y.Z` tag 與 GitHub Release。
 7. Linux amd64、Linux arm64、Windows amd64、macOS arm64 原生 runner 建置安裝檔，上傳更新簽章與 `latest.json`。
+8. 發布 job 將同一份繁中版本說明同步到 GitHub Release 與 `latest.json`，確認所有平台完成後才公開 Release。
 
 Release PR 是唯一正式發布閘門。一般功能 PR 不應手動修改版本、建立 tag，或直接建立同版本 Release。
 
@@ -54,6 +55,7 @@ Release PR 會一起更新：
 - GitHub Actions 必須保存 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。缺少私鑰時發布會直接失敗，避免產生客戶端拒絕的未簽章更新包。
 - Tauri updater 簽章用來驗證更新內容，與 Windows Authenticode 或 Apple Developer ID／notarization 是不同層次。目前自動化保證 updater 簽章；正式對外散佈前仍應補齊各作業系統的發行者憑證。
 - 某個平台失敗時，在 GitHub Actions 重新執行失敗的 job；Tauri Action 會尋找既有 tag 的 Release 並補上資產，不需再建同版本 tag。
+- `latest.json` 的 `notes` 必須與 GitHub Release 本文一致，避免應用程式內的更新視窗顯示空白版本說明。
 - `workflow_dispatch` 可重新整理 Release PR；若沒有可發布提交，它不會憑空增加版本。
 
 ## 維護規則

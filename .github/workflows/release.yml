@@ -195,6 +195,17 @@ jobs:
           TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         run: node scripts/render-release-metadata.mjs "$TAG_NAME" "$RUNNER_TEMP/release-metadata.json"
 
+      - name: Synchronize the updater release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/updater"
+          gh release download "$TAG_NAME" --pattern latest.json --dir "$RUNNER_TEMP/updater"
+          node scripts/sync-updater-release-notes.mjs "$RUNNER_TEMP/updater/latest.json" "$RUNNER_TEMP/release-metadata.json"
+          gh release upload "$TAG_NAME" "$RUNNER_TEMP/updater/latest.json" --clobber
+
       - name: Apply the release notes and flip the draft live
         uses: actions/github-script@v9
         env:
