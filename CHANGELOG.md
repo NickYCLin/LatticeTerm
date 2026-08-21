@@ -4,6 +4,13 @@
 
 ---
 
+## [0.9.6](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.5...v0.9.6) (2026-08-21)
+
+
+### 🛠️ 問題修正
+
+* **SFTP:** 保護串流覆寫的原始檔案 ([835a4c5](https://github.com/NickYCLin/LatticeTerm/commit/835a4c5bf73ae67790eb95ed34b9811e2190d69d))
+
 ## [0.9.5](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.4...v0.9.5) (2026-08-21)
 
 

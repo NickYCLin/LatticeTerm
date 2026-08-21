@@ -43,9 +43,9 @@ jobs:
           script: |
             return JSON.parse(process.env.RELEASE_PR).headBranchName;
 
-      # Cargo.lock is generated and strips custom version annotations. Update
-      # only its lattice-term root package entry on the generated Release PR,
-      # then commit that deterministic lockfile change.
+      # Cargo.lock is generated and strips custom version annotations. Also,
+      # merge commits may duplicate their child commit in the generated
+      # changelog. Normalize both files on the generated Release PR.
       - name: Check out the generated Release PR
         if: steps.release.outputs.prs_created == 'true'
         uses: actions/checkout@v7
@@ -53,20 +53,21 @@ jobs:
           ref: ${{ steps.release-pr.outputs.result }}
           fetch-depth: 0
 
-      - name: Synchronize the Cargo lockfile
+      - name: Normalize the generated release files
         if: steps.release.outputs.prs_created == 'true'
         shell: bash
         run: |
+          npm run release:normalize-changelog
           npm run version:sync-lock
           node scripts/check-version-sync.mjs
-          if git diff --quiet -- src-tauri/Cargo.lock; then
-            echo "Cargo.lock is already synchronized."
+          if git diff --quiet -- CHANGELOG.md src-tauri/Cargo.lock; then
+            echo "Release files are already normalized."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- src-tauri/Cargo.lock
-          git commit -m "chore(版本): 同步 Cargo 鎖定檔"
+          git add -- CHANGELOG.md src-tauri/Cargo.lock
+          git commit -m "chore(版本): 正規化版本檔案"
           git push origin "HEAD:${{ steps.release-pr.outputs.result }}"
 
       # Events created with GITHUB_TOKEN normally do not start another

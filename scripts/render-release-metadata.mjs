@@ -26,8 +26,28 @@ function extractReleaseSection(changelog, version) {
   return changelog.slice(start, end).trim().replace(/\n---\s*$/, "").trim();
 }
 
+export function deduplicateChangelogEntries(changelog) {
+  const seenEntries = new Set();
+
+  return changelog
+    .split("\n")
+    .filter((line) => {
+      if (/^## \[/.test(line)) {
+        seenEntries.clear();
+        return true;
+      }
+      if (!/^\* /.test(line)) return true;
+
+      const normalizedEntry = line.replace(COMMIT_LINK, "").trim();
+      if (seenEntries.has(normalizedEntry)) return false;
+      seenEntries.add(normalizedEntry);
+      return true;
+    })
+    .join("\n");
+}
+
 function normalizeReleaseBody(section) {
-  const body = section
+  const body = deduplicateChangelogEntries(section)
     .replace(/^### /gm, "## ")
     .replace(/^## 🛠️ 問題修正[^\S\r\n]*$/gm, "## 🛠️ 問題修正與優化")
     .replace(COMMIT_LINK, "")
