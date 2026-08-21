@@ -6,19 +6,20 @@
 
 ## [0.9.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.8.0...v0.9.0) (2026-08-21)
 
-
 ### 🚀 新增功能
-
-* **agent:** CLI 印出的 Session ID 會自動抓下來，續接不用再自己翻 ([e017ccb](https://github.com/NickYCLin/LatticeTerm/commit/e017ccb3a9aee4c09ce448e6da0fb13b8c14510a))
-* **SFTP:** 大檔案改用串流佇列，32MB 上限拿掉了 ([018cbeb](https://github.com/NickYCLin/LatticeTerm/commit/018cbebf49ada3bbc470120551d8580c06e5a806))
-* **VNC:** VNC 可以用了，順手修掉切換視圖後工作階段變空白的問題 ([1ea852e](https://github.com/NickYCLin/LatticeTerm/commit/1ea852ed7d080b659a6d33298ff3ee45569bed02))
-* **保管庫:** 加密保管庫上線，密碼多了一個不靠作業系統的家 ([53046d3](https://github.com/NickYCLin/LatticeTerm/commit/53046d3501f77cbadff3f0721ecc8c37193bd800))
-* **行動版:** Android 版能跑了 ([1ac6975](https://github.com/NickYCLin/LatticeTerm/commit/1ac6975862666db57b70f4aa8cb26023e340e5d8))
-
-
-### 🎨 介面與視覺調整
-
-* **圖示:** 替換活動紀錄與設定之圖示設計 ([45426d9](https://github.com/NickYCLin/LatticeTerm/commit/45426d9a0917368557e53f5988a3725c017c82e7))
+* **左側功能列圖示最佳化**：
+  - 活動紀錄 (Activity)：替換為直觀的「條列日誌記事本 (Audit Logsheet)」，消除醫療心電圖感。
+  - 設定 (Settings)：替換為標準的「一體連通式高精度機械齒輪 (Solid Mechanical Gear)」，徹底消除太陽放射感。
+* **SFTP 大檔案串流佇列**：
+  - SFTP 檔案傳輸升級為分塊串流佇列架構，正式解除 32MB 上傳與下載大小限制，支援大型檔案穩定傳輸。
+* **VNC 遠端桌面協定支援**：
+  - 新增 VNC 遠端連線模式，並修復切換視圖分頁時畫面偶發空白的問題。
+* **獨立加密保管庫 (Encrypted Vault)**：
+  - 新增本機加密保管庫功能，讓 SSH 與遠端主機認證資料多一個安全可靠的獨立儲存選擇。
+* **AI Agent Session ID 智慧擷取**：
+  - 自動從 CLI 輸出中識別並捕獲 Session ID，一鍵輕鬆續接歷史工作階段，無需手動複製貼上。
+* **行動版支援架構**：
+  - 完成 Android 行動裝置執行支援與跨端適配。
 
 ## [0.8.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.7.0...v0.8.0) (2026-08-21)
 
