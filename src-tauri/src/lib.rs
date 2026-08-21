@@ -85,6 +85,9 @@ struct RuntimeSummary {
     version: &'static str,
     supported_protocols: [&'static str; 4],
     credential_storage_ready: bool,
+    /// "windows" | "macos" | "linux" | "android" | "ios" — the interface
+    /// hides desktop-only areas (agents, sidecar engines) on mobile.
+    platform: &'static str,
 }
 
 #[tauri::command]
@@ -94,6 +97,7 @@ fn runtime_summary() -> RuntimeSummary {
         version: env!("CARGO_PKG_VERSION"),
         supported_protocols: ["ssh", "sftp", "rdp", "lattice"],
         credential_storage_ready: crate::credentials::status().ready,
+        platform: std::env::consts::OS,
     }
 }
 
@@ -1125,9 +1129,14 @@ fn tunnel_list(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Auto-update and relaunch are desktop concerns; mobile installs come
+    // from a package manager and restart through the OS.
+    #[cfg(desktop)]
+    let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_process::init());
+    let app = builder
         .setup(|app| {
             // Connection data belongs beside the app's other data, not next to
             // the executable, so it survives an update and follows the user

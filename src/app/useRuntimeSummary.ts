@@ -16,6 +16,8 @@ export interface RuntimeSummary {
   version: string;
   supportedProtocols: string[];
   credentialStorageReady: boolean;
+  /** "windows" | "macos" | "linux" | "android" | "ios". */
+  platform: string;
 }
 
 export interface RuntimeState {
@@ -28,6 +30,7 @@ const fallback: RuntimeSummary = {
   version: APP_VERSION,
   supportedProtocols: ["ssh", "rdp", "lattice"],
   credentialStorageReady: false,
+  platform: "browser",
 };
 
 export function useRuntimeSummary(): RuntimeState {

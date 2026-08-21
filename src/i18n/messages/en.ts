@@ -44,6 +44,9 @@ export const en: Messages = {
     "You can still enter a password for this attempt, but it will not be saved. Reason: {detail}",
 
   // Navigation ------------------------------------------------------------
+  "mobile.desktopOnly.title": "Desktop-only feature",
+  "mobile.desktopOnly.body": "RDP and VNC run in separate native engine processes, which mobile operating systems do not allow. Use this connection on the desktop app.",
+  "terminal.keybar.ctrl": "Ctrl",
   "nav.connections": "Connections",
   "nav.connections.desc": "Find, organise and edit remote hosts",
   "nav.agents": "AI Agent Fleet",

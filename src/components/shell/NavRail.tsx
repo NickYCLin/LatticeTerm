@@ -6,15 +6,17 @@
  * view header, so the rail is never the only place a label appears.
  */
 
-import { navigationItems, type ViewId } from "../../app/navigation";
+import { navigationItems, type NavigationItem, type ViewId } from "../../app/navigation";
 import { useI18n } from "../../i18n";
 
 export function NavRail({
   current,
   onSelect,
+  items = navigationItems,
 }: {
   current: ViewId;
   onSelect: (view: ViewId) => void;
+  items?: NavigationItem[];
 }) {
   const { t } = useI18n();
 
@@ -32,7 +34,7 @@ export function NavRail({
       </div>
 
       <ul className="rail__items">
-        {navigationItems.map((item) => {
+        {items.map((item) => {
           const Glyph = item.icon;
           const active = item.id === current;
           const planned = item.status === "planned";

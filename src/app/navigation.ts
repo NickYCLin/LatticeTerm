@@ -34,6 +34,9 @@ export interface NavigationItem {
   descriptionKey: MessageKey;
   icon: (props: IconProps) => ReactElement;
   status: "available" | "planned";
+  /** Areas built on local processes (CLI PTYs, sidecar engines) that a
+   *  mobile OS cannot run. Hidden there rather than shown broken. */
+  desktopOnly?: boolean;
 }
 
 export const navigationItems: NavigationItem[] = [
@@ -57,6 +60,7 @@ export const navigationItems: NavigationItem[] = [
     descriptionKey: "nav.agents.desc",
     icon: AgentIcon,
     status: "available",
+    desktopOnly: true,
   },
   {
     id: "tunnels",
@@ -90,4 +94,14 @@ export const navigationItems: NavigationItem[] = [
 
 export function findNavigationItem(id: ViewId): NavigationItem {
   return navigationItems.find((item) => item.id === id)!;
+}
+
+export function isMobilePlatform(platform: string | undefined): boolean {
+  return platform === "android" || platform === "ios";
+}
+
+/** The navigation a given platform actually offers. */
+export function navigationItemsFor(platform: string | undefined): NavigationItem[] {
+  if (!isMobilePlatform(platform)) return navigationItems;
+  return navigationItems.filter((item) => !item.desktopOnly);
 }

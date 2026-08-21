@@ -60,7 +60,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 5. SFTP 檔案瀏覽與安全傳輸、SSH Tunnel 本機／遠端轉送與 SOCKS5 代理設定、大型檔案串流佇列、VNC 畫面操作（皆可用）
 6. AI Agent Fleet 本機多 CLI PTY、安全語意 Reporter、批次提示、四種 CLI 原生 Session 續接與可命名排序的跨重啟安全啟動工作區（已可用）；自動 Session ID 擷取、工具 hook、背景 daemon、原程序重新 attach、依賴／佇列編排與遠端 attach 仍待完成
 7. 跨平台安裝檔打包、自動版號 Release PR、簽章更新包與自動更新機制（已可用；作業系統發行者簽章仍待憑證）
-8. Android 與 iOS 版本（遠端連線核心可沿用；本機 CLI Fleet 為桌面功能）
+8. Android 版本（已可建置執行：SSH／SFTP／通道／保管庫等核心可用，底部分頁列與終端機觸控鍵列；RDP／VNC／CLI Fleet 等需本機程序的功能為桌面限定）；iOS 需 macOS 建置環境，尚未開始
 
 ## 鍵盤快捷鍵
 

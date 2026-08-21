@@ -786,6 +786,61 @@
 }
 
 .terminal-slot,
+.terminal-slot > .terminal-pane-wrap {
+  height: 100%;
+}
+
+.terminal-pane-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.terminal-pane-wrap > .terminal-pane {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Touch helper keys: only where a hardware keyboard is unlikely. */
+.terminal-keybar {
+  display: none;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  overflow-x: auto;
+  border-top: 1px solid var(--line);
+  background: var(--surface-solid);
+}
+
+.app--mobile .terminal-keybar {
+  display: flex;
+}
+
+@media (pointer: coarse) {
+  .terminal-keybar {
+    display: flex;
+  }
+}
+
+.terminal-keybar__key {
+  flex: none;
+  min-width: 2.6rem;
+  height: 2.2rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+}
+
+.terminal-keybar__key.is-armed {
+  background: var(--accent-soft);
+  border-color: var(--accent-line, var(--accent));
+  color: var(--accent);
+}
+
 .terminal-slot > .terminal-pane {
   height: 100%;
 }

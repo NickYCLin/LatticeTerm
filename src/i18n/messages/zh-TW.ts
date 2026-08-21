@@ -41,6 +41,9 @@ export const zhTW = {
     "這次仍可手動輸入密碼，但不會保存。原因：{detail}",
 
   // 導覽 ------------------------------------------------------------------
+  "mobile.desktopOnly.title": "桌面版限定功能",
+  "mobile.desktopOnly.body": "RDP 與 VNC 需要獨立的原生引擎程序，行動裝置的系統不允許執行。請在桌面版使用這個連線。",
+  "terminal.keybar.ctrl": "Ctrl",
   "nav.connections": "我的連線",
   "nav.connections.desc": "尋找、整理與編輯遠端主機",
   "nav.agents": "AI Agent Fleet",

@@ -213,6 +213,17 @@
 
 ---
 
+## Android 行動版
+
+- **建置**：`npx tauri android init` 產生的專案在 `src-tauri/gen/android`（已入版控，build 輸出除外）；`tauri.android.conf.json` 覆寫 `externalBin` 為空——行動系統不能跑 sidecar，RDP／VNC／裝置分享引擎不隨行動版打包。`npx tauri android build --debug --target aarch64` 出 APK。
+- **核心全數共用**：SSH 終端機、SFTP 與串流佇列、通道、主機資源、known_hosts、加密保管庫都是行程內純 Rust（russh 用 ring 後端正是為了行動交叉編譯），Android 上原樣可用。
+- **平台感知**：`runtime_summary` 回報 `platform`；行動平台上導覽自動隱藏 Agent Fleet，分享裝置按鈕消失，RDP/VNC 連線改顯示「桌面版限定」說明。憑證後端在行動平台預設為加密保管庫（沒有可用的系統鑰匙圈）。
+- **行動佈局**：`.app--mobile` 把左側導覽列變成底部分頁列、單欄內容、隱藏桌面狀態列與資源側欄；系統狀態列以固定 fallback 避開（Android WebView 拿不到 safe-area inset）。
+- **終端機觸控鍵列**：Esc／Tab／方向鍵／管線符號等軟鍵盤沒有的鍵，加上黏性 Ctrl——按一下之後的下一個字元會轉成控制碼。粗指標裝置（`pointer: coarse`）與行動平台顯示。
+- **已實測**：Android 模擬器（API 36）安裝執行，主畫面、底部導覽、平台過濾皆如預期。iOS 需要 macOS + Xcode，本機環境無法建置。
+
+---
+
 ## 加密保管庫與憑證雙後端
 
 - **為什麼不是 IOTA Stronghold**：藍圖原寫 Stronghold，但該專案已被原廠封存、不再維護；改用兩個活躍維護的標準元件自建同等能力——Argon2id（64 MiB、3 迭代）把主密碼拉伸成金鑰，XChaCha20-Poly1305 AEAD 密封整包內容。檔案被改動一個位元組就會驗證失敗，不會吐出爛掉的密碼。

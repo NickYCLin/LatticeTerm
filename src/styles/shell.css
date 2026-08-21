@@ -382,3 +382,82 @@
     padding-inline: var(--space-5);
   }
 }
+
+/* Mobile frame ----------------------------------------------------------- */
+/* On Android/iOS the rail becomes a bottom tab bar, the workspace is a
+ * single column, and the resource sidebar and hover tooltips step aside. */
+
+.app--mobile {
+  flex-direction: column-reverse;
+  gap: var(--space-2);
+  /* Keep clear of the system status bar, notch and gesture bar. */
+  /* Android WebView reports no safe-area insets, so a fixed status-bar
+     allowance backs the env() values up. */
+  padding: max(calc(var(--space-2) + env(safe-area-inset-top, 0px)), 2.25rem)
+    var(--space-2)
+    max(calc(var(--space-2) + env(safe-area-inset-bottom, 0px)), var(--space-4));
+}
+
+.app--mobile .rail {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-around;
+  width: 100%;
+  height: auto;
+  padding: var(--space-1) var(--space-2);
+}
+
+.app--mobile .rail__brand {
+  display: none;
+}
+
+.app--mobile .rail__items {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  justify-content: space-around;
+  gap: 0;
+}
+
+.app--mobile .rail__spacer,
+.app--mobile .rail [data-tooltip]::after,
+.app--mobile .rail [data-tooltip]::before {
+  display: none;
+}
+
+.app--mobile .sidebar {
+  display: none;
+}
+
+.app--mobile .workspace__body {
+  min-width: 0;
+}
+
+.app--mobile .workspace__content {
+  padding: var(--space-3);
+}
+
+.app--mobile .inspector {
+  position: fixed;
+  inset: auto 0 0 0;
+  max-height: 70vh;
+  width: 100%;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  z-index: 40;
+}
+
+.app--mobile .view-header {
+  padding-inline: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.app--mobile .statusbar {
+  display: none;
+}
+
+.app--mobile .dialog,
+.app--mobile .dialog--wide {
+  width: min(94vw, 34rem);
+  max-height: 86vh;
+  overflow-y: auto;
+}

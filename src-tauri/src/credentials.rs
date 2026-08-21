@@ -46,15 +46,25 @@ fn backend_path() -> Option<PathBuf> {
     DIRECTORY.get().map(|dir| dir.join(BACKEND_FILE))
 }
 
+/// Mobile platforms have no OS keyring this app can reach, so the vault is
+/// the sensible default there; desktop keeps the OS store.
+fn default_backend() -> CredentialBackend {
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        CredentialBackend::Vault
+    } else {
+        CredentialBackend::OsKeyring
+    }
+}
+
 pub fn preferred_backend() -> CredentialBackend {
     let Some(path) = backend_path() else {
-        return CredentialBackend::OsKeyring;
+        return default_backend();
     };
     std::fs::read_to_string(path)
         .ok()
         .and_then(|raw| serde_json::from_str::<BackendFile>(&raw).ok())
         .map(|file| file.backend)
-        .unwrap_or(CredentialBackend::OsKeyring)
+        .unwrap_or_else(default_backend)
 }
 
 pub fn set_preferred_backend(backend: CredentialBackend) -> Result<CredentialBackend, String> {

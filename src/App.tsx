@@ -9,7 +9,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   findNavigationItem,
-  navigationItems,
+  isMobilePlatform,
+  navigationItemsFor,
   type ViewId,
 } from "./app/navigation";
 import { usePreferences, type PreferencesValue } from "./app/preferences";
@@ -61,6 +62,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const { t } = useI18n();
   const workspace = useWorkspace();
   const runtime = useRuntimeSummary();
+  const platform = runtime.summary?.platform;
+  const onMobile = isMobilePlatform(platform);
+  const visibleNavigation = navigationItemsFor(platform);
   const storage = useStorageStatus();
   const agents = useAgentSessions();
   const ssh = useSshSessions();
@@ -73,6 +77,12 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   useWindowTheme(findTheme(activeTheme).isDark);
 
   const [view, setView] = useState<ViewId>("connections");
+  // A desktop-only view reached on mobile (stale state) snaps back home.
+  useEffect(() => {
+    if (onMobile && !visibleNavigation.some((entry) => entry.id === view)) {
+      setView("connections");
+    }
+  }, [onMobile, view, visibleNavigation]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [remoteHostOpen, setRemoteHostOpen] = useState(false);
   const [drawer, setDrawer] = useState<{
@@ -150,7 +160,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   );
 
   const commands = useMemo<Command[]>(() => {
-    const entries: Command[] = navigationItems.map((item) => ({
+    const entries: Command[] = visibleNavigation.map((item) => ({
       id: `view:${item.id}`,
       label: t("palette.goTo", { name: t(item.labelKey) }),
       hint: t(item.descriptionKey),
@@ -247,7 +257,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     preferences.sidebarCollapsed,
     profiles.length,
     loadSamples,
-  ]);
+  , visibleNavigation]);
 
   // Global shortcuts. Anything typed into a field is left alone.
   useEffect(() => {
@@ -298,8 +308,8 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   );
 
   return (
-    <div className="app">
-      <NavRail current={view} onSelect={setView} />
+    <div className={`app${onMobile ? " app--mobile" : ""}`}>
+      <NavRail current={view} onSelect={setView} items={visibleNavigation} />
 
       {showSidebar && (
         <ResourceSidebar
@@ -327,22 +337,24 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           }
           actions={
             <>
-              <button
-                type="button"
-                className={
-                  remoteHost.status
-                    ? "button button--secondary"
-                    : "button button--ghost"
-                }
-                onClick={() => setRemoteHostOpen(true)}
-              >
-                <ScreenShareIcon size={15} />
-                {t(
-                  remoteHost.status
-                    ? "remote.host.activeAction"
-                    : "remote.host.action",
-                )}
-              </button>
+              {!onMobile && (
+                <button
+                  type="button"
+                  className={
+                    remoteHost.status
+                      ? "button button--secondary"
+                      : "button button--ghost"
+                  }
+                  onClick={() => setRemoteHostOpen(true)}
+                >
+                  <ScreenShareIcon size={15} />
+                  {t(
+                    remoteHost.status
+                      ? "remote.host.activeAction"
+                      : "remote.host.action",
+                  )}
+                </button>
+              )}
               {view === "connections" && profiles.length > 0 && (
                 <button
                   type="button"
@@ -551,7 +563,34 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       )}
 
-      {connectTarget?.protocol === "rdp" && (
+      {connectTarget && onMobile && (connectTarget.protocol === "rdp" || connectTarget.protocol === "vnc") && (
+        <div className="scrim scrim--center" role="presentation" onMouseDown={() => setConnectTarget(null)}>
+          <div
+            className="dialog"
+            role="dialog"
+            aria-modal="true"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header className="dialog__head">
+              <h2 className="dialog__title">{t("mobile.desktopOnly.title")}</h2>
+            </header>
+            <div className="dialog__stack">
+              <p className="dialog__body">{t("mobile.desktopOnly.body")}</p>
+              <div className="dialog__actions">
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={() => setConnectTarget(null)}
+                >
+                  {t("common.close")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!onMobile && connectTarget?.protocol === "rdp" && (
         <RdpConnectFlow
           profile={connectTarget}
           rdp={rdp}
@@ -564,7 +603,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       )}
 
-      {connectTarget?.protocol === "vnc" && (
+      {!onMobile && connectTarget?.protocol === "vnc" && (
         <VncConnectFlow
           profile={connectTarget}
           vnc={vnc}

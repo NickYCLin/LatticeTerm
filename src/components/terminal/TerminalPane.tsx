@@ -7,7 +7,7 @@
  * an editor lay themselves out correctly.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -62,6 +62,11 @@ export function TerminalPane({
   // render that happens to change a callback identity.
   const sshRef = useRef(ssh);
   sshRef.current = ssh;
+  // A sticky Ctrl for touch keyboards that have none: arm it, and the next
+  // typed character is sent as its control code.
+  const [ctrlArmed, setCtrlArmed] = useState(false);
+  const ctrlArmedRef = useRef(false);
+  ctrlArmedRef.current = ctrlArmed;
   const closedRef = useRef(onClosed);
   closedRef.current = onClosed;
   const messageRef = useRef("");
@@ -92,7 +97,15 @@ export function TerminalPane({
     // Silence here is what made a broken session look like a dead keyboard:
     // say so once, in the terminal itself, rather than dropping keystrokes.
     let inputReported = false;
-    const typed = terminal.onData((data) => {
+    const typed = terminal.onData((rawData) => {
+      let data = rawData;
+      if (ctrlArmedRef.current && data.length === 1) {
+        const code = data.toUpperCase().charCodeAt(0);
+        if (code >= 64 && code <= 95) {
+          data = String.fromCharCode(code - 64);
+        }
+        setCtrlArmed(false);
+      }
       void sshRef.current.send(sessionId, data).catch(() => {
         if (inputReported) return;
         inputReported = true;
@@ -149,5 +162,52 @@ export function TerminalPane({
     }
   }, [theme]);
 
-  return <div className="terminal-pane" ref={hostRef} />;
+  /** Sends bytes exactly as if they had been typed. */
+  function tap(sequence: string) {
+    termRef.current?.input(sequence);
+    termRef.current?.focus();
+  }
+
+  const keybarKeys: Array<{ label: string; sequence: string }> = [
+    { label: "Esc", sequence: "" },
+    { label: "Tab", sequence: "	" },
+    { label: "↑", sequence: "[A" },
+    { label: "↓", sequence: "[B" },
+    { label: "←", sequence: "[D" },
+    { label: "→", sequence: "[C" },
+    { label: "|", sequence: "|" },
+    { label: "-", sequence: "-" },
+    { label: "~", sequence: "~" },
+  ];
+
+  return (
+    <div className="terminal-pane-wrap">
+      <div className="terminal-pane" ref={hostRef} />
+      {/* Touch helper row: keys a software keyboard hides or lacks. Hidden on
+          fine-pointer desktops by the stylesheet. */}
+      <div className="terminal-keybar" role="toolbar" aria-label="terminal keys">
+        <button
+          type="button"
+          className={`terminal-keybar__key${ctrlArmed ? " is-armed" : ""}`}
+          aria-pressed={ctrlArmed}
+          onClick={() => {
+            setCtrlArmed((armed) => !armed);
+            termRef.current?.focus();
+          }}
+        >
+          {t("terminal.keybar.ctrl")}
+        </button>
+        {keybarKeys.map((key) => (
+          <button
+            key={key.label}
+            type="button"
+            className="terminal-keybar__key"
+            onClick={() => tap(key.sequence)}
+          >
+            {key.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
