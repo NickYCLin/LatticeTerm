@@ -52,7 +52,11 @@ pub struct RdpSessionSummary {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "outcome", rename_all = "camelCase")]
+#[serde(
+    tag = "outcome",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum RdpConnectOutcome {
     Connected {
         #[serde(flatten)]
@@ -479,6 +483,31 @@ mod tests {
         let second = session_id();
         assert!(first.starts_with("rdp-"));
         assert_ne!(first, second);
+    }
+
+    /// The interface reads these payloads by field name, and a mismatch
+    /// fails silently: a certificate fingerprint that arrives as
+    /// `fingerprint_sha256` is simply `undefined` to the dialog, which then
+    /// offers to trust an empty fingerprint forever. Pin the wire shape.
+    #[test]
+    fn connect_outcomes_use_the_field_names_the_interface_reads() {
+        let unknown = serde_json::to_value(RdpConnectOutcome::CertificateUnknown {
+            fingerprint_sha256: "AA:BB".into(),
+            detail: "self-signed".into(),
+        })
+        .expect("serialize outcome");
+
+        assert_eq!(unknown["outcome"], "certificateUnknown");
+        assert_eq!(unknown["fingerprintSha256"], "AA:BB");
+        assert!(unknown.get("fingerprint_sha256").is_none());
+
+        let failed = serde_json::to_value(RdpConnectOutcome::Failed {
+            stage: "connect",
+            detail: "refused".into(),
+        })
+        .expect("serialize outcome");
+        assert_eq!(failed["outcome"], "failed");
+        assert_eq!(failed["stage"], "connect");
     }
 
     #[test]

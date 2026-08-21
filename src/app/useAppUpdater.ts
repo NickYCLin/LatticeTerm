@@ -83,15 +83,17 @@ export function useAppUpdater(currentVersion = APP_VERSION) {
     } catch (err: unknown) {
       const errorMessage =
         err instanceof Error ? err.message : String(err);
+      // Being offline is a normal state, not a failure; anything else must
+      // surface as an error, or the settings page silently claims the app is
+      // up to date while the check never actually worked.
+      const offline =
+        errorMessage.includes("failed to get update") ||
+        errorMessage.includes("could not connect");
       setInfo((prev) => ({
         ...prev,
-        status: "up-to-date",
+        status: offline ? "up-to-date" : "error",
         lastChecked: new Date(),
-        error:
-          errorMessage.includes("failed to get update") ||
-          errorMessage.includes("could not connect")
-            ? null
-            : errorMessage,
+        error: offline ? null : errorMessage,
       }));
     }
   }, []);

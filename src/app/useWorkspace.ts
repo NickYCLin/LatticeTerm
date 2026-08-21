@@ -36,12 +36,19 @@ function describe(profile: ConnectionProfile): string {
   return `${findProtocol(profile.protocol).acronym} · ${connectionTarget(profile)}`;
 }
 
-async function syncSaveToBackend(profile: ConnectionProfile): Promise<void> {
+/// Returns the failure message, or `null` when the save landed (or there is
+/// no backend to land in). A desktop-mode failure must not vanish: the entry
+/// looks saved on screen but is gone after a restart.
+async function syncSaveToBackend(
+  profile: ConnectionProfile,
+): Promise<string | null> {
+  if (!("__TAURI_INTERNALS__" in window)) return null;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("save_connection_profile", { profile });
-  } catch {
-    // In-memory fallback
+    return null;
+  } catch (reason) {
+    return reason instanceof Error ? reason.message : String(reason);
   }
 }
 
@@ -90,16 +97,33 @@ export function useWorkspace() {
     setActivity((entries) => appendActivity(entries, createActivityEntry(entry)));
   }, []);
 
+  /** Saves to the backend and puts any failure into the activity log. */
+  const persist = useCallback(
+    (profile: ConnectionProfile) => {
+      void syncSaveToBackend(profile).then((failure) => {
+        if (failure) {
+          record({
+            kind: "workspace",
+            titleKey: "activity.saveFailed",
+            subject: profile.name,
+            detail: failure,
+          });
+        }
+      });
+    },
+    [record],
+  );
+
   const addProfile = useCallback(
     (draft: ConnectionDraft): ConnectionProfile => {
       const profile = createConnectionProfile(draft);
       setProfiles((current) => [...current, profile]);
       setSelectedId(profile.id);
       record({ kind: "created", subject: profile.name, detail: describe(profile) });
-      void syncSaveToBackend(profile);
+      persist(profile);
       return profile;
     },
-    [record],
+    [persist, record],
   );
 
   const updateProfile = useCallback(
@@ -109,10 +133,10 @@ export function useWorkspace() {
         current.map((entry) => (entry.id === id ? profile : entry)),
       );
       record({ kind: "updated", subject: profile.name, detail: describe(profile) });
-      void syncSaveToBackend(profile);
+      persist(profile);
       return profile;
     },
-    [record],
+    [persist, record],
   );
 
   const duplicateProfile = useCallback(
@@ -133,10 +157,10 @@ export function useWorkspace() {
         subject: copy.name,
         note: { key: "activity.duplicatedFrom", values: { name: source.name } },
       });
-      void syncSaveToBackend(copy);
+      persist(copy);
       return copy;
     },
-    [profiles, record],
+    [persist, profiles, record],
   );
 
   const removeProfile = useCallback(
@@ -156,16 +180,21 @@ export function useWorkspace() {
     [profiles, record],
   );
 
-  const toggleFavorite = useCallback((id: string): void => {
-    setProfiles((current) =>
-      current.map((entry) => {
-        if (entry.id !== id) return entry;
-        const updated = { ...entry, favorite: !entry.favorite };
-        void syncSaveToBackend(updated);
-        return updated;
-      }),
-    );
-  }, []);
+  const toggleFavorite = useCallback(
+    (id: string): void => {
+      // The save happens outside the state updater: updaters can run more
+      // than once (StrictMode re-runs them), and a side effect inside one
+      // would fire per run.
+      const target = profiles.find((entry) => entry.id === id);
+      if (!target) return;
+      const updated = { ...target, favorite: !target.favorite };
+      setProfiles((current) =>
+        current.map((entry) => (entry.id === id ? updated : entry)),
+      );
+      persist(updated);
+    },
+    [persist, profiles],
+  );
 
   const loadSamples = useCallback((): void => {
     const loaded = sampleProfiles.map((profile) => ({ ...profile }));

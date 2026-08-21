@@ -243,6 +243,7 @@ export const en: Messages = {
   "activity.confirmClear.body":
     "This removes all {count} entries from this window. Your connections are not affected.",
   "activity.confirmClear.confirm": "Clear {count} entries",
+  "activity.saveFailed": "The entry was not written to disk (it will be lost on restart)",
   "activity.kind.created": "Connection added",
   "activity.kind.updated": "Connection updated",
   "activity.kind.deleted": "Connection deleted",
