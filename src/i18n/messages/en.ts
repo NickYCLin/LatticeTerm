@@ -379,6 +379,7 @@ export const en: Messages = {
   "settings.updater.checking": "Checking for updates...",
   "settings.updater.upToDate": "You are up to date",
   "settings.updater.available": "New version {version} available",
+  "settings.updater.autoRestartHint": "The update downloads, installs in the background and restarts the app by itself — you will only see a short progress bar.",
   "settings.updater.download": "Download & Install Update",
   "settings.updater.downloading": "Downloading update ({percent}%)...",
   "settings.updater.downloaded": "Update downloaded, click to restart and apply",

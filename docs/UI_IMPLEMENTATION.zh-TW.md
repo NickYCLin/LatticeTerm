@@ -254,6 +254,8 @@
   2. `bundle.createUpdaterArtifacts`：沒有它只會產生安裝檔，不會產生更新包。
   3. `includeUpdaterJson`：把 `latest.json` 一併發佈，那正是更新端點指向的檔案。
 - **發行流程的防呆**：發行工作流程在建置前會確認簽章金鑰存在，缺少時直接失敗。否則會產出一份沒有簽章的發行版，安裝端會拒絕它的每一次更新，而問題要等使用者更新失敗才會被發現。
+- **Windows 只出 NSIS 更新包**：更新器查詢的是 `latest.json` 的 `windows-x86_64` 欄位，同時打包 MSI 與 NSIS 時這個欄位可能指到 MSI——裝 NSIS 版（per-user、免提權）的使用者會被餵 MSI，`msiexec` 要提權就卡住，看起來像「有下載卻沒裝」。因此 `bundle.targets` 明確排除 MSI。
+- **無感更新**：`installMode: passive` 搭配 NSIS 的 `/P /R`——按下更新後 app 自動關閉、背景安裝只顯示進度列、裝完自動重啟成新版，全程不出現安裝精靈。
 - **既有安裝需要重裝一次**：v0.2.0 建置時 updater plugin 是停用狀態，那個版本沒有檢查更新的能力。自動更新從下一個發行版開始生效。
 
 ---

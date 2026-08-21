@@ -27,7 +27,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis",
+      "app",
+      "dmg",
+      "appimage",
+      "deb",
+      "rpm"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -47,7 +54,10 @@
       "endpoints": [
         "https://github.com/NickYCLin/LatticeTerm/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdBNjI5RjRFQkE5NDAwRTMKUldUakFKUzZUcDlpZW1nVzNpK0dROWtzTTBYUjlxREdTc2dDUmNlbGFBaEtFYVJodk9PZlFodlIK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdBNjI5RjRFQkE5NDAwRTMKUldUakFKUzZUcDlpZW1nVzNpK0dROWtzTTBYUjlxREdTc2dDUmNlbGFBaEtFYVJodk9PZlFodlIK",
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

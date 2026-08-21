@@ -386,6 +386,9 @@ export function SettingsView({
             >
               {t("settings.updater.download")}
             </button>
+            <p className="text-muted" style={{ margin: 0, fontSize: "var(--text-sm)" }}>
+              {t("settings.updater.autoRestartHint")}
+            </p>
           </div>
         )}
 
