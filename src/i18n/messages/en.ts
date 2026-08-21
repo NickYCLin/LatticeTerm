@@ -867,7 +867,7 @@ export const en: Messages = {
   "vault.activity.removed": "Trusted host removed for {target}",
   "vault.credentials.title": "System credential storage is active",
   "vault.credentials.body":
-    "This tab lists which connections have a securely stored password without reading or displaying the password. SSH private keys and a Stronghold vault remain future work.",
+    "This tab lists which connections have a securely stored password without reading or displaying it. SSH key authentication uses the local key file you choose without storing the key or passphrase; a Stronghold vault remains future work.",
   "vault.credentials.loading.title": "Reading the system credential store",
   "vault.credentials.loading.body":
     "Only connection-to-entry associations are checked; passwords are never loaded into the view.",
