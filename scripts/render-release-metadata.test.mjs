@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildReleaseMetadata } from "./render-release-metadata.mjs";
+import {
+  buildReleaseMetadata,
+  deduplicateChangelogEntries,
+} from "./render-release-metadata.mjs";
 
 describe("buildReleaseMetadata", () => {
   it("將指定版本更新日誌轉成既有 Release 的繁中格式", () => {
@@ -91,5 +94,37 @@ describe("buildReleaseMetadata", () => {
     expect(buildReleaseMetadata(changelog, "v2.1.0").name).toBe(
       "LatticeTerm v2.1.0 - 大檔串流與 VNC 遠端桌面",
     );
+  });
+
+  it("合併提交與原提交描述相同時只保留一個版本項目", () => {
+    const changelog = `## [0.9.6] (2026-08-21)
+
+### 🛠️ 問題修正
+
+* **SFTP:** 保護串流覆寫的原始檔案 ([835a4c5](https://github.com/example/repo/commit/835a4c5bf73ae67790eb95ed34b9811e2190d69d))
+* **SFTP:** 保護串流覆寫的原始檔案 ([1bf2fc0](https://github.com/example/repo/commit/1bf2fc03566c87314cdba92cc34dfa56dd1f89a0))
+`;
+
+    const result = buildReleaseMetadata(changelog, "v0.9.6");
+
+    expect(result.name).toBe(
+      "LatticeTerm v0.9.6 - SFTP：保護串流覆寫的原始檔案",
+    );
+    expect(result.body.match(/保護串流覆寫的原始檔案/g)).toHaveLength(1);
+  });
+
+  it("不同版本可保留相同描述的項目", () => {
+    const changelog = `## [0.9.6] (2026-08-21)
+
+* **SFTP:** 保護串流覆寫的原始檔案 ([835a4c5](https://github.com/example/repo/commit/835a4c5bf73ae67790eb95ed34b9811e2190d69d))
+
+## [0.9.5] (2026-08-20)
+
+* **SFTP:** 保護串流覆寫的原始檔案 ([1bf2fc0](https://github.com/example/repo/commit/1bf2fc03566c87314cdba92cc34dfa56dd1f89a0))
+`;
+
+    const deduplicated = deduplicateChangelogEntries(changelog);
+
+    expect(deduplicated.match(/保護串流覆寫的原始檔案/g)).toHaveLength(2);
   });
 });

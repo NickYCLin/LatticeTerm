@@ -27,7 +27,7 @@ PR 的 CI 會驗證每一筆非合併提交的格式。若需明確指定下一�
 
 1. 功能 PR 通過 CI 並合併到 `main`。
 2. `Release` workflow 讀取自 `v0.2.0` 或上一個 Release 起的提交。
-3. 若有可發布變更，自動建立或更新一個 draft Release PR，內容包含新版本、`CHANGELOG.md` 與所有版本檔差異。
+3. 若有可發布變更，自動建立或更新一個 draft Release PR，內容包含新版本、`CHANGELOG.md` 與所有版本檔差異；workflow 會自動合併同一版本內由 merge commit 與原提交造成的重複 changelog 項目。
 4. workflow 另外以 `workflow_dispatch` 對 Release PR 分支觸發四平台 CI，避免 `GITHUB_TOKEN` 建立的 PR 無法自動連鎖觸發檢查。
 5. 檢視版本與 changelog，將 Release PR 標示為 ready 並合併。
 6. 下一次 `Release` workflow 建立 `vX.Y.Z` tag 與 GitHub Release。
@@ -47,7 +47,7 @@ Release PR 會一起更新：
 - `src-tauri/Cargo.lock` 中的 `lattice-term` 套件版本
 
 `npm run version:check` 會比對上述七個值，`npm run check` 與 CI 都會執行它。任何來源漂移都會在合併或發布前失敗。
-由於 Cargo 會移除 lockfile 內的自訂註記，Release workflow 會先執行 `npm run version:sync-lock`，只同步 `lattice-term` package block，再以繁中 bot commit 寫回 Release PR。
+由於 Cargo 會移除 lockfile 內的自訂註記，Release workflow 會先執行 `npm run release:normalize-changelog` 與 `npm run version:sync-lock`，移除同版本的重複 changelog 項目、只同步 `lattice-term` package block，再以繁中 bot commit 寫回 Release PR。
 
 ## 簽章與失敗處理
 
@@ -61,4 +61,5 @@ Release PR 會一起更新：
 - 小項目也要在相稱驗證後提交並推送。
 - 所有提交使用繁體中文 Conventional Commit。
 - PR 通過必要檢查並完成審查後合併到 `main`。
+- Release PR 的 `CHANGELOG.md` 不可包含語意相同但 commit 連結不同的重複項目。
 - 合併後刪除已整合的功能分支；不可讓長期分支成為另一條發布來源。

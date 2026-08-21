@@ -25,6 +25,7 @@
     "test": "vitest run",
     "version:sync-lock": "node scripts/sync-cargo-lock-version.mjs",
     "version:check": "node scripts/check-version-sync.mjs",
+    "release:normalize-changelog": "node scripts/normalize-release-changelog.mjs",
     "check": "npm run version:check && npm run test && npm run build",
     "preview": "vite preview",
     "tauri": "tauri",
