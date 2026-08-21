@@ -12,6 +12,7 @@
 
 use crate::sftp::{join_path, validate_name, validate_path, SftpRegistry};
 use base64::Engine;
+use russh_sftp::client::SftpSession;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -66,6 +67,13 @@ struct TransferEntry {
     cancel: AtomicBool,
     /// The open remote file of an in-progress upload, fed chunk by chunk.
     upload: AsyncMutex<Option<russh_sftp::client::fs::File>>,
+    /// Uploads retain their session so an error can clean up even if the UI
+    /// starts closing the visible SFTP session at the same time.
+    upload_session: Option<Arc<SftpSession>>,
+    /// Upload bytes go here first. The user-visible target is only replaced
+    /// after the expected byte count has arrived and the handle is closed.
+    staging_path: Option<String>,
+    overwrite: bool,
 }
 
 #[derive(Default)]
@@ -205,6 +213,184 @@ fn unoccupied_path(directory: &Path, name: &str, occupied: impl Fn(&Path) -> boo
     unreachable!("the counter above has no upper bound")
 }
 
+fn temporary_remote_path(parent: &str, purpose: &str) -> Result<String, String> {
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random)
+        .map_err(|error| format!("could not create a private upload name: {error}"))?;
+    let token = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(join_path(
+        parent,
+        &format!(".latticeterm-{purpose}-{token}.part"),
+    ))
+}
+
+fn next_upload_size(current: u64, total: u64, chunk: usize) -> Result<u64, String> {
+    let next = current
+        .checked_add(chunk as u64)
+        .ok_or_else(|| "the upload byte count overflowed".to_string())?;
+    if next > total {
+        return Err(format!(
+            "the upload received more data than expected ({next} of {total} bytes)"
+        ));
+    }
+    Ok(next)
+}
+
+fn require_complete_upload(done: u64, total: u64) -> Result<(), String> {
+    if done != total {
+        return Err(format!(
+            "the upload ended before every byte arrived ({done} of {total} bytes)"
+        ));
+    }
+    Ok(())
+}
+
+fn running_state(entry: &TransferEntry) -> Result<TransferState, String> {
+    let state = entry.state.lock().map_err(|error| error.to_string())?;
+    if state.state != "running" {
+        return Err(match state.state {
+            "cancelled" => "cancelled".to_string(),
+            _ => format!(
+                "the transfer has already ended with state '{}'",
+                state.state
+            ),
+        });
+    }
+    Ok(state.clone())
+}
+
+async fn remove_staging_file(entry: &TransferEntry) -> Result<(), String> {
+    let Some(session) = entry.upload_session.as_ref() else {
+        return Ok(());
+    };
+    let Some(staging_path) = entry.staging_path.as_ref() else {
+        return Ok(());
+    };
+    session
+        .remove_file(staging_path.clone())
+        .await
+        .map_err(|error| {
+            format!("could not remove the incomplete remote upload at '{staging_path}': {error}")
+        })
+}
+
+async fn abort_upload(
+    entry: &TransferEntry,
+    sink: &dyn TransferSink,
+    state: &'static str,
+    detail: &str,
+) -> String {
+    entry.cancel.store(true, Ordering::Relaxed);
+    let mut upload = entry.upload.lock().await;
+    {
+        let mut transfer = match entry.state.lock() {
+            Ok(transfer) => transfer,
+            Err(error) => return error.to_string(),
+        };
+        if transfer.state != "running" {
+            return transfer
+                .detail
+                .clone()
+                .unwrap_or_else(|| match transfer.state {
+                    "cancelled" => "cancelled".to_string(),
+                    _ => format!(
+                        "the transfer has already ended with state '{}'",
+                        transfer.state
+                    ),
+                });
+        }
+        // Claim the terminal transition before awaiting cleanup. A concurrent
+        // cancel/error path will now observe an ended transfer and leave the
+        // staging file to this owner instead of deleting it twice.
+        transfer.state = state;
+    }
+    upload.take();
+    drop(upload);
+    let cleanup_error = remove_staging_file(entry).await.err();
+    let combined = cleanup_error
+        .as_ref()
+        .map(|cleanup| format!("{detail}; {cleanup}"))
+        .unwrap_or_else(|| detail.to_string());
+    entry.update(sink, |transfer| {
+        transfer.detail = if state == "cancelled" && cleanup_error.is_none() {
+            None
+        } else {
+            Some(combined.clone())
+        };
+    });
+    combined
+}
+
+async fn promote_upload(entry: &TransferEntry) -> Result<Option<String>, String> {
+    let session = entry
+        .upload_session
+        .as_ref()
+        .ok_or_else(|| "the upload session is no longer available".to_string())?;
+    let staging_path = entry
+        .staging_path
+        .as_ref()
+        .ok_or_else(|| "the upload staging path is no longer available".to_string())?;
+    let state = entry
+        .state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let target_path = state.remote_path;
+    let target_exists = session
+        .try_exists(target_path.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if target_exists && !entry.overwrite {
+        return Err(
+            "the remote file appeared during the upload; confirm overwrite and try again"
+                .to_string(),
+        );
+    }
+
+    if !target_exists {
+        session
+            .rename(staging_path.clone(), target_path)
+            .await
+            .map_err(|error| format!("could not publish the completed upload: {error}"))?;
+        return Ok(None);
+    }
+
+    let parent = target_path
+        .rsplit_once('/')
+        .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+        .unwrap_or(".");
+    let backup_path = temporary_remote_path(parent, "backup")?;
+    session
+        .rename(target_path.clone(), backup_path.clone())
+        .await
+        .map_err(|error| format!("could not protect the existing remote file: {error}"))?;
+
+    if let Err(error) = session
+        .rename(staging_path.clone(), target_path.clone())
+        .await
+    {
+        return match session.rename(backup_path.clone(), target_path).await {
+            Ok(()) => Err(format!(
+                "could not publish the completed upload; the original file was restored: {error}"
+            )),
+            Err(restore_error) => Err(format!(
+                "could not publish the completed upload ({error}) or restore the original file ({restore_error}); the original remains at '{backup_path}'"
+            )),
+        };
+    }
+
+    match session.remove_file(backup_path.clone()).await {
+        Ok(()) => Ok(None),
+        Err(error) => Ok(Some(format!(
+            "upload completed, but the protected previous copy could not be removed from '{backup_path}': {error}"
+        ))),
+    }
+}
+
 /// Starts a download that streams the remote file into `target_dir`.
 pub async fn start_download(
     transfers: Arc<TransferRegistry>,
@@ -247,6 +433,9 @@ pub async fn start_download(
         }),
         cancel: AtomicBool::new(false),
         upload: AsyncMutex::new(None),
+        upload_session: None,
+        staging_path: None,
+        overwrite: false,
     });
     transfers.insert(Arc::clone(&entry))?;
     let snapshot = entry.state.lock().map_err(|e| e.to_string())?.clone();
@@ -345,8 +534,9 @@ pub async fn begin_upload(
         return Err("The remote file already exists; confirm overwrite first.".to_string());
     }
 
+    let staging_path = temporary_remote_path(&parent, "upload")?;
     let file = session
-        .create(remote_path.clone())
+        .create(staging_path.clone())
         .await
         .map_err(|error| error.to_string())?;
 
@@ -365,8 +555,17 @@ pub async fn begin_upload(
         }),
         cancel: AtomicBool::new(false),
         upload: AsyncMutex::new(Some(file)),
+        upload_session: Some(session),
+        staging_path: Some(staging_path),
+        overwrite,
     });
-    transfers.insert(Arc::clone(&entry))?;
+    if let Err(error) = transfers.insert(Arc::clone(&entry)) {
+        entry.upload.lock().await.take();
+        let cleanup = remove_staging_file(&entry).await.err();
+        return Err(cleanup
+            .map(|cleanup| format!("{error}; {cleanup}"))
+            .unwrap_or(error));
+    }
     let snapshot = entry.state.lock().map_err(|e| e.to_string())?.clone();
     sink.update(&snapshot);
     Ok(snapshot)
@@ -380,21 +579,34 @@ pub async fn upload_chunk(
     data_base64: &str,
 ) -> Result<(), String> {
     let entry = transfers.entry(transfer_id)?;
-    if entry.cancel.load(Ordering::Relaxed) {
-        return Err("cancelled".to_string());
-    }
 
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data_base64)
-        .map_err(|error| format!("the chunk was not valid base64: {error}"))?;
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(data_base64) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let detail = format!("the chunk was not valid base64: {error}");
+            return Err(abort_upload(&entry, sink, "error", &detail).await);
+        }
+    };
     if bytes.len() > MAX_UPLOAD_CHUNK {
-        return Err("the chunk exceeds the upload chunk limit".to_string());
+        let detail = "the chunk exceeds the upload chunk limit";
+        return Err(abort_upload(&entry, sink, "error", detail).await);
     }
 
     let mut slot = entry.upload.lock().await;
-    let file = slot
-        .as_mut()
-        .ok_or_else(|| "the upload is not accepting data".to_string())?;
+    let state = running_state(&entry)?;
+    let total = state.total_bytes.unwrap_or(0);
+    let next = match next_upload_size(state.bytes_done, total, bytes.len()) {
+        Ok(next) => next,
+        Err(detail) => {
+            drop(slot);
+            return Err(abort_upload(&entry, sink, "error", &detail).await);
+        }
+    };
+    let Some(file) = slot.as_mut() else {
+        drop(slot);
+        let detail = "the upload lost its remote file handle";
+        return Err(abort_upload(&entry, sink, "error", detail).await);
+    };
 
     let write = async {
         file.write_all(&bytes)
@@ -406,22 +618,16 @@ pub async fn upload_chunk(
     if let Err(detail) = write {
         *slot = None;
         drop(slot);
-        entry.update(sink, |state| {
-            state.state = "error";
-            state.detail = Some(detail.clone());
-        });
-        return Err(detail);
+        return Err(abort_upload(&entry, sink, "error", &detail).await);
     }
 
     drop(slot);
-    let done = {
+    {
         let mut state = entry.state.lock().map_err(|e| e.to_string())?;
-        state.bytes_done += bytes.len() as u64;
-        state.bytes_done
-    };
+        state.bytes_done = next;
+    }
     // Chunks arrive megabytes at a time, so per-chunk reporting is already
     // coarse enough not to flood the event stream.
-    let _ = done;
     if let Ok(state) = entry.state.lock() {
         sink.update(&state);
     }
@@ -436,14 +642,48 @@ pub async fn finish_upload(
 ) -> Result<(), String> {
     let entry = transfers.entry(transfer_id)?;
     let mut slot = entry.upload.lock().await;
-    let Some(mut file) = slot.take() else {
-        return Err("the upload is not accepting data".to_string());
-    };
-    drop(slot);
+    let state = running_state(&entry)?;
+    let total = state.total_bytes.unwrap_or(0);
+    if let Err(detail) = require_complete_upload(state.bytes_done, total) {
+        drop(slot);
+        return Err(abort_upload(&entry, sink, "error", &detail).await);
+    }
 
-    file.flush().await.map_err(|error| error.to_string())?;
-    file.shutdown().await.map_err(|error| error.to_string())?;
-    entry.update(sink, |state| state.state = "done");
+    let Some(mut file) = slot.take() else {
+        drop(slot);
+        let detail = "the upload lost its remote file handle";
+        return Err(abort_upload(&entry, sink, "error", detail).await);
+    };
+
+    let close_result = async {
+        file.flush().await.map_err(|error| error.to_string())?;
+        file.shutdown().await.map_err(|error| error.to_string())
+    }
+    .await;
+    drop(file);
+    if let Err(detail) = close_result {
+        drop(slot);
+        return Err(abort_upload(&entry, sink, "error", &detail).await);
+    }
+    if entry.cancel.load(Ordering::Relaxed) {
+        drop(slot);
+        return Err(abort_upload(&entry, sink, "cancelled", "cancelled").await);
+    }
+
+    let warning = match promote_upload(&entry).await {
+        Ok(warning) => warning,
+        Err(detail) => {
+            drop(slot);
+            return Err(abort_upload(&entry, sink, "error", &detail).await);
+        }
+    };
+    entry.update(sink, |state| {
+        if state.state == "running" {
+            state.state = "done";
+            state.detail = warning;
+        }
+    });
+    drop(slot);
     Ok(())
 }
 
@@ -451,31 +691,63 @@ pub async fn finish_upload(
 /// here and its partial remote file removed.
 pub async fn cancel(
     transfers: &TransferRegistry,
-    sessions: &SftpRegistry,
     sink: &dyn TransferSink,
     transfer_id: &str,
 ) -> Result<(), String> {
     let entry = transfers.entry(transfer_id)?;
+    if running_state(&entry).is_err() {
+        return Ok(());
+    }
     entry.cancel.store(true, Ordering::Relaxed);
 
-    let mut slot = entry.upload.lock().await;
-    if let Some(file) = slot.take() {
-        drop(file);
-        let (session_id, remote_path) = {
-            let state = entry.state.lock().map_err(|e| e.to_string())?;
-            (state.session_id.clone(), state.remote_path.clone())
-        };
-        if let Ok(session) = sessions.session(&session_id) {
-            let _ = session.remove_file(remote_path).await;
+    if entry.upload_session.is_some() {
+        let detail = abort_upload(&entry, sink, "cancelled", "cancelled").await;
+        let state = entry.state.lock().map_err(|error| error.to_string())?;
+        if state.state == "cancelled" && state.detail.is_some() {
+            return Err(detail);
         }
-        entry.update(sink, |state| state.state = "cancelled");
     }
     Ok(())
+}
+
+/// Cancels every active transfer for a session before its SFTP transport is
+/// closed. This keeps uploads from becoming invisible orphaned partials.
+pub async fn cancel_session(
+    transfers: &TransferRegistry,
+    sink: &dyn TransferSink,
+    session_id: &str,
+) -> Result<(), String> {
+    let transfer_ids = transfers
+        .list()
+        .into_iter()
+        .filter(|state| state.session_id == session_id && state.state == "running")
+        .map(|state| state.transfer_id)
+        .collect::<Vec<_>>();
+    let mut errors = Vec::new();
+    for transfer_id in transfer_ids {
+        if let Err(error) = cancel(transfers, sink, &transfer_id).await {
+            errors.push(format!("{transfer_id}: {error}"));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingSink(Mutex<Vec<TransferState>>);
+
+    impl TransferSink for RecordingSink {
+        fn update(&self, state: &TransferState) {
+            self.0.lock().unwrap().push(state.clone());
+        }
+    }
 
     #[test]
     fn local_names_lose_what_windows_cannot_store() {
@@ -543,6 +815,9 @@ mod tests {
             }),
             cancel: AtomicBool::new(false),
             upload: AsyncMutex::new(None),
+            upload_session: None,
+            staging_path: None,
+            overwrite: false,
         });
         registry.insert(entry).unwrap();
 
@@ -558,5 +833,59 @@ mod tests {
             .state = "done";
         registry.dismiss("transfer-1").unwrap();
         assert!(registry.list().is_empty());
+    }
+
+    #[test]
+    fn upload_sizes_must_match_the_declared_file() {
+        assert_eq!(next_upload_size(4, 10, 6).unwrap(), 10);
+        assert!(next_upload_size(4, 10, 7).is_err());
+        assert!(next_upload_size(u64::MAX, u64::MAX, 1).is_err());
+        assert!(require_complete_upload(10, 10).is_ok());
+        assert!(require_complete_upload(9, 10).is_err());
+    }
+
+    #[test]
+    fn remote_staging_names_are_private_and_unique() {
+        let first = temporary_remote_path("/srv/files", "upload").unwrap();
+        let second = temporary_remote_path("/srv/files", "upload").unwrap();
+        assert!(first.starts_with("/srv/files/.latticeterm-upload-"));
+        assert!(first.ends_with(".part"));
+        assert_ne!(first, second);
+    }
+
+    #[tokio::test]
+    async fn concurrent_terminal_paths_claim_the_transfer_once() {
+        let entry = TransferEntry {
+            state: Mutex::new(TransferState {
+                transfer_id: "transfer-race".into(),
+                session_id: "sftp-1".into(),
+                kind: "upload",
+                name: "report.bin".into(),
+                remote_path: "/srv/report.bin".into(),
+                local_path: None,
+                bytes_done: 4,
+                total_bytes: Some(8),
+                state: "running",
+                detail: None,
+            }),
+            cancel: AtomicBool::new(false),
+            upload: AsyncMutex::new(None),
+            upload_session: None,
+            staging_path: None,
+            overwrite: false,
+        };
+        let sink = RecordingSink::default();
+
+        let (cancelled, failed) = tokio::join!(
+            abort_upload(&entry, &sink, "cancelled", "cancelled"),
+            abort_upload(&entry, &sink, "error", "connection lost"),
+        );
+
+        let final_state = entry.state.lock().unwrap().clone();
+        assert!(matches!(final_state.state, "cancelled" | "error"));
+        assert_eq!(sink.0.lock().unwrap().len(), 1);
+        assert!(!cancelled.is_empty());
+        assert!(!failed.is_empty());
+        assert!(cancelled == "cancelled" || failed == "connection lost");
     }
 }
