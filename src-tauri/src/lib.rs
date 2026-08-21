@@ -9,6 +9,7 @@ pub mod remote_host;
 pub mod sftp;
 pub mod ssh;
 pub mod storage;
+pub mod tunnel;
 
 use crate::agent::{
     AgentBroadcastOutcome, AgentDefinition, AgentLaunchPlan, AgentLaunchPlanDraft,
@@ -31,6 +32,7 @@ use crate::sftp::{
 };
 use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
+use crate::tunnel::{StartTunnelRequest, TunnelRegistry, TunnelStatusSummary};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -791,6 +793,34 @@ fn ssh_forget_host(host: String, port: u16, trust: State<'_, TrustState>) -> Res
     }
 }
 
+#[tauri::command]
+async fn tunnel_start(
+    request: StartTunnelRequest,
+    registry: State<'_, Arc<TunnelRegistry>>,
+) -> Result<TunnelStatusSummary, String> {
+    crate::tunnel::start_tunnel(Arc::clone(registry.inner()), request).await
+}
+
+#[tauri::command]
+fn tunnel_stop(tunnel_id: String, registry: State<'_, Arc<TunnelRegistry>>) -> Result<(), String> {
+    registry.stop(&tunnel_id)
+}
+
+#[tauri::command]
+fn tunnel_status(
+    tunnel_id: String,
+    registry: State<'_, Arc<TunnelRegistry>>,
+) -> Result<Option<TunnelStatusSummary>, String> {
+    Ok(registry.status(&tunnel_id))
+}
+
+#[tauri::command]
+fn tunnel_list(
+    registry: State<'_, Arc<TunnelRegistry>>,
+) -> Result<Vec<TunnelStatusSummary>, String> {
+    Ok(registry.list())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -819,6 +849,7 @@ pub fn run() {
             app.manage(Arc::new(RemoteRegistry::new()));
             app.manage(Arc::new(RemoteHostRegistry::new()));
             app.manage(Arc::new(RdpRegistry::new()));
+            app.manage(Arc::new(TunnelRegistry::new()));
             let agent_registry = AgentRegistry::with_local_reporter(Arc::new(
                 crate::agent::EventSink(app.handle().clone()),
             ))
@@ -875,13 +906,18 @@ pub fn run() {
             rdp_sessions,
             ssh_trust_host,
             ssh_known_hosts,
-            ssh_forget_host
+            ssh_forget_host,
+            tunnel_start,
+            tunnel_stop,
+            tunnel_status,
+            tunnel_list
         ])
         .build(tauri::generate_context!())
         .expect("error while building LatticeTerm");
     app.run(|handle, event| {
         if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
             handle.state::<Arc<AgentRegistry>>().stop_all();
+            handle.state::<Arc<TunnelRegistry>>().stop_all();
         }
     });
 }

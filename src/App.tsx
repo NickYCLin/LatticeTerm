@@ -49,32 +49,10 @@ import { RdpConnectFlow } from "./components/rdp/RdpConnectFlow";
 import { SftpConnectFlow } from "./components/sftp/SftpConnectFlow";
 import { ActivityView } from "./views/ActivityView";
 import { VaultView } from "./views/VaultView";
-import { PlannedView, type PlannedArea } from "./views/PlannedView";
+import { TunnelsView } from "./views/TunnelsView";
 import { SettingsView } from "./views/SettingsView";
-import { PlusIcon, ScreenShareIcon, TunnelIcon } from "./components/icons";
+import { PlusIcon, ScreenShareIcon } from "./components/icons";
 import "./styles/index.css";
-
-const plannedAreas: Record<"tunnels", PlannedArea> = {
-  tunnels: {
-    summaryKey: "planned.tunnels.summary",
-    boundaryKey: "planned.tunnels.boundary",
-    icon: <TunnelIcon size={24} />,
-    capabilities: [
-      {
-        titleKey: "planned.tunnels.cap1.title",
-        detailKey: "planned.tunnels.cap1.detail",
-      },
-      {
-        titleKey: "planned.tunnels.cap2.title",
-        detailKey: "planned.tunnels.cap2.detail",
-      },
-      {
-        titleKey: "planned.tunnels.cap3.title",
-        detailKey: "planned.tunnels.cap3.detail",
-      },
-    ],
-  },
-};
 
 function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const { t } = useI18n();
@@ -401,7 +379,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 }}
               />
             )}
-            {view === "tunnels" && <PlannedView area={plannedAreas.tunnels} />}
+            {view === "tunnels" && <TunnelsView profiles={profiles} />}
             {view === "vault" && <VaultView workspace={workspace} />}
             {view === "activity" && <ActivityView workspace={workspace} />}
             {view === "settings" && (

@@ -63,7 +63,7 @@ export const navigationItems: NavigationItem[] = [
     labelKey: "nav.tunnels",
     descriptionKey: "nav.tunnels.desc",
     icon: TunnelIcon,
-    status: "planned",
+    status: "available",
   },
   {
     id: "vault",

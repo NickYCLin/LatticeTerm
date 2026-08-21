@@ -1211,12 +1211,9 @@ pub fn disconnect(
     session_id: &str,
 ) -> Result<(), String> {
     let entry = registry.get(session_id)?;
-    entry
-        .killer
-        .lock()
-        .map_err(|error| error.to_string())?
-        .kill()
-        .map_err(|error| format!("Cannot stop the agent process: {error}"))?;
+    if let Ok(mut killer) = entry.killer.lock() {
+        let _ = killer.kill();
+    }
     if registry.remove(session_id).is_some() {
         sink.closed(session_id, "Stopped by user");
     }
@@ -1227,6 +1224,7 @@ pub fn disconnect(
 mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
+    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
     #[derive(Default)]
