@@ -569,6 +569,7 @@ export const en: Messages = {
   "agents.resume.cli": "CLI with restore support",
   "agents.resume.adapterVersion":
     "Built-in adapter v{version}; LatticeTerm creates the argument vector without a shell.",
+  "agents.resume.captured": "Detected session IDs:",
   "agents.resume.sessionId": "Session ID or title",
   "agents.resume.sessionId.placeholder": "Paste the session ID or existing title shown by the CLI",
   "agents.resume.sessionId.hint":

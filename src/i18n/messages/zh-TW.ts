@@ -531,6 +531,7 @@ export const zhTW = {
   "agents.resume.securityBody": "只按「續接」不會把識別值寫入 LatticeTerm；只有按「保存續接項目」才會連同工作目錄存入工作區。LatticeTerm 不讀取 CLI 的對話內容、登入資料或模型憑證。",
   "agents.resume.cli": "支援續接的 CLI",
   "agents.resume.adapterVersion": "內建 Adapter v{version}；參數格式由 LatticeTerm 產生，不經 shell。",
+  "agents.resume.captured": "偵測到的 Session ID：",
   "agents.resume.sessionId": "Session ID 或標題",
   "agents.resume.sessionId.placeholder": "貼上 CLI 顯示的 Session ID 或既有標題",
   "agents.resume.sessionId.hint": "最多 512 個位元組，不能含控制字元或以 - 開頭；不會與額外啟動參數混用。",

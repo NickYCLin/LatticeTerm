@@ -137,6 +137,19 @@ export function AgentsView({
       ) ?? null,
     [resumeDefinitionId, resumeDefinitions],
   );
+  // Session ids the running CLIs announced themselves — one click to reuse
+  // instead of hunting through another tool's history.
+  const capturedResumeIds = useMemo(() => {
+    const seen = new Set<string>();
+    return agents.sessions
+      .filter(
+        (session) =>
+          session.definitionId === resumeDefinitionId &&
+          session.capturedSessionId,
+      )
+      .map((session) => session.capturedSessionId as string)
+      .filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
+  }, [agents.sessions, resumeDefinitionId]);
 
   useEffect(() => {
     if (
@@ -584,6 +597,28 @@ export function AgentsView({
             <span className="agents-field-hint">
               {t("agents.resume.sessionId.hint")}
             </span>
+            {capturedResumeIds.length > 0 && (
+              <span
+                className="agents-field-hint"
+                style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", alignItems: "center" }}
+              >
+                {t("agents.resume.captured")}
+                {capturedResumeIds.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className="button button--ghost"
+                    style={{ padding: "0.1rem 0.5rem", height: "auto", fontSize: "var(--text-2xs)" }}
+                    onClick={() => {
+                      setResumeSessionId(id);
+                      setResumeNotice(null);
+                    }}
+                  >
+                    <code className="mono">{id.slice(0, 8)}…</code>
+                  </button>
+                ))}
+              </span>
+            )}
           </label>
           <div className="agents-resume__actions">
             <button

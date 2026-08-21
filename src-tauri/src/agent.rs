@@ -20,6 +20,7 @@ use tauri::{AppHandle, Emitter};
 pub const EVENT_DATA: &str = "agent://data";
 pub const EVENT_CLOSED: &str = "agent://closed";
 pub const EVENT_STATE: &str = "agent://state";
+pub const EVENT_CAPTURE: &str = "agent://capture";
 
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 64;
@@ -170,6 +171,9 @@ pub struct AgentSessionSummary {
     pub state: AgentLifecycle,
     pub state_source: AgentStateSource,
     pub process_id: Option<u32>,
+    /// The CLI's own session id, when its output announced one — the value
+    /// native resume takes. Never guessed: absent until actually seen.
+    pub captured_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -260,6 +264,14 @@ pub trait AgentSink: Send + Sync + 'static {
     fn data(&self, session_id: &str, bytes: &[u8]);
     fn state(&self, session_id: &str, state: AgentLifecycle, source: AgentStateSource);
     fn closed(&self, session_id: &str, reason: &str);
+    fn captured(&self, session_id: &str, native_session_id: &str);
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentSessionIdCaptured {
+    session_id: String,
+    native_session_id: String,
 }
 
 pub struct EventSink(pub AppHandle);
@@ -295,6 +307,16 @@ impl AgentSink for EventSink {
             },
         );
     }
+
+    fn captured(&self, session_id: &str, native_session_id: &str) {
+        let _ = self.0.emit(
+            EVENT_CAPTURE,
+            AgentSessionIdCaptured {
+                session_id: session_id.to_string(),
+                native_session_id: native_session_id.to_string(),
+            },
+        );
+    }
 }
 
 struct AgentSessionEntry {
@@ -303,6 +325,43 @@ struct AgentSessionEntry {
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    capture: Mutex<CaptureState>,
+}
+
+/// Rolling window over a session's output while its native session id has
+/// not been seen yet. Bounded so an agent that never announces one costs a
+/// few kilobytes, not unbounded growth.
+struct CaptureState {
+    enabled: bool,
+    buffer: String,
+}
+
+/// How much stripped output the capture window retains across chunks.
+const CAPTURE_WINDOW_CHARS: usize = 4096;
+
+impl CaptureState {
+    /// Feeds one raw output chunk into the window and returns a session id
+    /// the moment one is seen. Ids split across chunks are still found,
+    /// because matching runs over the retained window, not the chunk.
+    fn feed(&mut self, bytes: &[u8]) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
+        let stripped = strip_ansi(&String::from_utf8_lossy(bytes));
+        self.buffer.push_str(&stripped);
+        let length = self.buffer.chars().count();
+        if length > CAPTURE_WINDOW_CHARS {
+            self.buffer = self
+                .buffer
+                .chars()
+                .skip(length - CAPTURE_WINDOW_CHARS)
+                .collect();
+        }
+        let found = find_native_session_id(&self.buffer)?;
+        self.enabled = false;
+        self.buffer.clear();
+        Some(found)
+    }
 }
 
 #[derive(Clone)]
@@ -411,6 +470,21 @@ impl AgentRegistry {
         summary.state = next;
         summary.state_source = source;
         true
+    }
+
+    /// Feeds one output chunk into the session's capture window and returns
+    /// a newly seen native session id, if any. The window spans chunks, so an
+    /// id split across two reads is still found.
+    fn scan_for_session_id(&self, session_id: &str, bytes: &[u8]) -> Option<String> {
+        let entry = self.get(session_id).ok()?;
+        let found = entry.capture.lock().ok()?.feed(bytes)?;
+
+        let mut summary = entry.summary.lock().ok()?;
+        if summary.captured_session_id.as_deref() == Some(found.as_str()) {
+            return None;
+        }
+        summary.captured_session_id = Some(found.clone());
+        Some(found)
     }
 
     fn update_reported_state(
@@ -972,6 +1046,87 @@ fn decode(value: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// Drops ANSI escape sequences (CSI, OSC, and single-character escapes) so
+/// pattern matching sees the text a human sees.
+fn strip_ansi(text: &str) -> String {
+    let mut cleaned = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '\u{1b}' {
+            cleaned.push(character);
+            continue;
+        }
+        match characters.peek() {
+            // CSI: ESC [ ... final byte in @-~
+            Some('[') => {
+                characters.next();
+                for follower in characters.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&follower) {
+                        break;
+                    }
+                }
+            }
+            // OSC: ESC ] ... BEL or ESC backslash
+            Some(']') => {
+                characters.next();
+                let mut previous = '\0';
+                for follower in characters.by_ref() {
+                    if follower == '\u{7}' || (previous == '\u{1b}' && follower == '\\') {
+                        break;
+                    }
+                    previous = follower;
+                }
+            }
+            // Two-character escapes such as ESC ( B.
+            Some(_) => {
+                characters.next();
+            }
+            None => {}
+        }
+    }
+    cleaned
+}
+
+fn is_uuid_shaped(candidate: &[char]) -> bool {
+    if candidate.len() != 36 {
+        return false;
+    }
+    candidate.iter().enumerate().all(|(index, character)| {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            *character == '-'
+        } else {
+            character.is_ascii_hexdigit()
+        }
+    })
+}
+
+/// Finds a CLI session id announced in output: a UUID with the word
+/// "session" shortly before it. The word requirement is what keeps this
+/// conservative — agents print plenty of UUIDs that are not session ids.
+fn find_native_session_id(text: &str) -> Option<String> {
+    let characters: Vec<char> = text.chars().collect();
+    let lowered: Vec<char> = characters.iter().map(|c| c.to_ascii_lowercase()).collect();
+    let needle: Vec<char> = "session".chars().collect();
+
+    for start in 0..characters.len().saturating_sub(35) {
+        let window = &characters[start..start + 36];
+        if !is_uuid_shaped(window) {
+            continue;
+        }
+        // A UUID is only trusted as a session id if "session" appears within
+        // the preceding few dozen characters.
+        let context_start = start.saturating_sub(64);
+        let context = &lowered[context_start..start];
+        if context
+            .windows(needle.len())
+            .any(|slice| slice == needle.as_slice())
+        {
+            return Some(window.iter().collect::<String>().to_ascii_lowercase());
+        }
+    }
+    None
+}
+
 fn lifecycle_from_output(bytes: &[u8]) -> AgentLifecycle {
     let text = String::from_utf8_lossy(bytes).to_lowercase();
     const ATTENTION_MARKERS: [&str; 12] = [
@@ -1045,6 +1200,12 @@ pub fn launch(
         .take_writer()
         .map_err(|error| format!("Cannot write to the local terminal: {error}"))?;
 
+    // Only CLIs whose resume shape is verified get automatic id capture;
+    // for the rest a captured id would be a guess nothing can use.
+    let capture_enabled = AGENTS
+        .iter()
+        .any(|agent| agent.id == definition_id && agent.resume_recipe.is_some());
+
     let summary = AgentSessionSummary {
         session_id: session_id.clone(),
         definition_id,
@@ -1054,6 +1215,9 @@ pub fn launch(
         state: AgentLifecycle::Working,
         state_source: AgentStateSource::Heuristic,
         process_id,
+        // A session launched as a native resume already knows its id; a
+        // fresh announcement in the output still overwrites it.
+        captured_session_id: request.resume_session_id.clone(),
     };
     let entry = Arc::new(AgentSessionEntry {
         summary: Mutex::new(summary.clone()),
@@ -1061,6 +1225,10 @@ pub fn launch(
         writer: Mutex::new(writer),
         master: Mutex::new(pair.master),
         killer: Mutex::new(killer),
+        capture: Mutex::new(CaptureState {
+            enabled: capture_enabled,
+            buffer: String::new(),
+        }),
     });
     registry.insert(&summary, entry)?;
 
@@ -1079,6 +1247,10 @@ pub fn launch(
                     if reader_registry.update_state(&reader_id, state, AgentStateSource::Heuristic)
                     {
                         reader_sink.state(&reader_id, state, AgentStateSource::Heuristic);
+                    }
+                    if let Some(native_id) = reader_registry.scan_for_session_id(&reader_id, bytes)
+                    {
+                        reader_sink.captured(&reader_id, &native_id);
                     }
                 }
                 Err(_) => break,
@@ -1233,6 +1405,7 @@ mod tests {
         session_data: Mutex<HashMap<String, Vec<u8>>>,
         states: Mutex<Vec<(String, AgentLifecycle, AgentStateSource)>>,
         closed: Mutex<Vec<String>>,
+        captured: Mutex<Vec<(String, String)>>,
     }
 
     impl AgentSink for TestSink {
@@ -1256,6 +1429,85 @@ mod tests {
         fn closed(&self, _session_id: &str, reason: &str) {
             self.closed.lock().unwrap().push(reason.to_string());
         }
+
+        fn captured(&self, session_id: &str, native_session_id: &str) {
+            self.captured
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), native_session_id.to_string()));
+        }
+    }
+
+    #[test]
+    fn ansi_noise_is_stripped_before_matching() {
+        let noisy = "\u{1b}[1;32msession id:\u{1b}[0m \u{1b}]0;title\u{7}0199aa11-bb22-4c33-8d44-ee55ff667788";
+        let cleaned = strip_ansi(noisy);
+        assert_eq!(cleaned, "session id: 0199aa11-bb22-4c33-8d44-ee55ff667788");
+    }
+
+    #[test]
+    fn a_uuid_near_the_word_session_is_captured() {
+        assert_eq!(
+            find_native_session_id("session id: 0199AA11-BB22-4C33-8D44-EE55FF667788").as_deref(),
+            Some("0199aa11-bb22-4c33-8d44-ee55ff667788")
+        );
+        assert_eq!(
+            find_native_session_id("Resuming session 0199aa11-bb22-4c33-8d44-ee55ff667788 now")
+                .as_deref(),
+            Some("0199aa11-bb22-4c33-8d44-ee55ff667788")
+        );
+    }
+
+    #[test]
+    fn an_id_split_across_chunks_is_still_captured_once() {
+        let mut capture = CaptureState {
+            enabled: true,
+            buffer: String::new(),
+        };
+        assert!(capture
+            .feed(
+                b"starting up...
+session id: 0199aa11-"
+            )
+            .is_none());
+        let found = capture.feed(
+            b"bb22-4c33-8d44-ee55ff667788
+",
+        );
+        assert_eq!(
+            found.as_deref(),
+            Some("0199aa11-bb22-4c33-8d44-ee55ff667788")
+        );
+        // Once captured, later output is no longer scanned.
+        assert!(capture
+            .feed(b"session id: 99998888-7777-4666-8555-444433332222")
+            .is_none());
+    }
+
+    #[test]
+    fn a_disabled_capture_never_matches() {
+        let mut capture = CaptureState {
+            enabled: false,
+            buffer: String::new(),
+        };
+        assert!(capture
+            .feed(b"session id: 0199aa11-bb22-4c33-8d44-ee55ff667788")
+            .is_none());
+    }
+
+    #[test]
+    fn a_uuid_without_session_context_is_not_trusted() {
+        assert!(
+            find_native_session_id("request 0199aa11-bb22-4c33-8d44-ee55ff667788 finished")
+                .is_none()
+        );
+        assert!(find_native_session_id("session id: not-a-uuid").is_none());
+        // "session" appearing far away does not vouch for the id.
+        let far = format!(
+            "session opened{}0199aa11-bb22-4c33-8d44-ee55ff667788",
+            " ".repeat(100)
+        );
+        assert!(find_native_session_id(&far).is_none());
     }
 
     #[test]

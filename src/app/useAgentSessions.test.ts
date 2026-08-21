@@ -40,6 +40,7 @@ describe("agent session transport", () => {
         state: "working" as const,
         stateSource: "heuristic" as const,
         processId: 42,
+        capturedSessionId: null,
       },
     ];
 

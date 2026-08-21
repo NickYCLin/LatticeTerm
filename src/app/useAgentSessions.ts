@@ -23,6 +23,8 @@ export interface AgentSessionSummary {
   state: AgentLifecycle;
   stateSource: AgentStateSource;
   processId: number | null;
+  /** The CLI's own session id, once its output announced one. */
+  capturedSessionId: string | null;
 }
 
 export interface AgentLaunchRequest {
@@ -292,6 +294,24 @@ export function useAgentSessions(): AgentApi {
           return;
         }
         cleanups.push(stopState);
+
+        const stopCapture = await listen<{
+          sessionId: string;
+          nativeSessionId: string;
+        }>("agent://capture", (event) => {
+          setSessions((current) =>
+            current.map((session) =>
+              session.sessionId === event.payload.sessionId
+                ? { ...session, capturedSessionId: event.payload.nativeSessionId }
+                : session,
+            ),
+          );
+        });
+        if (disposed) {
+          stopCapture();
+          return;
+        }
+        cleanups.push(stopCapture);
 
         const stopClosed = await listen<{
           sessionId: string;

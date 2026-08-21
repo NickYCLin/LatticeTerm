@@ -98,9 +98,9 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 | 批次提示 | 已完成 | 明確選取、二次確認、最多 32 個目標與部分失敗回報 |
 | 啟動工作區命名／排序 | 已完成 | 名稱與順序由 Rust 驗證及原子保存，v1 資料可相容遷移 |
 | 原生 CLI Session 續接 | 已完成 | Adapter v1 支援 Codex、Claude Code、Gemini CLI、Hermes；保存由使用者明確選擇 |
-| 工具專用語意 Adapter | 部分完成 | 已有版本化續接 recipe；工具 hook、自動 session ID、token／cost 擷取仍未完成 |
+| 工具專用語意 Adapter | 部分完成 | 已有版本化續接 recipe 與自動 session ID 擷取（白名單 CLI、保守比對）；工具 hook、token／cost 擷取仍未完成 |
 | 背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段 |
-| 跨重啟還原 | 部分完成 | 已有安全工作區、批次重新啟動與四種 CLI 原生脈絡續接；原程序、pane、輸出與自動 ID 擷取尚未完成 |
+| 跨重啟還原 | 部分完成 | 已有安全工作區、批次重新啟動、四種 CLI 原生脈絡續接與自動 session ID 擷取；原程序、pane 與輸出還原尚未完成 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 任務編排 | 部分完成 | broadcast prompt 已完成；依賴圖、佇列與排程仍待實作 |
 | 權限隔離 | 未完成 | 尚無每 Agent 容器、沙箱或檔案範圍策略 |
@@ -109,7 +109,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 
 ### 1. 語意 adapter
 
-Reporter 傳輸、狀態模型與 Adapter v1 的四種原生 restore recipe 已完成。下一步擴充 manifest 的工具 hook 安裝方式與 CLI session ID 自動擷取，再加入 token／cost 等可觀測事件。只有官方確認可在互動式 PTY 安全續接的 CLI 才進入白名單；其他 CLI 繼續使用保守 heuristic，也可由使用者自訂 hook 呼叫通用 Reporter。
+Reporter 傳輸、狀態模型與 Adapter v1 的四種原生 restore recipe 已完成。session ID 自動擷取已完成：輸出經 ANSI 清理後，只在「session」字樣附近出現的 UUID 才被視為 session id（跨 chunk 滾動視窗、僅白名單 CLI 啟用、擷取一次即停），寫入工作階段摘要並以 agent://capture 事件通知介面，續接區塊可一鍵套用。下一步擴充 manifest 的工具 hook 安裝方式，再加入 token／cost 等可觀測事件。只有官方確認可在互動式 PTY 安全續接的 CLI 才進入白名單；其他 CLI 繼續使用保守 heuristic，也可由使用者自訂 hook 呼叫通用 Reporter。
 
 ### 2. Lattice Agent daemon
 
