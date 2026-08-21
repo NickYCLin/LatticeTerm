@@ -10,10 +10,11 @@ import type {
   SftpEntry,
   SftpSessionSummary,
 } from "../../app/useSftpSessions";
-import { SFTP_MAX_TRANSFER_BYTES } from "../../app/useSftpSessions";
 import { useI18n } from "../../i18n";
+import { formatBytes } from "../../domain/metrics";
 import { Callout } from "../common/Callout";
 import {
+  CloseIcon,
   EditIcon,
   ExportIcon,
   FolderIcon,
@@ -30,17 +31,6 @@ function parentPath(path: string): string {
   return boundary <= 0 ? "/" : normalized.slice(0, boundary);
 }
 
-function downloadBytes(bytes: Uint8Array, name: string) {
-  const blob = new Blob([bytes as BlobPart], {
-    type: "application/octet-stream",
-  });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
-}
 
 export function SftpPane({
   session,
@@ -57,6 +47,9 @@ export function SftpPane({
   const [problem, setProblem] = useState<string | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const list = sftp.list;
+  const sessionTransfers = Object.values(sftp.transfers)
+    .filter((transfer) => transfer.sessionId === session.sessionId)
+    .sort((a, b) => a.transferId.localeCompare(b.transferId, undefined, { numeric: true }));
 
   async function open(path: string) {
     setLoading(true);
@@ -122,28 +115,18 @@ export function SftpPane({
   }
 
   async function download(entry: SftpEntry) {
-    setBusy(true);
     setProblem(null);
     try {
-      downloadBytes(await sftp.readFile(session.sessionId, entry.path), entry.name);
+      // Streamed on the Rust side straight into the download folder — no
+      // size cap, and the transfer strip below reports its progress.
+      await sftp.downloadToDisk(session.sessionId, entry.path);
     } catch (reason) {
       setProblem(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
     }
   }
 
   async function upload(file: File | undefined) {
     if (!file || !directory) return;
-    if (file.size > SFTP_MAX_TRANSFER_BYTES) {
-      setProblem(
-        t("sftp.tooLarge", {
-          limit: SFTP_MAX_TRANSFER_BYTES / 1024 / 1024,
-        }),
-      );
-      if (uploadRef.current) uploadRef.current.value = "";
-      return;
-    }
     const existing = directory.entries.find((entry) => entry.name === file.name);
     if (existing?.kind === "directory") {
       setProblem(t("sftp.overwriteDirectory", { name: file.name }));
@@ -157,8 +140,9 @@ export function SftpPane({
       if (uploadRef.current) uploadRef.current.value = "";
       return;
     }
+    // Chunked through the queue: no size cap, progress in the strip below.
     await mutate(() =>
-      sftp.writeFile(
+      sftp.uploadStream(
         session.sessionId,
         directory.path,
         file,
@@ -353,6 +337,83 @@ export function SftpPane({
           </table>
         )}
       </div>
+
+      {sessionTransfers.length > 0 && (
+        <div className="sftp-transfers" style={{ borderTop: "1px solid var(--line)", padding: "var(--space-3) var(--space-4)", display: "grid", gap: "var(--space-2)" }}>
+          {sessionTransfers.map((transfer) => {
+            const percent =
+              transfer.totalBytes && transfer.totalBytes > 0
+                ? Math.min(
+                    100,
+                    Math.round((transfer.bytesDone / transfer.totalBytes) * 100),
+                  )
+                : null;
+            return (
+              <div
+                key={transfer.transferId}
+                style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", fontSize: "var(--text-xs)" }}
+              >
+                <span aria-hidden="true" style={{ display: "flex", color: "var(--text-faint)" }}>
+                  {transfer.kind === "download" ? <ExportIcon size={12} /> : <ImportIcon size={12} />}
+                </span>
+                <span className="mono truncate" style={{ flex: "0 1 auto", minWidth: 0 }}>
+                  {transfer.name}
+                </span>
+                <span style={{ flex: "1 1 8rem", height: 4, borderRadius: 2, background: "var(--surface-solid)", overflow: "hidden" }}>
+                  <span
+                    style={{
+                      display: "block",
+                      height: "100%",
+                      width: `${percent ?? (transfer.state === "running" ? 30 : 100)}%`,
+                      background:
+                        transfer.state === "error"
+                          ? "var(--danger)"
+                          : transfer.state === "cancelled"
+                            ? "var(--text-faint)"
+                            : transfer.state === "done"
+                              ? "var(--ok)"
+                              : "var(--accent)",
+                      transition: "width var(--duration-fast) var(--ease)",
+                    }}
+                  />
+                </span>
+                <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                  {transfer.state === "running"
+                    ? `${formatBytes(transfer.bytesDone)}${transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}`
+                    : transfer.state === "error"
+                      ? (transfer.detail ?? t("sftp.transfer.error"))
+                      : t(
+                          transfer.state === "done"
+                            ? "sftp.transfer.done"
+                            : "sftp.transfer.cancelled",
+                        )}
+                </span>
+                {transfer.state === "running" ? (
+                  <button
+                    type="button"
+                    className="icon-button icon-button--sm"
+                    onClick={() => void sftp.cancelTransfer(transfer.transferId)}
+                    aria-label={t("sftp.transfer.cancel")}
+                    data-tooltip={t("sftp.transfer.cancel")}
+                  >
+                    <CloseIcon size={11} />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="icon-button icon-button--sm"
+                    onClick={() => void sftp.dismissTransfer(transfer.transferId)}
+                    aria-label={t("sftp.transfer.dismiss")}
+                    data-tooltip={t("sftp.transfer.dismiss")}
+                  >
+                    <TrashIcon size={11} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }

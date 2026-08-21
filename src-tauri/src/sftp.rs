@@ -123,7 +123,7 @@ impl SftpRegistry {
             .unwrap_or_default()
     }
 
-    fn session(&self, session_id: &str) -> Result<Arc<SftpSession>, String> {
+    pub(crate) fn session(&self, session_id: &str) -> Result<Arc<SftpSession>, String> {
         self.sessions
             .lock()
             .map_err(|error| error.to_string())?
@@ -265,7 +265,7 @@ pub async fn connect(
     SftpConnectOutcome::Connected { session: summary }
 }
 
-fn validate_path(path: &str) -> Result<String, String> {
+pub(crate) fn validate_path(path: &str) -> Result<String, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("The remote path is empty.".to_string());
@@ -282,7 +282,7 @@ fn validate_path(path: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-fn validate_name(name: &str) -> Result<String, String> {
+pub(crate) fn validate_name(name: &str) -> Result<String, String> {
     let name = validate_path(name)?;
     if name == "." || name == ".." || name.contains('/') {
         return Err("The name must be one file or folder name.".to_string());
@@ -290,7 +290,7 @@ fn validate_name(name: &str) -> Result<String, String> {
     Ok(name)
 }
 
-fn join_path(parent: &str, name: &str) -> String {
+pub(crate) fn join_path(parent: &str, name: &str) -> String {
     if parent == "/" {
         format!("/{name}")
     } else {

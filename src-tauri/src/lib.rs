@@ -8,6 +8,7 @@ pub mod rdp;
 pub mod remote;
 pub mod remote_host;
 pub mod sftp;
+pub mod sftp_transfers;
 pub mod ssh;
 pub mod storage;
 pub mod tunnel;
@@ -31,6 +32,7 @@ use crate::remote_host::{RemoteHostRegistry, RemoteHostStartRequest, RemoteHostS
 use crate::sftp::{
     SftpConnectOutcome, SftpConnectRequest, SftpDirectory, SftpRegistry, SftpSessionSummary,
 };
+use crate::sftp_transfers::{TransferRegistry, TransferState};
 use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
 use crate::tunnel::{StartTunnelRequest, TunnelRegistry, TunnelStatusSummary};
@@ -566,6 +568,107 @@ async fn sftp_connect(
 }
 
 #[tauri::command]
+async fn sftp_download_start(
+    app: AppHandle,
+    session_id: String,
+    remote_path: String,
+    sessions: State<'_, Arc<SftpRegistry>>,
+    transfers: State<'_, Arc<TransferRegistry>>,
+) -> Result<TransferState, String> {
+    // Downloads land in the OS download folder: always writable, always where
+    // the user already looks for arriving files.
+    let target = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|error| format!("no download folder is available: {error}"))?;
+    crate::sftp_transfers::start_download(
+        Arc::clone(transfers.inner()),
+        sessions.inner(),
+        Arc::new(crate::sftp_transfers::EventSink(app.clone())),
+        &session_id,
+        &remote_path,
+        target,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn sftp_upload_begin(
+    app: AppHandle,
+    plan: crate::sftp_transfers::UploadPlan,
+    sessions: State<'_, Arc<SftpRegistry>>,
+    transfers: State<'_, Arc<TransferRegistry>>,
+) -> Result<TransferState, String> {
+    crate::sftp_transfers::begin_upload(
+        Arc::clone(transfers.inner()),
+        sessions.inner(),
+        &crate::sftp_transfers::EventSink(app.clone()),
+        plan,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn sftp_upload_chunk(
+    app: AppHandle,
+    transfer_id: String,
+    data: String,
+    transfers: State<'_, Arc<TransferRegistry>>,
+) -> Result<(), String> {
+    crate::sftp_transfers::upload_chunk(
+        transfers.inner(),
+        &crate::sftp_transfers::EventSink(app.clone()),
+        &transfer_id,
+        &data,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn sftp_upload_finish(
+    app: AppHandle,
+    transfer_id: String,
+    transfers: State<'_, Arc<TransferRegistry>>,
+) -> Result<(), String> {
+    crate::sftp_transfers::finish_upload(
+        transfers.inner(),
+        &crate::sftp_transfers::EventSink(app.clone()),
+        &transfer_id,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn sftp_transfer_cancel(
+    app: AppHandle,
+    transfer_id: String,
+    sessions: State<'_, Arc<SftpRegistry>>,
+    transfers: State<'_, Arc<TransferRegistry>>,
+) -> Result<(), String> {
+    crate::sftp_transfers::cancel(
+        transfers.inner(),
+        sessions.inner(),
+        &crate::sftp_transfers::EventSink(app.clone()),
+        &transfer_id,
+    )
+    .await
+}
+
+#[tauri::command]
+fn sftp_transfer_dismiss(
+    transfer_id: String,
+    transfers: State<'_, Arc<TransferRegistry>>,
+) -> Result<(), String> {
+    transfers.dismiss(&transfer_id)
+}
+
+#[tauri::command]
+fn sftp_transfers(transfers: State<'_, Arc<TransferRegistry>>) -> Vec<TransferState> {
+    transfers.list()
+}
+
+#[tauri::command]
 fn sftp_sessions(registry: State<'_, Arc<SftpRegistry>>) -> Vec<SftpSessionSummary> {
     registry.list()
 }
@@ -917,6 +1020,7 @@ pub fn run() {
             app.manage(trust);
             app.manage(Arc::new(SshRegistry::new()));
             app.manage(Arc::new(SftpRegistry::new()));
+            app.manage(Arc::new(TransferRegistry::new()));
             app.manage(Arc::new(RemoteRegistry::new()));
             app.manage(Arc::new(RemoteHostRegistry::new()));
             app.manage(Arc::new(RdpRegistry::new()));
@@ -967,6 +1071,13 @@ pub fn run() {
             sftp_read_file,
             sftp_write_file,
             sftp_disconnect,
+            sftp_download_start,
+            sftp_upload_begin,
+            sftp_upload_chunk,
+            sftp_upload_finish,
+            sftp_transfer_cancel,
+            sftp_transfer_dismiss,
+            sftp_transfers,
             remote_connect,
             remote_disconnect,
             remote_sessions,

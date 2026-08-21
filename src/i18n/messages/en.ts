@@ -701,6 +701,11 @@ export const en: Messages = {
     "“{name}” already exists. Overwrite it? This action cannot be undone.",
   "sftp.overwriteDirectory":
     "“{name}” is a folder and cannot be overwritten by an uploaded file.",
+  "sftp.transfer.done": "Done",
+  "sftp.transfer.cancelled": "Cancelled",
+  "sftp.transfer.error": "Transfer failed",
+  "sftp.transfer.cancel": "Cancel transfer",
+  "sftp.transfer.dismiss": "Clear entry",
   "sftp.tooLarge": "This file exceeds the {limit} MiB transfer limit.",
   "sftp.column.name": "Name",
   "sftp.column.size": "Size",

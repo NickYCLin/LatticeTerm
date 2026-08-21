@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { HostKeyRecord } from "../domain/security";
 
 export const SFTP_MAX_TRANSFER_BYTES = 32 * 1024 * 1024;
@@ -25,6 +25,23 @@ export interface SftpDirectory {
   path: string;
   entries: SftpEntry[];
 }
+
+/** One queued transfer, as reported by the streaming engine. */
+export interface SftpTransfer {
+  transferId: string;
+  sessionId: string;
+  kind: "download" | "upload";
+  name: string;
+  remotePath: string;
+  localPath: string | null;
+  bytesDone: number;
+  totalBytes: number | null;
+  state: "running" | "done" | "error" | "cancelled";
+  detail: string | null;
+}
+
+/** Upload chunk size: large enough to move fast, bounded enough for memory. */
+const UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
 
 export interface SftpConnectRequest {
   profileId: string;
@@ -101,6 +118,19 @@ export interface SftpApi {
     file: File,
     overwrite: boolean,
   ) => Promise<void>;
+  /** Live transfer queue, keyed by transfer id. */
+  transfers: Record<string, SftpTransfer>;
+  /** Streams a remote file into the OS download folder. */
+  downloadToDisk: (sessionId: string, remotePath: string) => Promise<SftpTransfer>;
+  /** Streams a local file to the remote side in bounded chunks. */
+  uploadStream: (
+    sessionId: string,
+    parent: string,
+    file: File,
+    overwrite: boolean,
+  ) => Promise<void>;
+  cancelTransfer: (transferId: string) => Promise<void>;
+  dismissTransfer: (transferId: string) => Promise<void>;
   trustHost: (
     host: string,
     port: number,
@@ -111,6 +141,46 @@ export interface SftpApi {
 
 export function useSftpSessions(): SftpApi {
   const [sessions, setSessions] = useState<SftpSessionSummary[]>([]);
+  const [transfers, setTransfers] = useState<Record<string, SftpTransfer>>({});
+
+  // One listener carries every transfer's progress; a snapshot fetch fills in
+  // whatever moved before this view mounted.
+  useEffect(() => {
+    let cancelled = false;
+    let stop: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const [{ invoke }, { listen }] = await Promise.all([
+          core(),
+          import("@tauri-apps/api/event"),
+        ]);
+        const existing = await invoke<SftpTransfer[]>("sftp_transfers");
+        if (!cancelled) {
+          setTransfers((current) => {
+            const next = { ...current };
+            for (const transfer of existing) next[transfer.transferId] = transfer;
+            return next;
+          });
+        }
+        const unlisten = await listen<SftpTransfer>("sftp://transfer", (event) => {
+          setTransfers((current) => ({
+            ...current,
+            [event.payload.transferId]: event.payload,
+          }));
+        });
+        if (cancelled) unlisten();
+        else stop = unlisten;
+      } catch {
+        // Outside the desktop shell there are no transfers to watch.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, []);
 
   const connect = useCallback(
     async (request: SftpConnectRequest): Promise<SftpConnectOutcome> => {
@@ -206,6 +276,97 @@ export function useSftpSessions(): SftpApi {
     [],
   );
 
+  const downloadToDisk = useCallback(
+    async (sessionId: string, remotePath: string) => {
+      const { invoke } = await core();
+      const transfer = await invoke<SftpTransfer>("sftp_download_start", {
+        sessionId,
+        remotePath,
+      });
+      setTransfers((current) => ({ ...current, [transfer.transferId]: transfer }));
+      return transfer;
+    },
+    [],
+  );
+
+  const uploadStream = useCallback(
+    async (
+      sessionId: string,
+      parent: string,
+      file: File,
+      overwrite: boolean,
+    ) => {
+      const { invoke } = await core();
+      const transfer = await invoke<SftpTransfer>("sftp_upload_begin", {
+        plan: {
+          sessionId,
+          parent,
+          name: file.name,
+          totalBytes: file.size,
+          overwrite,
+        },
+      });
+      setTransfers((current) => ({ ...current, [transfer.transferId]: transfer }));
+
+      const reader = file.stream().getReader();
+      let pending = new Uint8Array(0);
+
+      async function sendChunk(bytes: Uint8Array) {
+        await invoke("sftp_upload_chunk", {
+          transferId: transfer.transferId,
+          data: encodeSftpPayload(bytes),
+        });
+      }
+
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.length > 0) {
+            const merged = new Uint8Array(pending.length + value.length);
+            merged.set(pending);
+            merged.set(value, pending.length);
+            pending = merged;
+          }
+          while (pending.length >= UPLOAD_CHUNK_BYTES) {
+            await sendChunk(pending.subarray(0, UPLOAD_CHUNK_BYTES));
+            pending = pending.slice(UPLOAD_CHUNK_BYTES);
+          }
+        }
+        if (pending.length > 0) {
+          await sendChunk(pending);
+        }
+        await invoke("sftp_upload_finish", { transferId: transfer.transferId });
+      } catch (reason) {
+        // A cancellation surfaces here as the chunk call refusing; the
+        // backend has already recorded the transfer's final state.
+        const message = reason instanceof Error ? reason.message : String(reason);
+        if (!message.includes("cancelled")) throw reason;
+      } finally {
+        reader.releaseLock();
+      }
+    },
+    [],
+  );
+
+  const cancelTransfer = useCallback(async (transferId: string) => {
+    const { invoke } = await core();
+    await invoke("sftp_transfer_cancel", { transferId });
+  }, []);
+
+  const dismissTransfer = useCallback(async (transferId: string) => {
+    try {
+      const { invoke } = await core();
+      await invoke("sftp_transfer_dismiss", { transferId });
+    } finally {
+      setTransfers((current) => {
+        const next = { ...current };
+        delete next[transferId];
+        return next;
+      });
+    }
+  }, []);
+
   const trustHost = useCallback(
     async (
       host: string,
@@ -234,6 +395,11 @@ export function useSftpSessions(): SftpApi {
     remove,
     readFile,
     writeFile,
+    transfers,
+    downloadToDisk,
+    uploadStream,
+    cancelTransfer,
+    dismissTransfer,
     trustHost,
   };
 }
