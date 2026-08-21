@@ -41,6 +41,24 @@ describe("buildReleaseMetadata", () => {
     expect(result.body).toContain("  - 支援使用者自行錄影與截圖。");
   });
 
+  it("版本標題不納入 PR 或 Issue 參照連結", () => {
+    const changelog = `## [0.9.4] (2026-08-21)
+
+### 🛠️ 問題修正
+
+* **更新:** 安裝完成後自動重新啟動 ([#37](https://github.com/example/repo/issues/37)) ([33192e5](https://github.com/example/repo/commit/33192e53c8ab43833aabdc578c29047d9fa0c5c9))
+`;
+
+    const result = buildReleaseMetadata(changelog, "v0.9.4");
+
+    expect(result.name).toBe(
+      "LatticeTerm v0.9.4 - 更新：安裝完成後自動重新啟動",
+    );
+    expect(result.body).toContain(
+      "([#37](https://github.com/example/repo/issues/37))",
+    );
+  });
+
   it("拒絕不存在的版本，避免發布空白說明", () => {
     expect(() => buildReleaseMetadata("# 更新日誌", "v9.9.9")).toThrow(
       "CHANGELOG.md 找不到 9.9.9 的版本段落",
