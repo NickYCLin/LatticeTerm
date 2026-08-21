@@ -95,6 +95,81 @@ export function decodeSftpPayload(value: string): Uint8Array {
   return bytes;
 }
 
+type SftpInvoke = (
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<unknown>;
+
+/**
+ * Feeds one browser file stream into an already-created backend transfer.
+ * Any local read or IPC failure explicitly cancels the backend transfer so a
+ * remote staging file cannot keep running after the WebView has stopped.
+ */
+export async function streamSftpUpload(
+  file: Pick<File, "stream">,
+  transferId: string,
+  invoke: SftpInvoke,
+): Promise<void> {
+  const reader = file.stream().getReader();
+  let pending = new Uint8Array(0);
+
+  async function sendChunk(bytes: Uint8Array) {
+    await invoke("sftp_upload_chunk", {
+      transferId,
+      data: encodeSftpPayload(bytes),
+    });
+  }
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.length > 0) {
+        const merged = new Uint8Array(pending.length + value.length);
+        merged.set(pending);
+        merged.set(value, pending.length);
+        pending = merged;
+      }
+      while (pending.length >= UPLOAD_CHUNK_BYTES) {
+        await sendChunk(pending.subarray(0, UPLOAD_CHUNK_BYTES));
+        pending = pending.slice(UPLOAD_CHUNK_BYTES);
+      }
+    }
+    if (pending.length > 0) {
+      await sendChunk(pending);
+    }
+    await invoke("sftp_upload_finish", { transferId });
+  } catch (reason) {
+    try {
+      await reader.cancel(reason);
+    } catch {
+      // The backend cancellation below is the authoritative cleanup path.
+    }
+
+    let cleanupProblem: unknown = null;
+    try {
+      await invoke("sftp_transfer_cancel", { transferId });
+    } catch (cleanupReason) {
+      cleanupProblem = cleanupReason;
+    }
+
+    const message = reason instanceof Error ? reason.message : String(reason);
+    if (message.trim().toLowerCase() === "cancelled" && cleanupProblem === null) {
+      return;
+    }
+    if (cleanupProblem !== null) {
+      const cleanupMessage =
+        cleanupProblem instanceof Error
+          ? cleanupProblem.message
+          : String(cleanupProblem);
+      throw new Error(`${message}; transfer cleanup failed: ${cleanupMessage}`);
+    }
+    throw reason;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export interface SftpApi {
   sessions: SftpSessionSummary[];
   connect: (request: SftpConnectRequest) => Promise<SftpConnectOutcome>;
@@ -307,44 +382,7 @@ export function useSftpSessions(): SftpApi {
         },
       });
       setTransfers((current) => ({ ...current, [transfer.transferId]: transfer }));
-
-      const reader = file.stream().getReader();
-      let pending = new Uint8Array(0);
-
-      async function sendChunk(bytes: Uint8Array) {
-        await invoke("sftp_upload_chunk", {
-          transferId: transfer.transferId,
-          data: encodeSftpPayload(bytes),
-        });
-      }
-
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value && value.length > 0) {
-            const merged = new Uint8Array(pending.length + value.length);
-            merged.set(pending);
-            merged.set(value, pending.length);
-            pending = merged;
-          }
-          while (pending.length >= UPLOAD_CHUNK_BYTES) {
-            await sendChunk(pending.subarray(0, UPLOAD_CHUNK_BYTES));
-            pending = pending.slice(UPLOAD_CHUNK_BYTES);
-          }
-        }
-        if (pending.length > 0) {
-          await sendChunk(pending);
-        }
-        await invoke("sftp_upload_finish", { transferId: transfer.transferId });
-      } catch (reason) {
-        // A cancellation surfaces here as the chunk call refusing; the
-        // backend has already recorded the transfer's final state.
-        const message = reason instanceof Error ? reason.message : String(reason);
-        if (!message.includes("cancelled")) throw reason;
-      } finally {
-        reader.releaseLock();
-      }
+      await streamSftpUpload(file, transfer.transferId, invoke);
     },
     [],
   );

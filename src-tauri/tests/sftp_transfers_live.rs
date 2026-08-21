@@ -13,7 +13,9 @@
 
 use base64::Engine;
 use latticeterm_lib::hostkeys::HostTrustStore;
-use latticeterm_lib::sftp::{connect, SftpConnectOutcome, SftpConnectRequest, SftpRegistry};
+use latticeterm_lib::sftp::{
+    connect, read_file, write_file, SftpConnectOutcome, SftpConnectRequest, SftpRegistry,
+};
 use latticeterm_lib::sftp_transfers::{
     begin_upload, cancel, finish_upload, start_download, upload_chunk, TransferRegistry,
     TransferSink, TransferState, UploadPlan,
@@ -214,7 +216,7 @@ async fn a_cancelled_upload_removes_its_partial_remote_file() {
         .await
         .unwrap();
 
-    cancel(&transfers, &sessions, sink.as_ref(), &upload.transfer_id)
+    cancel(&transfers, sink.as_ref(), &upload.transfer_id)
         .await
         .unwrap();
 
@@ -232,5 +234,133 @@ async fn a_cancelled_upload_removes_its_partial_remote_file() {
             .iter()
             .any(|entry| entry.name == "latticeterm-partial.bin"),
         "the partial remote file was removed"
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs the throwaway SSH container"]
+async fn overwrite_only_replaces_the_original_after_a_complete_upload() {
+    let sessions = Arc::new(SftpRegistry::new());
+    let session_id = connected_session(&sessions).await;
+    let transfers = Arc::new(TransferRegistry::new());
+    let sink = Arc::new(Collector::default());
+    let name = "latticeterm-transactional.bin";
+    let path = format!("/config/{name}");
+    let original = b"original remote contents";
+    let replacement = b"complete replacement contents";
+
+    write_file(
+        &sessions,
+        &session_id,
+        "/config",
+        name,
+        &base64::engine::general_purpose::STANDARD.encode(original),
+        true,
+    )
+    .await
+    .unwrap();
+
+    let completed = begin_upload(
+        Arc::clone(&transfers),
+        &sessions,
+        sink.as_ref(),
+        UploadPlan {
+            session_id: session_id.clone(),
+            parent: "/config".into(),
+            name: name.into(),
+            total_bytes: replacement.len() as u64,
+            overwrite: true,
+        },
+    )
+    .await
+    .unwrap();
+    upload_chunk(
+        &transfers,
+        sink.as_ref(),
+        &completed.transfer_id,
+        &base64::engine::general_purpose::STANDARD.encode(replacement),
+    )
+    .await
+    .unwrap();
+    finish_upload(&transfers, sink.as_ref(), &completed.transfer_id)
+        .await
+        .unwrap();
+    let published = base64::engine::general_purpose::STANDARD
+        .decode(read_file(&sessions, &session_id, &path).await.unwrap())
+        .unwrap();
+    assert_eq!(published, replacement);
+
+    let incomplete = begin_upload(
+        Arc::clone(&transfers),
+        &sessions,
+        sink.as_ref(),
+        UploadPlan {
+            session_id: session_id.clone(),
+            parent: "/config".into(),
+            name: name.into(),
+            total_bytes: 64,
+            overwrite: true,
+        },
+    )
+    .await
+    .unwrap();
+    upload_chunk(
+        &transfers,
+        sink.as_ref(),
+        &incomplete.transfer_id,
+        &base64::engine::general_purpose::STANDARD.encode(b"too short"),
+    )
+    .await
+    .unwrap();
+    assert!(
+        finish_upload(&transfers, sink.as_ref(), &incomplete.transfer_id)
+            .await
+            .is_err(),
+        "an incomplete upload must not be published"
+    );
+    let after_incomplete = base64::engine::general_purpose::STANDARD
+        .decode(read_file(&sessions, &session_id, &path).await.unwrap())
+        .unwrap();
+    assert_eq!(after_incomplete, replacement);
+
+    let cancelled = begin_upload(
+        Arc::clone(&transfers),
+        &sessions,
+        sink.as_ref(),
+        UploadPlan {
+            session_id: session_id.clone(),
+            parent: "/config".into(),
+            name: name.into(),
+            total_bytes: 64,
+            overwrite: true,
+        },
+    )
+    .await
+    .unwrap();
+    upload_chunk(
+        &transfers,
+        sink.as_ref(),
+        &cancelled.transfer_id,
+        &base64::engine::general_purpose::STANDARD.encode(b"cancel me"),
+    )
+    .await
+    .unwrap();
+    cancel(&transfers, sink.as_ref(), &cancelled.transfer_id)
+        .await
+        .unwrap();
+    let after_cancel = base64::engine::general_purpose::STANDARD
+        .decode(read_file(&sessions, &session_id, &path).await.unwrap())
+        .unwrap();
+    assert_eq!(after_cancel, replacement);
+
+    let directory = latticeterm_lib::sftp::list_directory(&sessions, &session_id, "/config")
+        .await
+        .unwrap();
+    assert!(
+        !directory
+            .entries
+            .iter()
+            .any(|entry| entry.name.starts_with(".latticeterm-")),
+        "successful, failed, and cancelled uploads leave no staging files"
     );
 }

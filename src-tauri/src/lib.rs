@@ -697,12 +697,10 @@ async fn sftp_upload_finish(
 async fn sftp_transfer_cancel(
     app: AppHandle,
     transfer_id: String,
-    sessions: State<'_, Arc<SftpRegistry>>,
     transfers: State<'_, Arc<TransferRegistry>>,
 ) -> Result<(), String> {
     crate::sftp_transfers::cancel(
         transfers.inner(),
-        sessions.inner(),
         &crate::sftp_transfers::EventSink(app.clone()),
         &transfer_id,
     )
@@ -797,10 +795,28 @@ async fn sftp_write_file(
 
 #[tauri::command]
 async fn sftp_disconnect(
+    app: AppHandle,
     session_id: String,
     registry: State<'_, Arc<SftpRegistry>>,
+    transfers: State<'_, Arc<TransferRegistry>>,
 ) -> Result<(), String> {
-    crate::sftp::disconnect(registry.inner(), &session_id).await
+    let cancel_result = crate::sftp_transfers::cancel_session(
+        transfers.inner(),
+        &crate::sftp_transfers::EventSink(app),
+        &session_id,
+    )
+    .await;
+    let disconnect_result = crate::sftp::disconnect(registry.inner(), &session_id).await;
+    match (cancel_result, disconnect_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(cancel_error), Ok(())) => Err(format!(
+            "the session closed, but one or more transfers could not be cleaned up: {cancel_error}"
+        )),
+        (Ok(()), Err(disconnect_error)) => Err(disconnect_error),
+        (Err(cancel_error), Err(disconnect_error)) => Err(format!(
+            "transfer cleanup failed ({cancel_error}); closing the SFTP session also failed ({disconnect_error})"
+        )),
+    }
 }
 
 #[tauri::command]

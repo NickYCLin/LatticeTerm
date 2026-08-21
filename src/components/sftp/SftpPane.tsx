@@ -382,11 +382,12 @@ export function SftpPane({
                     ? `${formatBytes(transfer.bytesDone)}${transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}`
                     : transfer.state === "error"
                       ? (transfer.detail ?? t("sftp.transfer.error"))
-                      : t(
+                      : (transfer.detail ??
+                        t(
                           transfer.state === "done"
                             ? "sftp.transfer.done"
                             : "sftp.transfer.cancelled",
-                        )}
+                        ))}
                 </span>
                 {transfer.state === "running" ? (
                   <button
