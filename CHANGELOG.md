@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.6.0...v0.7.0) (2026-08-21)
+
+
+### 新功能
+
+* **agent:** 加入原生工作階段續接 Adapter ([4f725ba](https://github.com/NickYCLin/LatticeTerm/commit/4f725ba03e14426a772508cd31c1b61d89a02310))
+* **agent:** 新增原生 Session 續接介面 ([bb757da](https://github.com/NickYCLin/LatticeTerm/commit/bb757da1b4411d8198e41987a572a368cc61ebdd))
+
 ## [0.6.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.5.0...v0.6.0) (2026-08-20)
 
 
