@@ -795,7 +795,8 @@ fn ssh_forget_host(host: String, port: u16, trust: State<'_, TrustState>) -> Res
 
 #[tauri::command]
 async fn tunnel_start(
-    request: StartTunnelRequest,
+    mut request: StartTunnelRequest,
+    storage: State<'_, AppStorage>,
     trust: State<'_, TrustState>,
     registry: State<'_, Arc<TunnelRegistry>>,
 ) -> Result<TunnelStatusSummary, String> {
@@ -803,6 +804,23 @@ async fn tunnel_start(
     // terminal session needs: a trusted host key and a credential. Both are
     // resolved here, before any listener exists, so failure leaves nothing
     // half-started behind.
+    // Resolve the endpoint from the stored profile. The WebView only selects
+    // an opaque id; altering IPC fields cannot pair that profile's credential
+    // with a different SSH host.
+    let profile = {
+        let guard = storage.lock().map_err(|error| error.to_string())?;
+        guard
+            .get_profile(&request.profile_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "profile:the SSH gateway profile no longer exists".to_string())?
+    };
+    if profile.protocol != Protocol::Ssh {
+        return Err("profile:SSH tunnels require an SSH connection profile".to_string());
+    }
+    request.ssh_hostname = profile.hostname;
+    request.ssh_port = profile.port;
+    request.ssh_username = profile.username;
+
     let known: Option<HostKeyRecord> = match trust.inner() {
         TrustState::Unavailable(reason) => return Err(format!("trust:{reason}")),
         TrustState::Ready(store) => {
