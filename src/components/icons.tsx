@@ -214,6 +214,20 @@ export const ShieldIcon: Glyph = (props) => (
   </Icon>
 );
 
+export const LockIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+    <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+  </Icon>
+);
+
+export const UnlockIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+    <path d="M5.5 7V5a2.5 2.5 0 0 1 4.9-.7" />
+  </Icon>
+);
+
 export const KeyIcon: Glyph = (props) => (
   <Icon {...props}>
     <circle cx="5.5" cy="8" r="3" />

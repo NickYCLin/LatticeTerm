@@ -12,6 +12,7 @@ pub mod sftp_transfers;
 pub mod ssh;
 pub mod storage;
 pub mod tunnel;
+pub mod vault;
 pub mod vnc;
 
 use crate::agent::{
@@ -355,6 +356,50 @@ async fn delete_connection_profile(
 #[tauri::command]
 fn credential_status() -> CredentialStoreStatus {
     crate::credentials::status()
+}
+
+#[tauri::command]
+fn credential_backend_get() -> crate::credentials::CredentialBackend {
+    crate::credentials::preferred_backend()
+}
+
+#[tauri::command]
+fn credential_backend_set(
+    backend: crate::credentials::CredentialBackend,
+) -> Result<crate::credentials::CredentialBackend, String> {
+    crate::credentials::set_preferred_backend(backend)
+}
+
+#[tauri::command]
+fn vault_status() -> Result<crate::vault::VaultStatus, String> {
+    Ok(crate::vault::manager()?.status())
+}
+
+#[tauri::command]
+async fn vault_create(master_password: String) -> Result<crate::vault::VaultStatus, String> {
+    // Argon2id takes real time by design; keep it off the event loop.
+    credential_call(move || crate::vault::manager()?.create(&master_password)).await
+}
+
+#[tauri::command]
+async fn vault_unlock(master_password: String) -> Result<crate::vault::VaultStatus, String> {
+    credential_call(move || crate::vault::manager()?.unlock(&master_password)).await
+}
+
+#[tauri::command]
+fn vault_lock() -> Result<crate::vault::VaultStatus, String> {
+    Ok(crate::vault::manager()?.lock())
+}
+
+#[tauri::command]
+async fn vault_change_password(
+    current_password: String,
+    new_password: String,
+) -> Result<crate::vault::VaultStatus, String> {
+    credential_call(move || {
+        crate::vault::manager()?.change_password(&current_password, &new_password)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1088,6 +1133,9 @@ pub fn run() {
             // the executable, so it survives an update and follows the user
             // profile on a shared machine.
             let dir = app.path().app_data_dir()?;
+            // The credential router and the encrypted vault live in the same
+            // directory as the rest of the app's data.
+            crate::credentials::initialize(dir.clone());
             let storage = FileStorage::open(&dir)?;
             app.manage(Mutex::new(storage));
             let agent_plans = FileAgentPlanStore::open(&dir).map_err(std::io::Error::other)?;
@@ -1133,6 +1181,13 @@ pub fn run() {
             agent_plan_reorder,
             agent_plan_restore,
             credential_status,
+            credential_backend_get,
+            credential_backend_set,
+            vault_status,
+            vault_create,
+            vault_unlock,
+            vault_lock,
+            vault_change_password,
             credential_exists,
             credential_delete,
             storage_status,

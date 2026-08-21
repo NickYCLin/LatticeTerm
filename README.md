@@ -54,7 +54,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 ## 開發藍圖
 
 1. 以純 Rust 的 SSH 實作（russh）建立終端機工作階段（已可用，持續強化）
-2. 嚴格驗證並管理 known_hosts、以作業系統金鑰鏈保存 SSH/SFTP/RDP 密碼、SSH 私鑰認證（已可用）；Stronghold 保管庫仍待完成
+2. 嚴格驗證並管理 known_hosts、以作業系統金鑰鏈保存 SSH/SFTP/RDP/VNC 密碼、SSH 私鑰認證、主密碼加密保管庫（皆可用）
 3. Lattice Remote 唯讀加密主螢幕與內嵌主機分享（已可用，後續增加 Relay/NAT 穿透、無人值守與顯式授權的輸入控制）
 4. 內嵌 Web RDP Canvas（已可用，持續強化封裝與憑證管理）
 5. SFTP 檔案瀏覽與安全傳輸、SSH Tunnel 本機／遠端轉送與 SOCKS5 代理設定、大型檔案串流佇列、VNC 畫面操作（皆可用）

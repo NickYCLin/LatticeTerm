@@ -31,6 +31,8 @@ import {
   TrashIcon,
 } from "../components/icons";
 import { Chip } from "../components/common/Badge";
+import { EncryptedVaultPanel } from "../components/vault/EncryptedVaultPanel";
+import { useVault } from "../app/useVault";
 import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 
@@ -53,7 +55,8 @@ export function VaultView({ workspace }: { workspace: WorkspaceState }) {
   const credentials = useCredentialInventory(workspace.profiles);
   const formId = useId();
 
-  const [activeTab, setActiveTab] = useState<"hosts" | "credentials">("hosts");
+  const [activeTab, setActiveTab] = useState<"hosts" | "credentials" | "encrypted">("hosts");
+  const vault = useVault(() => void credentials.refresh());
   const [hostSearch, setHostSearch] = useState("");
   const [showAddHostModal, setShowAddHostModal] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<HostKeyRecord | null>(null);
@@ -315,6 +318,18 @@ export function VaultView({ workspace }: { workspace: WorkspaceState }) {
               <Chip tone="ok">{t("common.available")}</Chip>
             )}
           </button>
+          <button
+            type="button"
+            className="segmented__btn"
+            role="tab"
+            aria-selected={activeTab === "encrypted"}
+            onClick={() => setActiveTab("encrypted")}
+          >
+            {t("vault.tabs.encrypted")}
+            {vault.status?.state === "unlocked" && (
+              <Chip tone="ok">{t("vault.encrypted.state.unlocked")}</Chip>
+            )}
+          </button>
         </div>
 
         {activeTab === "hosts" && trust.mode === "ready" && (
@@ -483,6 +498,8 @@ export function VaultView({ workspace }: { workspace: WorkspaceState }) {
           )}
         </>
       )}
+
+      {activeTab === "encrypted" && <EncryptedVaultPanel vault={vault} />}
 
       {activeTab === "credentials" && (
         <div className="stack">
