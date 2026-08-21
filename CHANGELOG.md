@@ -4,6 +4,13 @@
 
 ---
 
+## [0.9.5](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.4...v0.9.5) (2026-08-21)
+
+
+### 🛠️ 問題修正
+
+* **發布:** 排除版本標題參照連結 ([#39](https://github.com/NickYCLin/LatticeTerm/issues/39)) ([e2dda53](https://github.com/NickYCLin/LatticeTerm/commit/e2dda53ef6e41c96d6f16b79c8438ee569f015e8))
+
 ## [0.9.4](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.3...v0.9.4) (2026-08-21)
 
 
