@@ -4,6 +4,13 @@
 
 ---
 
+## [0.9.1](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.0...v0.9.1) (2026-08-21)
+
+
+### 🛠️ 問題修正
+
+* **更新:** 修好「有下載卻沒安裝」，更新改成全自動不跳安裝視窗 ([69f53c3](https://github.com/NickYCLin/LatticeTerm/commit/69f53c3faa0747310c3b350c36782f4ba928a428))
+
 ## [0.9.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.8.0...v0.9.0) (2026-08-21)
 
 ### 🚀 新增功能
