@@ -11,8 +11,9 @@
 LatticeTerm 採取明確的資料分類與分層儲存策略：
 
 - **非機密中繼資料層**：連線設定、顯示名稱、協定、連接埠、群組、標籤與 UI 偏好。未來採用 **redb / SQLCipher** 純 Rust 嵌入式資料庫保存。
-- **安全金鑰與憑證保管庫 (Key Vault)**：密碼、Passphrase、SSH 私鑰、RDP 認證與主機信任指紋，透過 **Tauri Stronghold** 進行加密與完整性保護。
-- **系統憑證保護層 (OS Credential Store)**：解鎖 Vault 所需的主密鑰包裝，利用 Windows Credential Manager、macOS Keychain 與 Linux Secret Service 保護。
+- **安全金鑰與憑證保管庫 (Key Vault)**：目前以 known_hosts.json 管理主機信任，並由作業系統認證儲存區隔離使用者明確保存的 SSH／SFTP／RDP 密碼；未來再以 **Tauri Stronghold** 提供整庫加密、自動鎖定與跨機備份。
+- **系統憑證保護層 (OS Credential Store)**：已使用 Windows Credential Manager、macOS Keychain 與 Linux Secret Service 保存密碼；未來也可用來包裝 Stronghold 的主密鑰。
+- **SSH 私鑰認證**：只在使用者連線時從明確選擇的本機路徑讀取並簽章，不把私鑰內容或 Passphrase 複製到 Profile、前端持久層或目前的認證儲存區。
 - **非機密備份與匯出**：以結構化 JSON 提供非機密設定匯出與匯入，絕不輸出或解析任何密碼或私鑰。
 
 ---
@@ -23,11 +24,13 @@ LatticeTerm 採取明確的資料分類與分層儲存策略：
 flowchart LR
     UI[React UI] -->|Profile request / short session ID| CORE[Rust Application Core]
     CORE --> META[Metadata Store (redb / Storage Trait)]
-    CORE --> VAULT[Tauri Stronghold Secure Vault]
+    CORE -. future .-> VAULT[Tauri Stronghold Secure Vault]
     CORE --> KEYRING[OS Credential Store]
+    CORE --> LOCALKEY[User-selected local SSH key]
     META -->|credential_ref only| CORE
-    KEYRING -->|wrapped master key| VAULT
-    VAULT -->|decrypted credentials in memory only| CORE
+    KEYRING -. future wrapped master key .-> VAULT
+    VAULT -. future decrypted credentials .-> CORE
+    LOCALKEY -->|sign in Rust memory only| CORE
     CORE --> ENGINE[SSH / SFTP / RDP / VNC Engines]
 ```
 
@@ -55,9 +58,10 @@ flowchart LR
 - 已完成主機指紋核對對話框（Unknown host fingerprint）與金鑰變更警告（Changed host key）。
 - 已完成 `known_hosts.json` 持久化，以及 Key Vault 內真實資料的列出、搜尋、手動新增與確認移除。
 - 網頁預覽不顯示範例信任資料；信任檔讀不到時維持安全失敗，不退化成空清單。
-- 尚待整合 Tauri Stronghold 與系統金鑰庫（Keyring）。
+- 已完成系統金鑰庫（Keyring）整合；只有使用者明確勾選且驗證成功的 SSH／SFTP／RDP 密碼才會寫入，前端只能查詢是否存在或要求刪除，不能讀取明文。
+- 已完成 SSH 私鑰認證；私鑰由使用者指定本機路徑，內容與 Passphrase 不會保存。Tauri Stronghold 仍待整合。
 - 尚待實作認證資料的自動鎖定、解鎖與閒置保護機制。
-- 目前 SSH、Lattice Remote 配對碼與 RDP 密碼都只供單次連線使用；內嵌 Lattice Remote 主機模式只把配對碼保留於程序與 WebView 記憶體並在配對後清除，RDP 密碼則以 stdin 傳入每工作階段獨立的 engine，兩者都未宣稱已完成持久化保管庫。
+- SSH／SFTP／RDP 密碼預設只供單次連線；只有使用者明確選擇記住且驗證成功後才存入系統認證儲存區。內嵌 Lattice Remote 主機模式只把配對碼保留於程序與 WebView 記憶體並在配對後清除；RDP 密碼則以 stdin 傳入每工作階段獨立的 engine。
 - RDP 自簽憑證信任也是當次重試限定，不寫入 profile 或 `known_hosts.json`。
 
 ### Phase 3：加密備份與跨平台遷移

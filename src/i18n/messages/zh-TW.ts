@@ -796,7 +796,7 @@ export const zhTW = {
   "vault.activity.removed": "已移除 {target} 的主機信任",
   "vault.credentials.title": "系統認證儲存已啟用",
   "vault.credentials.body":
-    "這裡只列出哪些連線已有安全保存的密碼，不會讀取或顯示密碼內容。SSH 私鑰與 Stronghold 保管庫仍屬後續項目。",
+    "這裡只列出哪些連線已有安全保存的密碼，不會讀取或顯示密碼內容。SSH 私鑰認證會直接使用你選擇的本機金鑰檔，不保存私鑰或密語；Stronghold 保管庫仍屬後續項目。",
   "vault.credentials.loading.title": "正在讀取系統認證儲存區",
   "vault.credentials.loading.body": "只檢查哪些連線有對應項目，不會把密碼載入畫面。",
   "vault.credentials.ready.title": "{provider} 已連線",
