@@ -5,7 +5,7 @@
 //! upload or download and each operation is capped to protect WebView memory.
 
 use crate::hostkeys::{HostKeyRecord, TrustVerdict};
-use crate::ssh::{AuthMethod, TrustingHandler};
+use crate::ssh::{authenticate, AuthAttempt, AuthMethod, TrustingHandler};
 use base64::Engine;
 use russh::client;
 use russh_sftp::client::SftpSession;
@@ -212,19 +212,21 @@ pub async fn connect(
             }
         };
 
-    let authenticated = match &request.auth {
-        AuthMethod::Password { password } => {
-            match transport
-                .authenticate_password(&request.username, password)
-                .await
-            {
-                Ok(result) => result.success(),
-                Err(error) => return failed("authenticate", error),
+    match authenticate(&mut transport, &request.username, &request.auth).await {
+        AuthAttempt::Accepted => {}
+        AuthAttempt::Rejected => return SftpConnectOutcome::AuthFailed,
+        AuthAttempt::Credential(detail) => {
+            return SftpConnectOutcome::Failed {
+                stage: "credential",
+                detail,
             }
         }
-    };
-    if !authenticated {
-        return SftpConnectOutcome::AuthFailed;
+        AuthAttempt::Transport(detail) => {
+            return SftpConnectOutcome::Failed {
+                stage: "authenticate",
+                detail,
+            }
+        }
     }
 
     let channel = match transport.channel_open_session().await {

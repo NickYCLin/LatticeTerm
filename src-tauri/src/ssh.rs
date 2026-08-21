@@ -79,9 +79,10 @@ fn decode(text: &str) -> Result<Vec<u8>, String> {
 
 /// How to prove who we are.
 ///
-/// A password is used for the single connection attempt it arrives with and is
-/// dropped as soon as authentication finishes. It is never written to the
-/// connection store, the trust store, or any log line.
+/// A password or passphrase is used for the single connection attempt it
+/// arrives with and is dropped as soon as authentication finishes. It is never
+/// written to the connection store, the trust store, or any log line. A key is
+/// read from disk at connect time and never leaves this process.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(
     rename_all = "camelCase",
@@ -89,7 +90,82 @@ fn decode(text: &str) -> Result<Vec<u8>, String> {
     tag = "kind"
 )]
 pub enum AuthMethod {
-    Password { password: String },
+    Password {
+        password: String,
+    },
+    PrivateKey {
+        /// Path to an OpenSSH-format private key on this machine.
+        path: String,
+        #[serde(default)]
+        passphrase: Option<String>,
+    },
+}
+
+/// Where one authentication attempt ended, before the caller maps it into its
+/// own outcome type. Shared by the terminal and SFTP connect paths so the two
+/// never drift on what a key failure means.
+pub(crate) enum AuthAttempt {
+    Accepted,
+    /// The host understood the credentials and said no.
+    Rejected,
+    /// The credentials could not even be assembled — unreadable key file,
+    /// wrong passphrase. The host was never asked.
+    Credential(String),
+    /// The connection failed mid-authentication.
+    Transport(String),
+}
+
+pub(crate) async fn authenticate<H: client::Handler>(
+    session: &mut client::Handle<H>,
+    username: &str,
+    auth: &AuthMethod,
+) -> AuthAttempt {
+    match auth {
+        AuthMethod::Password { password } => {
+            match session.authenticate_password(username, password).await {
+                Ok(result) if result.success() => AuthAttempt::Accepted,
+                Ok(_) => AuthAttempt::Rejected,
+                Err(error) => AuthAttempt::Transport(error.to_string()),
+            }
+        }
+        AuthMethod::PrivateKey { path, passphrase } => {
+            let key = match russh::keys::load_secret_key(path, passphrase.as_deref()) {
+                Ok(key) => key,
+                Err(error) => {
+                    return AuthAttempt::Credential(format!(
+                        "could not use the private key at {path}: {error}"
+                    ))
+                }
+            };
+            // RSA keys sign with the strongest hash the server accepts;
+            // other algorithms carry their hash in the key type itself.
+            let hash_alg = match session.best_supported_rsa_hash().await {
+                Ok(hash) => hash.flatten(),
+                Err(error) => return AuthAttempt::Transport(error.to_string()),
+            };
+            let prepared = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
+            match session.authenticate_publickey(username, prepared).await {
+                Ok(result) if result.success() => AuthAttempt::Accepted,
+                Ok(_) => AuthAttempt::Rejected,
+                Err(error) => AuthAttempt::Transport(error.to_string()),
+            }
+        }
+    }
+}
+
+/// The default OpenSSH key files that exist on this machine, most modern
+/// algorithm first — used to prefill the connect dialog, never read silently.
+pub fn default_key_paths() -> Vec<String> {
+    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) else {
+        return Vec::new();
+    };
+    ["id_ed25519", "id_ecdsa", "id_rsa"]
+        .iter()
+        .filter_map(|name| {
+            let path = std::path::Path::new(&home).join(".ssh").join(name);
+            path.is_file().then(|| path.display().to_string())
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -338,25 +414,21 @@ pub async fn connect(
             }
         };
 
-    let authenticated = match &request.auth {
-        AuthMethod::Password { password } => {
-            match session
-                .authenticate_password(&request.username, password)
-                .await
-            {
-                Ok(result) => result.success(),
-                Err(error) => {
-                    return ConnectOutcome::Failed {
-                        stage: "authenticate",
-                        detail: error.to_string(),
-                    }
-                }
+    match authenticate(&mut session, &request.username, &request.auth).await {
+        AuthAttempt::Accepted => {}
+        AuthAttempt::Rejected => return ConnectOutcome::AuthFailed,
+        AuthAttempt::Credential(detail) => {
+            return ConnectOutcome::Failed {
+                stage: "credential",
+                detail,
             }
         }
-    };
-
-    if !authenticated {
-        return ConnectOutcome::AuthFailed;
+        AuthAttempt::Transport(detail) => {
+            return ConnectOutcome::Failed {
+                stage: "authenticate",
+                detail,
+            }
+        }
     }
 
     // Everything after authentication takes `&self`, so the handle can be
@@ -628,6 +700,51 @@ mod tests {
         .unwrap();
         assert_eq!(summary["sessionId"], "session-1");
         assert_eq!(summary["profileId"], "p-1");
+    }
+
+    #[test]
+    fn auth_methods_deserialize_from_the_field_names_the_interface_sends() {
+        let password: AuthMethod = serde_json::from_value(serde_json::json!({
+            "kind": "password",
+            "password": "secret",
+        }))
+        .unwrap();
+        assert!(matches!(password, AuthMethod::Password { .. }));
+
+        let with_passphrase: AuthMethod = serde_json::from_value(serde_json::json!({
+            "kind": "privateKey",
+            "path": "C:/Users/me/.ssh/id_ed25519",
+            "passphrase": "secret",
+        }))
+        .unwrap();
+        match with_passphrase {
+            AuthMethod::PrivateKey { path, passphrase } => {
+                assert_eq!(path, "C:/Users/me/.ssh/id_ed25519");
+                assert_eq!(passphrase.as_deref(), Some("secret"));
+            }
+            other => panic!("expected a private key, got {other:?}"),
+        }
+
+        // The passphrase is optional on the wire, not just nullable.
+        let without: AuthMethod = serde_json::from_value(serde_json::json!({
+            "kind": "privateKey",
+            "path": "/home/me/.ssh/id_ed25519",
+        }))
+        .unwrap();
+        assert!(matches!(
+            without,
+            AuthMethod::PrivateKey {
+                passphrase: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn an_unreadable_key_file_is_a_credential_problem_not_a_rejection() {
+        let missing = std::env::temp_dir().join("latticeterm-no-such-key");
+        let result = russh::keys::load_secret_key(&missing, None);
+        assert!(result.is_err(), "a missing key cannot be loaded");
     }
 
     #[test]

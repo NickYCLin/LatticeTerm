@@ -187,6 +187,16 @@
 
 ---
 
+## SSH 私鑰認證
+
+- 連線視窗可切換「密碼／SSH 金鑰」。金鑰模式輸入私鑰檔路徑（會自動列出 `~/.ssh` 底下偵測到的 `id_ed25519`、`id_ecdsa`、`id_rsa` 供選擇）與選填的金鑰密語。
+- 私鑰只在本機讀取與簽名，內容不會離開這台電腦；密語只用於當次解鎖，不儲存。每個連線會記住上次成功的登入方式與金鑰路徑（存 localStorage，絕不含密語）。
+- 後端 `AuthMethod` 擴充為 `password | privateKey`，SSH 終端機與 SFTP 共用同一條認證路徑（`ssh.rs` 的 `authenticate`）。RSA 金鑰依伺服器支援自動挑最強的簽名雜湊。
+- 錯誤有分級：金鑰檔讀不到或密語錯是 `credential` 階段錯誤（根本沒問到主機）；主機看得懂但說不行是 `AuthFailed`；連線中斷才是 `authenticate` 階段錯誤。
+- 整合測試 `src-tauri/tests/keyauth_live.rs`：測試自產 ed25519 金鑰裝進拋棄式容器後成功簽入、缺檔案回報 credential 錯誤、未授權的金鑰被乾淨拒絕。
+
+---
+
 ## 14. 自動更新與發行簽章
 
 - **簽章金鑰**：以 `npm run tauri signer generate` 產生。公鑰放在 `tauri.conf.json` 的 `plugins.updater.pubkey`，私鑰與其密碼存在 GitHub Actions 的 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets，不會進入版本庫。

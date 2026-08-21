@@ -40,13 +40,17 @@ export interface SessionSummary {
   username: string;
 }
 
+/** Secrets here are held only for one call; nothing is written to disk. */
+export type SshAuth =
+  | { kind: "password"; password: string }
+  | { kind: "privateKey"; path: string; passphrase?: string };
+
 export interface ConnectRequest {
   profileId: string;
   hostname: string;
   port: number;
   username: string;
-  /** Held only for this call; nothing here is written to disk. */
-  auth: { kind: "password"; password: string };
+  auth: SshAuth;
   useSavedPassword: boolean;
   rememberPassword: boolean;
   cols: number;
@@ -86,6 +90,8 @@ export interface SshApi {
     algorithm: string,
     fingerprint: string,
   ) => Promise<HostKeyRecord>;
+  /** OpenSSH default key files that exist on this machine, best first. */
+  defaultKeys: () => Promise<string[]>;
   /** Registers a listener for one session's output. Returns an unsubscribe. */
   onData: (sessionId: string, handler: (bytes: Uint8Array) => void) => () => void;
   onClosed: (
@@ -228,6 +234,11 @@ export function useSshSessions(): SshApi {
     [],
   );
 
+  const defaultKeys = useCallback(async () => {
+    const { invoke } = await core();
+    return invoke<string[]>("ssh_default_keys");
+  }, []);
+
   const onData = useCallback(
     (sessionId: string, handler: (bytes: Uint8Array) => void) => {
       const set = dataHandlers.current.get(sessionId) ?? new Set();
@@ -263,6 +274,7 @@ export function useSshSessions(): SshApi {
     resize,
     disconnect,
     trustHost,
+    defaultKeys,
     onData,
     onClosed,
   };

@@ -2,11 +2,14 @@
  * Everything between pressing Connect and having a terminal.
  *
  * The backend refuses to open a session for a host it does not already trust,
- * so this component drives the conversation that resolves that: ask for a
- * password, attempt the connection, and if the host key is unknown put the
- * fingerprint in front of the user before trying again. A key that has
- * *changed* ends the attempt — that decision is deliberately not one click
- * away.
+ * so this component drives the conversation that resolves that: collect the
+ * credentials — a password, or a private key with an optional passphrase —
+ * attempt the connection, and if the host key is unknown put the fingerprint
+ * in front of the user before trying again. A key that has *changed* ends the
+ * attempt — that decision is deliberately not one click away.
+ *
+ * The chosen method and key path are remembered per connection (never the
+ * passphrase), so the next connect starts where the last one succeeded.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -46,6 +49,41 @@ function presented(
     firstSeenAt: seen?.firstSeenAt ?? 0,
     lastSeenAt: seen?.lastSeenAt ?? 0,
   };
+}
+
+type AuthMethodChoice = "password" | "privateKey";
+
+const AUTH_PREFS_KEY = "latticeterm.authPrefs.v1";
+
+interface AuthPref {
+  method: AuthMethodChoice;
+  keyPath: string;
+}
+
+/** The method and key path that last worked for this profile, if any. */
+function loadAuthPref(profileId: string): AuthPref | null {
+  try {
+    const raw = localStorage.getItem(AUTH_PREFS_KEY);
+    if (!raw) return null;
+    const prefs = JSON.parse(raw) as Record<string, AuthPref>;
+    const pref = prefs[profileId];
+    return pref && (pref.method === "password" || pref.method === "privateKey")
+      ? pref
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAuthPref(profileId: string, pref: AuthPref): void {
+  try {
+    const raw = localStorage.getItem(AUTH_PREFS_KEY);
+    const prefs = raw ? (JSON.parse(raw) as Record<string, AuthPref>) : {};
+    prefs[profileId] = pref;
+    localStorage.setItem(AUTH_PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // Remembering a preference is a convenience, never a requirement.
+  }
 }
 
 type Phase =
@@ -88,10 +126,37 @@ export function ConnectFlow({
   const [useSavedPassword, setUseSavedPassword] = useState(false);
   const [rememberPassword, setRememberPassword] = useState(false);
   const [removingCredential, setRemovingCredential] = useState(false);
+  const initialPref = loadAuthPref(profile.id);
+  const [method, setMethod] = useState<AuthMethodChoice>(
+    initialPref?.method ?? "password",
+  );
+  const [keyPath, setKeyPath] = useState(initialPref?.keyPath ?? "");
+  const [passphrase, setPassphrase] = useState("");
+  const [detectedKeys, setDetectedKeys] = useState<string[]>([]);
   const [problem, setProblem] = useState<{ title: string; body: string } | null>(
     null,
   );
   const passwordRef = useRef<HTMLInputElement>(null);
+
+  // Offer the keys that already exist in ~/.ssh; prefill the best one when
+  // nothing was remembered. Detection is a listing, never a silent read.
+  useEffect(() => {
+    let cancelled = false;
+    ssh
+      .defaultKeys()
+      .then((keys) => {
+        if (cancelled) return;
+        setDetectedKeys(keys);
+        setKeyPath((current) => current || keys[0] || "");
+      })
+      .catch(() => {
+        // Outside the desktop shell there is nothing to detect.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (savedCredential.state.mode === "saved") {
@@ -120,14 +185,21 @@ export function ConnectFlow({
     setPhase({ step: "connecting" });
     setProblem(null);
 
+    const usingPassword = method === "password";
     const outcome = await ssh.connect({
       profileId: profile.id,
       hostname: profile.hostname,
       port: profile.port,
       username: profile.username,
-      auth: { kind: "password", password: useSavedPassword ? "" : secret },
-      useSavedPassword,
-      rememberPassword: !useSavedPassword && rememberPassword,
+      auth: usingPassword
+        ? { kind: "password", password: useSavedPassword ? "" : secret }
+        : {
+            kind: "privateKey",
+            path: keyPath.trim(),
+            passphrase: passphrase.length > 0 ? passphrase : undefined,
+          },
+      useSavedPassword: usingPassword && useSavedPassword,
+      rememberPassword: usingPassword && !useSavedPassword && rememberPassword,
       // A sensible starting size; the pane corrects it the moment it mounts.
       cols: 80,
       rows: 24,
@@ -135,8 +207,11 @@ export function ConnectFlow({
 
     switch (outcome.outcome) {
       case "connected":
-        // The password has done its job; drop it rather than keep it in state.
+        // The secrets have done their job; drop them rather than keep them in
+        // state. What is remembered is only the method and the key path.
         setPassword("");
+        setPassphrase("");
+        saveAuthPref(profile.id, { method, keyPath: keyPath.trim() });
         onConnected(outcome.sessionId);
         return;
       case "hostUnknown":
@@ -150,7 +225,11 @@ export function ConnectFlow({
         if (useSavedPassword) setUseSavedPassword(false);
         setProblem({
           title: t("connect.failed.title"),
-          body: t("connect.authFailed"),
+          body: t(
+            method === "privateKey"
+              ? "connect.keyRejected"
+              : "connect.authFailed",
+          ),
         });
         return;
       default:
@@ -187,6 +266,13 @@ export function ConnectFlow({
       setProblem({
         title: t("connect.failed.title"),
         body: t("connect.noUsername"),
+      });
+      return;
+    }
+    if (method === "privateKey" && !keyPath.trim()) {
+      setProblem({
+        title: t("connect.failed.title"),
+        body: t("connect.noKeyPath"),
       });
       return;
     }
@@ -282,7 +368,38 @@ export function ConnectFlow({
             </Callout>
           )}
 
-          {savedCredential.state.mode === "saved" && (
+          <div className="field">
+            <span className="field__label">{t("connect.method")}</span>
+            <div
+              role="radiogroup"
+              aria-label={t("connect.method")}
+              style={{ display: "flex", gap: "var(--space-2)" }}
+            >
+              {(["password", "privateKey"] as const).map((choice) => (
+                <button
+                  key={choice}
+                  type="button"
+                  role="radio"
+                  aria-checked={method === choice}
+                  className={`button ${method === choice ? "button--secondary" : "button--ghost"}`}
+                  style={{ flex: 1 }}
+                  disabled={busy}
+                  onClick={() => {
+                    setMethod(choice);
+                    setProblem(null);
+                  }}
+                >
+                  {t(
+                    choice === "password"
+                      ? "connect.method.password"
+                      : "connect.method.privateKey",
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {method === "password" && savedCredential.state.mode === "saved" && (
             <Callout tone="security" title={t("credential.saved.title")}>
               <div className="credential-choice">
                 <label className="checkbox">
@@ -316,7 +433,7 @@ export function ConnectFlow({
             </Callout>
           )}
 
-          {savedCredential.state.mode === "unavailable" && (
+          {method === "password" && savedCredential.state.mode === "unavailable" && (
             <Callout tone="warn" title={t("credential.unavailable.title")}>
               {t("credential.unavailable.body", {
                 detail: savedCredential.state.detail,
@@ -324,7 +441,7 @@ export function ConnectFlow({
             </Callout>
           )}
 
-          {!useSavedPassword && (
+          {method === "password" && !useSavedPassword && (
             <div className="field">
               <label className="field__label" htmlFor="connect-password">
                 {t("connect.password")}
@@ -344,7 +461,56 @@ export function ConnectFlow({
             </div>
           )}
 
-          {!useSavedPassword && savedCredential.state.mode === "missing" && (
+          {method === "privateKey" && (
+            <>
+              <div className="field">
+                <label className="field__label" htmlFor="connect-key-path">
+                  {t("connect.keyPath")}
+                </label>
+                <input
+                  id="connect-key-path"
+                  className="input mono"
+                  type="text"
+                  list="connect-key-suggestions"
+                  value={keyPath}
+                  onChange={(event) => setKeyPath(event.currentTarget.value)}
+                  placeholder={t("connect.keyPath.placeholder")}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={busy}
+                />
+                {detectedKeys.length > 0 && (
+                  <datalist id="connect-key-suggestions">
+                    {detectedKeys.map((key) => (
+                      <option value={key} key={key} />
+                    ))}
+                  </datalist>
+                )}
+                <p className="field__optional">{t("connect.keyPath.hint")}</p>
+              </div>
+
+              <div className="field">
+                <label className="field__label" htmlFor="connect-passphrase">
+                  {t("connect.passphrase")}
+                </label>
+                <input
+                  id="connect-passphrase"
+                  className="input"
+                  type="password"
+                  value={passphrase}
+                  onChange={(event) => setPassphrase(event.currentTarget.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={busy}
+                />
+                <p className="field__optional">{t("connect.passphrase.hint")}</p>
+              </div>
+            </>
+          )}
+
+          {method === "password" &&
+            !useSavedPassword &&
+            savedCredential.state.mode === "missing" && (
             <label className="checkbox">
               <input
                 type="checkbox"

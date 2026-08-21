@@ -396,6 +396,9 @@ async fn ssh_connect(
     let password_to_store = if request.remember_password {
         match &request.auth {
             crate::ssh::AuthMethod::Password { password } => Some(Zeroizing::new(password.clone())),
+            // A key never has a password to remember; the checkbox is hidden
+            // for key authentication, so this arm is purely defensive.
+            crate::ssh::AuthMethod::PrivateKey { .. } => None,
         }
     } else {
         None
@@ -479,6 +482,11 @@ async fn host_metrics(
 }
 
 #[tauri::command]
+fn ssh_default_keys() -> Vec<String> {
+    crate::ssh::default_key_paths()
+}
+
+#[tauri::command]
 fn ssh_sessions(registry: State<'_, Arc<SshRegistry>>) -> Vec<SessionSummary> {
     registry.list()
 }
@@ -517,6 +525,9 @@ async fn sftp_connect(
     let password_to_store = if request.remember_password {
         match &request.auth {
             crate::ssh::AuthMethod::Password { password } => Some(Zeroizing::new(password.clone())),
+            // A key never has a password to remember; the checkbox is hidden
+            // for key authentication, so this arm is purely defensive.
+            crate::ssh::AuthMethod::PrivateKey { .. } => None,
         }
     } else {
         None
@@ -945,6 +956,7 @@ pub fn run() {
             ssh_resize,
             ssh_disconnect,
             ssh_sessions,
+            ssh_default_keys,
             host_metrics,
             sftp_connect,
             sftp_sessions,

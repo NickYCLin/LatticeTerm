@@ -485,6 +485,16 @@ export const en: Messages = {
   // Connect flow ----------------------------------------------------------
   "connect.title": "Connect to {name}",
   "connect.target": "{user}@{host}:{port}",
+  "connect.method": "Sign-in method",
+  "connect.method.password": "Password",
+  "connect.method.privateKey": "SSH key",
+  "connect.keyPath": "Private key file",
+  "connect.keyPath.placeholder": "e.g. C:\Users\you\.ssh\id_ed25519",
+  "connect.keyPath.hint": "The key is read and used for signing on this machine only; its contents never leave it.",
+  "connect.passphrase": "Key passphrase (leave empty if none)",
+  "connect.passphrase.hint": "Used once to unlock the key; never stored.",
+  "connect.noKeyPath": "Enter the path to the private key file.",
+  "connect.keyRejected": "The host rejected this key. Make sure the public key is in the host's authorized_keys.",
   "connect.password": "Password",
   "connect.passwordHint":
     "Used for this connection only. It is not saved and never written to a file.",
