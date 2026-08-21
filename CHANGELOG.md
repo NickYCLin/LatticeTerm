@@ -4,6 +4,13 @@
 
 ---
 
+## [0.9.2](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.1...v0.9.2) (2026-08-21)
+
+
+### 🛠️ 問題修正
+
+* **VNC:** 補發新版 Rust 像素分塊相容修正 ([73a3155](https://github.com/NickYCLin/LatticeTerm/commit/73a3155415c2109d315d9e1bab3ad554bb93607c))
+
 ## [0.9.1](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.0...v0.9.1) (2026-08-21)
 
 
