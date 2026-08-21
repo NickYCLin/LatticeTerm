@@ -2794,7 +2794,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-term"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "argon2 0.5.3",
  "base64 0.23.1",
