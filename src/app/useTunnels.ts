@@ -9,7 +9,7 @@
  * view maps the code to a translated message and keeps the detail for context.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createTunnelFromDraft,
   validateTunnelDraft,
@@ -57,6 +57,7 @@ export function useTunnels(
   });
 
   const [states, setStates] = useState<Record<string, LiveTunnelState>>({});
+  const autoStartAttempted = useRef(new Set<string>());
 
   // Persist to storage
   useEffect(() => {
@@ -227,10 +228,10 @@ export function useTunnels(
       if (!target) return { success: false, error: "connect:tunnel not found" };
 
       const profile = profiles.find((p) => p.id === target.profileId);
-      if (!profile) {
+      if (!profile || profile.protocol !== "ssh") {
         // Starting through a guessed gateway would silently forward through
         // the wrong machine; a missing profile is an error, not a default.
-        const error = "profile:the SSH gateway profile no longer exists";
+        const error = "profile:the SSH gateway profile is missing or is not an SSH profile";
         markError(id, error);
         return { success: false, error };
       }
@@ -256,9 +257,6 @@ export function useTunnels(
             local_port: target.localPort,
             remote_host: target.remoteHost,
             remote_port: target.remotePort,
-            ssh_hostname: profile.hostname,
-            ssh_port: profile.port,
-            ssh_username: profile.username,
           },
         });
 
@@ -285,6 +283,18 @@ export function useTunnels(
     },
     [tunnels, profiles, onActivity, markError],
   );
+
+  // Start opted-in tunnels once per application lifetime. Waiting until at
+  // least one profile exists avoids consuming the attempt while profile state
+  // is still being restored during startup.
+  useEffect(() => {
+    if (profiles.length === 0) return;
+    for (const tunnel of tunnels) {
+      if (!tunnel.autoStart || autoStartAttempted.current.has(tunnel.id)) continue;
+      autoStartAttempted.current.add(tunnel.id);
+      void startTunnel(tunnel.id);
+    }
+  }, [profiles.length, startTunnel, tunnels]);
 
   const stopTunnel = useCallback(
     async (id: string) => {

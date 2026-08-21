@@ -3,6 +3,8 @@ import {
   createTunnelFromDraft,
   formatBytes,
   formatSshTunnelCommand,
+  isIpLiteral,
+  isLoopbackIp,
   isValidPort,
   validateTunnelDraft,
   type TunnelConfig,
@@ -22,6 +24,21 @@ describe("tunnel domain model", () => {
     expect(isValidPort("abc")).toBe(false);
     expect(isValidPort("")).toBe(false);
     expect(isValidPort("80.5")).toBe(false);
+  });
+
+  it("accepts only literal bind addresses and identifies loopback ranges", () => {
+    expect(isIpLiteral("127.0.0.1")).toBe(true);
+    expect(isIpLiteral("0.0.0.0")).toBe(true);
+    expect(isIpLiteral("::1")).toBe(true);
+    expect(isIpLiteral("2001:db8::1")).toBe(true);
+    expect(isIpLiteral("localhost")).toBe(false);
+    expect(isIpLiteral("999.0.0.1")).toBe(false);
+    expect(isIpLiteral("1:2:3")).toBe(false);
+
+    expect(isLoopbackIp("127.20.30.40")).toBe(true);
+    expect(isLoopbackIp("::1")).toBe(true);
+    expect(isLoopbackIp("0.0.0.0")).toBe(false);
+    expect(isLoopbackIp("2001:db8::1")).toBe(false);
   });
 
   it("validates a complete local tunnel draft successfully", () => {
@@ -87,6 +104,23 @@ describe("tunnel domain model", () => {
     expect(tunnel.localPort).toBe(1080);
     expect(tunnel.remoteHost).toBe("");
     expect(tunnel.remotePort).toBe(0);
+  });
+
+  it("rejects a no-authentication SOCKS5 proxy on a public bind address", () => {
+    const draft: TunnelDraft = {
+      name: "Unsafe SOCKS5 Proxy",
+      type: "dynamic",
+      profileId: "profile-jump",
+      localHost: "0.0.0.0",
+      localPort: 1080,
+      remoteHost: "",
+      remotePort: "",
+    };
+
+    expect(validateTunnelDraft(draft)).toContainEqual({
+      field: "localHost",
+      messageKey: "tunnels.error.dynamicLoopback",
+    });
   });
 
   it("generates correct OpenSSH command line equivalents", () => {

@@ -40,6 +40,7 @@ interface TunnelsViewProps {
 
 export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
   const { t } = useI18n();
+  const sshProfiles = useMemo(() => profiles.filter((profile) => profile.protocol === "ssh"), [profiles]);
   const {
     tunnels,
     states,
@@ -88,7 +89,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
       }
       if (!search.trim()) return true;
       const q = search.toLowerCase();
-      const profile = profiles.find((p) => p.id === t.profileId);
+      const profile = sshProfiles.find((p) => p.id === t.profileId);
       return (
         t.name.toLowerCase().includes(q) ||
         String(t.localPort).includes(q) ||
@@ -98,7 +99,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
         (profile?.hostname.toLowerCase().includes(q) ?? false)
       );
     });
-  }, [tunnels, search, typeFilter, profiles]);
+  }, [tunnels, search, typeFilter, sshProfiles]);
 
   // Summary Metrics
   const totalCount = tunnels.length;
@@ -107,7 +108,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
   const totalDownloaded = Object.values(states).reduce((acc, s) => acc + s.bytesDownloaded, 0);
 
   const handleCopyCommand = (tunnel: TunnelConfig) => {
-    const profile = profiles.find((p) => p.id === tunnel.profileId);
+    const profile = sshProfiles.find((p) => p.id === tunnel.profileId);
     // Without a matching profile the command keeps its obvious placeholders
     // instead of silently borrowing some other connection's gateway.
     const cmd = profile
@@ -193,7 +194,12 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
               {t("tunnels.stopAll")}
             </button>
           ) : (
-            <button type="button" className="button button--ghost" onClick={() => void startAll()}>
+            <button
+              type="button"
+              className="button button--ghost"
+              disabled={sshProfiles.length === 0}
+              onClick={() => void startAll()}
+            >
               <PlayIcon size={14} />
               {t("tunnels.startAll")}
             </button>
@@ -202,6 +208,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
           <button
             type="button"
             className="button button--primary"
+            disabled={sshProfiles.length === 0}
             onClick={() => setIsCreating(true)}
           >
             <PlusIcon size={15} />
@@ -209,6 +216,12 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
           </button>
         </div>
       </div>
+
+      {sshProfiles.length === 0 && (
+        <p style={{ margin: 0, color: "var(--warn)", fontSize: "var(--text-sm)" }}>
+          {t("tunnels.sshRequired")}
+        </p>
+      )}
 
       {/* 3. Tunnels List */}
       {filteredTunnels.length === 0 ? (
@@ -226,6 +239,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
             <button
               type="button"
               className="button button--primary"
+              disabled={sshProfiles.length === 0}
               onClick={() => setIsCreating(true)}
             >
               <PlusIcon size={15} />
@@ -239,7 +253,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
             const state = states[tunnel.id] || { status: "stopped", bytesUploaded: 0, bytesDownloaded: 0, activeConnections: 0 };
             const isActive = state.status === "active";
             const isStarting = state.status === "starting";
-            const profile = profiles.find((p) => p.id === tunnel.profileId);
+            const profile = sshProfiles.find((p) => p.id === tunnel.profileId);
             const isCopied = copiedId === tunnel.id;
 
             return (
@@ -279,7 +293,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
                       type="button"
                       className={`button ${isActive ? "button--secondary" : "button--primary"}`}
                       style={{ padding: "0.35rem 0.85rem", height: "auto" }}
-                      disabled={isStarting}
+                      disabled={isStarting || (!isActive && !profile)}
                       onClick={() => {
                         if (isActive) {
                           void stopTunnel(tunnel.id);
@@ -320,7 +334,9 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
                   {/* Source */}
                   <div style={{ display: "flex", flexDirection: "column" }}>
                     <span style={{ fontSize: "var(--text-2xs)", color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "var(--tracking-caps)" }}>
-                      {t("tunnels.flow.localBind")}
+                      {tunnel.type === "remote"
+                        ? t("tunnels.flow.remoteBind")
+                        : t("tunnels.flow.localBind")}
                     </span>
                     <span className="mono" style={{ fontWeight: 600, color: "var(--text)" }}>
                       {tunnel.localHost}:{tunnel.localPort}
@@ -347,7 +363,11 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
                   {/* Remote Target / SOCKS5 */}
                   <div style={{ display: "flex", flexDirection: "column" }}>
                     <span style={{ fontSize: "var(--text-2xs)", color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "var(--tracking-caps)" }}>
-                      {tunnel.type === "dynamic" ? t("tunnels.flow.dynamicProxy") : t("tunnels.flow.remoteTarget")}
+                      {tunnel.type === "dynamic"
+                        ? t("tunnels.flow.dynamicProxy")
+                        : tunnel.type === "remote"
+                          ? t("tunnels.flow.localTarget")
+                          : t("tunnels.flow.remoteTarget")}
                     </span>
                     <span className="mono" style={{ fontWeight: 600, color: "var(--text)" }}>
                       {tunnel.type === "dynamic" ? "SOCKS5 Proxy (Any Host)" : `${tunnel.remoteHost}:${tunnel.remotePort}`}
@@ -438,7 +458,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
       {(isCreating || editingTunnel) && (
         <TunnelFormModal
           initial={editingTunnel}
-          profiles={profiles}
+          profiles={sshProfiles}
           onClose={() => {
             setIsCreating(false);
             setEditingTunnel(null);
@@ -525,6 +545,7 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
   const [localPort, setLocalPort] = useState<string | number>(initial?.localPort || 8080);
   const [remoteHost, setRemoteHost] = useState(initial?.remoteHost || "localhost");
   const [remotePort, setRemotePort] = useState<string | number>(initial?.remotePort || 80);
+  const [autoStart, setAutoStart] = useState(Boolean(initial?.autoStart));
   const [description, setDescription] = useState(initial?.description || "");
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -538,6 +559,7 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
       localPort,
       remoteHost,
       remotePort,
+      autoStart,
       description,
     };
 
@@ -637,6 +659,11 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
                 setErrors((prev) => ({ ...prev, profileId: "" }));
               }}
             >
+              {profiles.length === 0 && (
+                <option value="" disabled>
+                  {t("tunnels.sshRequired")}
+                </option>
+              )}
               {profiles.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name} ({p.username}@{p.hostname}:{p.port})
@@ -650,7 +677,9 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "var(--space-3)" }}>
             <div>
               <label className="field-label" style={{ display: "block", marginBottom: "var(--space-1)" }}>
-                {t("tunnels.form.localHost")}
+                {type === "remote"
+                  ? t("tunnels.form.remoteBindHost")
+                  : t("tunnels.form.localHost")}
               </label>
               <input
                 type="text"
@@ -666,7 +695,9 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
             </div>
             <div>
               <label className="field-label" style={{ display: "block", marginBottom: "var(--space-1)" }}>
-                {t("tunnels.form.localPort")}
+                {type === "remote"
+                  ? t("tunnels.form.remoteBindPort")
+                  : t("tunnels.form.localPort")}
               </label>
               <input
                 type="number"
@@ -687,7 +718,9 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "var(--space-3)" }}>
               <div>
                 <label className="field-label" style={{ display: "block", marginBottom: "var(--space-1)" }}>
-                  {t("tunnels.form.remoteHost")}
+                  {type === "remote"
+                    ? t("tunnels.form.localTargetHost")
+                    : t("tunnels.form.remoteHost")}
                 </label>
                 <input
                   type="text"
@@ -704,7 +737,9 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
               </div>
               <div>
                 <label className="field-label" style={{ display: "block", marginBottom: "var(--space-1)" }}>
-                  {t("tunnels.form.remotePort")}
+                  {type === "remote"
+                    ? t("tunnels.form.localTargetPort")
+                    : t("tunnels.form.remotePort")}
                 </label>
                 <input
                   type="number"
@@ -721,6 +756,21 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
               </div>
             </div>
           )}
+
+          <label style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-3)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={autoStart}
+              onChange={(event) => setAutoStart(event.target.checked)}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              <strong style={{ display: "block", color: "var(--text)", fontSize: "var(--text-sm)" }}>
+                {t("tunnels.form.autoStart")}
+              </strong>
+              <small style={{ color: "var(--text-muted)" }}>{t("tunnels.form.autoStartHint")}</small>
+            </span>
+          </label>
 
           {/* Description */}
           <div>
@@ -741,7 +791,7 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
             <button type="button" className="button button--ghost" onClick={onClose}>
               {t("common.cancel")}
             </button>
-            <button type="submit" className="button button--primary">
+            <button type="submit" className="button button--primary" disabled={profiles.length === 0}>
               {initial ? t("common.save") : t("tunnels.form.submitCreate")}
             </button>
           </div>
