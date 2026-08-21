@@ -183,13 +183,29 @@ jobs:
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Flip the draft release live
+      - name: Check out released source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
+
+      - name: Render the Traditional Chinese release notes
+        shell: bash
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: node scripts/render-release-metadata.mjs "$TAG_NAME" "$RUNNER_TEMP/release-metadata.json"
+
+      - name: Apply the release notes and flip the draft live
         uses: actions/github-script@v9
         env:
           TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_METADATA_PATH: ${{ runner.temp }}/release-metadata.json
         with:
           script: |
+            const fs = require("node:fs");
             const tag = process.env.TAG_NAME;
+            const metadata = JSON.parse(
+              fs.readFileSync(process.env.RELEASE_METADATA_PATH, "utf8"),
+            );
             const releases = await github.rest.repos.listReleases({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -197,15 +213,13 @@ jobs:
             });
             const release = releases.data.find((entry) => entry.tag_name === tag);
             if (!release) throw new Error(`No release found for ${tag}`);
-            if (!release.draft) {
-              core.info(`${tag} is already published.`);
-              return;
-            }
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: release.id,
+              name: metadata.name,
+              body: metadata.body,
               draft: false,
               make_latest: "true",
             });
-            core.info(`Published ${tag}.`);
+            core.info(`Published ${tag} with normalized release notes.`);
