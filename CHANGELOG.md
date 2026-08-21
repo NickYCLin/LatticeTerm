@@ -4,6 +4,13 @@
 
 ---
 
+## [0.9.4](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.3...v0.9.4) (2026-08-21)
+
+
+### 🛠️ 問題修正
+
+* **更新:** 安裝完成後自動重新啟動 ([#37](https://github.com/NickYCLin/LatticeTerm/issues/37)) ([33192e5](https://github.com/NickYCLin/LatticeTerm/commit/33192e53c8ab43833aabdc578c29047d9fa0c5c9))
+
 ## [0.9.3](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.2...v0.9.3) (2026-08-21)
 
 
