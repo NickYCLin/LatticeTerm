@@ -71,7 +71,7 @@ describe("connection profiles", () => {
     expect(isProtocolAvailable("rdp")).toBe(true);
     expect(isProtocolAvailable("lattice")).toBe(true);
     expect(isProtocolAvailable("sftp")).toBe(true);
-    expect(isProtocolAvailable("vnc")).toBe(false);
+    expect(isProtocolAvailable("vnc")).toBe(true);
   });
 
   it("round-trips a profile into an editable draft", () => {

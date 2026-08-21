@@ -20,14 +20,16 @@
     "build:rdp:release": "node scripts/build-rdp-engine.mjs --release",
     "build:remote": "node scripts/build-remote-agent.mjs",
     "build:remote:release": "node scripts/build-remote-agent.mjs --release",
-    "build:sidecars": "npm run build:rdp && npm run build:remote",
-    "build:sidecars:release": "npm run build:rdp:release && npm run build:remote:release",
+    "build:sidecars": "npm run build:rdp && npm run build:vnc && npm run build:remote",
+    "build:sidecars:release": "npm run build:rdp:release && npm run build:vnc:release && npm run build:remote:release",
     "test": "vitest run",
     "version:sync-lock": "node scripts/sync-cargo-lock-version.mjs",
     "version:check": "node scripts/check-version-sync.mjs",
     "check": "npm run version:check && npm run test && npm run build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:vnc": "node scripts/build-vnc-engine.mjs",
+    "build:vnc:release": "node scripts/build-vnc-engine.mjs --release"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

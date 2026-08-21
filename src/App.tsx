@@ -23,6 +23,7 @@ import { useSftpSessions } from "./app/useSftpSessions";
 import { useRemoteSessions } from "./app/useRemoteSessions";
 import { useRemoteHost } from "./app/useRemoteHost";
 import { useRdpSessions } from "./app/useRdpSessions";
+import { useVncSessions } from "./app/useVncSessions";
 import { useWindowTheme } from "./app/useWindowTheme";
 import { useWorkspace } from "./app/useWorkspace";
 import { useCredentialDeleteGuard } from "./app/useSavedCredential";
@@ -47,6 +48,7 @@ import { ConnectFlow } from "./components/terminal/ConnectFlow";
 import { RemoteConnectFlow } from "./components/remote/RemoteConnectFlow";
 import { RemoteHostDialog } from "./components/remote/RemoteHostDialog";
 import { RdpConnectFlow } from "./components/rdp/RdpConnectFlow";
+import { VncConnectFlow } from "./components/vnc/VncConnectFlow";
 import { SftpConnectFlow } from "./components/sftp/SftpConnectFlow";
 import { ActivityView } from "./views/ActivityView";
 import { VaultView } from "./views/VaultView";
@@ -66,6 +68,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const remote = useRemoteSessions();
   const remoteHost = useRemoteHost();
   const rdp = useRdpSessions();
+  const vnc = useVncSessions();
 
   useWindowTheme(findTheme(activeTheme).isDark);
 
@@ -365,18 +368,25 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 onConnect={setConnectTarget}
               />
             )}
-            {view === "terminal" && (
+            {/* Sessions stay mounted while other views are open: a terminal
+                or remote canvas that unmounts loses everything it has drawn,
+                and nothing replays it. Hidden, not gone. */}
+            <div
+              hidden={view !== "terminal"}
+              style={{ display: view === "terminal" ? "contents" : "none" }}
+            >
               <SessionsView
                 agents={agents}
                 ssh={ssh}
                 sftp={sftp}
                 remote={remote}
                 rdp={rdp}
+                vnc={vnc}
                 activeSessionId={activeSessionId}
                 onSelect={setActiveSessionId}
                 theme={activeTheme}
               />
-            )}
+            </div>
             {view === "agents" && (
               <AgentsView
                 agents={agents}
@@ -545,6 +555,19 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         <RdpConnectFlow
           profile={connectTarget}
           rdp={rdp}
+          onConnected={(sessionId) => {
+            setConnectTarget(null);
+            setActiveSessionId(sessionId);
+            setView("terminal");
+          }}
+          onCancel={() => setConnectTarget(null)}
+        />
+      )}
+
+      {connectTarget?.protocol === "vnc" && (
+        <VncConnectFlow
+          profile={connectTarget}
+          vnc={vnc}
           onConnected={(sessionId) => {
             setConnectTarget(null);
             setActiveSessionId(sessionId);

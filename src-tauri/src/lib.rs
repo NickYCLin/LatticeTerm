@@ -12,6 +12,7 @@ pub mod sftp_transfers;
 pub mod ssh;
 pub mod storage;
 pub mod tunnel;
+pub mod vnc;
 
 use crate::agent::{
     AgentBroadcastOutcome, AgentDefinition, AgentLaunchPlan, AgentLaunchPlanDraft,
@@ -36,6 +37,9 @@ use crate::sftp_transfers::{TransferRegistry, TransferState};
 use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
 use crate::tunnel::{StartTunnelRequest, TunnelRegistry, TunnelStatusSummary};
+use crate::vnc::{
+    VncConnectOutcome, VncConnectRequest, VncInputRequest, VncRegistry, VncSessionSummary,
+};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -328,6 +332,7 @@ async fn delete_connection_profile(
                 Protocol::Ssh => Some(CredentialKind::SshPassword),
                 Protocol::Sftp => Some(CredentialKind::SftpPassword),
                 Protocol::Rdp => Some(CredentialKind::RdpPassword),
+                Protocol::Vnc => Some(CredentialKind::VncPassword),
                 _ => None,
             })
     };
@@ -917,6 +922,84 @@ fn ssh_forget_host(host: String, port: u16, trust: State<'_, TrustState>) -> Res
 }
 
 #[tauri::command]
+async fn vnc_connect(
+    app: AppHandle,
+    mut request: VncConnectRequest,
+    registry: State<'_, Arc<VncRegistry>>,
+) -> Result<VncConnectOutcome, String> {
+    if request.use_saved_password && request.remember_password {
+        return Ok(VncConnectOutcome::Failed {
+            stage: "credential",
+            detail: "Choose either the saved password or a new password to remember.".to_string(),
+        });
+    }
+
+    if request.use_saved_password {
+        let profile_id = request.profile_id.clone();
+        request.password = match credential_call(move || {
+            crate::credentials::load(&profile_id, CredentialKind::VncPassword)
+        })
+        .await
+        {
+            Ok(password) => password,
+            Err(detail) => {
+                return Ok(VncConnectOutcome::Failed {
+                    stage: "credential",
+                    detail,
+                })
+            }
+        };
+    }
+
+    let profile_id = request.profile_id.clone();
+    let password_to_store = request
+        .remember_password
+        .then(|| Zeroizing::new(request.password.clone()));
+    let outcome = crate::vnc::connect(app.clone(), Arc::clone(registry.inner()), request).await;
+
+    if let (VncConnectOutcome::Connected { session }, Some(password)) =
+        (&outcome, password_to_store)
+    {
+        let save_result = credential_call(move || {
+            crate::credentials::store(&profile_id, CredentialKind::VncPassword, password.as_str())
+        })
+        .await;
+        if let Err(detail) = save_result {
+            let _ = crate::vnc::disconnect(&app, registry.inner(), &session.session_id).await;
+            return Ok(VncConnectOutcome::Failed {
+                stage: "credential",
+                detail,
+            });
+        }
+    }
+
+    Ok(outcome)
+}
+
+#[tauri::command]
+async fn vnc_input(
+    session_id: String,
+    request: VncInputRequest,
+    registry: State<'_, Arc<VncRegistry>>,
+) -> Result<(), String> {
+    crate::vnc::input(registry.inner(), &session_id, request).await
+}
+
+#[tauri::command]
+async fn vnc_disconnect(
+    app: AppHandle,
+    session_id: String,
+    registry: State<'_, Arc<VncRegistry>>,
+) -> Result<(), String> {
+    crate::vnc::disconnect(&app, registry.inner(), &session_id).await
+}
+
+#[tauri::command]
+fn vnc_sessions(registry: State<'_, Arc<VncRegistry>>) -> Vec<VncSessionSummary> {
+    registry.list()
+}
+
+#[tauri::command]
 async fn tunnel_start(
     mut request: StartTunnelRequest,
     storage: State<'_, AppStorage>,
@@ -1024,6 +1107,7 @@ pub fn run() {
             app.manage(Arc::new(RemoteRegistry::new()));
             app.manage(Arc::new(RemoteHostRegistry::new()));
             app.manage(Arc::new(RdpRegistry::new()));
+            app.manage(Arc::new(VncRegistry::new()));
             app.manage(Arc::new(TunnelRegistry::new()));
             let agent_registry = AgentRegistry::with_local_reporter(Arc::new(
                 crate::agent::EventSink(app.handle().clone()),
@@ -1088,6 +1172,10 @@ pub fn run() {
             rdp_input,
             rdp_disconnect,
             rdp_sessions,
+            vnc_connect,
+            vnc_input,
+            vnc_disconnect,
+            vnc_sessions,
             ssh_trust_host,
             ssh_known_hosts,
             ssh_forget_host,

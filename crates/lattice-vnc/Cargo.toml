@@ -1,0 +1,18 @@
+[package]
+name = "lattice-vnc"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Isolated native VNC engine for LatticeTerm"
+
+[[bin]]
+name = "lattice-vnc-engine"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.23"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.53", features = ["io-util", "io-std", "macros", "net", "rt-multi-thread", "sync", "time"] }
+vnc-rs = "0.5"

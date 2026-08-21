@@ -2,6 +2,7 @@
 
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
+import type { VncApi } from "../app/useVncSessions";
 import type { AgentApi } from "../app/useAgentSessions";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
@@ -18,6 +19,7 @@ import {
 import { AgentTerminalPane } from "../components/agents/AgentTerminalPane";
 import { RemotePane } from "../components/remote/RemotePane";
 import { RdpPane } from "../components/rdp/RdpPane";
+import { VncPane } from "../components/vnc/VncPane";
 import { SftpPane } from "../components/sftp/SftpPane";
 import { TerminalPane } from "../components/terminal/TerminalPane";
 
@@ -26,7 +28,8 @@ type SessionRef =
   | { kind: "ssh"; sessionId: string; label: string }
   | { kind: "sftp"; sessionId: string; label: string }
   | { kind: "remote"; sessionId: string; label: string }
-  | { kind: "rdp"; sessionId: string; label: string };
+  | { kind: "rdp"; sessionId: string; label: string }
+  | { kind: "vnc"; sessionId: string; label: string };
 
 export function SessionsView({
   agents,
@@ -34,6 +37,7 @@ export function SessionsView({
   sftp,
   remote,
   rdp,
+  vnc,
   activeSessionId,
   onSelect,
   theme,
@@ -43,6 +47,7 @@ export function SessionsView({
   sftp: SftpApi;
   remote: RemoteApi;
   rdp: RdpApi;
+  vnc: VncApi;
   activeSessionId: string | null;
   onSelect: (sessionId: string | null) => void;
   theme: ThemeId;
@@ -74,6 +79,11 @@ export function SessionsView({
       sessionId: session.sessionId,
       label: `${session.username}@${session.host}`,
     })),
+    ...vnc.sessions.map((session) => ({
+      kind: "vnc" as const,
+      sessionId: session.sessionId,
+      label: `${session.host}:${session.port}`,
+    })),
   ];
 
   if (sessions.length === 0) {
@@ -94,7 +104,8 @@ export function SessionsView({
     else if (session.kind === "ssh") await ssh.disconnect(session.sessionId);
     else if (session.kind === "sftp") await sftp.disconnect(session.sessionId);
     else if (session.kind === "remote") await remote.disconnect(session.sessionId);
-    else await rdp.disconnect(session.sessionId);
+    else if (session.kind === "rdp") await rdp.disconnect(session.sessionId);
+    else await vnc.disconnect(session.sessionId);
     if (session.sessionId === active.sessionId) onSelect(null);
   }
 
@@ -194,6 +205,15 @@ export function SessionsView({
             hidden={session.sessionId !== active.sessionId}
           >
             <RdpPane session={session} rdp={rdp} />
+          </div>
+        ))}
+        {vnc.sessions.map((session) => (
+          <div
+            className="terminal-slot"
+            key={session.sessionId}
+            hidden={session.sessionId !== active.sessionId}
+          >
+            <VncPane session={session} vnc={vnc} />
           </div>
         ))}
       </div>

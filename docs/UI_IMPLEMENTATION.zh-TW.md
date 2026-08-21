@@ -187,6 +187,23 @@
 
 ---
 
+## VNC 畫面操作
+
+- 架構與 RDP 相同：`crates/lattice-vnc` 是獨立的 sidecar 引擎（vnc-rs 純 Rust 客戶端），stdin/stdout 走一行一個 JSON 的協定；密碼只經 stdin 傳入引擎一次，不進事件、狀態或日誌。
+- 引擎在自己這端合成完整 framebuffer（Raw／Zrle／CopyRect 矩形更新、越界矩形一律裁切不信任），以每秒約 15 幀節流輸出 JPEG；WebView 只收合成後的畫面，不碰 VNC 線上格式。
+- 鍵盤走 X11 keysym（可列印字元用碼點、特殊鍵查表、左右修飾鍵區分），滑鼠按鍵與滾輪照 RFC 6143 的按鍵遮罩處理，滾輪是按放脈衝。
+- 傳統 VNC 沒有傳輸加密，連線視窗直接講明，並建議搭配本程式的 SSH 通道使用；密碼可存進系統認證儲存區（`CredentialKind::VncPassword`）。
+- 密碼錯誤會辨識為「驗證失敗」而不是籠統的連線錯誤（含伺服器用 SecurityResult 文字回絕的情況）。
+
+---
+
+## 工作階段常駐掛載
+
+- 「工作階段」視圖改為常駐掛載、以 `hidden` 隱藏：xterm 與 RDP/VNC canvas 一旦卸載，畫面內容就沒了，也沒有任何機制重放。修正前「切去別的功能列再切回來」會得到一片空白的終端機。
+- 外層包 `display: contents`，顯示時不影響原本排版；隱藏時 `display: none`，xterm 的 ResizeObserver 會在重新顯示時自動重排大小。
+
+---
+
 ## SFTP 大型檔案串流佇列
 
 - 舊的上傳／下載把整個檔案以 base64 走一次 IPC，因此有 32 MiB 上限；佇列引擎（`src-tauri/src/sftp_transfers.rs`）改為串流，上限取消：下載由 Rust 直接寫入系統「下載」資料夾（重名自動改成 `名稱 (2).ext`，不會蓋掉舊檔），上傳由前端以 4 MiB 分塊送入、後端邊收邊寫。

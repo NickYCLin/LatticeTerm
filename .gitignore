@@ -46,6 +46,7 @@ src-tauri/icons/ios/
 # Rust build output
 **/target/
 
-# Built and bundled by scripts/build-rdp-engine.mjs.
+# Built and bundled by scripts/build-*-engine.mjs.
 src-tauri/binaries/lattice-rdp-engine-*
+src-tauri/binaries/lattice-vnc-engine-*
 src-tauri/binaries/lattice-agent-*

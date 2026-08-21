@@ -38,6 +38,7 @@
     "createUpdaterArtifacts": true,
     "externalBin": [
       "binaries/lattice-rdp-engine",
+      "binaries/lattice-vnc-engine",
       "binaries/lattice-agent"
     ]
   },

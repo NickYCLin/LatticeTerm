@@ -40,7 +40,7 @@ export const protocolCatalog = [
     acronym: "VNC",
     defaultPort: 5900,
     milestone: 5,
-    available: false,
+    available: true,
   },
   {
     id: "lattice",

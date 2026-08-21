@@ -17,6 +17,7 @@ pub enum CredentialKind {
     SshPassword,
     SftpPassword,
     RdpPassword,
+    VncPassword,
 }
 
 impl CredentialKind {
@@ -25,6 +26,7 @@ impl CredentialKind {
             Self::SshPassword => "ssh-password",
             Self::SftpPassword => "sftp-password",
             Self::RdpPassword => "rdp-password",
+            Self::VncPassword => "vnc-password",
         }
     }
 }

@@ -4,7 +4,8 @@ import type { ConnectionProfile } from "../domain/connection";
 export type CredentialKind =
   | "sshPassword"
   | "sftpPassword"
-  | "rdpPassword";
+  | "rdpPassword"
+  | "vncPassword";
 
 export interface CredentialStoreStatus {
   ready: boolean;
@@ -58,6 +59,7 @@ export function credentialKindFor(
   if (profile.protocol === "ssh") return "sshPassword";
   if (profile.protocol === "sftp") return "sftpPassword";
   if (profile.protocol === "rdp") return "rdpPassword";
+  if (profile.protocol === "vnc") return "vncPassword";
   return null;
 }
 
