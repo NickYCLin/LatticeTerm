@@ -207,4 +207,4 @@
 - **一鍵啟停與快捷指令**：提供通道獨立與批次啟停控制、一鍵複製標準 OpenSSH 命令列，以及即時連線狀態診斷與防呆防重複綁定機制。
 - **信任與認證的前置條件**：通道使用自己的 SSH 工作階段，因此啟動前必須（1）主機金鑰已在 SSH 連線流程完成指紋確認、（2）該連線設定已儲存密碼（連線時勾選「記住密碼」）。缺一者會以可翻譯的錯誤碼（`trust:`／`credential:`）回報，不會靜默啟動一條沒有作用的通道。
 - **失敗必須看得見**：啟動失敗、SSH 連線中斷、或閘道主機拒絕開啟目標連線（例如伺服器設定 `AllowTcpForwarding no`）都會記錄在通道狀態的 `last_error`，介面直接顯示原因。
-- **端到端整合測試**：`src-tauri/tests/tunnel_live.rs` 以拋棄式 SSH 容器驗證本機轉送真的把遠端服務的位元組帶回本機、SOCKS5 CONNECT 能連上指定目標、遠端轉送請求被伺服器接受。注意容器需將 `AllowTcpForwarding` 設為 `yes` 才能通過。
+- **端到端整合測試**：`src-tauri/tests/tunnel_live.rs` 以拋棄式 SSH 容器驗證 Local 與 SOCKS5 的 `direct-tcpip` 真正傳輸目標服務位元組，並讓 Remote 的 `tcpip-forward` 經由容器對外連接埠把測試訊息送到本機 echo 服務再原樣帶回。容器需將 `AllowTcpForwarding yes` 與 `GatewayPorts clientspecified` 明確開啟才會通過。

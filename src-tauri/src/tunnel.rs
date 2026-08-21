@@ -16,12 +16,16 @@ use russh::client;
 use russh::{Channel, ChannelOpenFailure, Disconnect};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
+
+const MAX_TUNNEL_ID_BYTES: usize = 128;
+const MAX_HOST_BYTES: usize = 253;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -61,8 +65,11 @@ pub struct StartTunnelRequest {
     pub local_port: u16,
     pub remote_host: String,
     pub remote_port: u16,
+    #[serde(default)]
     pub ssh_hostname: String,
+    #[serde(default)]
     pub ssh_port: u16,
+    #[serde(default)]
     pub ssh_username: String,
 }
 
@@ -148,6 +155,15 @@ impl TunnelRegistry {
     fn register(&self, tunnel: ActiveTunnel) -> Result<u64, String> {
         let generation = tunnel.generation;
         let mut guard = self.tunnels.lock().map_err(|e| e.to_string())?;
+        if guard
+            .get(&tunnel.tunnel_id)
+            .is_some_and(|current| current.stop_tx.is_some())
+        {
+            return Err(format!(
+                "connect:tunnel '{}' is already running",
+                tunnel.tunnel_id
+            ));
+        }
         guard.insert(tunnel.tunnel_id.clone(), tunnel);
         Ok(generation)
     }
@@ -231,7 +247,11 @@ impl ConnectionGuard {
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        let _ = self
+            .0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(1))
+            });
     }
 }
 
@@ -405,6 +425,9 @@ impl client::Handler for TunnelHandler {
                     pump(socket, channel, counters).await;
                 }
                 Err(_) => {
+                    counters.record_error(format!(
+                        "forward:the local target {host}:{port} is unavailable"
+                    ));
                     reply.reject(ChannelOpenFailure::ConnectFailed).await;
                 }
             }
@@ -428,6 +451,67 @@ fn connect_error(verdict: Option<TrustVerdict>, fallback: String) -> String {
         ),
         _ => format!("connect:{fallback}"),
     }
+}
+
+fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > MAX_TUNNEL_ID_BYTES
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(format!(
+            "profile:{label} is missing or contains unsupported characters"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_host(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > MAX_HOST_BYTES
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | ':' | '-' | '[' | ']' | '%')
+        })
+    {
+        return Err(format!("connect:{label} is invalid"));
+    }
+    Ok(())
+}
+
+fn validate_request(request: &StartTunnelRequest) -> Result<(), String> {
+    validate_identifier(&request.tunnel_id, "tunnel id")?;
+    validate_identifier(&request.profile_id, "profile id")?;
+    validate_host(&request.ssh_hostname, "SSH hostname")?;
+    if request.ssh_port == 0
+        || request.ssh_username.trim().is_empty()
+        || request.ssh_username.len() > 64
+        || request.ssh_username.chars().any(char::is_whitespace)
+        || request.ssh_username.chars().any(char::is_control)
+    {
+        return Err("connect:the SSH endpoint is invalid".to_string());
+    }
+
+    let bind_ip = request
+        .local_host
+        .parse::<IpAddr>()
+        .map_err(|_| "bind:the bind address must be an IPv4 or IPv6 literal".to_string())?;
+    if request.local_port == 0 {
+        return Err("bind:the bind port must be between 1 and 65535".to_string());
+    }
+    if request.tunnel_type == TunnelType::Dynamic && !bind_ip.is_loopback() {
+        return Err(
+            "bind:a no-authentication SOCKS5 proxy may only use a loopback address".to_string(),
+        );
+    }
+    if request.tunnel_type != TunnelType::Dynamic {
+        validate_host(&request.remote_host, "tunnel target hostname")?;
+        if request.remote_port == 0 {
+            return Err("connect:the target port must be between 1 and 65535".to_string());
+        }
+    }
+    Ok(())
 }
 
 /// Connects and authenticates the tunnel's own SSH session.
@@ -493,6 +577,7 @@ pub async fn start_tunnel(
     password: &str,
     known: Option<HostKeyRecord>,
 ) -> Result<TunnelStatusSummary, String> {
+    validate_request(&request)?;
     if registry.is_running(&request.tunnel_id) {
         return Err(format!(
             "connect:tunnel '{}' is already running",
@@ -695,6 +780,21 @@ mod tests {
         }
     }
 
+    fn request(tunnel_type: TunnelType) -> StartTunnelRequest {
+        StartTunnelRequest {
+            tunnel_id: "tunnel-1".to_string(),
+            tunnel_type,
+            profile_id: "profile-1".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            local_port: 8080,
+            remote_host: "db.internal".to_string(),
+            remote_port: 5432,
+            ssh_hostname: "gateway.internal".to_string(),
+            ssh_port: 22,
+            ssh_username: "operator".to_string(),
+        }
+    }
+
     #[test]
     fn stopping_a_registered_tunnel_marks_it_stopped() {
         let registry = TunnelRegistry::new();
@@ -717,6 +817,7 @@ mod tests {
     fn a_stale_run_cannot_overwrite_a_restarted_tunnel() {
         let registry = TunnelRegistry::new();
         registry.register(entry("t1", 1)).unwrap();
+        registry.stop("t1").unwrap();
         // The tunnel restarts: same id, new generation.
         registry.register(entry("t1", 2)).unwrap();
 
@@ -730,6 +831,35 @@ mod tests {
         // The current run's ending is still recorded normally.
         registry.finish("t1", 2, TunnelStatus::Stopped, None);
         assert_eq!(registry.status("t1").unwrap().status, TunnelStatus::Stopped);
+    }
+
+    #[test]
+    fn a_running_tunnel_cannot_be_replaced_by_a_concurrent_start() {
+        let registry = TunnelRegistry::new();
+        registry.register(entry("t1", 1)).unwrap();
+        assert!(registry.register(entry("t1", 2)).is_err());
+        let guard = registry.tunnels.lock().unwrap();
+        assert_eq!(guard.get("t1").unwrap().generation, 1);
+    }
+
+    #[test]
+    fn unsafe_ids_and_public_no_auth_socks_bindings_are_rejected() {
+        let mut unsafe_id = request(TunnelType::Local);
+        unsafe_id.tunnel_id = "../tunnel".to_string();
+        assert!(validate_request(&unsafe_id).is_err());
+
+        let mut public_socks = request(TunnelType::Dynamic);
+        public_socks.local_host = "0.0.0.0".to_string();
+        assert!(validate_request(&public_socks).is_err());
+    }
+
+    #[test]
+    fn a_connection_guard_cannot_underflow_after_stop_resets_the_counter() {
+        let counter = Arc::new(AtomicU32::new(0));
+        let guard = ConnectionGuard::open(&counter);
+        counter.store(0, Ordering::Relaxed);
+        drop(guard);
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

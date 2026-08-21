@@ -3,9 +3,13 @@
 //! `#[ignore]`d so ordinary `cargo test` and CI stay green. Run deliberately:
 //!
 //! ```text
-//! docker run -d --name latticeterm-sshtest -p 2222:2222 \
+//! docker run -d --name latticeterm-sshtest -p 2222:2222 -p 3333:3333 \
 //!   -e PASSWORD_ACCESS=true -e USER_NAME=tester -e USER_PASSWORD=testpass123 \
 //!   linuxserver/openssh-server
+//! docker exec latticeterm-sshtest sed -i \
+//!   -e 's/AllowTcpForwarding no/AllowTcpForwarding yes/' \
+//!   -e 's/GatewayPorts no/GatewayPorts clientspecified/' /config/sshd/sshd_config
+//! docker restart latticeterm-sshtest
 //! cargo test --test tunnel_live -- --ignored --test-threads=1
 //! ```
 //!
@@ -24,6 +28,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 const HOST: &str = "127.0.0.1";
 const PORT: u16 = 2222;
+const REMOTE_FORWARD_PORT: u16 = 3333;
 const USER: &str = "tester";
 const PASSWORD: &str = "testpass123";
 
@@ -236,13 +241,12 @@ async fn a_remote_forward_delivers_server_side_connections_locally() {
         }
     });
 
-    let remote_port = free_port();
     let request = StartTunnelRequest {
         tunnel_id: "live-remote".into(),
         tunnel_type: TunnelType::Remote,
         profile_id: "tunnel-live".into(),
-        local_host: "127.0.0.1".into(),
-        local_port: remote_port,
+        local_host: "0.0.0.0".into(),
+        local_port: REMOTE_FORWARD_PORT,
         remote_host: "127.0.0.1".into(),
         remote_port: target_port,
         ssh_hostname: HOST.into(),
@@ -254,18 +258,32 @@ async fn a_remote_forward_delivers_server_side_connections_locally() {
         .await
         .unwrap();
 
-    // The server now listens on `remote_port`; because the container maps
-    // only 2222 outward, reach that listener from the host is not possible —
-    // but the sshd's loopback IS reachable through a second SSH session…
-    // Simplest reliable probe: connect to the port on the container's
-    // loopback via the tunnel test above is out of scope, so this test only
-    // asserts the forward was accepted and the session stays healthy.
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Port 3333 is published by the container and GatewayPorts is explicitly
+    // enabled in the setup above. Bytes entering that server-side listener
+    // must reach the local echo target and return through the SSH channel.
+    let mut remote = TcpStream::connect((HOST, REMOTE_FORWARD_PORT))
+        .await
+        .unwrap();
+    let payload = b"lattice-remote-ok";
+    remote.write_all(payload).await.unwrap();
+    let mut echoed = [0u8; 17];
+    remote.read_exact(&mut echoed).await.unwrap();
+    assert_eq!(&echoed, payload);
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let status = registry.status("live-remote").unwrap();
     assert_eq!(
         status.status,
         latticeterm_lib::tunnel::TunnelStatus::Active,
         "the remote forward is accepted and held open"
+    );
+    assert!(
+        status.bytes_uploaded > 0,
+        "echo bytes returned to the remote side"
+    );
+    assert!(
+        status.bytes_downloaded > 0,
+        "remote bytes reached the local target"
     );
 
     registry.stop("live-remote").unwrap();

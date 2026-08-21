@@ -65,6 +65,44 @@ export function isValidPort(port: string | number): boolean {
 }
 
 /**
+ * Bind addresses are passed to the native socket API, so accept IP literals
+ * only. Hostnames such as `localhost` can resolve differently and accidentally
+ * expose a listener on an unintended interface.
+ */
+export function isIpLiteral(value: string): boolean {
+  const candidate = value.trim();
+  const octets = candidate.split(".");
+  if (octets.length === 4) {
+    return octets.every(
+      (octet) => /^\d{1,3}$/.test(octet) && Number(octet) >= 0 && Number(octet) <= 255,
+    );
+  }
+
+  if (!candidate.includes(":")) return false;
+  try {
+    // WHATWG URL parsing provides a well-tested IPv6 parser in browsers and
+    // in the Vitest runtime. Brackets are added only for parsing.
+    new URL(`http://[${candidate}]/`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isLoopbackIp(value: string): boolean {
+  const candidate = value.trim().toLowerCase();
+  if (candidate.includes(".")) {
+    return isIpLiteral(candidate) && candidate.split(".")[0] === "127";
+  }
+  if (!isIpLiteral(candidate)) return false;
+  try {
+    return new URL(`http://[${candidate}]/`).hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Validates a tunnel draft and returns a list of validation errors.
  */
 export function validateTunnelDraft(draft: TunnelDraft): TunnelValidationError[] {
@@ -80,6 +118,10 @@ export function validateTunnelDraft(draft: TunnelDraft): TunnelValidationError[]
 
   if (!draft.localHost || draft.localHost.trim().length === 0) {
     errors.push({ field: "localHost", messageKey: "tunnels.error.localHostRequired" });
+  } else if (!isIpLiteral(draft.localHost)) {
+    errors.push({ field: "localHost", messageKey: "tunnels.error.invalidBindIp" });
+  } else if (draft.type === "dynamic" && !isLoopbackIp(draft.localHost)) {
+    errors.push({ field: "localHost", messageKey: "tunnels.error.dynamicLoopback" });
   }
 
   if (!isValidPort(draft.localPort)) {
