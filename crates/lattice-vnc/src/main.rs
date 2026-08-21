@@ -158,7 +158,9 @@ impl Framebuffer {
         // JPEG carries no alpha; strip the channel rather than ask the
         // encoder to guess.
         let mut rgb = Vec::with_capacity(self.pixels.len() / 4 * 3);
-        for pixel in self.pixels.chunks_exact(4) {
+        let (pixels, remainder) = self.pixels.as_chunks::<4>();
+        debug_assert!(remainder.is_empty());
+        for pixel in pixels {
             rgb.extend_from_slice(&pixel[..3]);
         }
         let mut jpeg = Vec::new();
