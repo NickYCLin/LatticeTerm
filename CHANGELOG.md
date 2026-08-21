@@ -4,6 +4,28 @@
 
 ---
 
+## [0.8.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.7.0...v0.8.0) (2026-08-21)
+
+
+### 🚀 新增功能
+
+* **監控:** 連線後真的能看到主機的 CPU、記憶體、硬碟了 ([593eac5](https://github.com/NickYCLin/LatticeTerm/commit/593eac512f3b662f79e30584e85fcdad7fdfbda8))
+* **通道:** 實作原生 SSH 通道轉發與 SOCKS5 動態代理管理視圖 ([6f07cf1](https://github.com/NickYCLin/LatticeTerm/commit/6f07cf1b2bdd6dd32f631f2ae76c2f5f75fb5018))
+* **連線:** 支援用 SSH 私鑰登入，不用再只能打密碼 ([6f02cda](https://github.com/NickYCLin/LatticeTerm/commit/6f02cda9c358b14e49b5de1e26dca5f96e3b6134))
+
+
+### 🛠️ 問題修正
+
+* **介面:** 修掉四個藏在細節裡的問題 ([2dae9d3](https://github.com/NickYCLin/LatticeTerm/commit/2dae9d32f715f3f9460f7850feef9a466b8dad9e))
+* **通道:** 修正遠端轉送介面語意 ([58a219a](https://github.com/NickYCLin/LatticeTerm/commit/58a219a6e9a1029cf85e2cec4414ccb69d8c9867))
+* **通道:** 強化 SSH 通道安全邊界 ([d76c36e](https://github.com/NickYCLin/LatticeTerm/commit/d76c36e55962b323d7346a64f27dfe7bcb1a3ced))
+* **通道:** 讓連接埠轉送真正經過 SSH 傳輸資料 ([d550195](https://github.com/NickYCLin/LatticeTerm/commit/d550195249ed1f0ad32d7ade8b5247272d53e788))
+
+
+### 🎨 介面與視覺調整
+
+* **圖示:** 全面升級左側主導覽列 7 大功能之向量圖示設計 ([fe6836a](https://github.com/NickYCLin/LatticeTerm/commit/fe6836a3e41fef11b21f34d0df641f92cafc36e3))
+
 ## [0.7.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.6.0...v0.7.0) (2026-08-21)
 
 ### 🚀 新增功能
