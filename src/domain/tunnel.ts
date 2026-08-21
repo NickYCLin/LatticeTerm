@@ -64,6 +64,28 @@ export function isValidPort(port: string | number): boolean {
   return !isNaN(num) && num >= 1 && num <= 65535 && String(num) === String(port).trim();
 }
 
+export function isIpLiteral(value: string): boolean {
+  const host = value.trim();
+  const ipv4 = host.split(".");
+  if (
+    ipv4.length === 4 &&
+    ipv4.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+  ) {
+    return true;
+  }
+  return (
+    host.includes(":") &&
+    /^[0-9a-f:]+$/i.test(host) &&
+    !host.includes(":::") &&
+    host.split(":").length <= 9
+  );
+}
+
+export function isLoopbackIp(value: string): boolean {
+  const host = value.trim().toLowerCase();
+  return host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
+}
+
 /**
  * Validates a tunnel draft and returns a list of validation errors.
  */
@@ -80,6 +102,10 @@ export function validateTunnelDraft(draft: TunnelDraft): TunnelValidationError[]
 
   if (!draft.localHost || draft.localHost.trim().length === 0) {
     errors.push({ field: "localHost", messageKey: "tunnels.error.localHostRequired" });
+  } else if (!isIpLiteral(draft.localHost)) {
+    errors.push({ field: "localHost", messageKey: "tunnels.error.invalidBindIp" });
+  } else if (draft.type === "dynamic" && !isLoopbackIp(draft.localHost)) {
+    errors.push({ field: "localHost", messageKey: "tunnels.error.dynamicLoopback" });
   }
 
   if (!isValidPort(draft.localPort)) {

@@ -5,7 +5,7 @@
  * live tunnel runtime execution (start/stop/stats) via Tauri IPC.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createTunnelFromDraft,
   validateTunnelDraft,
@@ -18,6 +18,16 @@ import {
 import type { ConnectionProfile } from "../domain/connection";
 
 const TUNNELS_STORAGE_KEY = "latticeterm.tunnels.v1";
+
+function errorDetail(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  return "The tunnel runtime did not provide an error detail.";
+}
 
 const DEFAULT_SAMPLE_TUNNELS: TunnelConfig[] = [
   {
@@ -69,6 +79,7 @@ export function useTunnels(
   profiles: ConnectionProfile[],
   onActivity?: (type: string, detail: string) => void,
 ): UseTunnelsResult {
+  const autoStartAttempted = useRef(false);
   const [tunnels, setTunnels] = useState<TunnelConfig[]>(() => {
     try {
       const raw = localStorage.getItem(TUNNELS_STORAGE_KEY);
@@ -227,9 +238,34 @@ export function useTunnels(
       if (!target) return { success: false, error: "Tunnel not found." };
 
       const profile = profiles.find((p) => p.id === target.profileId);
-      const sshHost = profile?.hostname || "localhost";
-      const sshPort = profile?.port || 22;
-      const sshUser = profile?.username || "root";
+      if (!profile) {
+        const error = "The selected SSH gateway profile no longer exists.";
+        setStates((prev) => ({
+          ...prev,
+          [id]: {
+            status: "error",
+            bytesUploaded: prev[id]?.bytesUploaded ?? 0,
+            bytesDownloaded: prev[id]?.bytesDownloaded ?? 0,
+            activeConnections: 0,
+            lastError: error,
+          },
+        }));
+        return { success: false, error };
+      }
+      if (profile.protocol !== "ssh") {
+        const error = "SSH tunnels require an SSH connection profile.";
+        setStates((prev) => ({
+          ...prev,
+          [id]: {
+            status: "error",
+            bytesUploaded: prev[id]?.bytesUploaded ?? 0,
+            bytesDownloaded: prev[id]?.bytesDownloaded ?? 0,
+            activeConnections: 0,
+            lastError: error,
+          },
+        }));
+        return { success: false, error };
+      }
 
       setStates((prev) => ({
         ...prev,
@@ -247,13 +283,11 @@ export function useTunnels(
           request: {
             tunnel_id: target.id,
             tunnel_type: target.type,
+            profile_id: target.profileId,
             local_host: target.localHost,
             local_port: target.localPort,
             remote_host: target.remoteHost,
             remote_port: target.remotePort,
-            ssh_hostname: sshHost,
-            ssh_port: sshPort,
-            ssh_username: sshUser,
           },
         });
 
@@ -269,24 +303,36 @@ export function useTunnels(
         }));
         onActivity?.("tunnel_start", target.name);
         return { success: true };
-      } catch {
-        // Fallback for browser preview mode simulation
+      } catch (invokeError) {
+        const error = errorDetail(invokeError);
         setStates((prev) => ({
           ...prev,
           [id]: {
-            status: "active",
-            bytesUploaded: 1024,
-            bytesDownloaded: 4096,
-            activeConnections: 1,
-            startedAt: Date.now(),
+            status: "error",
+            bytesUploaded: prev[id]?.bytesUploaded ?? 0,
+            bytesDownloaded: prev[id]?.bytesDownloaded ?? 0,
+            activeConnections: 0,
+            lastError: error,
           },
         }));
-        onActivity?.("tunnel_start", target.name);
-        return { success: true };
+        onActivity?.("tunnel_error", `${target.name}: ${error}`);
+        return { success: false, error };
       }
     },
     [tunnels, profiles, onActivity],
   );
+
+  useEffect(() => {
+    if (autoStartAttempted.current || profiles.length === 0) {
+      return;
+    }
+    autoStartAttempted.current = true;
+    for (const tunnel of tunnels) {
+      if (tunnel.autoStart) {
+        void startTunnel(tunnel.id);
+      }
+    }
+  }, [profiles.length, tunnels, startTunnel]);
 
   const stopTunnel = useCallback(
     async (id: string) => {

@@ -150,6 +150,7 @@
 - **密碼**：預設由對話框輸入並只用於當次連線；使用者可勾選保存，Rust 核心只在驗證成功後寫入作業系統認證儲存區。已保存密碼由 Rust 直接取用，不回傳 WebView。
 - **輸出管道**：Rust 端以 `SessionSink` 介面輸出，正式執行時發送 Tauri 事件，測試時收進緩衝區——這是連線流程能對真實伺服器做整合測試的原因。
 - **測試**：`src-tauri/tests/ssh_live.rs` 針對真實 SSH 伺服器驗證「拒絕→信任→開 shell→指令有輸出」、密碼錯誤、金鑰變更與連不上四種情況；預設標記 `#[ignore]`，需要時搭配拋棄式容器執行。
+- **通道實流測試**：`src-tauri/tests/tunnel_live.rs` 會透過同一個拋棄式 OpenSSH 容器，驗證 Local、SOCKS5 CONNECT 的 `direct-tcpip`，以及 Remote 的 `tcpip-forward` 都真正傳送位元組；容器須明確啟用 TCP forwarding，測試預設忽略，發布前可明確執行。
 - **Key Vault 管理介面**：`useHostTrust` 透過 `ssh_known_hosts`、`ssh_trust_host` 與 `ssh_forget_host` IPC 直接操作同一份信任資料。手動新增只接受完整 OpenSSH SHA-256 指紋，既有主機不可靜默覆蓋，移除前必須再次確認。
 - **誠實的執行環境狀態**：網頁預覽沒有 Tauri 後端時不注入 sample hosts；信任檔損壞時顯示安全錯誤並禁止操作。認證資料分頁直接查詢系統儲存區，只列真實參照並在不可用時顯示原因。
 

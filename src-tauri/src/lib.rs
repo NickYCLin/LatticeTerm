@@ -32,7 +32,7 @@ use crate::sftp::{
 };
 use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
-use crate::tunnel::{StartTunnelRequest, TunnelRegistry, TunnelStatusSummary};
+use crate::tunnel::{SshTunnelEndpoint, StartTunnelRequest, TunnelRegistry, TunnelStatusSummary};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -796,9 +796,53 @@ fn ssh_forget_host(host: String, port: u16, trust: State<'_, TrustState>) -> Res
 #[tauri::command]
 async fn tunnel_start(
     request: StartTunnelRequest,
+    storage: State<'_, AppStorage>,
+    trust: State<'_, TrustState>,
     registry: State<'_, Arc<TunnelRegistry>>,
 ) -> Result<TunnelStatusSummary, String> {
-    crate::tunnel::start_tunnel(Arc::clone(registry.inner()), request).await
+    let profile = {
+        let guard = storage.lock().map_err(|error| error.to_string())?;
+        guard
+            .get_profile(&request.profile_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "The SSH gateway profile no longer exists.".to_string())?
+    };
+    if profile.protocol != Protocol::Ssh {
+        return Err("SSH tunnels require an SSH connection profile.".to_string());
+    }
+
+    let known = match trust.inner() {
+        TrustState::Unavailable(reason) => {
+            return Err(format!("The SSH host trust store is unavailable: {reason}"));
+        }
+        TrustState::Ready(store) => {
+            let guard = store.lock().map_err(|error| error.to_string())?;
+            crate::ssh::known_record(&guard, &profile.hostname, profile.port)
+        }
+    };
+
+    let credential_profile_id = profile.id.clone();
+    let password = credential_call(move || {
+        crate::credentials::load(&credential_profile_id, CredentialKind::SshPassword)
+    })
+    .await
+    .map(Zeroizing::new)
+    .map_err(|error| {
+        format!("A saved SSH password is required before this tunnel can start: {error}")
+    })?;
+
+    crate::tunnel::start_tunnel(
+        Arc::clone(registry.inner()),
+        known,
+        password,
+        request,
+        SshTunnelEndpoint {
+            hostname: profile.hostname,
+            port: profile.port,
+            username: profile.username,
+        },
+    )
+    .await
 }
 
 #[tauri::command]

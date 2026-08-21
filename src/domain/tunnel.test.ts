@@ -3,6 +3,8 @@ import {
   createTunnelFromDraft,
   formatBytes,
   formatSshTunnelCommand,
+  isIpLiteral,
+  isLoopbackIp,
   isValidPort,
   validateTunnelDraft,
   type TunnelConfig,
@@ -22,6 +24,28 @@ describe("tunnel domain model", () => {
     expect(isValidPort("abc")).toBe(false);
     expect(isValidPort("")).toBe(false);
     expect(isValidPort("80.5")).toBe(false);
+  });
+
+  it("accepts IP literals and keeps no-auth SOCKS5 on loopback", () => {
+    expect(isIpLiteral("127.0.0.1")).toBe(true);
+    expect(isIpLiteral("::1")).toBe(true);
+    expect(isIpLiteral("localhost")).toBe(false);
+    expect(isLoopbackIp("127.0.0.42")).toBe(true);
+    expect(isLoopbackIp("::1")).toBe(true);
+    expect(isLoopbackIp("0.0.0.0")).toBe(false);
+
+    const errors = validateTunnelDraft({
+      name: "Unsafe SOCKS",
+      type: "dynamic",
+      profileId: "profile-jump",
+      localHost: "0.0.0.0",
+      localPort: 1080,
+      remoteHost: "",
+      remotePort: "",
+    });
+    expect(errors.map((error) => error.messageKey)).toContain(
+      "tunnels.error.dynamicLoopback",
+    );
   });
 
   it("validates a complete local tunnel draft successfully", () => {
