@@ -379,7 +379,14 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 }}
               />
             )}
-            {view === "tunnels" && <TunnelsView profiles={profiles} />}
+            {view === "tunnels" && (
+              // Tunnels authenticate with a saved SSH password, so only SSH
+              // profiles can serve as the gateway; offering an RDP or Lattice
+              // profile here would fail at start every time.
+              <TunnelsView
+                profiles={profiles.filter((entry) => entry.protocol === "ssh")}
+              />
+            )}
             {view === "vault" && <VaultView workspace={workspace} />}
             {view === "activity" && <ActivityView workspace={workspace} />}
             {view === "settings" && (

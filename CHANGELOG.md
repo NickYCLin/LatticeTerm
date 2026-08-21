@@ -1,79 +1,78 @@
-# Changelog
+# 更新日誌 (Changelog)
+
+本專案遵循語意化版本（Semantic Versioning）發布，所有更新內容均以繁體中文條列說明。
+
+---
 
 ## [0.7.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.6.0...v0.7.0) (2026-08-21)
 
+### 🚀 新增功能
+* **SSH 通道與連接埠轉送 (Tunnels)**：
+  - 新增本機轉送 (`-L`)、動態 SOCKS5 代理 (`-D`) 與遠端轉送 (`-R`) 完整功能。
+  - 支援透過跳板機安全穿透連線內網資料庫（PostgreSQL、MySQL、Redis）或內部網頁。
+  - 提供即時連線數統計、傳輸流量監控，以及一鍵複製標準 OpenSSH 終端指令。
+* **左側主功能列圖示全面重繪**：
+  - 重新設計 7 大功能圖示（雙層伺服器機架、終端機視窗、AI 多核心星芒、拱型通道、防護金庫、即時脈搏波形、六齒機械齒輪），辨識度與視覺層次大幅提升。
+* **全新 7 套原創手繪色彩主題**：
+  - 重新調配黑曜金珀（預設）、星穹紫境、極地冰霜、北歐墨翠、雅緻亮白、暖陶赭石、極限高對比主題。
+* **AI 工作階段原生續接**：
+  - 支援直接續接既有的 Agent 工作階段（Native Session Resume），避免重啟時遺失上下文。
 
-### 新功能
+### 🛠️ 問題修正與優化
+* **行程安全釋放**：結束終端機或退出 App 時，後端會主動且安全地停止所有背景子行程，不再殘留佔用系統資源。
+* **介面去蕪存菁**：移除左側底部重複的主題按鈕，統一由「設定 ➔ 外觀」管理，讓工作區視野更寬敞。
 
-* **agent:** 加入原生工作階段續接 Adapter ([4f725ba](https://github.com/NickYCLin/LatticeTerm/commit/4f725ba03e14426a772508cd31c1b61d89a02310))
-* **agent:** 新增原生 Session 續接介面 ([bb757da](https://github.com/NickYCLin/LatticeTerm/commit/bb757da1b4411d8198e41987a572a368cc61ebdd))
+---
 
 ## [0.6.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.5.0...v0.6.0) (2026-08-20)
 
+### 🚀 新增功能
+* **工作區命名與拖曳排序**：
+  - 支援為多個 AI Agent 工作區自訂名稱並自由拖曳調整排列順序。
+  - 啟動偏好設定自動持久化儲存，重新開啟 App 後立即恢復上次佈局。
 
-### 新功能
+### 🛠️ 問題修正
+* **工作區安全性檢驗**：增加本機磁碟儲存路徑的安全名稱過濾，防止非法字元或路徑穿越。
+* **版本號精準同步**：介面版號與建置資訊直接連動，確保各處顯示的版本號完全一致。
 
-* **agent:** 加入工作區命名與排序介面 ([afc5c7a](https://github.com/NickYCLin/LatticeTerm/commit/afc5c7acd6e8b98fb1e85cc22b6e4972b252ac15))
-* **agent:** 支援啟動工作區名稱與排序儲存 ([1a17df7](https://github.com/NickYCLin/LatticeTerm/commit/1a17df78528df23852b1ad0180951f1d9b465abc))
-
-
-### 問題修正
-
-* **agent:** 驗證磁碟中的工作區名稱 ([0572737](https://github.com/NickYCLin/LatticeTerm/commit/0572737be2f168e70b6b2c928893c2913d724afa))
-* **ui:** 由建置資訊同步顯示版號 ([c308f49](https://github.com/NickYCLin/LatticeTerm/commit/c308f497ee12b6bc01d10136c7404524470d6dbc))
+---
 
 ## [0.5.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.4.0...v0.5.0) (2026-08-20)
 
+### 🚀 新增功能
+* **工作區獨立儲存**：
+  - 實作安全隔離的工作區設定儲存，保護個別工作區的命令參數與工作目錄。
+  - 新增工作區快速切換面板，簡化多專案多任務之間的切換流程。
 
-### 新功能
-
-* **agent:** 加入安全啟動工作區儲存 ([68a6afe](https://github.com/NickYCLin/LatticeTerm/commit/68a6afe60d5325b8b381fd39d5e26babfae8d93a))
-* **agent:** 加入啟動工作區操作介面 ([1302bf8](https://github.com/NickYCLin/LatticeTerm/commit/1302bf8169115a2b17c9c946d3d24dd7889e0d77))
+---
 
 ## [0.4.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.3.0...v0.4.0) (2026-08-20)
 
+### 🚀 新增功能
+* **批次指令廣播 (Fleet Broadcast)**：
+  - 支援同時勾選多個活躍工作階段並一鍵廣播傳送指令或提示詞。
+  - 提供即時送達狀態回饋，方便多主機或多 Agent 同步操作。
 
-### 新功能
-
-* **agent:** 加入安全批次提示傳輸 ([fcaaf4c](https://github.com/NickYCLin/LatticeTerm/commit/fcaaf4cfbe317be74a9a5f5bb47102fe466175e6))
-* **agent:** 加入批次提示操作介面 ([7d9c714](https://github.com/NickYCLin/LatticeTerm/commit/7d9c7143e74328063a8901b7b6cd5b880e6ff6c1))
+---
 
 ## [0.3.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.2.0...v0.3.0) (2026-08-20)
 
+### 🚀 新增功能
+* **AI Agent Fleet 多工作階段管理**：
+  - 內建本機 PTY 虛擬終端核心，支援多個 CLI Agent 並行執行與狀態監控。
+  - 提供 Working / Waiting / Needs Attention / Done 四種即時生命週期識別。
+* **SFTP 檔案傳輸工作區**：
+  - 整合純 Rust `russh-sftp` 檔案瀏覽器，支援遠端目錄瀏覽、檔案上傳、下載、重新命名與權限檢視。
+* **Lattice Remote 遠端桌面與主機分享**：
+  - 支援本機螢幕唯讀畫面串流分享與 Web RDP 遠端連線畫布。
+  - 支援一鍵擷取高解析度截圖（PNG）與畫面錄影下載（WebM）。
+* **系統金鑰保管庫 (Key Vault)**：
+  - SSH 與 RDP 密碼採用作業系統原生認證儲存區（Windows Credential Manager / macOS Keychain / Linux Secret Service）加密保護。
+  - 主機金鑰指紋（Host Keys）在首次連線時比對防護（TOFU），伺服器變更金鑰時主動攔截警示。
+* **App 內建自動更新**：
+  - 整合數位簽章驗證的自動更新機制，可在「設定」介面直接檢查最新版本並就地更新。
 
-### 新功能
-
-* **agent:** 加入 AI Agent Fleet 操作介面 ([ca7969b](https://github.com/NickYCLin/LatticeTerm/commit/ca7969b73d7025a53598edad797dd89ef469da04))
-* **agent:** 加入安全語意狀態回報器 ([523f54b](https://github.com/NickYCLin/LatticeTerm/commit/523f54b4249798c03c6dea6f640a4d5a064aaf25))
-* **agent:** 建立本機多 CLI PTY 執行核心 ([5bdcfb8](https://github.com/NickYCLin/LatticeTerm/commit/5bdcfb8477d6018606dacbe59e7b4eb21e32e81b))
-* **agent:** 顯示 Adapter 語意狀態來源 ([f75ac4f](https://github.com/NickYCLin/LatticeTerm/commit/f75ac4fb9e58061c1b744160a2fd081fb05e934f))
-* **sftp:** 加入檔案瀏覽與傳輸工作區 ([5ae0472](https://github.com/NickYCLin/LatticeTerm/commit/5ae0472cefbb8b36a9b616c294d696dbe563d163))
-* **sftp:** 合併安全檔案傳輸工作區 ([#13](https://github.com/NickYCLin/LatticeTerm/issues/13)) ([e5426e4](https://github.com/NickYCLin/LatticeTerm/commit/e5426e4fbfe955d0daa4b96db4779ba6af667b5b))
-* **sftp:** 建立安全檔案傳輸後端 ([d23394c](https://github.com/NickYCLin/LatticeTerm/commit/d23394c1cba1408cd6dcdf40074e218e12475386))
-* **安全:** 使用系統認證儲存保存 SSH 與 RDP 密碼 ([bdc11a1](https://github.com/NickYCLin/LatticeTerm/commit/bdc11a141f895bcfd81544e1909ac9a0ebe5f960))
-* **安全:** 使用系統認證儲存保存 SSH 與 RDP 密碼 ([950d225](https://github.com/NickYCLin/LatticeTerm/commit/950d225cb83565a38fc55b9d30d80b0377fbf4ae))
-* 整合 Lattice Remote 主機分享模式 ([2a5d9bb](https://github.com/NickYCLin/LatticeTerm/commit/2a5d9bb9ebce9bf157c9c70ee313d005cf9b8691))
-* 新增遠端桌面與主機信任管理 ([0bc8cf0](https://github.com/NickYCLin/LatticeTerm/commit/0bc8cf0df10ce19231d4548dde676af0e6868645))
-* 新增遠端畫面截圖與錄影 ([4859158](https://github.com/NickYCLin/LatticeTerm/commit/4859158838afc9a06795afdc7ddabe009711d269))
-* **更新:** 啟用已簽章的自動更新流程 ([7e13001](https://github.com/NickYCLin/LatticeTerm/commit/7e13001a8e7f9048060a87dfae3ce4a76ab708be))
-* **發布:** 自動判定版本並產生跨平台發行版 ([c9aaac0](https://github.com/NickYCLin/LatticeTerm/commit/c9aaac03d61f99cb162a4c99cdfc701723d30d0f))
-* **遠端:** 整合 Lattice Remote 主機分享與 Web RDP 擷取 ([8ad3eb3](https://github.com/NickYCLin/LatticeTerm/commit/8ad3eb3e8cf261c9442e85b57bbae9702cc71f09))
-
-
-### 問題修正
-
-* **agent:** 結束應用程式時停止所有 CLI ([088ff8a](https://github.com/NickYCLin/LatticeTerm/commit/088ff8a98217abb8588ab677458fbf9cd4ddb487))
-* **ci:** 在 Rust 驗證前建置遠端 sidecar ([7f837bc](https://github.com/NickYCLin/LatticeTerm/commit/7f837bc8949fbcb0d2d26c1b83e2b252256befcb))
-* **sftp:** 阻擋未確認的同名檔案覆寫 ([0ddf961](https://github.com/NickYCLin/LatticeTerm/commit/0ddf961a93939eabaf4360b7da9242269d0b0908))
-* **介面:** 修正停用確認動作時的對話框焦點 ([cd95138](https://github.com/NickYCLin/LatticeTerm/commit/cd9513826d4d3b65ec37d5559a6ba5f87baf78d5))
-* **安全:** 允許瀏覽器預覽刪除連線設定 ([c10e86b](https://github.com/NickYCLin/LatticeTerm/commit/c10e86bd29480a6f896e928bf6810e906ed924b5))
-* 明確解參考 RDP 子程序輸入鎖 ([acd5899](https://github.com/NickYCLin/LatticeTerm/commit/acd5899e861117ce54f233a253180041e3ad38ed))
-* **版本:** 防止多來源版本號漂移 ([a5a5864](https://github.com/NickYCLin/LatticeTerm/commit/a5a58643526d28f3f86ba78f08b337507378c548))
-* **發布:** 以確定性腳本同步 Cargo 鎖定檔 ([de70270](https://github.com/NickYCLin/LatticeTerm/commit/de70270530fd769cf42413fe27f482583749bc5b))
-* **發布:** 精準同步 Cargo 鎖定檔版本 ([36d3d16](https://github.com/NickYCLin/LatticeTerm/commit/36d3d16207f6e71a2a3e1d90ac6ed2c659fba94a))
-* **監控:** 容量格式化改用算術運算避免測試逾時 ([e78690c](https://github.com/NickYCLin/LatticeTerm/commit/e78690cd513cb1f76d9707d58fc4766f5e315e29))
-* 移除 Linux Agent 的不相容 PipeWire 依賴 ([dc980e4](https://github.com/NickYCLin/LatticeTerm/commit/dc980e486bb96c7c1f86e631b1abd37fada4f6cd))
-* 符合 RDP 輸入鎖的 Clippy 規範 ([32d0c97](https://github.com/NickYCLin/LatticeTerm/commit/32d0c9726bdb001547ee82c897cc939b30f30a2d))
-* 統一遠端協定可用性狀態 ([0af4f75](https://github.com/NickYCLin/LatticeTerm/commit/0af4f75f758663355683243b76cbccbbd490f4e9))
-* 維持 Linux Agent 的 PipeWire 相容性 ([fcccafb](https://github.com/NickYCLin/LatticeTerm/commit/fcccafb72beadcfbccfe54f2dc45a57242990857))
-* **連線:** 修正工作階段代號傳到介面時的欄位命名 ([905684c](https://github.com/NickYCLin/LatticeTerm/commit/905684c71f317f28a10a7c183d129eabc9308714))
+### 🛠️ 問題修正
+* **檔案覆寫防呆**：SFTP 上傳同名檔案時強制跳出覆寫確認對話框。
+* **視窗與焦點優化**：修正在關閉對話框時鍵盤焦點丟失的問題。
+* **跨平台相容性**：優化 Linux 環境下的系統相依性，提升各發行版安裝穩定度。

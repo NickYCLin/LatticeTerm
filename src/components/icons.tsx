@@ -74,39 +74,40 @@ export const LatticeMark = ({ size = 20, ...props }: IconProps) => (
 
 export const ConnectionsIcon: Glyph = (props) => (
   <Icon {...props}>
-    <circle cx="4" cy="4" r="2.25" />
-    <circle cx="12" cy="4" r="2.25" />
-    <circle cx="8" cy="12" r="2.25" />
-    <path d="M5.6 5.6 6.8 10M10.4 5.6 9.2 10" />
+    <rect x="2" y="2.5" width="12" height="4.25" rx="1.25" />
+    <rect x="2" y="9.25" width="12" height="4.25" rx="1.25" />
+    <circle cx="4.5" cy="4.62" r=".75" fill="currentColor" />
+    <circle cx="4.5" cy="11.38" r=".75" fill="currentColor" />
+    <path d="M8 6.75v2.5" />
   </Icon>
 );
 
 export const TunnelIcon: Glyph = (props) => (
   <Icon {...props}>
-    <rect x="2" y="3" width="12" height="10" rx="2" />
-    <path d="M6 6.5 4.5 8 6 9.5M10 6.5l1.5 1.5L10 9.5M8 6v4" />
+    <path d="M2.5 13.5V6a5.5 5.5 0 0 1 11 0v7.5" />
+    <path d="M5.5 13.5V7a2.5 2.5 0 0 1 5 0v6.5" />
+    <path d="M8 13.5v-3.5" />
   </Icon>
 );
 
 export const VaultIcon: Glyph = (props) => (
   <Icon {...props}>
-    <rect x="2.5" y="6" width="11" height="8" rx="1.5" />
-    <path d="M5 6V4.5a3 3 0 0 1 6 0V6" />
-    <circle cx="8" cy="10" r="1" fill="currentColor" />
+    <rect x="2" y="2.5" width="12" height="11" rx="2" />
+    <circle cx="8" cy="8" r="2.25" />
+    <path d="M8 5.75v1M8 9.25v1M5.75 8h1M9.25 8h1M11.5 8h.75" />
   </Icon>
 );
 
 export const ActivityIcon: Glyph = (props) => (
   <Icon {...props}>
-    <circle cx="8" cy="8" r="6" />
-    <path d="M8 4.5v3.8l2.5 1.5" />
+    <path d="M1.75 8.5h3l2-5 2.5 9 2-4h3" />
   </Icon>
 );
 
 export const SettingsIcon: Glyph = (props) => (
   <Icon {...props}>
     <circle cx="8" cy="8" r="2.25" />
-    <path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M3.6 12.4l1.05-1.05M11.35 4.65l1.05-1.05" />
+    <path d="M8 1.5v1.5M8 13v1.5M1.5 8h1.5M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M3.4 12.6l1.06-1.06M11.54 4.46l1.06-1.06" />
   </Icon>
 );
 
@@ -219,16 +220,15 @@ export const KeyIcon: Glyph = (props) => (
 export const TerminalIcon: Glyph = (props) => (
   <Icon {...props}>
     <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
-    <path d="m5 6 2 2-2 2M9 10h2.5" />
+    <path d="m5 6 2.25 2-2.25 2M9.5 10h2" />
   </Icon>
 );
 
 export const AgentIcon: Glyph = (props) => (
   <Icon {...props}>
-    <rect x="2" y="3" width="12" height="10" rx="2" />
-    <circle cx="6" cy="7" r="1" fill="currentColor" />
-    <circle cx="10" cy="7" r="1" fill="currentColor" />
-    <path d="M5.5 10h5M8 1.5V3" />
+    <path d="M7.5 1.5c.2 2.7 1.8 4.3 4.5 4.5-2.7.2-4.3 1.8-4.5 4.5-.2-2.7-1.8-4.3-4.5-4.5 2.7-.2 4.3-1.8 4.5-4.5z" />
+    <path d="M12.5 10.5c.1 1.3.8 2 2 2.1-1.2.1-1.9.8-2 2.1-.1-1.3-.8-2-2-2.1 1.2-.1 1.9-.8 2-2.1z" />
+    <path d="M3 12.5c.1 1 .6 1.5 1.5 1.6-.9.1-1.4.6-1.5 1.6-.1-1-.6-1.5-1.5-1.6.9-.1 1.4-.6 1.5-1.6z" />
   </Icon>
 );
 

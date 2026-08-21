@@ -230,6 +230,7 @@ export const zhTW = {
   "activity.confirmClear.title": "要清空操作紀錄嗎？",
   "activity.confirmClear.body": "會移除這個視窗裡的 {count} 筆紀錄，連線設定不受影響。",
   "activity.confirmClear.confirm": "清空 {count} 筆紀錄",
+  "activity.saveFailed": "設定未寫入磁碟（重新啟動後會遺失）",
   "activity.kind.created": "新增連線",
   "activity.kind.updated": "修改連線",
   "activity.kind.deleted": "刪除連線",
