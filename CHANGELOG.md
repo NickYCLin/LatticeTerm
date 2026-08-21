@@ -4,6 +4,22 @@
 
 ---
 
+## [0.9.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.8.0...v0.9.0) (2026-08-21)
+
+
+### 🚀 新增功能
+
+* **agent:** CLI 印出的 Session ID 會自動抓下來，續接不用再自己翻 ([e017ccb](https://github.com/NickYCLin/LatticeTerm/commit/e017ccb3a9aee4c09ce448e6da0fb13b8c14510a))
+* **SFTP:** 大檔案改用串流佇列，32MB 上限拿掉了 ([018cbeb](https://github.com/NickYCLin/LatticeTerm/commit/018cbebf49ada3bbc470120551d8580c06e5a806))
+* **VNC:** VNC 可以用了，順手修掉切換視圖後工作階段變空白的問題 ([1ea852e](https://github.com/NickYCLin/LatticeTerm/commit/1ea852ed7d080b659a6d33298ff3ee45569bed02))
+* **保管庫:** 加密保管庫上線，密碼多了一個不靠作業系統的家 ([53046d3](https://github.com/NickYCLin/LatticeTerm/commit/53046d3501f77cbadff3f0721ecc8c37193bd800))
+* **行動版:** Android 版能跑了 ([1ac6975](https://github.com/NickYCLin/LatticeTerm/commit/1ac6975862666db57b70f4aa8cb26023e340e5d8))
+
+
+### 🎨 介面與視覺調整
+
+* **圖示:** 替換活動紀錄與設定之圖示設計 ([45426d9](https://github.com/NickYCLin/LatticeTerm/commit/45426d9a0917368557e53f5988a3725c017c82e7))
+
 ## [0.8.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.7.0...v0.8.0) (2026-08-21)
 
 ### 🚀 新增功能
