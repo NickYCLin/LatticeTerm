@@ -3,6 +3,10 @@
  *
  * Persists user tunnel configurations, provides CRUD operations, and manages
  * live tunnel runtime execution (start/stop/stats) via Tauri IPC.
+ *
+ * The backend reports failures with a stable `code:detail` prefix
+ * (`credential:`, `trust:`, `auth:`, `bind:`, `connect:`, `forward:`); the
+ * view maps the code to a translated message and keeps the detail for context.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -18,35 +22,6 @@ import {
 import type { ConnectionProfile } from "../domain/connection";
 
 const TUNNELS_STORAGE_KEY = "latticeterm.tunnels.v1";
-
-const DEFAULT_SAMPLE_TUNNELS: TunnelConfig[] = [
-  {
-    id: "tunnel-postgres-sample",
-    name: "Production PostgreSQL (Internal)",
-    type: "local",
-    profileId: "sample-prod",
-    localHost: "127.0.0.1",
-    localPort: 5432,
-    remoteHost: "postgres.internal.net",
-    remotePort: 5432,
-    description: "Forward local port 5432 to internal DB through production gateway",
-    createdAt: Date.now() - 3600000,
-    updatedAt: Date.now() - 3600000,
-  },
-  {
-    id: "tunnel-socks5-sample",
-    name: "Staging SOCKS5 Dynamic Proxy",
-    type: "dynamic",
-    profileId: "sample-staging",
-    localHost: "127.0.0.1",
-    localPort: 1080,
-    remoteHost: "",
-    remotePort: 0,
-    description: "Local SOCKS5 proxy for testing staging environment APIs",
-    createdAt: Date.now() - 7200000,
-    updatedAt: Date.now() - 7200000,
-  },
-];
 
 export interface LiveTunnelState extends TunnelStats {
   status: TunnelStatus;
@@ -76,9 +51,9 @@ export function useTunnels(
         return JSON.parse(raw) as TunnelConfig[];
       }
     } catch {
-      // Fallback
+      // An unreadable store starts empty rather than crashing the view.
     }
-    return DEFAULT_SAMPLE_TUNNELS;
+    return [];
   });
 
   const [states, setStates] = useState<Record<string, LiveTunnelState>>({});
@@ -92,7 +67,9 @@ export function useTunnels(
     }
   }, [tunnels]);
 
-  // Poll status from Tauri backend periodically
+  // Poll live status from the backend. Only fields the backend owns are
+  // overwritten, so an error recorded at start time survives until the next
+  // successful start of that tunnel.
   useEffect(() => {
     let cancelled = false;
 
@@ -121,7 +98,7 @@ export function useTunnels(
                 bytesDownloaded: item.bytes_downloaded,
                 activeConnections: item.active_connections,
                 startedAt: item.started_at ? item.started_at * 1000 : undefined,
-                lastError: item.last_error,
+                lastError: item.last_error ?? prev[item.tunnel_id]?.lastError,
               };
             }
             return next;
@@ -166,12 +143,22 @@ export function useTunnels(
         return { success: false, errors };
       }
 
-      const updated = createTunnelFromDraft(draft, id);
+      const existing = tunnels.find((t) => t.id === id);
+      if (!existing) {
+        return { success: false };
+      }
+
+      // Editing changes the settings, not the history: the original creation
+      // time survives the update.
+      const updated: TunnelConfig = {
+        ...createTunnelFromDraft(draft, id),
+        createdAt: existing.createdAt,
+      };
       setTunnels((prev) => prev.map((t) => (t.id === id ? updated : t)));
       onActivity?.("tunnel_update", updated.name);
       return { success: true, tunnel: updated };
     },
-    [onActivity],
+    [tunnels, onActivity],
   );
 
   const deleteTunnel = useCallback(
@@ -221,15 +208,32 @@ export function useTunnels(
     [tunnels, onActivity],
   );
 
+  const markError = useCallback((id: string, error: string) => {
+    setStates((prev) => ({
+      ...prev,
+      [id]: {
+        status: "error",
+        bytesUploaded: prev[id]?.bytesUploaded ?? 0,
+        bytesDownloaded: prev[id]?.bytesDownloaded ?? 0,
+        activeConnections: 0,
+        lastError: error,
+      },
+    }));
+  }, []);
+
   const startTunnel = useCallback(
     async (id: string): Promise<{ success: boolean; error?: string }> => {
       const target = tunnels.find((t) => t.id === id);
-      if (!target) return { success: false, error: "Tunnel not found." };
+      if (!target) return { success: false, error: "connect:tunnel not found" };
 
       const profile = profiles.find((p) => p.id === target.profileId);
-      const sshHost = profile?.hostname || "localhost";
-      const sshPort = profile?.port || 22;
-      const sshUser = profile?.username || "root";
+      if (!profile) {
+        // Starting through a guessed gateway would silently forward through
+        // the wrong machine; a missing profile is an error, not a default.
+        const error = "profile:the SSH gateway profile no longer exists";
+        markError(id, error);
+        return { success: false, error };
+      }
 
       setStates((prev) => ({
         ...prev,
@@ -247,13 +251,14 @@ export function useTunnels(
           request: {
             tunnel_id: target.id,
             tunnel_type: target.type,
+            profile_id: profile.id,
             local_host: target.localHost,
             local_port: target.localPort,
             remote_host: target.remoteHost,
             remote_port: target.remotePort,
-            ssh_hostname: sshHost,
-            ssh_port: sshPort,
-            ssh_username: sshUser,
+            ssh_hostname: profile.hostname,
+            ssh_port: profile.port,
+            ssh_username: profile.username,
           },
         });
 
@@ -269,23 +274,16 @@ export function useTunnels(
         }));
         onActivity?.("tunnel_start", target.name);
         return { success: true };
-      } catch {
-        // Fallback for browser preview mode simulation
-        setStates((prev) => ({
-          ...prev,
-          [id]: {
-            status: "active",
-            bytesUploaded: 1024,
-            bytesDownloaded: 4096,
-            activeConnections: 1,
-            startedAt: Date.now(),
-          },
-        }));
-        onActivity?.("tunnel_start", target.name);
-        return { success: true };
+      } catch (raised) {
+        // A tunnel that failed to start is a failure the user must see —
+        // pretending it is active would leave them debugging a dead port.
+        const error = typeof raised === "string" ? raised : String(raised);
+        markError(id, error);
+        onActivity?.("tunnel_error", `${target.name}: ${error}`);
+        return { success: false, error };
       }
     },
-    [tunnels, profiles, onActivity],
+    [tunnels, profiles, onActivity, markError],
   );
 
   const stopTunnel = useCallback(

@@ -796,9 +796,42 @@ fn ssh_forget_host(host: String, port: u16, trust: State<'_, TrustState>) -> Res
 #[tauri::command]
 async fn tunnel_start(
     request: StartTunnelRequest,
+    trust: State<'_, TrustState>,
     registry: State<'_, Arc<TunnelRegistry>>,
 ) -> Result<TunnelStatusSummary, String> {
-    crate::tunnel::start_tunnel(Arc::clone(registry.inner()), request).await
+    // A tunnel rides its own SSH session, so it needs the same two things a
+    // terminal session needs: a trusted host key and a credential. Both are
+    // resolved here, before any listener exists, so failure leaves nothing
+    // half-started behind.
+    let known: Option<HostKeyRecord> = match trust.inner() {
+        TrustState::Unavailable(reason) => return Err(format!("trust:{reason}")),
+        TrustState::Ready(store) => {
+            let guard = store.lock().map_err(|e| e.to_string())?;
+            crate::ssh::known_record(&guard, &request.ssh_hostname, request.ssh_port)
+        }
+    };
+
+    if known.is_none() {
+        return Err(
+            "trust:this host is not trusted yet — connect over SSH once to confirm its fingerprint"
+                .to_string(),
+        );
+    }
+
+    let profile_id = request.profile_id.clone();
+    let password = Zeroizing::new(
+        credential_call(move || crate::credentials::load(&profile_id, CredentialKind::SshPassword))
+            .await
+            .map_err(|detail| format!("credential:{detail}"))?,
+    );
+
+    crate::tunnel::start_tunnel(
+        Arc::clone(registry.inner()),
+        request,
+        password.as_str(),
+        known,
+    )
+    .await
 }
 
 #[tauri::command]

@@ -53,6 +53,26 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
     stopAll,
   } = useTunnels(profiles, onActivity);
 
+  // Backend failures arrive as "code:detail"; the code picks the translated
+  // explanation and the detail fills in the specifics where useful.
+  const tunnelErrorText = (raw: string): string => {
+    const split = raw.indexOf(":");
+    const code = split > 0 ? raw.slice(0, split) : "";
+    const detail = split > 0 ? raw.slice(split + 1).trim() : raw;
+    switch (code) {
+      case "credential":
+        return t("tunnels.error.credentialMissing");
+      case "trust":
+        return t("tunnels.error.trustRequired");
+      case "auth":
+        return t("tunnels.error.authFailed");
+      case "profile":
+        return t("tunnels.error.profileMissing");
+      default:
+        return t("tunnels.error.startFailed", { detail });
+    }
+  };
+
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | TunnelType>("all");
   const [editingTunnel, setEditingTunnel] = useState<TunnelConfig | null>(null);
@@ -87,22 +107,18 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
   const totalDownloaded = Object.values(states).reduce((acc, s) => acc + s.bytesDownloaded, 0);
 
   const handleCopyCommand = (tunnel: TunnelConfig) => {
-    const profile = profiles.find((p) => p.id === targetProfileId(tunnel.profileId));
-    const user = profile?.username || "root";
-    const host = profile?.hostname || "localhost";
-    const port = profile?.port || 22;
-    const cmd = formatSshTunnelCommand(tunnel, user, host, port);
+    const profile = profiles.find((p) => p.id === tunnel.profileId);
+    // Without a matching profile the command keeps its obvious placeholders
+    // instead of silently borrowing some other connection's gateway.
+    const cmd = profile
+      ? formatSshTunnelCommand(tunnel, profile.username, profile.hostname, profile.port)
+      : formatSshTunnelCommand(tunnel);
 
     void navigator.clipboard.writeText(cmd);
     setCopiedId(tunnel.id);
     setTimeout(() => {
       setCopiedId(null);
     }, 2000);
-  };
-
-  const targetProfileId = (profileId: string) => {
-    const found = profiles.find((p) => p.id === profileId);
-    return found ? found.id : profiles[0]?.id || "";
   };
 
   return (
@@ -338,6 +354,13 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
                     </span>
                   </div>
                 </div>
+
+                {/* Why the last start failed, in the user's language. */}
+                {state.status === "error" && state.lastError && (
+                  <p style={{ margin: "0 0 var(--space-4)", fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                    {tunnelErrorText(state.lastError)}
+                  </p>
+                )}
 
                 {/* Description & Metrics Footnote */}
                 {tunnel.description && (
