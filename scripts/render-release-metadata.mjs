@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 
 const RELEASE_HEADING = /^## \[([^\]]+)\](?:\([^\n]+\))?(?: \([^\n]+\))?\s*$/gm;
 const COMMIT_LINK = / \(\[[0-9a-f]{7,40}\]\(https:\/\/github\.com\/[^)]+\/commit\/[0-9a-f]{7,40}\)\)$/gim;
+const TRAILING_REFERENCE_LINKS = /(?:\s+\(\[[^\]\r\n]+\]\(https:\/\/github\.com\/[^)\r\n]+\)\))+\s*$/;
 
 function normalizeTag(tag) {
   const normalized = tag.trim();
@@ -54,7 +55,11 @@ function deriveSubtitle(body) {
   }
 
   const subject = items[0][1].replace(/[：:]$/, "").trim();
-  const summary = items[0][2].replace(/^[：:][^\S\r\n]*/, "").replace(/[。：:]$/, "").trim();
+  const summary = items[0][2]
+    .replace(/^[：:][^\S\r\n]*/, "")
+    .replace(TRAILING_REFERENCE_LINKS, "")
+    .replace(/[。：:]$/, "")
+    .trim();
   const subtitle = summary ? `${subject}：${summary}` : subject;
   return [...subtitle].slice(0, 56).join("");
 }
