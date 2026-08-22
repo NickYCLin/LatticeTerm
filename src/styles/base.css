@@ -74,6 +74,11 @@ button {
 
 button:disabled {
   cursor: not-allowed;
+  opacity: 0.48;
+}
+
+button:disabled:active {
+  transform: none;
 }
 
 :focus {
