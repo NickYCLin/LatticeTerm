@@ -18,11 +18,11 @@ describe("syncUpdaterReleaseNotes", () => {
 
     expect(
       syncUpdaterReleaseNotes(manifest, {
-        body: "  ## 問題修正\n\n* 修正版本說明  ",
+        body: "  ## 問題修正\n\n- 修正版本說明  ",
       }),
     ).toEqual({
       ...manifest,
-      notes: "## 問題修正\n\n* 修正版本說明",
+      notes: "## 問題修正\n\n- 修正版本說明",
     });
     expect(manifest.notes).toBe("");
   });

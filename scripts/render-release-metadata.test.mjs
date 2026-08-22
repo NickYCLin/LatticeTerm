@@ -24,7 +24,7 @@ describe("buildReleaseMetadata", () => {
 
     expect(buildReleaseMetadata(changelog, "v0.9.2")).toEqual({
       name: "LatticeTerm v0.9.2 - VNC：補發新版 Rust 像素分塊相容修正",
-      body: "## 🛠️ 問題修正與優化\n\n* **VNC**：補發新版 Rust 像素分塊相容修正",
+      body: "## 🛠️ 問題修正與優化\n\n- **VNC**：補發新版 Rust 像素分塊相容修正",
     });
   });
 
@@ -41,7 +41,25 @@ describe("buildReleaseMetadata", () => {
 
     expect(result.name).toBe("LatticeTerm v1.0.0 - 遠端桌面");
     expect(result.body).toContain("## 🚀 新增功能");
+    expect(result.body).toContain("- **遠端桌面**：");
     expect(result.body).toContain("  - 支援使用者自行錄影與截圖。");
+  });
+
+  it("統一混用的頂層項目符號且保留縮排子項目", () => {
+    const changelog = `## [1.1.0] (2026-08-21)
+
+### 🚀 新增功能
+* **SSH:** 新增安全連線。
+- **遠端桌面**：
+  - 保留既有的縮排子項目。
+`;
+
+    const result = buildReleaseMetadata(changelog, "v1.1.0");
+
+    expect(result.body).toBe(
+      "## 🚀 新增功能\n\n- **SSH**：新增安全連線。\n- **遠端桌面**：\n  - 保留既有的縮排子項目。",
+    );
+    expect(result.body).not.toMatch(/^\* /m);
   });
 
   it("版本標題不納入 PR 或 Issue 參照連結", () => {

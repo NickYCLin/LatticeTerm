@@ -36,9 +36,12 @@ export function deduplicateChangelogEntries(changelog) {
         seenEntries.clear();
         return true;
       }
-      if (!/^\* /.test(line)) return true;
+      if (!/^[*-] /.test(line)) return true;
 
-      const normalizedEntry = line.replace(COMMIT_LINK, "").trim();
+      const normalizedEntry = line
+        .replace(/^[*-] /, "")
+        .replace(COMMIT_LINK, "")
+        .trim();
       if (seenEntries.has(normalizedEntry)) return false;
       seenEntries.add(normalizedEntry);
       return true;
@@ -51,8 +54,9 @@ function normalizeReleaseBody(section) {
     .replace(/^### /gm, "## ")
     .replace(/^## 🛠️ 問題修正[^\S\r\n]*$/gm, "## 🛠️ 問題修正與優化")
     .replace(COMMIT_LINK, "")
-    .replace(/^\* \*\*([^*\n]+):\*\* /gm, "* **$1**：")
-    .replace(/^(## .+)\n(?=\*)/gm, "$1\n\n")
+    .replace(/^[*-] \*\*([^*\n]+):\*\* /gm, "- **$1**：")
+    .replace(/^\* /gm, "- ")
+    .replace(/^(## .+)\n(?=- )/gm, "$1\n\n")
     .replace(/\n(## )/g, "\n\n$1")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -64,7 +68,7 @@ function normalizeReleaseBody(section) {
 }
 
 function deriveSubtitle(body) {
-  const items = [...body.matchAll(/^\*[^\S\r\n]+\*\*([^*]+)\*\*(?:[：:][^\S\r\n]*)?(.*)$/gm)];
+  const items = [...body.matchAll(/^-[^\S\r\n]+\*\*([^*]+)\*\*(?:[：:][^\S\r\n]*)?(.*)$/gm)];
   if (!items.length) return "版本更新";
 
   if (items.length > 1) {
