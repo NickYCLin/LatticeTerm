@@ -4,6 +4,13 @@
 
 ---
 
+## [0.13.1](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.0...v0.13.1) (2026-08-22)
+
+
+### 🛠️ 問題修正
+
+* **遠端:** 限制畫面協定資源使用 ([ab2f5e2](https://github.com/NickYCLin/LatticeTerm/commit/ab2f5e205834c50d5ffb9eaab38dbde12232cb76))
+
 ## [0.13.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.12.1...v0.13.0) (2026-08-22)
 
 
