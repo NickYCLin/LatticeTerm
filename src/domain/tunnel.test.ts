@@ -10,6 +10,11 @@ import {
   type TunnelConfig,
   type TunnelDraft,
 } from "./tunnel";
+import {
+  requestTunnelStop,
+  tunnelRequiresStopBeforeDelete,
+  tunnelStateAfterStopFailure,
+} from "../app/useTunnels";
 
 describe("tunnel domain model", () => {
   it("validates ports accurately within 1 - 65535", () => {
@@ -162,5 +167,58 @@ describe("tunnel domain model", () => {
     expect(formatBytes(1536)).toBe("1.5 KB");
     expect(formatBytes(2097152)).toBe("2.0 MB");
     expect(formatBytes(10737418240)).toBe("10.00 GB");
+  });
+});
+
+describe("tunnel runtime lifecycle", () => {
+  it("requires a confirmed stop before deleting active or starting tunnels", () => {
+    expect(tunnelRequiresStopBeforeDelete("active")).toBe(true);
+    expect(tunnelRequiresStopBeforeDelete("starting")).toBe(true);
+    expect(tunnelRequiresStopBeforeDelete("stopped")).toBe(false);
+    expect(tunnelRequiresStopBeforeDelete("error")).toBe(false);
+    expect(tunnelRequiresStopBeforeDelete(undefined)).toBe(false);
+  });
+
+  it("keeps an active tunnel active when stopping fails", () => {
+    expect(
+      tunnelStateAfterStopFailure(
+        {
+          status: "active",
+          bytesUploaded: 12,
+          bytesDownloaded: 34,
+          activeConnections: 2,
+          startedAt: 1000,
+        },
+        "stop:backend unreachable",
+      ),
+    ).toEqual({
+      status: "active",
+      bytesUploaded: 12,
+      bytesDownloaded: 34,
+      activeConnections: 2,
+      startedAt: 1000,
+      lastError: "stop:backend unreachable",
+    });
+  });
+
+  it("preserves a backend stop failure instead of reporting success", async () => {
+    const result = await requestTunnelStop(
+      "tunnel-1",
+      async (command, args) => {
+        expect(command).toBe("tunnel_stop");
+        expect(args).toEqual({ tunnelId: "tunnel-1" });
+        throw new Error("backend unreachable");
+      },
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "stop:backend unreachable",
+    });
+  });
+
+  it("reports success only after the backend accepted the stop", async () => {
+    const result = await requestTunnelStop("tunnel-1", async () => undefined);
+    expect(result).toEqual({ success: true });
   });
 });

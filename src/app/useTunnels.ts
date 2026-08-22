@@ -27,15 +27,62 @@ export interface LiveTunnelState extends TunnelStats {
   status: TunnelStatus;
 }
 
+export interface TunnelActionResult {
+  success: boolean;
+  error?: string;
+}
+
+type TunnelCommandInvoker = (
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<unknown>;
+
+export function tunnelRequiresStopBeforeDelete(
+  status: TunnelStatus | undefined,
+): boolean {
+  return status === "active" || status === "starting";
+}
+
+export function tunnelStopFailure(reason: unknown): TunnelActionResult {
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  return { success: false, error: "stop:" + detail };
+}
+
+export function tunnelStateAfterStopFailure(
+  current: LiveTunnelState | undefined,
+  error: string,
+): LiveTunnelState {
+  return {
+    status: current?.status ?? "error",
+    bytesUploaded: current?.bytesUploaded ?? 0,
+    bytesDownloaded: current?.bytesDownloaded ?? 0,
+    activeConnections: current?.activeConnections ?? 0,
+    startedAt: current?.startedAt,
+    lastError: error,
+  };
+}
+
+export async function requestTunnelStop(
+  id: string,
+  invoke: TunnelCommandInvoker,
+): Promise<TunnelActionResult> {
+  try {
+    await invoke("tunnel_stop", { tunnelId: id });
+    return { success: true };
+  } catch (reason) {
+    return tunnelStopFailure(reason);
+  }
+}
+
 export interface UseTunnelsResult {
   tunnels: TunnelConfig[];
   states: Record<string, LiveTunnelState>;
   addTunnel: (draft: TunnelDraft) => { success: boolean; errors?: TunnelValidationError[]; tunnel?: TunnelConfig };
   updateTunnel: (id: string, draft: TunnelDraft) => { success: boolean; errors?: TunnelValidationError[]; tunnel?: TunnelConfig };
-  deleteTunnel: (id: string) => void;
+  deleteTunnel: (id: string) => Promise<TunnelActionResult>;
   duplicateTunnel: (id: string) => void;
   startTunnel: (id: string) => Promise<{ success: boolean; error?: string }>;
-  stopTunnel: (id: string) => Promise<void>;
+  stopTunnel: (id: string) => Promise<TunnelActionResult>;
   startAll: () => Promise<void>;
   stopAll: () => Promise<void>;
 }
@@ -162,33 +209,6 @@ export function useTunnels(
     [tunnels, onActivity],
   );
 
-  const deleteTunnel = useCallback(
-    (id: string) => {
-      const target = tunnels.find((t) => t.id === id);
-      setTunnels((prev) => prev.filter((t) => t.id !== id));
-      setStates((prev) => {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-
-      // If in Tauri, tell backend to stop
-      void (async () => {
-        try {
-          const { invoke } = await import("@tauri-apps/api/core");
-          await invoke("tunnel_stop", { tunnelId: id });
-        } catch {
-          // Ignore
-        }
-      })();
-
-      if (target) {
-        onActivity?.("tunnel_delete", target.name);
-      }
-    },
-    [tunnels, onActivity],
-  );
-
   const duplicateTunnel = useCallback(
     (id: string) => {
       const target = tunnels.find((t) => t.id === id);
@@ -219,6 +239,13 @@ export function useTunnels(
         activeConnections: 0,
         lastError: error,
       },
+    }));
+  }, []);
+
+  const markStopError = useCallback((id: string, error: string) => {
+    setStates((prev) => ({
+      ...prev,
+      [id]: tunnelStateAfterStopFailure(prev[id], error),
     }));
   }, []);
 
@@ -297,13 +324,27 @@ export function useTunnels(
   }, [profiles.length, startTunnel, tunnels]);
 
   const stopTunnel = useCallback(
-    async (id: string) => {
+    async (id: string): Promise<TunnelActionResult> => {
       const target = tunnels.find((t) => t.id === id);
+      if (!target) {
+        return tunnelStopFailure(new Error("tunnel not found"));
+      }
+
+      let outcome: TunnelActionResult;
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("tunnel_stop", { tunnelId: id });
-      } catch {
-        // Ignore
+        outcome = await requestTunnelStop(id, (command, args) =>
+          invoke(command, args),
+        );
+      } catch (reason) {
+        outcome = tunnelStopFailure(reason);
+      }
+
+      if (!outcome.success) {
+        const error = outcome.error ?? "stop:unknown error";
+        markStopError(id, error);
+        onActivity?.("tunnel_error", target.name + ": " + error);
+        return outcome;
       }
 
       setStates((prev) => ({
@@ -312,14 +353,38 @@ export function useTunnels(
           ...prev[id],
           status: "stopped",
           activeConnections: 0,
+          lastError: undefined,
         },
       }));
 
-      if (target) {
-        onActivity?.("tunnel_stop", target.name);
-      }
+      onActivity?.("tunnel_stop", target.name);
+      return { success: true };
     },
-    [tunnels, onActivity],
+    [markStopError, tunnels, onActivity],
+  );
+
+  const deleteTunnel = useCallback(
+    async (id: string): Promise<TunnelActionResult> => {
+      const target = tunnels.find((t) => t.id === id);
+      if (!target) {
+        return { success: false, error: "delete:tunnel not found" };
+      }
+
+      if (tunnelRequiresStopBeforeDelete(states[id]?.status)) {
+        const stopped = await stopTunnel(id);
+        if (!stopped.success) return stopped;
+      }
+
+      setTunnels((prev) => prev.filter((t) => t.id !== id));
+      setStates((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      onActivity?.("tunnel_delete", target.name);
+      return { success: true };
+    },
+    [onActivity, states, stopTunnel, tunnels],
   );
 
   const startAll = useCallback(async () => {

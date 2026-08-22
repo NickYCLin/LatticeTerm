@@ -69,6 +69,10 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
         return t("tunnels.error.authFailed");
       case "profile":
         return t("tunnels.error.profileMissing");
+      case "stop":
+        return t("tunnels.error.stopFailed", { detail });
+      case "delete":
+        return t("tunnels.error.deleteFailed", { detail });
       default:
         return t("tunnels.error.startFailed", { detail });
     }
@@ -79,6 +83,8 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
   const [editingTunnel, setEditingTunnel] = useState<TunnelConfig | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [deletingTunnel, setDeletingTunnel] = useState(false);
+  const [deleteProblem, setDeleteProblem] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Filtered tunnels
@@ -121,6 +127,35 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
       setCopiedId(null);
     }, 2000);
   };
+
+  async function confirmDelete() {
+    const id = pendingDeleteId;
+    if (!id || deletingTunnel) return;
+
+    setDeletingTunnel(true);
+    setDeleteProblem(null);
+    try {
+      const outcome = await deleteTunnel(id);
+      if (outcome.success) {
+        setPendingDeleteId(null);
+      } else {
+        setDeleteProblem(
+          tunnelErrorText(outcome.error ?? "delete:unknown error"),
+        );
+      }
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      setDeleteProblem(tunnelErrorText("delete:" + detail));
+    } finally {
+      setDeletingTunnel(false);
+    }
+  }
+
+  function cancelDelete() {
+    if (deletingTunnel) return;
+    setPendingDeleteId(null);
+    setDeleteProblem(null);
+  }
 
   return (
     <div className="stack" style={{ gap: "var(--space-6)" }}>
@@ -376,7 +411,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
                 </div>
 
                 {/* Why the last start failed, in the user's language. */}
-                {state.status === "error" && state.lastError && (
+                {state.lastError && (
                   <p style={{ margin: "0 0 var(--space-4)", fontSize: "var(--text-sm)", color: "var(--danger)" }}>
                     {tunnelErrorText(state.lastError)}
                   </p>
@@ -440,7 +475,10 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
                       type="button"
                       className="button button--ghost"
                       style={{ padding: "0.25rem 0.6rem", fontSize: "var(--text-xs)", color: "var(--danger)" }}
-                      onClick={() => setPendingDeleteId(tunnel.id)}
+                      onClick={() => {
+                        setDeleteProblem(null);
+                        setPendingDeleteId(tunnel.id);
+                      }}
                       title={t("tunnels.action.delete")}
                     >
                       <TrashIcon size={14} />
@@ -501,11 +539,24 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
             <p style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)", margin: "0 0 var(--space-6)" }}>
               {t("tunnels.deleteConfirm.body")}
             </p>
+            {deleteProblem && (
+              <p
+                role="alert"
+                style={{
+                  color: "var(--danger)",
+                  fontSize: "var(--text-sm)",
+                  margin: "calc(var(--space-4) * -1) 0 var(--space-6)",
+                }}
+              >
+                {deleteProblem}
+              </p>
+            )}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-3)" }}>
               <button
                 type="button"
                 className="button button--ghost"
-                onClick={() => setPendingDeleteId(null)}
+                onClick={cancelDelete}
+                disabled={deletingTunnel}
               >
                 {t("common.cancel")}
               </button>
@@ -513,12 +564,12 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
                 type="button"
                 className="button button--primary"
                 style={{ background: "var(--danger)" }}
-                onClick={() => {
-                  deleteTunnel(pendingDeleteId);
-                  setPendingDeleteId(null);
-                }}
+                onClick={() => void confirmDelete()}
+                disabled={deletingTunnel}
               >
-                {t("common.delete")}
+                {deletingTunnel
+                  ? t("tunnels.deleteConfirm.deleting")
+                  : t("common.delete")}
               </button>
             </div>
           </div>
