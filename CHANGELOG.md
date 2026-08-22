@@ -4,6 +4,13 @@
 
 ---
 
+## [0.13.3](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.2...v0.13.3) (2026-08-22)
+
+
+### 🛠️ 問題修正
+
+* **SFTP:** 修正傳輸清除狀態同步 ([e4284c9](https://github.com/NickYCLin/LatticeTerm/commit/e4284c9baf6bbdb08f299d05390585f662953fd9))
+
 ## [0.13.2](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.1...v0.13.2) (2026-08-22)
 
 
