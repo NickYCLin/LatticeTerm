@@ -72,7 +72,13 @@ function deriveSubtitle(body) {
   if (!items.length) return "版本更新";
 
   if (items.length > 1) {
-    const subjects = items.slice(0, 3).map((item) => item[1].replace(/[：:]$/, "").trim());
+    const subjects = [
+      ...new Set(
+        items.map((item) => item[1].replace(/[：:]$/, "").trim()),
+      ),
+    ].slice(0, 3);
+    if (subjects.length === 1) return subjects[0];
+
     const last = subjects.pop();
     const conjunction = /^\p{Script=Han}/u.test(last) ? "與" : "與 ";
     return `${subjects.join("、")}${conjunction}${last}`;

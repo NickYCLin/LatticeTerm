@@ -101,6 +101,34 @@ describe("buildReleaseMetadata", () => {
     );
   });
 
+  it("產品化版本標題不重複相同分類", () => {
+    const changelog = `## [2.0.1] (2026-08-22)
+
+### 🛠️ 問題修正
+* **RDP**：修正畫面色彩。
+* **RDP**：區分憑證錯誤。
+* **VNC**：修正畫面邊界。
+* **發布**：統一版本說明。
+`;
+
+    expect(buildReleaseMetadata(changelog, "v2.0.1").name).toBe(
+      "LatticeTerm v2.0.1 - RDP、VNC與發布",
+    );
+  });
+
+  it("多個項目只有同一分類時標題只保留分類名稱", () => {
+    const changelog = `## [2.0.2] (2026-08-22)
+
+### 🛠️ 問題修正
+* **RDP**：修正畫面色彩。
+* **RDP**：區分憑證錯誤。
+`;
+
+    expect(buildReleaseMetadata(changelog, "v2.0.2").name).toBe(
+      "LatticeTerm v2.0.2 - RDP",
+    );
+  });
+
   it("連接英文縮寫前保留可讀空格", () => {
     const changelog = `## [2.1.0] (2026-08-21)
 
