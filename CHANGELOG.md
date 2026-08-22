@@ -4,6 +4,13 @@
 
 ---
 
+## [0.13.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.12.1...v0.13.0) (2026-08-22)
+
+
+### 🚀 新增功能
+
+* **代理:** 支援同程序工作階段重新連接 ([76d0560](https://github.com/NickYCLin/LatticeTerm/commit/76d0560f9603bd2be11f061be6a41a313e1cf545))
+
 ## [0.12.1](https://github.com/NickYCLin/LatticeTerm/compare/v0.12.0...v0.12.1) (2026-08-22)
 
 
