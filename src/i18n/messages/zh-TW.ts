@@ -918,9 +918,9 @@ export const zhTW = {
   "vault.actionFailed.body": "桌面核心拒絕這次操作：{error}",
   "vault.activity.added": "已新增 {target} 的主機信任",
   "vault.activity.removed": "已移除 {target} 的主機信任",
-  "vault.credentials.title": "系統認證儲存已啟用",
+  "vault.credentials.title": "安全認證儲存已啟用",
   "vault.credentials.body":
-    "這裡只列出哪些連線已有安全保存的密碼，不會讀取或顯示密碼內容。SSH 私鑰認證會直接使用你選擇的本機金鑰檔，不保存私鑰或密語；Stronghold 保管庫仍屬後續項目。",
+    "這裡只列出哪些連線已有安全保存的密碼，不會讀取或顯示密碼內容。密碼可存於作業系統認證儲存區或主密碼加密保管庫；SSH 私鑰只使用你選擇的本機檔案，不保存私鑰或密語。",
   "vault.credentials.loading.title": "正在讀取系統認證儲存區",
   "vault.credentials.loading.body": "只檢查哪些連線有對應項目，不會把密碼載入畫面。",
   "vault.credentials.ready.title": "{provider} 已連線",
@@ -928,7 +928,7 @@ export const zhTW = {
     "密碼只會由 Rust 連線核心在需要時取用；前端保管庫不會收到明文內容。",
   "vault.credentials.empty.title": "還沒有保存任何密碼",
   "vault.credentials.empty.body":
-    "開啟 SSH 或 RDP 連線時勾選保存；只有驗證成功後才會寫入系統安全儲存區。",
+    "開啟 SSH、SFTP、RDP 或 VNC 連線時勾選保存；只有驗證成功後才會寫入目前選擇的安全儲存區。",
   "vault.credentials.table.connection": "連線",
   "vault.credentials.table.protocol": "連線方式",
   "vault.credentials.table.target": "目標",
@@ -939,13 +939,13 @@ export const zhTW = {
   "vault.credentials.activity.removed": "已刪除「{name}」的安全認證資料",
   "vault.credentials.systemStore": "作業系統認證儲存區",
   "vault.credentials.systemStoreDetail":
-    "用 Windows Credential Manager、macOS Keychain 或 Linux Secret Service 包裝主密鑰。",
-  "vault.credentials.stronghold": "Stronghold 加密保管庫",
+    "由 Windows Credential Manager、macOS Keychain 或 Linux Secret Service 保存使用者明確選擇的密碼。",
+  "vault.credentials.stronghold": "主密碼加密保管庫",
   "vault.credentials.strongholdDetail":
-    "保存 SSH 私鑰、密碼與 Passphrase，前端只接觸不透明的參照代號。",
+    "以 Argon2id 與 XChaCha20-Poly1305 保護密碼；不匯入 SSH 私鑰或 Passphrase。",
   "vault.credentials.autoLock": "自動鎖定與閒置保護",
   "vault.credentials.autoLockDetail":
-    "離開應用程式或閒置逾時時封存解密狀態，並提供明確的復原流程。",
+    "視窗進入背景或閒置逾時時清除解密狀態，之後必須以主密碼重新解鎖。",
 
   // 主機信任對話框 --------------------------------------------------------
   "security.verify.title": "請確認主機指紋",

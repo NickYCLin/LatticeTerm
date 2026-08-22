@@ -989,9 +989,9 @@ export const en: Messages = {
   "vault.actionFailed.body": "The desktop core refused the operation: {error}",
   "vault.activity.added": "Trusted host added for {target}",
   "vault.activity.removed": "Trusted host removed for {target}",
-  "vault.credentials.title": "System credential storage is active",
+  "vault.credentials.title": "Secure credential storage is active",
   "vault.credentials.body":
-    "This tab lists which connections have a securely stored password without reading or displaying it. SSH key authentication uses the local key file you choose without storing the key or passphrase; a Stronghold vault remains future work.",
+    "This tab lists which connections have a securely stored password without reading or displaying it. Passwords can use the operating-system credential store or the master-password vault; SSH keys stay in the local files you choose, without storing key material or passphrases.",
   "vault.credentials.loading.title": "Reading the system credential store",
   "vault.credentials.loading.body":
     "Only connection-to-entry associations are checked; passwords are never loaded into the view.",
@@ -1000,7 +1000,7 @@ export const en: Messages = {
     "Only the Rust connection core can request a saved password when needed; the WebView never receives its plaintext.",
   "vault.credentials.empty.title": "No passwords have been saved",
   "vault.credentials.empty.body":
-    "Choose save when opening an SSH or RDP connection. The password is written only after authentication succeeds.",
+    "Choose save when opening an SSH, SFTP, RDP, or VNC connection. The password is written to the selected secure backend only after authentication succeeds.",
   "vault.credentials.table.connection": "Connection",
   "vault.credentials.table.protocol": "Protocol",
   "vault.credentials.table.target": "Target",
@@ -1011,13 +1011,13 @@ export const en: Messages = {
   "vault.credentials.activity.removed": "Secure credential removed for {name}",
   "vault.credentials.systemStore": "Operating-system credential store",
   "vault.credentials.systemStoreDetail":
-    "Wrap the master key with Windows Credential Manager, macOS Keychain, or Linux Secret Service.",
-  "vault.credentials.stronghold": "Stronghold encrypted vault",
+    "Save user-approved passwords with Windows Credential Manager, macOS Keychain, or Linux Secret Service.",
+  "vault.credentials.stronghold": "Master-password encrypted vault",
   "vault.credentials.strongholdDetail":
-    "Store SSH private keys, passwords, and passphrases while the UI sees opaque references only.",
+    "Protect passwords with Argon2id and XChaCha20-Poly1305 without importing SSH keys or passphrases.",
   "vault.credentials.autoLock": "Auto-lock and idle protection",
   "vault.credentials.autoLockDetail":
-    "Seal decrypted state when the app loses focus or times out, with an explicit recovery path.",
+    "Clear decrypted state when the window enters the background or times out, then require the master password to unlock again.",
 
   // Host trust dialogs ----------------------------------------------------
   "security.verify.title": "Check the host fingerprint",

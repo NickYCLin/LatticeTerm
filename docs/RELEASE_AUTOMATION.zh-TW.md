@@ -28,7 +28,7 @@ PR 的 CI 會驗證每一筆非合併提交的格式。若需明確指定下一�
 1. 功能 PR 通過 CI 並合併到 `main`。
 2. `Release` workflow 讀取自 `v0.2.0` 或上一個 Release 起的提交。
 3. 若有可發布變更，自動建立或更新一個 draft Release PR，內容包含新版本、`CHANGELOG.md` 與所有版本檔差異；workflow 會自動合併同一版本內由 merge commit 與原提交造成的重複 changelog 項目。
-4. workflow 另外以 `workflow_dispatch` 對 Release PR 分支觸發四平台 CI，避免 `GITHUB_TOKEN` 建立的 PR 無法自動連鎖觸發檢查。
+4. workflow 另外以 `workflow_dispatch` 對 Release PR 分支觸發 Windows、Linux x64／arm64、macOS 與 Android 五個 CI 工作，避免 `GITHUB_TOKEN` 建立的 PR 無法自動連鎖觸發檢查。
 5. 檢視版本與 changelog，將 Release PR 標示為 ready 並合併。
 6. 下一次 `Release` workflow 建立 `vX.Y.Z` tag 與 GitHub Release。
 7. Linux amd64、Linux arm64、Windows amd64、macOS arm64 原生 runner 建置安裝檔，上傳更新簽章與 `latest.json`。

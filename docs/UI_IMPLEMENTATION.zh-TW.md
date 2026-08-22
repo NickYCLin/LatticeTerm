@@ -1,6 +1,6 @@
 # LatticeTerm 介面實作說明
 
-文件版本：1.1
+文件版本：1.2
 更新日期：2026-08-22<br>
 對應文件：[UI/UX 設計規格書](UI_UX_DESIGN_BRIEF.zh-TW.md)  
 
@@ -45,7 +45,7 @@
 - **Workspace Hook (`src/app/useWorkspace.ts`)**：
   - 整合 Profiles 集合、即時搜尋過濾、群組與標籤收集、CRUD 操作與批次匯入。
 - **Preferences Hook (`src/app/preferences.ts`)**：
-  - 管理主題（深色/淺色/跟隨系統）、密度（舒適/緊湊）與動態偏好，並同步至 DOM 與 localStorage。
+  - 管理六種內建主題與跟隨系統模式、密度（舒適/緊湊）及動態偏好，並同步至 DOM 與 localStorage。
 - **加密備份橋接 (`src/app/encryptedBackup.ts`)**：
   - 只收集版本化 allowlist localStorage 鍵；Rust 完成驗證加密後才把密文交給瀏覽器下載，還原時精確移除備份中不存在的 allowlist 設定，避免混合兩台裝置的狀態。
 - **Agent Sessions Hook (`src/app/useAgentSessions.ts`)**：

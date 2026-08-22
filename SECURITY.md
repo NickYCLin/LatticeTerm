@@ -15,11 +15,11 @@ Use the repository's private [GitHub Security Advisory form](https://github.com/
 - potential impact;
 - a suggested fix, if available.
 
-You should receive an acknowledgement through GitHub after the report is reviewed. No response-time guarantee is offered during the pre-release stage.
+You should receive an acknowledgement through GitHub after the report is reviewed. No response-time guarantee is offered during the pre-1.0 stage.
 
 ## Supported versions
 
-LatticeTerm has not published a stable release. Security fixes currently target the latest commit on `main`.
+LatticeTerm is currently pre-1.0. The latest GitHub Release and the latest commit on `main` receive security fixes; fixes land on `main` first and are included in the next applicable release. Older pre-1.0 releases are not maintained as separate support lines.
 
 ## Current security boundaries
 
@@ -34,7 +34,7 @@ LatticeTerm has not published a stable release. Security fixes currently target 
 - Agent Fleet launches local AI CLIs in native PTYs with the current operating-system user permissions. Executables and arguments remain separate and are never interpolated into a shell command. LatticeTerm does not read or store model API keys, terminal transcripts, or prompt history; every registered CLI is terminated when the user stops it or the app exits.
 - Custom Agent Fleet inputs reject control characters and enforce limits on labels, paths, arguments, terminal dimensions, and IPC input size. Working directories are canonicalized before launch. On Windows, only directly executable `.exe` and `.com` files are accepted until a safe command-shim adapter is implemented.
 - Agent semantic reports are accepted only by an ephemeral loopback listener. Each PTY child receives a separate 256-bit random token; reports are capped at 4 KiB, time out, and can select only one of four lifecycle states. The reporter cannot send terminal input, launch processes, read files, or retrieve prompts. Processes running as the same operating-system user remain inside this local trust boundary because they may be able to inspect another process environment.
-- Password persistence uses Windows Credential Manager, macOS Keychain, or Linux Secret Service through keyring-rs; the optional master-password vault uses Argon2id and XChaCha20-Poly1305. SSH private keys are read only from a user-selected local path and are not copied into profile storage. SSH tunnels and VNC are implemented; VNC is explicitly identified as unencrypted and should be carried through an SSH tunnel on untrusted networks. Stronghold-backed storage and private-key import remain unimplemented.
+- Password persistence uses Windows Credential Manager, macOS Keychain, or Linux Secret Service through keyring-rs; the optional master-password vault uses Argon2id and XChaCha20-Poly1305. SSH private keys are read only from a user-selected local path and are not copied into profile storage. SSH tunnels and VNC are implemented; VNC is explicitly identified as unencrypted and should be carried through an SSH tunnel on untrusted networks. Stronghold is not planned because the upstream project is archived; importing private-key material into either credential backend remains unimplemented.
 - Tauri IPC exposes scoped profile-storage, Agent Fleet PTY, SSH/SFTP-session, Lattice Remote, Web RDP input/session, trusted-host, credential-status/existence/deletion, runtime-summary, and updater operations. Agent Fleet input events are capped at 64 KiB and target only an existing in-memory session. SFTP file bytes cross IPC only after an explicit upload or download. There is deliberately no IPC command that returns a saved password to the WebView, and no arbitrary local filesystem access.
 - Logs and screenshots must not contain secrets or private infrastructure details.
 

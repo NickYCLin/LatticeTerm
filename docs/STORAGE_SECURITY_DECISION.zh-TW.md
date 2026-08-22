@@ -1,6 +1,6 @@
 # LatticeTerm 本機儲存與安全架構決策
 
-文件版本：1.3
+文件版本：1.4
 更新日期：2026-08-22
 狀態：Accepted / Phase 3 Core Implemented
 
@@ -10,7 +10,7 @@
 
 LatticeTerm 採取明確的資料分類與分層儲存策略：
 
-- **非機密中繼資料層**：連線設定、顯示名稱、協定、連接埠、群組、標籤與 UI 偏好。未來採用 **redb / SQLCipher** 純 Rust 嵌入式資料庫保存。
+- **非機密中繼資料層**：連線設定、顯示名稱、協定、連接埠、群組、標籤與 UI 偏好。目前透過版本化 `Storage` trait 與逐檔原子替換的 JSON 保存；若未來資料量或查詢需求增加，可在不改領域模型的前提下評估純 Rust 嵌入式資料庫。
 - **安全金鑰與憑證保管庫 (Key Vault)**：以 `known_hosts.json` 管理主機信任，並提供兩種認證後端：作業系統認證儲存區，以及以 Argon2id 衍生金鑰、XChaCha20-Poly1305 密封整包內容的主密碼加密保管庫。
 - **系統憑證保護層 (OS Credential Store)**：已使用 Windows Credential Manager、macOS Keychain 與 Linux Secret Service 保存使用者明確選擇的密碼；這是桌面預設後端，加密保管庫則供沒有可用系統鑰匙圈或需要可攜式本機保護的情境。
 - **SSH 私鑰認證**：只在使用者連線時從明確選擇的本機路徑讀取並簽章，不把私鑰內容或 Passphrase 複製到 Profile、前端持久層或目前的認證儲存區。
@@ -23,7 +23,7 @@ LatticeTerm 採取明確的資料分類與分層儲存策略：
 ```mermaid
 flowchart LR
     UI[React UI] -->|Profile request / short session ID| CORE[Rust Application Core]
-    CORE --> META[Metadata Store (redb / Storage Trait)]
+    CORE --> META[Versioned JSON / Storage Trait]
     CORE --> VAULT[Argon2id + XChaCha20-Poly1305 Vault]
     CORE --> KEYRING[OS Credential Store]
     CORE --> LOCALKEY[User-selected local SSH key]
@@ -39,7 +39,7 @@ flowchart LR
 
 | 資料等級 | 資料範例 | 安全與儲存要求 |
 |---|---|---|
-| **一般中繼資料** | 顯示名稱、協定、連接埠、群組、標籤、環境標記、外觀設定 | 儲存於中繼資料庫，支援交易、版本與安全匯出 |
+| **一般中繼資料** | 顯示名稱、協定、連接埠、群組、標籤、環境標記、外觀設定 | 儲存於版本化中繼資料層；目前使用原子 JSON，支援驗證、遷移與安全匯出 |
 | **敏感資產資訊** | 主機名稱、IP 位址、使用者名稱、連線活動紀錄 | 不可進入遠端診斷日誌，支援非機密 JSON 匯出 |
 | **使用者產生的媒體** | 遠端 Canvas 的 PNG 截圖、WebM／MP4 錄影 | 僅在使用者主動擷取時產生；下載前暫存於 WebView 記憶體，不進應用程式資料目錄或設定匯出 |
 | **機密與信任根** | 密碼、Token、私鑰 bytes、Passphrase、一次性配對碼、主機金鑰指紋 | 必須靜態加密與完整性保護，禁止寫入前端持久層；複製的一次性配對碼套用可調整的內容比對清除策略 |

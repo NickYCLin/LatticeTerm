@@ -74,6 +74,10 @@ Run these checks before opening a pull request:
 ```sh
 npm ci
 npm run check
+npm run build:sidecars
+cargo test --manifest-path crates/lattice-remote/Cargo.toml --features agent
+cargo test --manifest-path crates/lattice-rdp/Cargo.toml
+cargo test --manifest-path crates/lattice-vnc/Cargo.toml
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
