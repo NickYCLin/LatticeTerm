@@ -19,8 +19,8 @@ pub mod vnc;
 
 use crate::agent::{
     AgentBroadcastOutcome, AgentDefinition, AgentLaunchPlan, AgentLaunchPlanDraft,
-    AgentLaunchRequest, AgentRegistry, AgentRestoreOutcome, AgentSessionSummary,
-    MAX_SAVED_AGENT_PLANS,
+    AgentLaunchRequest, AgentOutputSnapshot, AgentRegistry, AgentRestoreOutcome,
+    AgentSessionSummary, MAX_SAVED_AGENT_PLANS,
 };
 use crate::agent_plans::{AgentPlanSnapshot, FileAgentPlanStore};
 use crate::backup::{DecryptedBackup, ValidatedAppData};
@@ -379,6 +379,11 @@ fn agent_disconnect(
 #[tauri::command]
 fn agent_sessions(registry: State<'_, Arc<AgentRegistry>>) -> Vec<AgentSessionSummary> {
     registry.list()
+}
+
+#[tauri::command]
+fn agent_output_snapshots(registry: State<'_, Arc<AgentRegistry>>) -> Vec<AgentOutputSnapshot> {
+    registry.output_snapshots()
 }
 
 #[tauri::command]
@@ -1432,6 +1437,7 @@ pub fn run() {
             agent_resize,
             agent_disconnect,
             agent_sessions,
+            agent_output_snapshots,
             agent_plan_snapshot,
             agent_plan_save,
             agent_plan_delete,

@@ -7,7 +7,7 @@
 use base64::Engine;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
@@ -27,7 +27,9 @@ const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 const MAX_RESUME_SESSION_ID_BYTES: usize = 512;
 const MAX_BROADCAST_TARGETS: usize = 32;
+pub const MAX_AGENT_SESSIONS: usize = 32;
 pub const MAX_SAVED_AGENT_PLANS: usize = 32;
+const MAX_OUTPUT_SNAPSHOT_BYTES: usize = 256 * 1024;
 const MAX_REPORT_BYTES: u64 = 4096;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REPORT_RETRIES: usize = 5;
@@ -184,6 +186,15 @@ pub struct AgentBroadcastOutcome {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentOutputSnapshot {
+    pub session_id: String,
+    pub start_offset: u64,
+    pub end_offset: u64,
+    pub base64: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentLaunchRequest {
@@ -242,6 +253,7 @@ pub struct AgentRestoreOutcome {
 #[serde(rename_all = "camelCase")]
 struct AgentData {
     session_id: String,
+    offset: u64,
     base64: String,
 }
 
@@ -261,7 +273,7 @@ struct AgentStateChanged {
 }
 
 pub trait AgentSink: Send + Sync + 'static {
-    fn data(&self, session_id: &str, bytes: &[u8]);
+    fn data(&self, session_id: &str, offset: u64, bytes: &[u8]);
     fn state(&self, session_id: &str, state: AgentLifecycle, source: AgentStateSource);
     fn closed(&self, session_id: &str, reason: &str);
     fn captured(&self, session_id: &str, native_session_id: &str);
@@ -277,11 +289,12 @@ struct AgentSessionIdCaptured {
 pub struct EventSink(pub AppHandle);
 
 impl AgentSink for EventSink {
-    fn data(&self, session_id: &str, bytes: &[u8]) {
+    fn data(&self, session_id: &str, offset: u64, bytes: &[u8]) {
         let _ = self.0.emit(
             EVENT_DATA,
             AgentData {
                 session_id: session_id.to_string(),
+                offset,
                 base64: encode(bytes),
             },
         );
@@ -326,6 +339,38 @@ struct AgentSessionEntry {
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     capture: Mutex<CaptureState>,
+    output: Mutex<OutputBuffer>,
+}
+
+#[derive(Default)]
+struct OutputBuffer {
+    bytes: VecDeque<u8>,
+    start_offset: u64,
+    end_offset: u64,
+}
+
+impl OutputBuffer {
+    fn append(&mut self, bytes: &[u8]) -> u64 {
+        let offset = self.end_offset;
+        self.end_offset = self.end_offset.saturating_add(bytes.len() as u64);
+        self.bytes.extend(bytes);
+        if self.bytes.len() > MAX_OUTPUT_SNAPSHOT_BYTES {
+            let overflow = self.bytes.len() - MAX_OUTPUT_SNAPSHOT_BYTES;
+            self.bytes.drain(..overflow);
+            self.start_offset = self.start_offset.saturating_add(overflow as u64);
+        }
+        offset
+    }
+
+    fn snapshot(&self, session_id: &str) -> AgentOutputSnapshot {
+        let bytes = self.bytes.iter().copied().collect::<Vec<_>>();
+        AgentOutputSnapshot {
+            session_id: session_id.to_string(),
+            start_offset: self.start_offset,
+            end_offset: self.end_offset,
+            base64: encode(&bytes),
+        }
+    }
 }
 
 /// Rolling window over a session's output while its native session id has
@@ -378,6 +423,10 @@ struct ReporterMessage {
     state: AgentLifecycle,
 }
 
+fn agent_session_limit_reached(session_count: usize) -> bool {
+    session_count >= MAX_AGENT_SESSIONS
+}
+
 #[derive(Default)]
 pub struct AgentRegistry {
     sessions: Mutex<HashMap<String, Arc<AgentSessionEntry>>>,
@@ -427,10 +476,13 @@ impl AgentRegistry {
         summary: &AgentSessionSummary,
         entry: Arc<AgentSessionEntry>,
     ) -> Result<(), String> {
-        self.sessions
-            .lock()
-            .map_err(|error| error.to_string())?
-            .insert(summary.session_id.clone(), entry);
+        let mut sessions = self.sessions.lock().map_err(|error| error.to_string())?;
+        if agent_session_limit_reached(sessions.len()) {
+            return Err(format!(
+                "At most {MAX_AGENT_SESSIONS} agent sessions may run at once."
+            ));
+        }
+        sessions.insert(summary.session_id.clone(), entry);
         Ok(())
     }
 
@@ -487,6 +539,16 @@ impl AgentRegistry {
         Some(found)
     }
 
+    fn record_output(&self, session_id: &str, bytes: &[u8]) -> Result<u64, String> {
+        let entry = self.get(session_id)?;
+        let offset = entry
+            .output
+            .lock()
+            .map_err(|error| error.to_string())?
+            .append(bytes);
+        Ok(offset)
+    }
+
     fn update_reported_state(
         &self,
         session_id: &str,
@@ -517,6 +579,24 @@ impl AgentRegistry {
             .collect();
         summaries.sort_by(|left, right| left.session_id.cmp(&right.session_id));
         summaries
+    }
+
+    pub fn output_snapshots(&self) -> Vec<AgentOutputSnapshot> {
+        let Ok(sessions) = self.sessions.lock() else {
+            return Vec::new();
+        };
+        let mut snapshots = sessions
+            .iter()
+            .filter_map(|(session_id, entry)| {
+                entry
+                    .output
+                    .lock()
+                    .ok()
+                    .map(|output| output.snapshot(session_id))
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        snapshots
     }
 
     /// Stop every child before the desktop process exits or restarts.
@@ -1229,8 +1309,14 @@ pub fn launch(
             enabled: capture_enabled,
             buffer: String::new(),
         }),
+        output: Mutex::new(OutputBuffer::default()),
     });
-    registry.insert(&summary, entry)?;
+    if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
+        if let Ok(mut killer) = entry.killer.lock() {
+            let _ = killer.kill();
+        }
+        return Err(error);
+    }
 
     let reader_id = session_id.clone();
     let reader_sink = Arc::clone(&sink);
@@ -1242,7 +1328,10 @@ pub fn launch(
                 Ok(0) => break,
                 Ok(count) => {
                     let bytes = &buffer[..count];
-                    reader_sink.data(&reader_id, bytes);
+                    let Ok(offset) = reader_registry.record_output(&reader_id, bytes) else {
+                        break;
+                    };
+                    reader_sink.data(&reader_id, offset, bytes);
                     let state = lifecycle_from_output(bytes);
                     if reader_registry.update_state(&reader_id, state, AgentStateSource::Heuristic)
                     {
@@ -1409,7 +1498,7 @@ mod tests {
     }
 
     impl AgentSink for TestSink {
-        fn data(&self, session_id: &str, bytes: &[u8]) {
+        fn data(&self, session_id: &str, _offset: u64, bytes: &[u8]) {
             self.data.lock().unwrap().extend_from_slice(bytes);
             self.session_data
                 .lock()
@@ -1603,6 +1692,41 @@ session id: 0199aa11-"
     }
 
     #[test]
+    fn active_agent_limit_keeps_output_memory_bounded() {
+        assert!(!agent_session_limit_reached(MAX_AGENT_SESSIONS - 1));
+        assert!(agent_session_limit_reached(MAX_AGENT_SESSIONS));
+        assert_eq!(
+            MAX_AGENT_SESSIONS * MAX_OUTPUT_SNAPSHOT_BYTES,
+            8 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn output_buffer_retains_a_bounded_tail_with_monotonic_offsets() {
+        let mut output = OutputBuffer::default();
+        let prefix = vec![b'a'; MAX_OUTPUT_SNAPSHOT_BYTES - 2];
+        assert_eq!(output.append(&prefix), 0);
+        assert_eq!(
+            output.append(b"bcde"),
+            (MAX_OUTPUT_SNAPSHOT_BYTES - 2) as u64
+        );
+
+        let snapshot = output.snapshot("agent-session-test");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&snapshot.base64)
+            .unwrap();
+        assert_eq!(snapshot.session_id, "agent-session-test");
+        assert_eq!(snapshot.start_offset, 2);
+        assert_eq!(snapshot.end_offset, (MAX_OUTPUT_SNAPSHOT_BYTES + 2) as u64);
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(wire["sessionId"], "agent-session-test");
+        assert_eq!(wire["startOffset"], 2);
+        assert_eq!(wire["endOffset"], (MAX_OUTPUT_SNAPSHOT_BYTES + 2) as u64);
+        assert_eq!(decoded.len(), MAX_OUTPUT_SNAPSHOT_BYTES);
+        assert_eq!(&decoded[decoded.len() - 4..], b"bcde");
+    }
+
+    #[test]
     fn input_decoder_rejects_oversized_events() {
         let encoded = encode(&vec![0_u8; MAX_INPUT_BYTES + 1]);
         assert!(decode(&encoded).unwrap_err().contains("at most"));
@@ -1788,6 +1912,19 @@ session id: 0199aa11-"
         }
         assert!(
             String::from_utf8_lossy(&collector.data.lock().unwrap()).contains("lattice-agent-test")
+        );
+        let snapshots = registry.output_snapshots();
+        let snapshot = snapshots
+            .iter()
+            .find(|entry| entry.session_id == session.session_id)
+            .expect("active session output snapshot");
+        let replay = base64::engine::general_purpose::STANDARD
+            .decode(&snapshot.base64)
+            .unwrap();
+        assert!(String::from_utf8_lossy(&replay).contains("lattice-agent-test"));
+        assert_eq!(
+            snapshot.end_offset - snapshot.start_offset,
+            replay.len() as u64
         );
         disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
     }

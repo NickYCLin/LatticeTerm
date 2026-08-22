@@ -18,7 +18,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 - **六種主題**：深色、淺色、午夜藍、石墨黑、暖砂與高對比，另可跟隨系統；切換時原生標題列會一起換色。
 - **主機資源檢視**：活躍 SSH 工作階段可定期讀取 Linux 主機的 CPU、記憶體、磁碟與開機時間；未連線或不支援的平台會明確說明，不顯示假數值。
 - **本機持久化**：連線設定會存在本機的應用程式資料目錄，關閉再開仍在；檔案只含主機資訊，不含任何認證資料。
-- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、OpenCode、Hermes 等本機 LLM CLI，也可安全指定自訂可執行檔與參數；通用 Reporter 讓工具 hook 明確回報狀態，並可在二次確認後將同一段提示送給多個已選 Agent。內建 Adapter 可用各 CLI 的原生格式續接 Codex、Claude Code、Gemini CLI 與 Hermes Session；是否把識別值存入可命名、排序的啟動工作區，完全由使用者分開決定。登入資料仍由各 CLI 自行管理。
+- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、OpenCode、Hermes 等本機 LLM CLI，也可安全指定自訂可執行檔與參數；通用 Reporter 讓工具 hook 明確回報狀態，並可在二次確認後將同一段提示送給多個已選 Agent。內建 Adapter 可用各 CLI 的原生格式續接 Codex、Claude Code、Gemini CLI 與 Hermes Session；是否把識別值存入可命名、排序的啟動工作區，完全由使用者分開決定。同一桌面程序內若 WebView 重新載入，活躍 PTY 會重新 attach 並重播最近 256 KiB 記憶體輸出。登入資料仍由各 CLI 自行管理。
 - **SSH 連線**：以純 Rust 的 russh 實作，可使用密碼或本機 OpenSSH 私鑰建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼預設只用於當次連線，使用者可在驗證成功後明確保存到系統認證儲存區，私鑰內容與密語不會保存至連線設定。
 - **SSH Tunnel**：可建立本機、遠端與 SOCKS5 動態轉送，顯示即時狀態與連線數；動態代理若未設定驗證只允許綁定 loopback，遠端轉送則依 SSH 伺服器的 GatewayPorts 政策生效。
 - **SFTP 檔案工作區**：沿用 SSH 主機指紋驗證與獨立的認證項目，可瀏覽遠端路徑、上下載、新增資料夾、重新命名及確認刪除；大型檔案經有界分塊與原生串流佇列傳輸，不把整個檔案塞進 WebView／IPC 記憶體。上傳先寫入同目錄的私有暫存檔，只有位元組數完整且關檔成功才替換目標，取消、失敗或中斷連線不會把既有檔案變成半成品。
@@ -46,7 +46,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 介面必須讓使用者一眼分辨「已經可用」與「還在開發」：
 
 - 尚未實作的功能標示為「即將推出」，不使用看起來可按、實際上停用的假按鈕。
-- AI Agent Fleet、SSH、SFTP、Lattice Remote、Web RDP 與 VNC 會啟動真正的工作階段；Agent Fleet 可保存安全啟動工作區，但不會假裝舊程序或終端內容可跨重啟存活。背景 Agent daemon 與原工作階段重新 attach 仍明確標示開發狀態。
+- AI Agent Fleet、SSH、SFTP、Lattice Remote、Web RDP 與 VNC 會啟動真正的工作階段；Agent Fleet 可在同一桌面程序內重新 attach 活躍 PTY，但不會假裝舊程序或終端內容可跨應用程式重啟存活。跨程序背景 daemon 與重新 attach 仍明確標示開發狀態。
 - 主機資源分頁在監控資料尚未接入前直接說明原因，不顯示假的 CPU 或記憶體數字。
 - SSH/SFTP/RDP/VNC 密碼永遠不寫入連線設定檔；預設只供當次驗證，勾選後也只有驗證成功才會寫入使用者選擇的作業系統認證儲存區或已解鎖加密保管庫。
 - Key Vault 的主機信任、認證與加密保管庫分頁都顯示真正的本機狀態；認證分頁只列連線參照，不顯示密碼內容。
@@ -61,7 +61,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 3. Lattice Remote 唯讀加密主螢幕與內嵌主機分享（已可用，後續增加 Relay/NAT 穿透、無人值守與顯式授權的輸入控制）
 4. 內嵌 Web RDP Canvas（已可用，持續強化封裝與憑證管理）
 5. SFTP 檔案瀏覽與安全傳輸、SSH Tunnel 本機／遠端轉送與 SOCKS5 代理設定、大型檔案串流佇列、VNC 畫面操作（皆可用）
-6. AI Agent Fleet 本機多 CLI PTY、安全語意 Reporter、批次提示、四種 CLI 原生 Session 續接、自動 Session ID 擷取與可命名排序的跨重啟安全啟動工作區（已可用）；工具 hook 安裝、自動化 token／cost 觀測、背景 daemon、原程序重新 attach、依賴／佇列編排與遠端 attach 仍待完成
+6. AI Agent Fleet 本機多 CLI PTY、安全語意 Reporter、批次提示、四種 CLI 原生 Session 續接、自動 Session ID 擷取、同程序 PTY 重新 attach 與可命名排序的跨重啟安全啟動工作區（已可用）；工具 hook 安裝、自動化 token／cost 觀測、跨程序背景 daemon、依賴／佇列編排與遠端 attach 仍待完成
 7. 跨平台安裝檔打包、自動版號 Release PR、簽章更新包與自動更新機制（已可用；作業系統發行者簽章仍待憑證）
 8. Android 版本（已可建置執行：SSH／SFTP／通道／保管庫等核心可用，底部分頁列與終端機觸控鍵列；RDP／VNC／CLI Fleet 等需本機程序的功能為桌面限定）；iOS 需 macOS 建置環境，尚未開始
 
@@ -114,11 +114,11 @@ Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示
 
 「原生 Session 續接」目前支援 Codex、Claude Code、Gemini CLI 與 Hermes Agent。選擇 CLI、貼上該工具提供的 Session ID 或標題後，可直接續接而不保存；只有另外按下「保存續接項目」，識別值才會寫入 `agent-workspaces.json`。參數由版本化內建 Adapter 直接建立，不經 shell，也不能與額外啟動參數混用。這是 CLI 自身的歷史還原，不代表舊 PTY、程序或終端畫面仍存活。
 
-「保存啟動項目」會記錄 CLI 類型、標籤、可執行檔、明確參數與工作目錄，最多 32 個；工作區名稱與項目順序也會保存。原生 Session ID 或標題只會隨使用者明確保存的續接項目寫入。密碼、Token、API Key、Passphrase、Secret 參數、提示、輸出與 Reporter 權杖都不會保存。下次開啟應用程式時，使用者可逐項或依保存順序整批確認並建立新的 CLI 程序；已保存原生識別值的項目會請 CLI 續接既有脈絡，但舊程序與終端畫面不會被假裝還原。工作階段本身仍只存於記憶體，停止或關閉應用程式會終止 CLI。
+「保存啟動項目」會記錄 CLI 類型、標籤、可執行檔、明確參數與工作目錄，最多 32 個；工作區名稱與項目順序也會保存。原生 Session ID 或標題只會隨使用者明確保存的續接項目寫入。密碼、Token、API Key、Passphrase、Secret 參數、提示、輸出與 Reporter 權杖都不會寫入工作區或磁碟。下次開啟應用程式時，使用者可逐項或依保存順序整批確認並建立新的 CLI 程序；已保存原生識別值的項目會請 CLI 續接既有脈絡，但舊程序與終端畫面不會被假裝還原。工作階段本身仍只存於記憶體；Rust 核心會為每個活躍 PTY 保留最近 256 KiB 輸出，讓同一桌面程序內的 WebView 重新載入後安全重新 attach，不會寫入磁碟。停止工作階段或關閉應用程式仍會終止 CLI。
 
 每個 CLI 都會收到本機 Reporter 環境變數。工具 hook 可執行 `"$LATTICETERM_AGENT_REPORTER" agent-report done`，並以 `working`、`needs-attention`、`idle` 或 `done` 回報狀態；Windows PowerShell 使用 `& $env:LATTICETERM_AGENT_REPORTER agent-report done`。Reporter 只接受該工作階段的隨機權杖，且只能更新狀態。完整協定與安全邊界請見架構文件。
 
-Herdr 類型的背景服務、完整工具語意 Adapter、原程序重新 attach 與自建遠端 attach 規劃，請見 [AI Agent Fleet 架構與整合藍圖](docs/AGENT_FLEET_ARCHITECTURE.zh-TW.md)。
+Herdr 類型的背景服務、完整工具語意 Adapter、跨程序原 PTY 重新 attach 與自建遠端 attach 規劃，請見 [AI Agent Fleet 架構與整合藍圖](docs/AGENT_FLEET_ARCHITECTURE.zh-TW.md)。
 
 ### 專案驗證
 

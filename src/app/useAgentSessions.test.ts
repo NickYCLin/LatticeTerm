@@ -5,6 +5,7 @@ import {
   decodeAgentPayload,
   encodeAgentPayload,
   moveAgentLaunchPlan,
+  reconcileAgentOutputSnapshot,
   splitAgentArguments,
 } from "./useAgentSessions";
 
@@ -12,6 +13,56 @@ describe("agent session transport", () => {
   it("round-trips arbitrary PTY bytes", () => {
     const bytes = new Uint8Array([0, 10, 27, 128, 200, 255]);
     expect(decodeAgentPayload(encodeAgentPayload(bytes))).toEqual(bytes);
+  });
+
+  it("replays a snapshot once and trims overlapping live events by offset", () => {
+    const bytes = (value: string) =>
+      encodeAgentPayload(new TextEncoder().encode(value));
+    const chunks = reconcileAgentOutputSnapshot(
+      {
+        sessionId: "agent-session-1",
+        startOffset: 0,
+        endOffset: 4,
+        base64: bytes("abcd"),
+      },
+      [
+        {
+          sessionId: "agent-session-1",
+          offset: 2,
+          base64: bytes("cdef"),
+        },
+        {
+          sessionId: "agent-session-1",
+          offset: 6,
+          base64: bytes("gh"),
+        },
+      ],
+    );
+
+    expect(chunks.map((chunk) => chunk.offset)).toEqual([0, 4, 6]);
+    const replay = new Uint8Array(
+      chunks.reduce((total, chunk) => total + chunk.bytes.length, 0),
+    );
+    let offset = 0;
+    for (const chunk of chunks) {
+      replay.set(chunk.bytes, offset);
+      offset += chunk.bytes.length;
+    }
+    expect(new TextDecoder().decode(replay)).toBe("abcdefgh");
+  });
+
+  it("rejects inconsistent output snapshot offsets", () => {
+    expect(() =>
+      reconcileAgentOutputSnapshot(
+        {
+          sessionId: "agent-session-1",
+          startOffset: 10,
+          endOffset: 20,
+          base64: encodeAgentPayload(new TextEncoder().encode("short")),
+        },
+        [],
+      ),
+    ).toThrow("offsets are inconsistent");
   });
 
   it("treats each non-empty line as one direct argument", () => {

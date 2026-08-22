@@ -22,7 +22,7 @@
 | **新增/編輯抽屜** | `ConnectionDrawer` | `src/components/overlays/ConnectionDrawer.tsx` | 抽屜式連線表單，支援即時驗證、Tab 焦點循環鎖定與重複目標提醒。 |
 | **命令面板** | `CommandPalette` | `src/components/overlays/CommandPalette.tsx` | `Ctrl` + `K` 全域命令面板，支援搜尋連線與執行全域快捷動作。 |
 | **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、SFTP 檔案、Lattice Remote、Web RDP 與 VNC Canvas 分頁。 |
-| **AI Agent Fleet** | `AgentsView` | `src/views/AgentsView.tsx` | 本機多 CLI 啟動、Reporter 狀態、批次提示，以及可命名排序的安全啟動工作區。 |
+| **AI Agent Fleet** | `AgentsView` | `src/views/AgentsView.tsx` | 本機多 CLI 啟動、Reporter 狀態、批次提示、可命名排序的安全啟動工作區，以及同程序 WebView 重載後的 PTY 重新 attach。 |
 | **SFTP 檔案工作區** | `SftpPane` | `src/components/sftp/SftpPane.tsx` | 遠端路徑瀏覽、上下載、建立資料夾、改名與確認刪除。 |
 | **Web RDP Canvas** | `RdpPane` | `src/components/rdp/RdpPane.tsx` | Canvas 畫面、座標縮放、滑鼠、滾輪、掃描碼鍵盤與失焦釋放。 |
 | **金鑰保管庫** | `VaultView` | `src/views/VaultView.tsx` | 管理 Rust 核心的主機信任、認證參照與 Argon2id／XChaCha20-Poly1305 加密保管庫；可建立、解鎖、鎖定、改主密碼及切換認證後端，但不把密碼內容交給前端。 |

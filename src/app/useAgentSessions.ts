@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { reconcileSessionSnapshot } from "./sessionSnapshot";
 
 export type AgentLifecycle = "working" | "needsAttention" | "idle" | "done";
 export type AgentStateSource = "heuristic" | "integration";
@@ -59,6 +60,24 @@ export interface AgentStateEvent {
   sessionId: string;
   state: AgentLifecycle;
   source: AgentStateSource;
+}
+
+export interface AgentOutputEvent {
+  sessionId: string;
+  offset: number;
+  base64: string;
+}
+
+export interface AgentOutputSnapshot {
+  sessionId: string;
+  startOffset: number;
+  endOffset: number;
+  base64: string;
+}
+
+export interface AgentOutputChunk {
+  offset: number;
+  bytes: Uint8Array;
 }
 
 export interface AgentBroadcastOutcome {
@@ -141,6 +160,36 @@ export function decodeAgentPayload(value: string): Uint8Array {
   return bytes;
 }
 
+export function reconcileAgentOutputSnapshot(
+  snapshot: AgentOutputSnapshot | null,
+  events: AgentOutputEvent[],
+): AgentOutputChunk[] {
+  const chunks: AgentOutputChunk[] = [];
+  let cursor = 0;
+  if (snapshot) {
+    const bytes = decodeAgentPayload(snapshot.base64);
+    if (bytes.length !== snapshot.endOffset - snapshot.startOffset) {
+      throw new Error("Agent output snapshot offsets are inconsistent.");
+    }
+    if (bytes.length > 0) {
+      chunks.push({ offset: snapshot.startOffset, bytes });
+    }
+    cursor = snapshot.endOffset;
+  }
+
+  const ordered = [...events].sort((left, right) => left.offset - right.offset);
+  for (const event of ordered) {
+    const bytes = decodeAgentPayload(event.base64);
+    const endOffset = event.offset + bytes.length;
+    if (endOffset <= cursor) continue;
+    const freshOffset = Math.max(cursor, event.offset);
+    const fresh = bytes.subarray(freshOffset - event.offset);
+    if (fresh.length > 0) chunks.push({ offset: freshOffset, bytes: fresh });
+    cursor = endOffset;
+  }
+  return chunks;
+}
+
 export function splitAgentArguments(value: string): string[] {
   return value
     .split(/\r?\n/)
@@ -219,20 +268,18 @@ export function useAgentSessions(): AgentApi {
   );
   const pendingOutput = useRef(new Map<string, Uint8Array[]>());
   const pendingBytes = useRef(new Map<string, number>());
+  const outputOffsets = useRef(new Map<string, number>());
 
-  const load = useCallback(async () => {
+  const refreshCatalog = useCallback(async () => {
     try {
       const { invoke } = await core();
-      const [definitions, directory, currentSessions, planSnapshot] =
-        await Promise.all([
+      const [definitions, directory, planSnapshot] = await Promise.all([
         invoke<AgentDefinition[]>("agent_catalog"),
         invoke<string>("agent_default_working_directory"),
-        invoke<AgentSessionSummary[]>("agent_sessions"),
         invoke<AgentPlanSnapshot>("agent_plan_snapshot"),
       ]);
       setCatalog(definitions);
       setDefaultWorkingDirectory(directory);
-      setSessions(currentSessions);
       setWorkspaceName(planSnapshot.workspaceName);
       setPlans(planSnapshot.plans);
       setPlanRecovery(planSnapshot.recovery);
@@ -246,95 +293,223 @@ export function useAgentSessions(): AgentApi {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
     let disposed = false;
+    let hydrating = true;
     const cleanups: (() => void)[] = [];
+    const closedDuringHydration = new Set<string>();
+    const outputDuringHydration = new Map<string, AgentOutputEvent[]>();
+    const stateDuringHydration = new Map<string, AgentStateEvent>();
+    const captureDuringHydration = new Map<string, string>();
 
-    void events()
-      .then(async ({ listen }) => {
-        if (disposed) return;
-        const stopData = await listen<{ sessionId: string; base64: string }>(
-          "agent://data",
-          (event) => {
-            const bytes = decodeAgentPayload(event.payload.base64);
-            const handlers = dataHandlers.current.get(event.payload.sessionId);
-            if (handlers?.size) {
-              handlers.forEach((handler) => handler(bytes));
-              return;
-            }
+    function keep(cleanup: () => void): boolean {
+      if (disposed) {
+        cleanup();
+        return false;
+      }
+      cleanups.push(cleanup);
+      return true;
+    }
 
-            const current = pendingOutput.current.get(event.payload.sessionId) ?? [];
-            const currentBytes = pendingBytes.current.get(event.payload.sessionId) ?? 0;
-            current.push(bytes);
-            let total = currentBytes + bytes.length;
-            while (total > MAX_PENDING_OUTPUT && current.length > 1) {
-              total -= current.shift()?.length ?? 0;
-            }
-            pendingOutput.current.set(event.payload.sessionId, current);
-            pendingBytes.current.set(event.payload.sessionId, total);
-          },
-        );
-        if (disposed) {
-          stopData();
-          return;
+    function deliverOutput(
+      sessionId: string,
+      offset: number,
+      bytes: Uint8Array,
+    ) {
+      const endOffset = offset + bytes.length;
+      const cursor = outputOffsets.current.get(sessionId) ?? offset;
+      if (endOffset <= cursor) return;
+      const fresh = bytes.subarray(Math.max(0, cursor - offset));
+      if (fresh.length === 0) return;
+      outputOffsets.current.set(sessionId, endOffset);
+
+      const handlers = dataHandlers.current.get(sessionId);
+      if (handlers?.size) {
+        handlers.forEach((handler) => handler(fresh));
+        return;
+      }
+
+      const chunks = pendingOutput.current.get(sessionId) ?? [];
+      let total = pendingBytes.current.get(sessionId) ?? 0;
+      chunks.push(fresh);
+      total += fresh.length;
+      while (total > MAX_PENDING_OUTPUT && chunks.length > 0) {
+        const overflow = total - MAX_PENDING_OUTPUT;
+        const first = chunks[0];
+        if (first.length <= overflow) {
+          chunks.shift();
+          total -= first.length;
+        } else {
+          chunks[0] = first.subarray(overflow);
+          total -= overflow;
         }
-        cleanups.push(stopData);
+      }
+      pendingOutput.current.set(sessionId, chunks);
+      pendingBytes.current.set(sessionId, total);
+    }
 
-        const stopState = await listen<AgentStateEvent>(
-          "agent://state",
-          (event) => {
-            setSessions((current) => applyAgentStateEvent(current, event.payload));
-          },
-        );
-        if (disposed) {
-          stopState();
-          return;
-        }
-        cleanups.push(stopState);
-
-        const stopCapture = await listen<{
-          sessionId: string;
-          nativeSessionId: string;
-        }>("agent://capture", (event) => {
-          setSessions((current) =>
-            current.map((session) =>
-              session.sessionId === event.payload.sessionId
-                ? { ...session, capturedSessionId: event.payload.nativeSessionId }
-                : session,
-            ),
-          );
-        });
-        if (disposed) {
-          stopCapture();
-          return;
-        }
-        cleanups.push(stopCapture);
+    async function subscribeAndHydrate() {
+      try {
+        const [{ invoke }, { listen }] = await Promise.all([core(), events()]);
 
         const stopClosed = await listen<{
           sessionId: string;
           reason: string;
         }>("agent://closed", (event) => {
+          const sessionId = event.payload.sessionId;
+          if (hydrating) closedDuringHydration.add(sessionId);
           setSessions((current) =>
-            current.filter(
-              (session) => session.sessionId !== event.payload.sessionId,
-            ),
+            current.filter((session) => session.sessionId !== sessionId),
           );
-          pendingOutput.current.delete(event.payload.sessionId);
-          pendingBytes.current.delete(event.payload.sessionId);
+          outputDuringHydration.delete(sessionId);
+          pendingOutput.current.delete(sessionId);
+          pendingBytes.current.delete(sessionId);
+          outputOffsets.current.delete(sessionId);
           closeHandlers.current
-            .get(event.payload.sessionId)
+            .get(sessionId)
             ?.forEach((handler) => handler(event.payload.reason));
         });
-        if (disposed) stopClosed();
-        else cleanups.push(stopClosed);
-      })
-      .catch(() => {
-        // Browser previews have no Tauri event bus; the catalog explains this.
-      });
+        if (!keep(stopClosed)) return;
 
+        const stopData = await listen<AgentOutputEvent>(
+          "agent://data",
+          (event) => {
+            const payload = event.payload;
+            if (hydrating) {
+              const queued = outputDuringHydration.get(payload.sessionId) ?? [];
+              queued.push(payload);
+              outputDuringHydration.set(payload.sessionId, queued);
+              return;
+            }
+            deliverOutput(
+              payload.sessionId,
+              payload.offset,
+              decodeAgentPayload(payload.base64),
+            );
+          },
+        );
+        if (!keep(stopData)) return;
+
+        const stopState = await listen<AgentStateEvent>(
+          "agent://state",
+          (event) => {
+            if (hydrating) {
+              stateDuringHydration.set(event.payload.sessionId, event.payload);
+              return;
+            }
+            setSessions((current) =>
+              applyAgentStateEvent(current, event.payload),
+            );
+          },
+        );
+        if (!keep(stopState)) return;
+
+        const stopCapture = await listen<{
+          sessionId: string;
+          nativeSessionId: string;
+        }>("agent://capture", (event) => {
+          if (hydrating) {
+            captureDuringHydration.set(
+              event.payload.sessionId,
+              event.payload.nativeSessionId,
+            );
+            return;
+          }
+          setSessions((current) =>
+            current.map((session) =>
+              session.sessionId === event.payload.sessionId
+                ? {
+                    ...session,
+                    capturedSessionId: event.payload.nativeSessionId,
+                  }
+                : session,
+            ),
+          );
+        });
+        if (!keep(stopCapture)) return;
+
+        const [
+          definitions,
+          directory,
+          existingSessions,
+          planSnapshot,
+          outputSnapshots,
+        ] = await Promise.all([
+          invoke<AgentDefinition[]>("agent_catalog"),
+          invoke<string>("agent_default_working_directory"),
+          invoke<AgentSessionSummary[]>("agent_sessions"),
+          invoke<AgentPlanSnapshot>("agent_plan_snapshot"),
+          invoke<AgentOutputSnapshot[]>("agent_output_snapshots"),
+        ]);
+        if (disposed) return;
+
+        setSessions((current) => {
+          let restored = reconcileSessionSnapshot(
+            current,
+            existingSessions,
+            closedDuringHydration,
+          );
+          for (const event of stateDuringHydration.values()) {
+            restored = applyAgentStateEvent(restored, event);
+          }
+          return restored.map((session) => {
+            const capturedSessionId = captureDuringHydration.get(
+              session.sessionId,
+            );
+            return capturedSessionId
+              ? { ...session, capturedSessionId }
+              : session;
+          });
+        });
+
+        const snapshotsBySession = new Map(
+          outputSnapshots.map((snapshot) => [snapshot.sessionId, snapshot]),
+        );
+        for (const snapshot of outputSnapshots) {
+          if (closedDuringHydration.has(snapshot.sessionId)) continue;
+          for (const chunk of reconcileAgentOutputSnapshot(
+            snapshot,
+            outputDuringHydration.get(snapshot.sessionId) ?? [],
+          )) {
+            deliverOutput(snapshot.sessionId, chunk.offset, chunk.bytes);
+          }
+        }
+        for (const [sessionId, queued] of outputDuringHydration) {
+          if (
+            closedDuringHydration.has(sessionId) ||
+            snapshotsBySession.has(sessionId)
+          ) {
+            continue;
+          }
+          for (const chunk of reconcileAgentOutputSnapshot(null, queued)) {
+            deliverOutput(sessionId, chunk.offset, chunk.bytes);
+          }
+        }
+
+        hydrating = false;
+        closedDuringHydration.clear();
+        outputDuringHydration.clear();
+        stateDuringHydration.clear();
+        captureDuringHydration.clear();
+        setCatalog(definitions);
+        setDefaultWorkingDirectory(directory);
+        setWorkspaceName(planSnapshot.workspaceName);
+        setPlans(planSnapshot.plans);
+        setPlanRecovery(planSnapshot.recovery);
+        setError(null);
+        setMode("ready");
+      } catch (reason) {
+        hydrating = false;
+        closedDuringHydration.clear();
+        outputDuringHydration.clear();
+        stateDuringHydration.clear();
+        captureDuringHydration.clear();
+        setCatalog(FALLBACK_CATALOG);
+        setError(reason instanceof Error ? reason.message : String(reason));
+        setMode("unavailable");
+      }
+    }
+
+    void subscribeAndHydrate();
     return () => {
       disposed = true;
       cleanups.forEach((cleanup) => cleanup());
@@ -392,7 +567,9 @@ export function useAgentSessions(): AgentApi {
     });
     const currentSessions =
       await invoke<AgentSessionSummary[]>("agent_sessions");
-    setSessions(currentSessions);
+    setSessions((current) =>
+      reconcileSessionSnapshot(current, currentSessions),
+    );
     return outcomes;
   }, []);
 
@@ -476,7 +653,7 @@ export function useAgentSessions(): AgentApi {
     workspaceName,
     plans,
     planRecovery,
-    refreshCatalog: load,
+    refreshCatalog,
     launch,
     savePlan,
     renameWorkspace,

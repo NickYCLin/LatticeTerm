@@ -78,9 +78,9 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 - 自訂名稱、路徑、參數數量、單一參數大小、終端尺寸與輸入事件大小都有上限與控制字元驗證。
 - LatticeTerm 不讀取、不複製也不保存模型 API 金鑰；登入仍由各 CLI 自行處理。
 - CLI 以啟動 LatticeTerm 的使用者權限執行，不是沙箱。使用者只能加入自己信任的程式。
-- 執行中的工作階段只存在記憶體；使用者停止或應用程式結束／重啟時會終止已登記的 CLI。
+- 執行中的工作階段只存在記憶體，Rust registry 最多接受 32 個活躍 session；每個 PTY 保留最近 256 KiB 有界輸出與單調 byte offset，因此重播尾端總上限為 8 MiB。WebView 重新載入可重新 attach 並避免快照／即時事件重複。使用者停止或應用程式結束／重啟時仍會終止已登記的 CLI。
 - 安全啟動工作區使用獨立的版本化 JSON；v3 可無損讀取 v1／v2，並保存工作區名稱、項目順序、CLI 類型、標籤、可執行檔、明確參數與工作目錄。原生 Session ID 或標題只在使用者明確保存續接項目時寫入。密碼、Token、API Key、Passphrase、Secret 參數會被拒絕；讀不到或版本不相容的原檔會先移到復原檔，不會直接覆寫。
-- 不保存終端輸出、提示內容、輸入歷史、程序 ID、Reporter 權杖或模型憑證。
+- 不把終端輸出、提示內容、輸入歷史、程序 ID、Reporter 權杖或模型憑證寫入磁碟；重新 attach 用的 256 KiB 輸出尾端只存在該桌面程序記憶體。
 - Reporter 只監聽 loopback，訊息限制 4 KiB 且有讀寫逾時；每個工作階段使用獨立高熵權杖。權杖會存在該 CLI 的環境中，因此相同作業系統使用者權限的程序仍屬於信任邊界，但即使權杖外洩也只能變更該工作階段的顯示狀態。
 - Windows 目前只直接啟動 `.exe`／`.com`。需要 `.cmd`／`.bat` 的 npm shim 尚未經過 shell adapter 安全設計，因此不會被誤標為可用。
 
@@ -98,9 +98,10 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 | 批次提示 | 已完成 | 明確選取、二次確認、最多 32 個目標與部分失敗回報 |
 | 啟動工作區命名／排序 | 已完成 | 名稱與順序由 Rust 驗證及原子保存，v1 資料可相容遷移 |
 | 原生 CLI Session 續接 | 已完成 | Adapter v1 支援 Codex、Claude Code、Gemini CLI、Hermes；保存由使用者明確選擇 |
+| 同程序介面重新 attach | 已完成 | 先訂閱事件再 hydration；session 關閉不會被舊快照復活，最近 256 KiB PTY 輸出依 offset 去重重播 |
 | 工具專用語意 Adapter | 部分完成 | 已有版本化續接 recipe 與自動 session ID 擷取（白名單 CLI、保守比對）；工具 hook、token／cost 擷取仍未完成 |
-| 背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段 |
-| 跨重啟還原 | 部分完成 | 已有安全工作區、批次重新啟動、四種 CLI 原生脈絡續接與自動 session ID 擷取；原程序、pane 與輸出還原尚未完成 |
+| 跨程序背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段；目前只支援同一桌面程序內的 WebView 重新 attach |
+| 跨重啟還原 | 部分完成 | 已有安全工作區、批次重新啟動、四種 CLI 原生脈絡續接與自動 session ID 擷取；應用程式程序重啟後的原 PTY、pane 與輸出還原尚未完成 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 任務編排 | 部分完成 | broadcast prompt 已完成；依賴圖、佇列與排程仍待實作 |
 | 權限隔離 | 未完成 | 尚無每 Agent 容器、沙箱或檔案範圍策略 |
