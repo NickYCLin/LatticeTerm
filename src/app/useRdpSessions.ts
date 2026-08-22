@@ -1,7 +1,10 @@
 /** Native RDP sessions rendered by the embedded Canvas pane. */
 
-import { useCallback, useEffect, useState } from "react";
-import { reconcileSessionSnapshot } from "./sessionSnapshot";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  reconcileSessionSnapshot,
+  type SessionClosedNotice,
+} from "./sessionSnapshot";
 
 export interface RdpFrame {
   frameId: number;
@@ -64,9 +67,11 @@ interface FrameEvent {
 
 export interface RdpApi {
   sessions: RdpSessionSummary[];
+  lastClosed: SessionClosedNotice | null;
   connect: (request: RdpConnectRequest) => Promise<RdpConnectOutcome>;
   input: (sessionId: string, request: RdpInput) => Promise<void>;
   disconnect: (sessionId: string) => Promise<void>;
+  clearLastClosed: () => void;
 }
 
 async function core() {
@@ -75,6 +80,10 @@ async function core() {
 
 export function useRdpSessions(): RdpApi {
   const [sessions, setSessions] = useState<RdpSessionSummary[]>([]);
+  const [lastClosed, setLastClosed] = useState<SessionClosedNotice | null>(null);
+  const sessionsRef = useRef(sessions);
+  const intentionalDisconnects = useRef(new Set<string>());
+  sessionsRef.current = sessions;
 
   useEffect(() => {
     const disposers: Array<() => void> = [];
@@ -105,6 +114,20 @@ export function useRdpSessions(): RdpApi {
             const sessionId = event.payload.sessionId;
             if (hydrating) closedDuringHydration.add(sessionId);
             pendingFrames.delete(sessionId);
+            const intentional = intentionalDisconnects.current.delete(sessionId);
+            if (!intentional) {
+              const session = sessionsRef.current.find(
+                (current) => current.sessionId === sessionId,
+              );
+              setLastClosed({
+                sessionId,
+                label: session
+                  ? session.username + "@" + session.host
+                  : sessionId,
+                reason: event.payload.reason,
+                at: Date.now(),
+              });
+            }
             setSessions((current) =>
               current.filter((session) => session.sessionId !== sessionId),
             );
@@ -199,9 +222,13 @@ export function useRdpSessions(): RdpApi {
   }, []);
 
   const disconnect = useCallback(async (sessionId: string) => {
+    intentionalDisconnects.current.add(sessionId);
     try {
       const { invoke } = await core();
       await invoke("rdp_disconnect", { sessionId });
+    } catch (reason) {
+      intentionalDisconnects.current.delete(sessionId);
+      throw reason;
     } finally {
       setSessions((current) =>
         current.filter((session) => session.sessionId !== sessionId),
@@ -209,5 +236,14 @@ export function useRdpSessions(): RdpApi {
     }
   }, []);
 
-  return { sessions, connect, input, disconnect };
+  const clearLastClosed = useCallback(() => setLastClosed(null), []);
+
+  return {
+    sessions,
+    lastClosed,
+    connect,
+    input,
+    disconnect,
+    clearLastClosed,
+  };
 }

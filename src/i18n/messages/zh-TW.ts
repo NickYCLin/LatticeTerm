@@ -510,6 +510,8 @@ export const zhTW = {
   "terminal.reconnect": "重新連線",
   "terminal.empty.title": "目前沒有進行中的工作階段",
   "terminal.empty.body": "從 AI Agent Fleet 啟動 CLI，或在連線清單挑一台主機，工作階段就會在這裡開啟。",
+  "terminal.sessionClosed.title": "遠端工作階段已中斷",
+  "terminal.sessionClosed.body": "「{name}」已停止連線：{reason}",
 
   // AI Agent Fleet --------------------------------------------------------
   "agents.hero.eyebrow": "本機協作中樞",

@@ -740,6 +740,10 @@
   min-height: 0;
 }
 
+.session-notice {
+  padding: var(--space-3) var(--space-4) 0;
+}
+
 .session-tabs {
   display: flex;
   gap: var(--space-2);

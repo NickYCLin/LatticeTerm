@@ -1,7 +1,10 @@
 /** Native VNC sessions rendered by the embedded Canvas pane. */
 
-import { useCallback, useEffect, useState } from "react";
-import { reconcileSessionSnapshot } from "./sessionSnapshot";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  reconcileSessionSnapshot,
+  type SessionClosedNotice,
+} from "./sessionSnapshot";
 
 export interface VncFrame {
   frameId: number;
@@ -54,9 +57,11 @@ interface FrameEvent {
 
 export interface VncApi {
   sessions: VncSessionSummary[];
+  lastClosed: SessionClosedNotice | null;
   connect: (request: VncConnectRequest) => Promise<VncConnectOutcome>;
   input: (sessionId: string, request: VncInput) => Promise<void>;
   disconnect: (sessionId: string) => Promise<void>;
+  clearLastClosed: () => void;
 }
 
 async function core() {
@@ -65,6 +70,10 @@ async function core() {
 
 export function useVncSessions(): VncApi {
   const [sessions, setSessions] = useState<VncSessionSummary[]>([]);
+  const [lastClosed, setLastClosed] = useState<SessionClosedNotice | null>(null);
+  const sessionsRef = useRef(sessions);
+  const intentionalDisconnects = useRef(new Set<string>());
+  sessionsRef.current = sessions;
 
   useEffect(() => {
     const disposers: Array<() => void> = [];
@@ -95,6 +104,20 @@ export function useVncSessions(): VncApi {
             const sessionId = event.payload.sessionId;
             if (hydrating) closedDuringHydration.add(sessionId);
             pendingFrames.delete(sessionId);
+            const intentional = intentionalDisconnects.current.delete(sessionId);
+            if (!intentional) {
+              const session = sessionsRef.current.find(
+                (current) => current.sessionId === sessionId,
+              );
+              setLastClosed({
+                sessionId,
+                label: session
+                  ? session.host + ":" + session.port
+                  : sessionId,
+                reason: event.payload.reason,
+                at: Date.now(),
+              });
+            }
             setSessions((current) =>
               current.filter((session) => session.sessionId !== sessionId),
             );
@@ -189,9 +212,13 @@ export function useVncSessions(): VncApi {
   }, []);
 
   const disconnect = useCallback(async (sessionId: string) => {
+    intentionalDisconnects.current.add(sessionId);
     try {
       const { invoke } = await core();
       await invoke("vnc_disconnect", { sessionId });
+    } catch (reason) {
+      intentionalDisconnects.current.delete(sessionId);
+      throw reason;
     } finally {
       setSessions((current) =>
         current.filter((session) => session.sessionId !== sessionId),
@@ -199,5 +226,14 @@ export function useVncSessions(): VncApi {
     }
   }, []);
 
-  return { sessions, connect, input, disconnect };
+  const clearLastClosed = useCallback(() => setLastClosed(null), []);
+
+  return {
+    sessions,
+    lastClosed,
+    connect,
+    input,
+    disconnect,
+    clearLastClosed,
+  };
 }

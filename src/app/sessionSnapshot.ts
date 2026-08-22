@@ -2,6 +2,12 @@ export interface SessionIdentity {
   sessionId: string;
 }
 
+export interface SessionClosedNotice extends SessionIdentity {
+  label: string;
+  reason: string;
+  at: number;
+}
+
 /**
  * Reconciles a backend snapshot with events or connections that landed while
  * the snapshot request was in flight. Current entries win so a newer frame or

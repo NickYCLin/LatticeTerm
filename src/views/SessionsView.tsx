@@ -3,12 +3,13 @@
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
 import type { VncApi } from "../app/useVncSessions";
+import type { SessionClosedNotice } from "../app/sessionSnapshot";
 import type { AgentApi } from "../app/useAgentSessions";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
 import { useI18n } from "../i18n";
-import { EmptyState } from "../components/common/Callout";
+import { Callout, EmptyState } from "../components/common/Callout";
 import {
   AgentIcon,
   CloseIcon,
@@ -30,6 +31,11 @@ type SessionRef =
   | { kind: "remote"; sessionId: string; label: string }
   | { kind: "rdp"; sessionId: string; label: string }
   | { kind: "vnc"; sessionId: string; label: string };
+
+interface ClosedNoticeSource {
+  notice: SessionClosedNotice;
+  clear: () => void;
+}
 
 export function SessionsView({
   agents,
@@ -86,13 +92,55 @@ export function SessionsView({
     })),
   ];
 
+  const closedNotices: ClosedNoticeSource[] = [];
+  if (remote.lastClosed) {
+    closedNotices.push({
+      notice: remote.lastClosed,
+      clear: remote.clearLastClosed,
+    });
+  }
+  if (rdp.lastClosed) {
+    closedNotices.push({ notice: rdp.lastClosed, clear: rdp.clearLastClosed });
+  }
+  if (vnc.lastClosed) {
+    closedNotices.push({ notice: vnc.lastClosed, clear: vnc.clearLastClosed });
+  }
+  const latestClosed = closedNotices.sort(
+    (left, right) => right.notice.at - left.notice.at,
+  )[0];
+  const closedCallout = latestClosed ? (
+    <div className="session-notice">
+      <Callout
+        tone="warn"
+        title={t("terminal.sessionClosed.title")}
+        actions={
+          <button
+            type="button"
+            className="button button--ghost button--sm"
+            onClick={latestClosed.clear}
+          >
+            {t("common.close")}
+          </button>
+        }
+      >
+        {t("terminal.sessionClosed.body", {
+          name: latestClosed.notice.label,
+          reason: latestClosed.notice.reason,
+        })}
+      </Callout>
+    </div>
+  ) : null;
+
   if (sessions.length === 0) {
     return (
-      <EmptyState
-        icon={<TerminalIcon size={26} />}
-        title={t("terminal.empty.title")}
-        description={t("terminal.empty.body")}
-      />
+      <div className="terminal-workspace">
+        {closedCallout}
+        <EmptyState
+          icon={<TerminalIcon size={26} />}
+          title={t("terminal.empty.title")}
+          description={t("terminal.empty.body")}
+        />
+      </div>
     );
   }
 
@@ -111,6 +159,7 @@ export function SessionsView({
 
   return (
     <div className="terminal-workspace">
+      {closedCallout}
       <div className="session-tabs" role="tablist">
         {sessions.map((session) => {
           const selected = session.sessionId === active.sessionId;
