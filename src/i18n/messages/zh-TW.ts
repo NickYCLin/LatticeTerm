@@ -27,6 +27,7 @@ export const zhTW = {
   "common.copy": "複製",
   "common.copied": "已複製",
   "common.detecting": "偵測中…",
+  "common.loading": "正在載入功能…",
 
   // 系統認證儲存 ----------------------------------------------------------
   "credential.saved.title": "已安全保存密碼",

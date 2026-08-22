@@ -30,6 +30,7 @@ export const en: Messages = {
   "common.copy": "Copy",
   "common.copied": "Copied",
   "common.detecting": "Detecting…",
+  "common.loading": "Loading feature…",
 
   // System credential storage --------------------------------------------
   "credential.saved.title": "Password stored securely",

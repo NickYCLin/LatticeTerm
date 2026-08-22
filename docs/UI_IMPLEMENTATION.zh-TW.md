@@ -201,9 +201,17 @@
 
 ---
 
+## 前端功能分包
+
+- `App.tsx` 以 `React.lazy` 依功能載入連線清單、Agent Fleet、通道、保管庫、設定、終端工作區與各連線對話框；只開啟連線清單時不會先下載 xterm、RDP/VNC Canvas 與所有設定頁程式。
+- 每個工作區與 overlay 都有可存取的 `Suspense` 載入提示；終端工作區使用獨立邊界，其他頁面的首次載入不會暫停或重設現有終端。
+- `scripts/check-frontend-entry-size.mjs` 在正式建置後檢查入口檔，超過 500 KiB 直接讓 CI 失敗，避免功能成長後退回單一大型 bundle。
+
+---
+
 ## 工作階段常駐掛載
 
-- 「工作階段」視圖改為常駐掛載、以 `hidden` 隱藏：xterm 與 RDP/VNC canvas 一旦卸載，畫面內容就沒了，也沒有任何機制重放。修正前「切去別的功能列再切回來」會得到一片空白的終端機。
+- 「工作階段」視圖在第一次開啟或偵測到活躍工作階段時才載入，之後維持掛載並以 `hidden` 隱藏：xterm 與 RDP/VNC canvas 一旦卸載，畫面內容就沒了，也沒有任何機制重放。修正前「切去別的功能列再切回來」會得到一片空白的終端機。
 - 外層包 `display: contents`，顯示時不影響原本排版；隱藏時 `display: none`，xterm 的 ResizeObserver 會在重新顯示時自動重排大小。
 
 ---

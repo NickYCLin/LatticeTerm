@@ -6,7 +6,15 @@
  * `I18nProvider`, and each area renders its own view.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   findNavigationItem,
   isMobilePlatform,
@@ -43,27 +51,106 @@ import { StatusBar } from "./components/shell/StatusBar";
 import { ViewHeader } from "./components/shell/ViewHeader";
 import { ConnectionInspector } from "./components/connections/ConnectionInspector";
 import { useHostMetrics } from "./app/useHostMetrics";
-import {
-  CommandPalette,
-  type Command,
-} from "./components/overlays/CommandPalette";
+import type { Command } from "./components/overlays/CommandPalette";
 import { ConfirmDialog } from "./components/overlays/ConfirmDialog";
-import { ConnectionDrawer } from "./components/overlays/ConnectionDrawer";
-import { ConnectionsView } from "./views/ConnectionsView";
-import { AgentsView } from "./views/AgentsView";
-import { SessionsView } from "./views/SessionsView";
-import { ConnectFlow } from "./components/terminal/ConnectFlow";
-import { RemoteConnectFlow } from "./components/remote/RemoteConnectFlow";
-import { RemoteHostDialog } from "./components/remote/RemoteHostDialog";
-import { RdpConnectFlow } from "./components/rdp/RdpConnectFlow";
-import { VncConnectFlow } from "./components/vnc/VncConnectFlow";
-import { SftpConnectFlow } from "./components/sftp/SftpConnectFlow";
-import { ActivityView } from "./views/ActivityView";
-import { VaultView } from "./views/VaultView";
-import { TunnelsView } from "./views/TunnelsView";
-import { SettingsView } from "./views/SettingsView";
 import { PlusIcon, ScreenShareIcon } from "./components/icons";
 import "./styles/index.css";
+
+const ConnectionsView = lazy(() =>
+  import("./views/ConnectionsView").then((module) => ({
+    default: module.ConnectionsView,
+  })),
+);
+const AgentsView = lazy(() =>
+  import("./views/AgentsView").then((module) => ({
+    default: module.AgentsView,
+  })),
+);
+const SessionsView = lazy(() =>
+  import("./views/SessionsView").then((module) => ({
+    default: module.SessionsView,
+  })),
+);
+const ActivityView = lazy(() =>
+  import("./views/ActivityView").then((module) => ({
+    default: module.ActivityView,
+  })),
+);
+const VaultView = lazy(() =>
+  import("./views/VaultView").then((module) => ({
+    default: module.VaultView,
+  })),
+);
+const TunnelsView = lazy(() =>
+  import("./views/TunnelsView").then((module) => ({
+    default: module.TunnelsView,
+  })),
+);
+const SettingsView = lazy(() =>
+  import("./views/SettingsView").then((module) => ({
+    default: module.SettingsView,
+  })),
+);
+const CommandPalette = lazy(() =>
+  import("./components/overlays/CommandPalette").then((module) => ({
+    default: module.CommandPalette,
+  })),
+);
+const ConnectionDrawer = lazy(() =>
+  import("./components/overlays/ConnectionDrawer").then((module) => ({
+    default: module.ConnectionDrawer,
+  })),
+);
+const ConnectFlow = lazy(() =>
+  import("./components/terminal/ConnectFlow").then((module) => ({
+    default: module.ConnectFlow,
+  })),
+);
+const RemoteConnectFlow = lazy(() =>
+  import("./components/remote/RemoteConnectFlow").then((module) => ({
+    default: module.RemoteConnectFlow,
+  })),
+);
+const RemoteHostDialog = lazy(() =>
+  import("./components/remote/RemoteHostDialog").then((module) => ({
+    default: module.RemoteHostDialog,
+  })),
+);
+const RdpConnectFlow = lazy(() =>
+  import("./components/rdp/RdpConnectFlow").then((module) => ({
+    default: module.RdpConnectFlow,
+  })),
+);
+const VncConnectFlow = lazy(() =>
+  import("./components/vnc/VncConnectFlow").then((module) => ({
+    default: module.VncConnectFlow,
+  })),
+);
+const SftpConnectFlow = lazy(() =>
+  import("./components/sftp/SftpConnectFlow").then((module) => ({
+    default: module.SftpConnectFlow,
+  })),
+);
+
+function LazyViewFallback() {
+  const { t } = useI18n();
+  return (
+    <div className="empty-state" role="status" aria-live="polite">
+      <span className="panel__hint">{t("common.loading")}</span>
+    </div>
+  );
+}
+
+function LazyOverlayFallback() {
+  const { t } = useI18n();
+  return (
+    <div className="scrim scrim--center" role="status" aria-live="polite">
+      <div className="dialog">
+        <p className="dialog__body">{t("common.loading")}</p>
+      </div>
+    </div>
+  );
+}
 
 function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const { t } = useI18n();
@@ -107,6 +194,21 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     null,
   );
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [terminalMounted, setTerminalMounted] = useState(false);
+  const hasLiveSessions =
+    agents.sessions.length > 0 ||
+    ssh.sessions.length > 0 ||
+    sftp.sessions.length > 0 ||
+    remote.sessions.length > 0 ||
+    rdp.sessions.length > 0 ||
+    vnc.sessions.length > 0;
+
+  // The terminal workspace is expensive because it owns xterm and every
+  // remote-canvas renderer. Load it only when first needed, then keep it
+  // mounted so switching views never discards terminal or canvas contents.
+  useEffect(() => {
+    if (view === "terminal" || hasLiveSessions) setTerminalMounted(true);
+  }, [hasLiveSessions, view]);
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -409,34 +511,47 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
 
         <div className="workspace__body">
           <div className="workspace__content glass glass--sheen">
-            {view === "connections" && (
-              <ConnectionsView
-                workspace={workspace}
-                onCreate={openCreate}
-                onEdit={openEdit}
-                onDelete={requestDelete}
-                onConnect={setConnectTarget}
-              />
+            <Suspense fallback={<LazyViewFallback />}>
+              {view === "connections" && (
+                <ConnectionsView
+                  workspace={workspace}
+                  onCreate={openCreate}
+                  onEdit={openEdit}
+                  onDelete={requestDelete}
+                  onConnect={setConnectTarget}
+                />
+              )}
+            </Suspense>
+            {/* Sessions load on first use, then stay mounted while other
+                views are open: a terminal or remote canvas that unmounts loses
+                everything it has drawn, and nothing replays it. Keep this in
+                its own Suspense boundary so loading another view cannot reset
+                an active xterm or canvas. */}
+            {(terminalMounted || view === "terminal" || hasLiveSessions) && (
+              <Suspense
+                fallback={view === "terminal" ? <LazyViewFallback /> : null}
+              >
+                <div
+                  hidden={view !== "terminal"}
+                  style={{
+                    display: view === "terminal" ? "contents" : "none",
+                  }}
+                >
+                  <SessionsView
+                    agents={agents}
+                    ssh={ssh}
+                    sftp={sftp}
+                    remote={remote}
+                    rdp={rdp}
+                    vnc={vnc}
+                    activeSessionId={activeSessionId}
+                    onSelect={setActiveSessionId}
+                    theme={activeTheme}
+                  />
+                </div>
+              </Suspense>
             )}
-            {/* Sessions stay mounted while other views are open: a terminal
-                or remote canvas that unmounts loses everything it has drawn,
-                and nothing replays it. Hidden, not gone. */}
-            <div
-              hidden={view !== "terminal"}
-              style={{ display: view === "terminal" ? "contents" : "none" }}
-            >
-              <SessionsView
-                agents={agents}
-                ssh={ssh}
-                sftp={sftp}
-                remote={remote}
-                rdp={rdp}
-                vnc={vnc}
-                activeSessionId={activeSessionId}
-                onSelect={setActiveSessionId}
-                theme={activeTheme}
-              />
-            </div>
+            <Suspense fallback={<LazyViewFallback />}>
             {view === "agents" && (
               <AgentsView
                 agents={agents}
@@ -468,6 +583,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 onBackupRestored={applyRestoredBackup}
               />
             )}
+            </Suspense>
           </div>
 
           {showInspector && selected && (
@@ -492,6 +608,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       </main>
 
+      <Suspense fallback={<LazyOverlayFallback />}>
       {drawer.open && (
         <ConnectionDrawer
           key={drawer.profileId ?? "new"}
@@ -677,6 +794,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           onClose={() => setRemoteHostOpen(false)}
         />
       )}
+      </Suspense>
     </div>
   );
 }
