@@ -109,6 +109,23 @@ fn fingerprint(der: &[u8]) -> String {
         .join(":")
 }
 
+fn validate_certificate_pin(
+    approved: Option<&str>,
+    der: &[u8],
+    validation_detail: String,
+    rejected: &Mutex<Option<(String, String)>>,
+) -> bool {
+    let formatted = fingerprint(der);
+    let presented = normalize_fingerprint(&formatted).expect("generated SHA-256 fingerprint");
+    let accepted = approved == Some(presented.as_str());
+    if !accepted {
+        if let Ok(mut rejected) = rejected.lock() {
+            *rejected = Some((formatted, validation_detail));
+        }
+    }
+    accepted
+}
+
 fn rgba_frame(buffer: &[u32], width: u16, height: u16) -> Result<Vec<u8>, String> {
     let expected = usize::from(width) * usize::from(height);
     if buffer.len() != expected {
@@ -213,12 +230,12 @@ async fn run_session(
     let observed_certificate = Arc::new(Mutex::new(None::<(String, String)>));
     let observed_for_callback = Arc::clone(&observed_certificate);
     let callback: CertificateValidationCallback = Arc::new(move |der, validation_error| {
-        let formatted = fingerprint(der);
-        let presented = normalize_fingerprint(&formatted).expect("generated SHA-256 fingerprint");
-        if let Ok(mut observed) = observed_for_callback.lock() {
-            *observed = Some((formatted, validation_error.to_string()));
-        }
-        approved.as_deref() == Some(presented.as_str())
+        validate_certificate_pin(
+            approved.as_deref(),
+            der,
+            validation_error.to_string(),
+            &observed_for_callback,
+        )
     });
 
     let mut builder = ConfigBuilder::new()
@@ -387,6 +404,39 @@ mod tests {
     #[test]
     fn rejects_short_certificate_fingerprint() {
         assert!(normalize_fingerprint("AA:BB").is_none());
+    }
+
+    #[test]
+    fn an_approved_certificate_is_not_remembered_as_rejected() {
+        let certificate = b"approved certificate";
+        let approved = normalize_fingerprint(&fingerprint(certificate)).expect("valid pin");
+        let rejected = Mutex::new(None);
+
+        assert!(validate_certificate_pin(
+            Some(&approved),
+            certificate,
+            "self-signed".to_string(),
+            &rejected,
+        ));
+        assert!(rejected.into_inner().expect("lock").is_none());
+    }
+
+    #[test]
+    fn an_unapproved_certificate_is_available_for_the_trust_prompt() {
+        let certificate = b"new certificate";
+        let expected_fingerprint = fingerprint(certificate);
+        let rejected = Mutex::new(None);
+
+        assert!(!validate_certificate_pin(
+            None,
+            certificate,
+            "self-signed".to_string(),
+            &rejected,
+        ));
+        assert_eq!(
+            rejected.into_inner().expect("lock"),
+            Some((expected_fingerprint, "self-signed".to_string())),
+        );
     }
 
     #[test]
