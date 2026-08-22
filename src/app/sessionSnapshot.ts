@@ -34,3 +34,20 @@ export function reconcileSessionSnapshot<T extends SessionIdentity>(
 
   return [...reconciled.values()];
 }
+
+/**
+ * Reconciles a singleton backend snapshot with status events or local actions
+ * that completed while the snapshot request was in flight. A current value is
+ * newer than the snapshot, while a close event must prevent the matching
+ * snapshot value from being restored.
+ */
+export function reconcileSingletonSnapshot<T>(
+  current: T | null,
+  snapshot: T | null,
+  identity: (value: T) => string,
+  closedSessionIds: ReadonlySet<string> = new Set(),
+): T | null {
+  if (current && !closedSessionIds.has(identity(current))) return current;
+  if (snapshot && !closedSessionIds.has(identity(snapshot))) return snapshot;
+  return null;
+}

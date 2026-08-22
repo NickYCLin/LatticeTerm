@@ -1,6 +1,7 @@
 /** User-controlled lifecycle for sharing this device through Lattice Remote. */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { reconcileSingletonSnapshot } from "./sessionSnapshot";
 
 export interface RemoteHostStatus {
   hostId: string;
@@ -34,10 +35,24 @@ async function core() {
 export function useRemoteHost(): RemoteHostApi {
   const [status, setStatus] = useState<RemoteHostStatus | null>(null);
   const [closedReason, setClosedReason] = useState<string | null>(null);
+  const intentionalStops = useRef(new Set<string>());
+  const statusRevision = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
-    let disposers: Array<() => void> = [];
+    const disposers: Array<() => void> = [];
+    let hydrating = true;
+    const closedDuringHydration = new Set<string>();
+    const hydrationRevision = statusRevision.current;
+
+    function keep(dispose: () => void): boolean {
+      if (cancelled) {
+        dispose();
+        return false;
+      }
+      disposers.push(dispose);
+      return true;
+    }
 
     async function initialize() {
       try {
@@ -47,28 +62,47 @@ export function useRemoteHost(): RemoteHostApi {
         ]);
         const stopStatus = await listen<RemoteHostStatus>(
           "remote-host://status",
-          (event) => setStatus(event.payload),
+          (event) => {
+            statusRevision.current += 1;
+            setStatus(event.payload);
+          },
         );
+        if (!keep(stopStatus)) return;
+
         const stopClosed = await listen<{ hostId: string; reason: string }>(
           "remote-host://closed",
           (event) => {
+            if (hydrating) closedDuringHydration.add(event.payload.hostId);
+            statusRevision.current += 1;
             setStatus((current) =>
               current?.hostId === event.payload.hostId ? null : current,
             );
-            setClosedReason(event.payload.reason);
+            if (!intentionalStops.current.delete(event.payload.hostId)) {
+              setClosedReason(event.payload.reason);
+            }
           },
         );
+        if (!keep(stopClosed)) return;
+
         const current = await invoke<RemoteHostStatus | null>(
           "remote_host_status",
         );
-        if (cancelled) {
-          stopStatus();
-          stopClosed();
-          return;
+        if (!cancelled) {
+          setStatus((latest) => {
+            if (statusRevision.current === hydrationRevision) return current;
+            return reconcileSingletonSnapshot(
+              latest,
+              current,
+              (entry) => entry.hostId,
+              closedDuringHydration,
+            );
+          });
+          hydrating = false;
+          closedDuringHydration.clear();
         }
-        disposers = [stopStatus, stopClosed];
-        setStatus(current);
       } catch {
+        hydrating = false;
+        closedDuringHydration.clear();
         // Browser preview has no native Agent process.
       }
     }
@@ -86,15 +120,24 @@ export function useRemoteHost(): RemoteHostApi {
     const started = await invoke<RemoteHostStatus>("remote_host_start", {
       request,
     });
+    statusRevision.current += 1;
     setStatus(started);
     return started;
   }, []);
 
   const stop = useCallback(async () => {
     const { invoke } = await core();
-    await invoke("remote_host_stop");
-    setStatus(null);
-  }, []);
+    const hostId = status?.hostId;
+    if (hostId) intentionalStops.current.add(hostId);
+    try {
+      await invoke("remote_host_stop");
+      statusRevision.current += 1;
+      setStatus(null);
+    } catch (reason) {
+      if (hostId) intentionalStops.current.delete(hostId);
+      throw reason;
+    }
+  }, [status?.hostId]);
 
   const clearClosedReason = useCallback(() => setClosedReason(null), []);
 
