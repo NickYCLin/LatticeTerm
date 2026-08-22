@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostKeyRecord } from "../domain/security";
+import { reconcileSessionSnapshot } from "./sessionSnapshot";
 
 export type { HostKeyRecord } from "../domain/security";
 
@@ -78,6 +79,8 @@ async function core() {
   return import("@tauri-apps/api/core");
 }
 
+const MAX_PENDING_OUTPUT_BYTES = 256 * 1024;
+
 export interface SshApi {
   sessions: SessionSummary[];
   connect: (request: ConnectRequest) => Promise<ConnectOutcome>;
@@ -104,49 +107,99 @@ export function useSshSessions(): SshApi {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const dataHandlers = useRef(new Map<string, Set<(bytes: Uint8Array) => void>>());
   const closeHandlers = useRef(new Map<string, Set<(reason: string) => void>>());
+  const pendingOutput = useRef(new Map<string, Uint8Array[]>());
+  const pendingBytes = useRef(new Map<string, number>());
 
   // One listener pair for the whole app, fanned out by session id: a terminal
   // pane mounting must not cost another IPC subscription.
   useEffect(() => {
-    let disposers: Array<() => void> = [];
+    const disposers: Array<() => void> = [];
     let cancelled = false;
+    let hydrating = true;
+    const closedDuringHydration = new Set<string>();
+
+    function keep(dispose: () => void): boolean {
+      if (cancelled) {
+        dispose();
+        return false;
+      }
+      disposers.push(dispose);
+      return true;
+    }
 
     async function subscribe() {
       try {
-        const { listen } = await import("@tauri-apps/api/event");
+        const [{ invoke }, { listen }] = await Promise.all([
+          core(),
+          import("@tauri-apps/api/event"),
+        ]);
+
+        // Subscribe to closure first: a snapshot that races with a close event
+        // must not bring the already-closed session back.
+        const stopClosed = await listen<{ sessionId: string; reason: string }>(
+          "ssh://closed",
+          (event) => {
+            const sessionId = event.payload.sessionId;
+            if (hydrating) closedDuringHydration.add(sessionId);
+            const handlers = closeHandlers.current.get(sessionId);
+            if (handlers) {
+              for (const handler of handlers) handler(event.payload.reason);
+            }
+            pendingOutput.current.delete(sessionId);
+            pendingBytes.current.delete(sessionId);
+            setSessions((current) =>
+              current.filter((session) => session.sessionId !== sessionId),
+            );
+          },
+        );
+        if (!keep(stopClosed)) return;
 
         const stopData = await listen<{ sessionId: string; base64: string }>(
           "ssh://data",
           (event) => {
-            const handlers = dataHandlers.current.get(event.payload.sessionId);
-            if (!handlers) return;
+            const sessionId = event.payload.sessionId;
             const bytes = fromBase64(event.payload.base64);
-            for (const handler of handlers) handler(bytes);
-          },
-        );
-
-        const stopClosed = await listen<{ sessionId: string; reason: string }>(
-          "ssh://closed",
-          (event) => {
-            const handlers = closeHandlers.current.get(event.payload.sessionId);
-            if (handlers) {
-              for (const handler of handlers) handler(event.payload.reason);
+            const handlers = dataHandlers.current.get(sessionId);
+            if (handlers?.size) {
+              for (const handler of handlers) handler(bytes);
+              return;
             }
-            setSessions((current) =>
-              current.filter(
-                (session) => session.sessionId !== event.payload.sessionId,
-              ),
-            );
+
+            if (bytes.length >= MAX_PENDING_OUTPUT_BYTES) {
+              const tail = bytes.slice(bytes.length - MAX_PENDING_OUTPUT_BYTES);
+              pendingOutput.current.set(sessionId, [tail]);
+              pendingBytes.current.set(sessionId, tail.length);
+              return;
+            }
+
+            const chunks = pendingOutput.current.get(sessionId) ?? [];
+            let total = pendingBytes.current.get(sessionId) ?? 0;
+            chunks.push(bytes);
+            total += bytes.length;
+            while (total > MAX_PENDING_OUTPUT_BYTES && chunks.length > 1) {
+              total -= chunks.shift()?.length ?? 0;
+            }
+            pendingOutput.current.set(sessionId, chunks);
+            pendingBytes.current.set(sessionId, total);
           },
         );
+        if (!keep(stopData)) return;
 
-        if (cancelled) {
-          stopData();
-          stopClosed();
-          return;
+        const existing = await invoke<SessionSummary[]>("ssh_sessions");
+        if (!cancelled) {
+          setSessions((current) =>
+            reconcileSessionSnapshot(
+              current,
+              existing,
+              closedDuringHydration,
+            ),
+          );
+          hydrating = false;
+          closedDuringHydration.clear();
         }
-        disposers = [stopData, stopClosed];
       } catch {
+        hydrating = false;
+        closedDuringHydration.clear();
         // Browser preview: there is no backend to listen to.
       }
     }
@@ -244,6 +297,12 @@ export function useSshSessions(): SshApi {
       const set = dataHandlers.current.get(sessionId) ?? new Set();
       set.add(handler);
       dataHandlers.current.set(sessionId, set);
+      const pending = pendingOutput.current.get(sessionId);
+      pendingOutput.current.delete(sessionId);
+      pendingBytes.current.delete(sessionId);
+      if (pending) {
+        for (const bytes of pending) handler(bytes);
+      }
 
       return () => {
         set.delete(handler);

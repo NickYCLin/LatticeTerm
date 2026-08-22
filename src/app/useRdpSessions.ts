@@ -1,6 +1,7 @@
 /** Native RDP sessions rendered by the embedded Canvas pane. */
 
 import { useCallback, useEffect, useState } from "react";
+import { reconcileSessionSnapshot } from "./sessionSnapshot";
 
 export interface RdpFrame {
   frameId: number;
@@ -76,12 +77,41 @@ export function useRdpSessions(): RdpApi {
   const [sessions, setSessions] = useState<RdpSessionSummary[]>([]);
 
   useEffect(() => {
-    let disposers: Array<() => void> = [];
+    const disposers: Array<() => void> = [];
     let cancelled = false;
+    let hydrating = true;
+    const closedDuringHydration = new Set<string>();
+    const pendingFrames = new Map<string, RdpFrame>();
+
+    function keep(dispose: () => void): boolean {
+      if (cancelled) {
+        dispose();
+        return false;
+      }
+      disposers.push(dispose);
+      return true;
+    }
 
     async function subscribe() {
       try {
-        const { listen } = await import("@tauri-apps/api/event");
+        const [{ invoke }, { listen }] = await Promise.all([
+          core(),
+          import("@tauri-apps/api/event"),
+        ]);
+
+        const stopClosed = await listen<{ sessionId: string; reason: string }>(
+          "rdp://closed",
+          (event) => {
+            const sessionId = event.payload.sessionId;
+            if (hydrating) closedDuringHydration.add(sessionId);
+            pendingFrames.delete(sessionId);
+            setSessions((current) =>
+              current.filter((session) => session.sessionId !== sessionId),
+            );
+          },
+        );
+        if (!keep(stopClosed)) return;
+
         const stopFrames = await listen<FrameEvent>("rdp://frame", (event) => {
           const frame: RdpFrame = {
             frameId: event.payload.frameId,
@@ -89,6 +119,7 @@ export function useRdpSessions(): RdpApi {
             height: event.payload.height,
             dataUrl: `data:${event.payload.mimeType};base64,${event.payload.base64}`,
           };
+          if (hydrating) pendingFrames.set(event.payload.sessionId, frame);
           setSessions((current) =>
             current.map((session) =>
               session.sessionId === event.payload.sessionId
@@ -97,23 +128,32 @@ export function useRdpSessions(): RdpApi {
             ),
           );
         });
-        const stopClosed = await listen<{ sessionId: string; reason: string }>(
-          "rdp://closed",
-          (event) => {
-            setSessions((current) =>
-              current.filter(
-                (session) => session.sessionId !== event.payload.sessionId,
-              ),
-            );
-          },
-        );
-        if (cancelled) {
-          stopFrames();
-          stopClosed();
-          return;
+        if (!keep(stopFrames)) return;
+
+        const existing =
+          await invoke<Array<Omit<RdpSessionSummary, "frame">>>("rdp_sessions");
+        if (!cancelled) {
+          const restored = existing.map<RdpSessionSummary>((session) => {
+            const frame = pendingFrames.get(session.sessionId) ?? null;
+            return frame
+              ? { ...session, width: frame.width, height: frame.height, frame }
+              : { ...session, frame: null };
+          });
+          setSessions((current) =>
+            reconcileSessionSnapshot(
+              current,
+              restored,
+              closedDuringHydration,
+            ),
+          );
+          hydrating = false;
+          closedDuringHydration.clear();
+          pendingFrames.clear();
         }
-        disposers = [stopFrames, stopClosed];
       } catch {
+        hydrating = false;
+        closedDuringHydration.clear();
+        pendingFrames.clear();
         // Browser preview intentionally has no native RDP event source.
       }
     }

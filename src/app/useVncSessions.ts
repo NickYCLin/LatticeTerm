@@ -1,6 +1,7 @@
 /** Native VNC sessions rendered by the embedded Canvas pane. */
 
 import { useCallback, useEffect, useState } from "react";
+import { reconcileSessionSnapshot } from "./sessionSnapshot";
 
 export interface VncFrame {
   frameId: number;
@@ -66,12 +67,41 @@ export function useVncSessions(): VncApi {
   const [sessions, setSessions] = useState<VncSessionSummary[]>([]);
 
   useEffect(() => {
-    let disposers: Array<() => void> = [];
+    const disposers: Array<() => void> = [];
     let cancelled = false;
+    let hydrating = true;
+    const closedDuringHydration = new Set<string>();
+    const pendingFrames = new Map<string, VncFrame>();
+
+    function keep(dispose: () => void): boolean {
+      if (cancelled) {
+        dispose();
+        return false;
+      }
+      disposers.push(dispose);
+      return true;
+    }
 
     async function subscribe() {
       try {
-        const { listen } = await import("@tauri-apps/api/event");
+        const [{ invoke }, { listen }] = await Promise.all([
+          core(),
+          import("@tauri-apps/api/event"),
+        ]);
+
+        const stopClosed = await listen<{ sessionId: string; reason: string }>(
+          "vnc://closed",
+          (event) => {
+            const sessionId = event.payload.sessionId;
+            if (hydrating) closedDuringHydration.add(sessionId);
+            pendingFrames.delete(sessionId);
+            setSessions((current) =>
+              current.filter((session) => session.sessionId !== sessionId),
+            );
+          },
+        );
+        if (!keep(stopClosed)) return;
+
         const stopFrames = await listen<FrameEvent>("vnc://frame", (event) => {
           const frame: VncFrame = {
             frameId: event.payload.frameId,
@@ -79,6 +109,7 @@ export function useVncSessions(): VncApi {
             height: event.payload.height,
             dataUrl: `data:${event.payload.mimeType};base64,${event.payload.base64}`,
           };
+          if (hydrating) pendingFrames.set(event.payload.sessionId, frame);
           setSessions((current) =>
             current.map((session) =>
               session.sessionId === event.payload.sessionId
@@ -87,23 +118,32 @@ export function useVncSessions(): VncApi {
             ),
           );
         });
-        const stopClosed = await listen<{ sessionId: string; reason: string }>(
-          "vnc://closed",
-          (event) => {
-            setSessions((current) =>
-              current.filter(
-                (session) => session.sessionId !== event.payload.sessionId,
-              ),
-            );
-          },
-        );
-        if (cancelled) {
-          stopFrames();
-          stopClosed();
-          return;
+        if (!keep(stopFrames)) return;
+
+        const existing =
+          await invoke<Array<Omit<VncSessionSummary, "frame">>>("vnc_sessions");
+        if (!cancelled) {
+          const restored = existing.map<VncSessionSummary>((session) => {
+            const frame = pendingFrames.get(session.sessionId) ?? null;
+            return frame
+              ? { ...session, width: frame.width, height: frame.height, frame }
+              : { ...session, frame: null };
+          });
+          setSessions((current) =>
+            reconcileSessionSnapshot(
+              current,
+              restored,
+              closedDuringHydration,
+            ),
+          );
+          hydrating = false;
+          closedDuringHydration.clear();
+          pendingFrames.clear();
         }
-        disposers = [stopFrames, stopClosed];
       } catch {
+        hydrating = false;
+        closedDuringHydration.clear();
+        pendingFrames.clear();
         // Browser preview intentionally has no native VNC event source.
       }
     }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { HostKeyRecord } from "../domain/security";
+import { reconcileSessionSnapshot } from "./sessionSnapshot";
 
 export const SFTP_MAX_TRANSFER_BYTES = 32 * 1024 * 1024;
 
@@ -230,22 +231,36 @@ export function useSftpSessions(): SftpApi {
           core(),
           import("@tauri-apps/api/event"),
         ]);
-        const existing = await invoke<SftpTransfer[]>("sftp_transfers");
-        if (!cancelled) {
-          setTransfers((current) => {
-            const next = { ...current };
-            for (const transfer of existing) next[transfer.transferId] = transfer;
-            return next;
-          });
-        }
+
+        // Listen first so a progress event that races with the snapshots wins.
         const unlisten = await listen<SftpTransfer>("sftp://transfer", (event) => {
           setTransfers((current) => ({
             ...current,
             [event.payload.transferId]: event.payload,
           }));
         });
-        if (cancelled) unlisten();
-        else stop = unlisten;
+        if (cancelled) {
+          unlisten();
+          return;
+        }
+        stop = unlisten;
+
+        const [existingTransfers, existingSessions] = await Promise.all([
+          invoke<SftpTransfer[]>("sftp_transfers"),
+          invoke<SftpSessionSummary[]>("sftp_sessions"),
+        ]);
+        if (!cancelled) {
+          setTransfers((current) => {
+            const snapshot: Record<string, SftpTransfer> = {};
+            for (const transfer of existingTransfers) {
+              snapshot[transfer.transferId] = transfer;
+            }
+            return { ...snapshot, ...current };
+          });
+          setSessions((current) =>
+            reconcileSessionSnapshot(current, existingSessions),
+          );
+        }
       } catch {
         // Outside the desktop shell there are no transfers to watch.
       }
