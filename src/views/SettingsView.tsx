@@ -10,6 +10,7 @@ import type {
   DensityChoice,
   MotionChoice,
   Preferences,
+  VaultAutoLockChoice,
 } from "../app/preferences";
 import { themeCatalog } from "../app/themes";
 import type { RuntimeState } from "../app/useRuntimeSummary";
@@ -37,11 +38,22 @@ const motionChoices: Choice<MotionChoice>[] = [
   { value: "reduced", labelKey: "settings.motion.reduced" },
 ];
 
+const vaultAutoLockChoices: Choice<VaultAutoLockChoice>[] = [
+  { value: "off", labelKey: "settings.security.autoLock.off" },
+  { value: "5", labelKey: "settings.security.autoLock.5min" },
+  { value: "15", labelKey: "settings.security.autoLock.15min" },
+  { value: "30", labelKey: "settings.security.autoLock.30min" },
+  { value: "60", labelKey: "settings.security.autoLock.60min" },
+];
+
+type ToggleChoice = "enabled" | "disabled";
+
+const backgroundLockChoices: Choice<ToggleChoice>[] = [
+  { value: "enabled", labelKey: "settings.security.background.enabled" },
+  { value: "disabled", labelKey: "settings.security.background.disabled" },
+];
+
 const plannedSecurity: { titleKey: MessageKey; detailKey: MessageKey }[] = [
-  {
-    titleKey: "settings.security.autoLock",
-    detailKey: "settings.security.autoLockDetail",
-  },
   {
     titleKey: "settings.security.clipboard",
     detailKey: "settings.security.clipboardDetail",
@@ -242,6 +254,33 @@ export function SettingsView({
         <Callout tone="security" title={t("settings.security.title")}>
           {t("settings.security.body")}
         </Callout>
+
+        <div className="setting-list">
+          <SegmentedSetting
+            title={t("settings.security.autoLock")}
+            description={t("settings.security.autoLockDetail")}
+            choices={vaultAutoLockChoices.map((choice) => ({
+              value: choice.value,
+              label: t(choice.labelKey),
+            }))}
+            value={preferences.vaultAutoLock}
+            onChange={(vaultAutoLock) => onChange({ vaultAutoLock })}
+          />
+          <SegmentedSetting
+            title={t("settings.security.background")}
+            description={t("settings.security.backgroundDetail")}
+            choices={backgroundLockChoices.map((choice) => ({
+              value: choice.value,
+              label: t(choice.labelKey),
+            }))}
+            value={
+              preferences.vaultLockOnBackground ? "enabled" : "disabled"
+            }
+            onChange={(choice) =>
+              onChange({ vaultLockOnBackground: choice === "enabled" })
+            }
+          />
+        </div>
 
         <ul className="planned-list">
           {plannedSecurity.map((entry) => (

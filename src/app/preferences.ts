@@ -1,8 +1,9 @@
 /**
- * Interface preferences: theme, language, density and motion.
+ * Interface preferences: appearance, layout and local security policy.
  *
- * Appearance only. They are written to `localStorage` because losing them is
- * harmless; nothing secret, and no connection data, is stored here.
+ * They are written to `localStorage` because losing them is harmless; the
+ * security entries select local lock timing only. No secret or connection
+ * data is stored here.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -11,12 +12,15 @@ import { resolveTheme, themeIds, type ThemeChoice, type ThemeId } from "./themes
 
 export type DensityChoice = "comfortable" | "compact";
 export type MotionChoice = "system" | "reduced";
+export type VaultAutoLockChoice = "off" | "5" | "15" | "30" | "60";
 
 export interface Preferences {
   theme: ThemeChoice;
   locale: Locale;
   density: DensityChoice;
   motion: MotionChoice;
+  vaultAutoLock: VaultAutoLockChoice;
+  vaultLockOnBackground: boolean;
   sidebarCollapsed: boolean;
   inspectorOpen: boolean;
 }
@@ -26,6 +30,8 @@ export const defaultPreferences: Preferences = {
   locale: defaultLocale,
   density: "comfortable",
   motion: "system",
+  vaultAutoLock: "15",
+  vaultLockOnBackground: true,
   sidebarCollapsed: false,
   inspectorOpen: true,
 };
@@ -34,12 +40,19 @@ const STORAGE_KEY = "latticeterm.preferences.v2";
 
 const knownThemes = new Set<string>([...themeIds, "system"]);
 const knownLocales = new Set<string>(localeCatalog.map((entry) => entry.id));
+const knownVaultAutoLockChoices = new Set<string>([
+  "off",
+  "5",
+  "15",
+  "30",
+  "60",
+]);
 
 /**
  * Ignores anything unrecognised, so an older file or a hand-edited one cannot
  * leave the app painted in a theme that no longer exists.
  */
-function sanitize(stored: Partial<Preferences>): Preferences {
+export function sanitizePreferences(stored: Partial<Preferences>): Preferences {
   return {
     theme: knownThemes.has(String(stored.theme))
       ? (stored.theme as ThemeChoice)
@@ -49,6 +62,13 @@ function sanitize(stored: Partial<Preferences>): Preferences {
       : defaultPreferences.locale,
     density: stored.density === "compact" ? "compact" : "comfortable",
     motion: stored.motion === "reduced" ? "reduced" : "system",
+    vaultAutoLock: knownVaultAutoLockChoices.has(String(stored.vaultAutoLock))
+      ? (stored.vaultAutoLock as VaultAutoLockChoice)
+      : defaultPreferences.vaultAutoLock,
+    vaultLockOnBackground:
+      typeof stored.vaultLockOnBackground === "boolean"
+        ? stored.vaultLockOnBackground
+        : defaultPreferences.vaultLockOnBackground,
     sidebarCollapsed: Boolean(stored.sidebarCollapsed),
     inspectorOpen: stored.inspectorOpen !== false,
   };
@@ -58,7 +78,7 @@ function readStored(): Preferences {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultPreferences;
-    return sanitize(JSON.parse(raw) as Partial<Preferences>);
+    return sanitizePreferences(JSON.parse(raw) as Partial<Preferences>);
   } catch {
     return defaultPreferences;
   }

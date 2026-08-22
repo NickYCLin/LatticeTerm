@@ -335,12 +335,23 @@ export const zhTW = {
   "settings.motion.reduced": "減少動態",
   "settings.security": "安全性",
   "settings.securityHint":
-    "主機金鑰嚴格驗證與系統認證儲存已啟用；自動鎖定、剪貼簿清除與加密備份仍在開發中。",
+    "主機金鑰嚴格驗證、系統認證儲存與保管庫自動鎖定已啟用；剪貼簿清除與加密備份仍在開發中。",
   "settings.security.title": "主機信任與系統認證儲存已啟用",
   "settings.security.body":
     "SSH/SFTP/RDP 密碼預設只用於當次連線；明確勾選後，也只有驗證成功才交給作業系統安全保存，連線設定檔仍不含機密。",
   "settings.security.autoLock": "自動鎖定保管庫",
-  "settings.security.autoLockDetail": "閒置一段時間或切換到其他程式時自動上鎖。",
+  "settings.security.autoLockDetail":
+    "沒有鍵盤、滑鼠或觸控操作達指定時間後，立即清除記憶體中的解密金鑰。",
+  "settings.security.autoLock.off": "關閉",
+  "settings.security.autoLock.5min": "5 分鐘",
+  "settings.security.autoLock.15min": "15 分鐘",
+  "settings.security.autoLock.30min": "30 分鐘",
+  "settings.security.autoLock.60min": "60 分鐘",
+  "settings.security.background": "切換到其他程式時鎖定",
+  "settings.security.backgroundDetail":
+    "視窗失去焦點或進入背景時立即上鎖；現有遠端與終端工作階段不會中斷。",
+  "settings.security.background.enabled": "啟用",
+  "settings.security.background.disabled": "停用",
   "settings.security.hostKey": "主機金鑰驗證原則",
   "settings.security.hostKeyDetail": "嚴格比對已知主機，第一次連線時由你明確決定是否信任。",
   "settings.security.clipboard": "剪貼簿清除",

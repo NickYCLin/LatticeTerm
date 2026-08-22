@@ -349,13 +349,23 @@ export const en: Messages = {
   "settings.motion.reduced": "Reduce motion",
   "settings.security": "Security",
   "settings.securityHint":
-    "Strict host-key verification and system credential storage are active. Auto-lock, clipboard clearing, and encrypted backup are still in development.",
+    "Strict host-key verification, system credential storage, and vault auto-lock are active. Clipboard clearing and encrypted backup are still in development.",
   "settings.security.title": "Host trust and system credential storage are active",
   "settings.security.body":
     "SSH, SFTP, and RDP passwords default to one connection attempt. When explicitly selected, only a successfully verified password is saved by the operating system; connection profiles remain secret-free.",
   "settings.security.autoLock": "Auto-lock the vault",
   "settings.security.autoLockDetail":
-    "Lock after a period of inactivity, and when the app loses focus.",
+    "Clear decrypted keys from memory after the selected period without keyboard, pointer, or touch activity.",
+  "settings.security.autoLock.off": "Off",
+  "settings.security.autoLock.5min": "5 minutes",
+  "settings.security.autoLock.15min": "15 minutes",
+  "settings.security.autoLock.30min": "30 minutes",
+  "settings.security.autoLock.60min": "60 minutes",
+  "settings.security.background": "Lock when switching apps",
+  "settings.security.backgroundDetail":
+    "Lock immediately when the window loses focus or enters the background. Existing remote and terminal sessions stay connected.",
+  "settings.security.background.enabled": "On",
+  "settings.security.background.disabled": "Off",
   "settings.security.hostKey": "Host key verification policy",
   "settings.security.hostKeyDetail":
     "Strict known-host checking, with an explicit trust decision on first connect.",

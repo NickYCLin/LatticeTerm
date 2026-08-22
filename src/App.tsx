@@ -25,6 +25,8 @@ import { useRemoteSessions } from "./app/useRemoteSessions";
 import { useRemoteHost } from "./app/useRemoteHost";
 import { useRdpSessions } from "./app/useRdpSessions";
 import { useVncSessions } from "./app/useVncSessions";
+import { useVault } from "./app/useVault";
+import { useVaultAutoLock } from "./app/useVaultAutoLock";
 import { useWindowTheme } from "./app/useWindowTheme";
 import { useWorkspace } from "./app/useWorkspace";
 import { useCredentialDeleteGuard } from "./app/useSavedCredential";
@@ -73,6 +75,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const remoteHost = useRemoteHost();
   const rdp = useRdpSessions();
   const vnc = useVncSessions();
+  const vault = useVault();
+
+  useVaultAutoLock(preferences, vault);
 
   useWindowTheme(findTheme(activeTheme).isDark);
 
@@ -418,7 +423,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 profiles={profiles.filter((entry) => entry.protocol === "ssh")}
               />
             )}
-            {view === "vault" && <VaultView workspace={workspace} />}
+            {view === "vault" && (
+              <VaultView workspace={workspace} vault={vault} />
+            )}
             {view === "activity" && <ActivityView workspace={workspace} />}
             {view === "settings" && (
               <SettingsView

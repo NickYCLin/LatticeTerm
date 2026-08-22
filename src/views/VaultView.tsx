@@ -5,7 +5,7 @@
  * can verify and delete OS-store entries, but it never requests secret values.
  */
 
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useHostTrust } from "../app/useHostTrust";
 import {
@@ -32,7 +32,7 @@ import {
 } from "../components/icons";
 import { Chip } from "../components/common/Badge";
 import { EncryptedVaultPanel } from "../components/vault/EncryptedVaultPanel";
-import { useVault } from "../app/useVault";
+import type { VaultApi } from "../app/useVault";
 import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 
@@ -49,14 +49,22 @@ function reasonText(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-export function VaultView({ workspace }: { workspace: WorkspaceState }) {
+export function VaultView({
+  workspace,
+  vault,
+}: {
+  workspace: WorkspaceState;
+  vault: VaultApi;
+}) {
   const { t, tag } = useI18n();
   const trust = useHostTrust();
   const credentials = useCredentialInventory(workspace.profiles);
   const formId = useId();
 
   const [activeTab, setActiveTab] = useState<"hosts" | "credentials" | "encrypted">("hosts");
-  const vault = useVault(() => void credentials.refresh());
+  useEffect(() => {
+    void credentials.refresh();
+  }, [credentials.refresh, vault.backend, vault.status?.state]);
   const [hostSearch, setHostSearch] = useState("");
   const [showAddHostModal, setShowAddHostModal] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<HostKeyRecord | null>(null);
