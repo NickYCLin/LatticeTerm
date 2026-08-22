@@ -4,6 +4,18 @@
 
 ---
 
+## [0.12.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.11.0...v0.12.0) (2026-08-22)
+
+
+### 🚀 新增功能
+
+* **備份:** 加入完整工作區加密匯出與還原 ([fc36800](https://github.com/NickYCLin/LatticeTerm/commit/fc36800c2c97ee1004ddbfdb3ab58bc6a38dd035))
+
+
+### 🛠️ 問題修正
+
+* **介面:** 強化停用按鈕的視覺狀態 ([07f76ba](https://github.com/NickYCLin/LatticeTerm/commit/07f76ba06e7bd7611356153a6a38abe1b3df70ad))
+
 ## [0.11.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.10.0...v0.11.0) (2026-08-22)
 
 
