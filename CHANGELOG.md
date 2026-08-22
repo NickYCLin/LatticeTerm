@@ -4,6 +4,13 @@
 
 ---
 
+## [0.13.4](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.3...v0.13.4) (2026-08-22)
+
+
+### 🛠️ 問題修正
+
+* **工作階段:** 保留 Agent 與 SSH 非預期中斷原因 ([a338099](https://github.com/NickYCLin/LatticeTerm/commit/a33809968f47977464d4afd8615ec3a072c8ac13))
+
 ## [0.13.3](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.2...v0.13.3) (2026-08-22)
 
 
