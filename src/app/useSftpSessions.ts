@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostKeyRecord } from "../domain/security";
 import { reconcileSessionSnapshot } from "./sessionSnapshot";
 
@@ -100,6 +100,49 @@ type SftpInvoke = (
   command: string,
   args?: Record<string, unknown>,
 ) => Promise<unknown>;
+
+const MAX_RECENTLY_REMOVED_IDS = 1_024;
+
+function rememberRemovedId(ids: Set<string>, id: string) {
+  ids.add(id);
+  if (ids.size <= MAX_RECENTLY_REMOVED_IDS) return;
+  const oldest = ids.values().next().value;
+  if (oldest !== undefined) ids.delete(oldest);
+}
+
+/**
+ * Snapshot reconciliation for the transfer queue. Event state wins over an
+ * older snapshot, while acknowledged dismissals act as bounded tombstones so
+ * neither a snapshot nor a delayed progress event can bring a row back.
+ */
+export function reconcileSftpTransferSnapshot(
+  current: Record<string, SftpTransfer>,
+  snapshot: SftpTransfer[],
+  dismissedTransferIds: ReadonlySet<string> = new Set(),
+): Record<string, SftpTransfer> {
+  const reconciled: Record<string, SftpTransfer> = {};
+  for (const transfer of snapshot) {
+    if (!dismissedTransferIds.has(transfer.transferId)) {
+      reconciled[transfer.transferId] = transfer;
+    }
+  }
+  for (const transfer of Object.values(current)) {
+    if (!dismissedTransferIds.has(transfer.transferId)) {
+      reconciled[transfer.transferId] = transfer;
+    }
+  }
+  return reconciled;
+}
+
+/** Calls the backend first; the interface only removes an acknowledged row. */
+export async function dismissSftpTransfer(
+  transferId: string,
+  invoke: SftpInvoke,
+  onDismissed: (transferId: string) => void,
+): Promise<void> {
+  await invoke("sftp_transfer_dismiss", { transferId });
+  onDismissed(transferId);
+}
 
 /**
  * Feeds one browser file stream into an already-created backend transfer.
@@ -218,6 +261,8 @@ export interface SftpApi {
 export function useSftpSessions(): SftpApi {
   const [sessions, setSessions] = useState<SftpSessionSummary[]>([]);
   const [transfers, setTransfers] = useState<Record<string, SftpTransfer>>({});
+  const disconnectedSessionIds = useRef(new Set<string>());
+  const dismissedTransferIds = useRef(new Set<string>());
 
   // One listener carries every transfer's progress; a snapshot fetch fills in
   // whatever moved before this view mounted.
@@ -234,6 +279,7 @@ export function useSftpSessions(): SftpApi {
 
         // Listen first so a progress event that races with the snapshots wins.
         const unlisten = await listen<SftpTransfer>("sftp://transfer", (event) => {
+          if (dismissedTransferIds.current.has(event.payload.transferId)) return;
           setTransfers((current) => ({
             ...current,
             [event.payload.transferId]: event.payload,
@@ -250,15 +296,19 @@ export function useSftpSessions(): SftpApi {
           invoke<SftpSessionSummary[]>("sftp_sessions"),
         ]);
         if (!cancelled) {
-          setTransfers((current) => {
-            const snapshot: Record<string, SftpTransfer> = {};
-            for (const transfer of existingTransfers) {
-              snapshot[transfer.transferId] = transfer;
-            }
-            return { ...snapshot, ...current };
-          });
+          setTransfers((current) =>
+            reconcileSftpTransferSnapshot(
+              current,
+              existingTransfers,
+              dismissedTransferIds.current,
+            ),
+          );
           setSessions((current) =>
-            reconcileSessionSnapshot(current, existingSessions),
+            reconcileSessionSnapshot(
+              current,
+              existingSessions,
+              disconnectedSessionIds.current,
+            ),
           );
         }
       } catch {
@@ -299,6 +349,7 @@ export function useSftpSessions(): SftpApi {
       const { invoke } = await core();
       await invoke("sftp_disconnect", { sessionId });
     } finally {
+      rememberRemovedId(disconnectedSessionIds.current, sessionId);
       setSessions((current) =>
         current.filter((session) => session.sessionId !== sessionId),
       );
@@ -408,16 +459,15 @@ export function useSftpSessions(): SftpApi {
   }, []);
 
   const dismissTransfer = useCallback(async (transferId: string) => {
-    try {
-      const { invoke } = await core();
-      await invoke("sftp_transfer_dismiss", { transferId });
-    } finally {
+    const { invoke } = await core();
+    await dismissSftpTransfer(transferId, invoke, (dismissedId) => {
+      rememberRemovedId(dismissedTransferIds.current, dismissedId);
       setTransfers((current) => {
         const next = { ...current };
-        delete next[transferId];
+        delete next[dismissedId];
         return next;
       });
-    }
+    });
   }, []);
 
   const trustHost = useCallback(

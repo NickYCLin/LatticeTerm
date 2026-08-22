@@ -152,6 +152,15 @@ export function SftpPane({
     if (uploadRef.current) uploadRef.current.value = "";
   }
 
+  async function transferAction(operation: () => Promise<void>) {
+    setProblem(null);
+    try {
+      await operation();
+    } catch (reason) {
+      setProblem(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
   function size(entry: SftpEntry): string {
     if (entry.kind === "directory") return "—";
     return new Intl.NumberFormat(tag, {
@@ -393,7 +402,11 @@ export function SftpPane({
                   <button
                     type="button"
                     className="icon-button icon-button--sm"
-                    onClick={() => void sftp.cancelTransfer(transfer.transferId)}
+                    onClick={() =>
+                      void transferAction(() =>
+                        sftp.cancelTransfer(transfer.transferId),
+                      )
+                    }
                     aria-label={t("sftp.transfer.cancel")}
                     data-tooltip={t("sftp.transfer.cancel")}
                   >
@@ -403,7 +416,11 @@ export function SftpPane({
                   <button
                     type="button"
                     className="icon-button icon-button--sm"
-                    onClick={() => void sftp.dismissTransfer(transfer.transferId)}
+                    onClick={() =>
+                      void transferAction(() =>
+                        sftp.dismissTransfer(transfer.transferId),
+                      )
+                    }
                     aria-label={t("sftp.transfer.dismiss")}
                     data-tooltip={t("sftp.transfer.dismiss")}
                   >
