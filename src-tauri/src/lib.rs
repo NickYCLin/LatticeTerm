@@ -324,6 +324,15 @@ fn save_connection_profile(
 }
 
 #[tauri::command]
+fn replace_connection_profiles(
+    profiles: Vec<ConnectionProfile>,
+    storage: State<'_, AppStorage>,
+) -> Result<(), String> {
+    let mut guard = storage.lock().map_err(|e| e.to_string())?;
+    guard.replace_profiles(profiles).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn delete_connection_profile(
     id: String,
     storage: State<'_, AppStorage>,
@@ -1218,6 +1227,7 @@ pub fn run() {
             storage_status,
             list_connection_profiles,
             save_connection_profile,
+            replace_connection_profiles,
             delete_connection_profile,
             ssh_connect,
             ssh_send,

@@ -193,7 +193,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         label: t("palette.command.samples"),
         hint: t("palette.command.samplesHint"),
         group: t("palette.group.actions"),
-        run: loadSamples,
+        run: () => {
+          void loadSamples();
+        },
       });
     }
 

@@ -63,6 +63,8 @@ export const en: Messages = {
   // Connection list -------------------------------------------------------
   "connections.add": "Add connection",
   "connections.loadSamples": "Load samples",
+  "connections.samplesFailed": "Could not load samples",
+  "connections.samplesFailedBody": "The sample connections could not be written to disk: {error}",
   "connections.importJson": "Import file",
   "connections.exportJson": "Export",
   "connections.count": "{count} connections",
@@ -981,6 +983,10 @@ export const en: Messages = {
   "transfer.import.partialBody": "{errors} ({skipped} invalid entries skipped)",
   "transfer.import.failed": "Import failed",
   "transfer.import.failedBody": "No usable connections were found in the file.",
+  "transfer.import.persistFailedBody":
+    "The connections could not be written to disk, so the existing workspace was not changed: {error}",
+  "transfer.import.readFailedBody":
+    "The selected file could not be read. Make sure it still exists and is accessible.",
   "transfer.export.hint":
     "The exported file contains host details only, never secrets.",
   "transfer.error.json": "The file is not valid JSON.",

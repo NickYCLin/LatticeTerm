@@ -60,6 +60,8 @@ export const zhTW = {
   // 連線清單 --------------------------------------------------------------
   "connections.add": "新增連線",
   "connections.loadSamples": "載入範例",
+  "connections.samplesFailed": "無法載入範例",
+  "connections.samplesFailedBody": "範例連線無法寫入磁碟：{error}",
   "connections.importJson": "匯入檔案",
   "connections.exportJson": "匯出",
   "connections.count": "{count} 個連線",
@@ -908,6 +910,8 @@ export const zhTW = {
   "transfer.import.partialBody": "{errors}（略過 {skipped} 筆無效資料）",
   "transfer.import.failed": "匯入失敗",
   "transfer.import.failedBody": "檔案裡找不到可用的連線設定。",
+  "transfer.import.persistFailedBody": "連線設定無法寫入磁碟，原有資料未變更：{error}",
+  "transfer.import.readFailedBody": "無法讀取選取的檔案，請確認檔案仍然存在且可存取。",
   "transfer.export.hint": "匯出的檔案只含主機資訊，不含任何機密資料。",
   "transfer.error.json": "檔案不是有效的 JSON 格式。",
   "transfer.error.notObject": "匯入資料必須是 JSON 物件。",

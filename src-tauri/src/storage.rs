@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 pub const STORE_VERSION: u32 = 1;
 
 const STORE_FILE: &str = "connections.json";
-const TEMP_FILE: &str = "connections.json.tmp";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageError {
@@ -46,6 +45,7 @@ pub trait Storage: Send + Sync {
     fn insert_profile(&mut self, profile: ConnectionProfile) -> Result<(), StorageError>;
     fn update_profile(&mut self, profile: ConnectionProfile) -> Result<(), StorageError>;
     fn delete_profile(&mut self, id: &str) -> Result<bool, StorageError>;
+    fn replace_profiles(&mut self, profiles: Vec<ConnectionProfile>) -> Result<(), StorageError>;
 }
 
 #[derive(Debug, Default, Clone)]
@@ -65,6 +65,26 @@ fn sorted(profiles: &HashMap<String, ConnectionProfile>) -> Vec<ConnectionProfil
     let mut list: Vec<ConnectionProfile> = profiles.values().cloned().collect();
     list.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
     list
+}
+
+fn index_profiles(
+    profiles: Vec<ConnectionProfile>,
+) -> Result<HashMap<String, ConnectionProfile>, StorageError> {
+    let mut indexed = HashMap::with_capacity(profiles.len());
+    for profile in profiles {
+        let id = profile.id.clone();
+        if id.trim().is_empty() {
+            return Err(StorageError::Validation(
+                "profile ID cannot be empty".to_string(),
+            ));
+        }
+        if indexed.insert(id.clone(), profile).is_some() {
+            return Err(StorageError::Validation(format!(
+                "profile ID '{id}' appears more than once"
+            )));
+        }
+    }
+    Ok(indexed)
 }
 
 impl Storage for InMemoryStorage {
@@ -91,6 +111,11 @@ impl Storage for InMemoryStorage {
 
     fn delete_profile(&mut self, id: &str) -> Result<bool, StorageError> {
         Ok(self.profiles.remove(id).is_some())
+    }
+
+    fn replace_profiles(&mut self, profiles: Vec<ConnectionProfile>) -> Result<(), StorageError> {
+        self.profiles = index_profiles(profiles)?;
+        Ok(())
     }
 }
 
@@ -195,10 +220,13 @@ impl FileStorage {
         self.recovery.as_ref()
     }
 
-    fn persist(&self) -> Result<(), StorageError> {
+    fn persist_profiles(
+        &self,
+        profiles: &HashMap<String, ConnectionProfile>,
+    ) -> Result<(), StorageError> {
         let file = StoreFile {
             version: STORE_VERSION,
-            profiles: sorted(&self.profiles),
+            profiles: sorted(profiles),
         };
 
         let json = serde_json::to_string_pretty(&file)
@@ -208,21 +236,24 @@ impl FileStorage {
             .path
             .parent()
             .ok_or_else(|| StorageError::Internal("store path has no directory".into()))?;
-        let temp = dir.join(TEMP_FILE);
+        let mut temp = tempfile::Builder::new()
+            .prefix(".connections-")
+            .suffix(".tmp")
+            .tempfile_in(dir)
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        {
-            let mut handle =
-                fs::File::create(&temp).map_err(|e| StorageError::Internal(e.to_string()))?;
-            handle
-                .write_all(json.as_bytes())
-                .map_err(|e| StorageError::Internal(e.to_string()))?;
-            // Flush before the rename, so the swap cannot publish a short file.
-            handle
-                .sync_all()
-                .map_err(|e| StorageError::Internal(e.to_string()))?;
-        }
+        temp.write_all(json.as_bytes())
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
+        // Flush before the rename, so the swap cannot publish a short file.
+        temp.as_file()
+            .sync_all()
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        fs::rename(&temp, &self.path).map_err(|e| StorageError::Internal(e.to_string()))
+        // NamedTempFile::persist atomically replaces the destination on all
+        // supported desktop platforms and cleans the temporary file on error.
+        temp.persist(&self.path)
+            .map(|_| ())
+            .map_err(|e| StorageError::Internal(e.to_string()))
     }
 }
 
@@ -236,24 +267,41 @@ impl Storage for FileStorage {
     }
 
     fn insert_profile(&mut self, profile: ConnectionProfile) -> Result<(), StorageError> {
-        self.profiles.insert(profile.id.clone(), profile);
-        self.persist()
+        let mut next = self.profiles.clone();
+        next.insert(profile.id.clone(), profile);
+        self.persist_profiles(&next)?;
+        self.profiles = next;
+        Ok(())
     }
 
     fn update_profile(&mut self, profile: ConnectionProfile) -> Result<(), StorageError> {
         if !self.profiles.contains_key(&profile.id) {
             return Err(StorageError::NotFound(profile.id));
         }
-        self.profiles.insert(profile.id.clone(), profile);
-        self.persist()
+        let mut next = self.profiles.clone();
+        next.insert(profile.id.clone(), profile);
+        self.persist_profiles(&next)?;
+        self.profiles = next;
+        Ok(())
     }
 
     fn delete_profile(&mut self, id: &str) -> Result<bool, StorageError> {
-        let removed = self.profiles.remove(id).is_some();
-        if removed {
-            self.persist()?;
+        if !self.profiles.contains_key(id) {
+            return Ok(false);
         }
-        Ok(removed)
+
+        let mut next = self.profiles.clone();
+        next.remove(id);
+        self.persist_profiles(&next)?;
+        self.profiles = next;
+        Ok(true)
+    }
+
+    fn replace_profiles(&mut self, profiles: Vec<ConnectionProfile>) -> Result<(), StorageError> {
+        let next = index_profiles(profiles)?;
+        self.persist_profiles(&next)?;
+        self.profiles = next;
+        Ok(())
     }
 }
 
@@ -364,7 +412,75 @@ mod file_storage_tests {
             .insert_profile(profile("p-1", "Edge gateway"))
             .unwrap();
 
-        assert!(!dir.join(TEMP_FILE).exists());
+        let temporary_files = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with(".connections-") && name.ends_with(".tmp")
+            })
+            .count();
+        assert_eq!(temporary_files, 0);
+    }
+
+    #[test]
+    fn replacing_profiles_is_one_durable_operation() {
+        let dir = temp_dir("replace");
+        let mut store = FileStorage::open(&dir).unwrap();
+
+        store
+            .replace_profiles(vec![
+                profile("p-1", "Edge gateway"),
+                profile("p-2", "App node"),
+            ])
+            .unwrap();
+
+        let reopened = FileStorage::open(&dir).unwrap();
+        let names: Vec<String> = reopened
+            .list_profiles()
+            .unwrap()
+            .into_iter()
+            .map(|profile| profile.name)
+            .collect();
+        assert_eq!(names, vec!["App node", "Edge gateway"]);
+    }
+
+    #[test]
+    fn failed_writes_leave_the_published_state_unchanged() {
+        let dir = temp_dir("transaction-rollback");
+        let mut store = FileStorage::open(&dir).unwrap();
+        store
+            .insert_profile(profile("p-1", "Edge gateway"))
+            .unwrap();
+        let before = store.list_profiles().unwrap();
+
+        let blocked_target = dir.join("blocked-target");
+        fs::create_dir(&blocked_target).unwrap();
+        store.path = blocked_target;
+
+        assert!(store.insert_profile(profile("p-2", "App node")).is_err());
+        assert_eq!(store.list_profiles().unwrap(), before);
+
+        assert!(store
+            .update_profile(profile("p-1", "Renamed gateway"))
+            .is_err());
+        assert_eq!(store.list_profiles().unwrap(), before);
+
+        assert!(store.delete_profile("p-1").is_err());
+        assert_eq!(store.list_profiles().unwrap(), before);
+
+        assert!(store
+            .replace_profiles(vec![profile("p-3", "Replacement")])
+            .is_err());
+        assert_eq!(store.list_profiles().unwrap(), before);
+
+        let temporary_files = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(temporary_files, 0);
     }
 
     #[test]

@@ -58,6 +58,24 @@ async function syncDeleteToBackend(id: string): Promise<void> {
   await invoke("delete_connection_profile", { id });
 }
 
+async function syncReplaceBackend(
+  profiles: ConnectionProfile[],
+): Promise<string | null> {
+  if (!("__TAURI_INTERNALS__" in window)) return null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("replace_connection_profiles", { profiles });
+    return null;
+  } catch (reason) {
+    return reason instanceof Error ? reason.message : String(reason);
+  }
+}
+
+export interface WorkspaceBatchResult {
+  count: number;
+  error: string | null;
+}
+
 export function useWorkspace() {
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
@@ -196,8 +214,18 @@ export function useWorkspace() {
     [persist, profiles],
   );
 
-  const loadSamples = useCallback((): void => {
+  const loadSamples = useCallback(async (): Promise<WorkspaceBatchResult> => {
     const loaded = sampleProfiles.map((profile) => ({ ...profile }));
+    const failure = await syncReplaceBackend(loaded);
+    if (failure) {
+      record({
+        kind: "workspace",
+        titleKey: "activity.saveFailed",
+        detail: failure,
+      });
+      return { count: 0, error: failure };
+    }
+
     setProfiles(loaded);
     setSelectedId(loaded[0]?.id ?? null);
     record({
@@ -208,17 +236,26 @@ export function useWorkspace() {
         values: { count: sampleProfiles.length },
       },
     });
-    for (const p of loaded) {
-      void syncSaveToBackend(p);
-    }
+    return { count: loaded.length, error: null };
   }, [record]);
 
   /** Imported entries are appended; nothing already in the workspace is lost. */
   const importProfiles = useCallback(
-    (imported: ConnectionProfile[]): number => {
-      if (imported.length === 0) return 0;
+    async (imported: ConnectionProfile[]): Promise<WorkspaceBatchResult> => {
+      if (imported.length === 0) return { count: 0, error: null };
 
-      setProfiles((current) => [...current, ...imported]);
+      const next = [...profiles, ...imported];
+      const failure = await syncReplaceBackend(next);
+      if (failure) {
+        record({
+          kind: "workspace",
+          titleKey: "activity.saveFailed",
+          detail: failure,
+        });
+        return { count: 0, error: failure };
+      }
+
+      setProfiles(next);
       setSelectedId((current) => current ?? imported[0].id);
 
       for (const profile of imported) {
@@ -227,12 +264,11 @@ export function useWorkspace() {
           subject: profile.name,
           detail: describe(profile),
         });
-        void syncSaveToBackend(profile);
       }
 
-      return imported.length;
+      return { count: imported.length, error: null };
     },
-    [record],
+    [profiles, record],
   );
 
   const resetFilter = useCallback((): void => setFilter(emptyFilter), []);

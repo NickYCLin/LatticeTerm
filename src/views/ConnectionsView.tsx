@@ -102,13 +102,24 @@ export function ConnectionsView({
     });
   }
 
+  async function handleLoadSamples() {
+    const result = await loadSamples();
+    if (result.error) {
+      setNotice({
+        tone: "warn",
+        title: t("connections.samplesFailed"),
+        body: t("connections.samplesFailedBody", { error: result.error }),
+      });
+    }
+  }
+
   function handleFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const result = parseAndValidateImport(String(reader.result ?? ""));
 
       if (result.validProfiles.length === 0) {
@@ -123,7 +134,17 @@ export function ConnectionsView({
         return;
       }
 
-      const count = importProfiles(result.validProfiles);
+      const imported = await importProfiles(result.validProfiles);
+      if (imported.error) {
+        setNotice({
+          tone: "warn",
+          title: t("transfer.import.failed"),
+          body: t("transfer.import.persistFailedBody", {
+            error: imported.error,
+          }),
+        });
+        return;
+      }
 
       setNotice(
         result.issues.length > 0
@@ -138,9 +159,18 @@ export function ConnectionsView({
           : {
               tone: "info",
               title: t("transfer.import.success"),
-              body: t("transfer.import.successBody", { count }),
+              body: t("transfer.import.successBody", {
+                count: imported.count,
+              }),
             },
       );
+    };
+    reader.onerror = () => {
+      setNotice({
+        tone: "warn",
+        title: t("transfer.import.failed"),
+        body: t("transfer.import.readFailedBody"),
+      });
     };
     reader.readAsText(file);
   }
@@ -184,7 +214,7 @@ export function ConnectionsView({
               <button
                 type="button"
                 className="button button--secondary"
-                onClick={loadSamples}
+                onClick={() => void handleLoadSamples()}
               >
                 {t("connections.loadSamples")}
               </button>
