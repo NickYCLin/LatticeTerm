@@ -9,6 +9,8 @@ mod secure;
 
 pub use protocol::{
     frame_messages, CompleteFrame, FrameAssembler, FrameDescriptor, FrameFormat, ProtocolError,
-    RemoteHello, RemoteMessage, DEFAULT_PORT, FRAME_CHUNK_SIZE, MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    RemoteHello, RemoteMessage, DEFAULT_PORT, FRAME_CHUNK_SIZE, MAX_AGENT_NAME_BYTES,
+    MAX_CLOSE_REASON_BYTES, MAX_FRAME_BYTES, MAX_FRAME_DIMENSION, MAX_FRAME_PIXELS,
+    PROTOCOL_VERSION,
 };
 pub use secure::{generate_pairing_code, normalize_pairing_code, RemoteError, SecureConnection};

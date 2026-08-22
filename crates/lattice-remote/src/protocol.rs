@@ -4,6 +4,10 @@ pub const PROTOCOL_VERSION: u16 = 1;
 pub const DEFAULT_PORT: u16 = 44_900;
 pub const FRAME_CHUNK_SIZE: usize = 48 * 1024;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_AGENT_NAME_BYTES: usize = 256;
+pub const MAX_FRAME_DIMENSION: u32 = 16_384;
+pub const MAX_FRAME_PIXELS: u64 = 32 * 1024 * 1024;
+pub const MAX_CLOSE_REASON_BYTES: usize = 1024;
 
 const MESSAGE_HELLO: u8 = 1;
 const MESSAGE_FRAME_START: u8 = 2;
@@ -101,14 +105,44 @@ impl fmt::Display for ProtocolError {
 
 impl std::error::Error for ProtocolError {}
 
+fn valid_frame_dimensions(width: u32, height: u32) -> bool {
+    width > 0
+        && height > 0
+        && width <= MAX_FRAME_DIMENSION
+        && height <= MAX_FRAME_DIMENSION
+        && u64::from(width) * u64::from(height) <= MAX_FRAME_PIXELS
+}
+
+fn validate_hello(hello: &RemoteHello) -> Result<(), ProtocolError> {
+    if hello.agent_name.is_empty()
+        || hello.agent_name.len() > MAX_AGENT_NAME_BYTES
+        || hello.agent_name.chars().any(char::is_control)
+        || !valid_frame_dimensions(hello.width, hello.height)
+    {
+        return Err(ProtocolError::InvalidHello);
+    }
+    Ok(())
+}
+
+fn validate_frame_descriptor(frame: &FrameDescriptor) -> Result<(), ProtocolError> {
+    let encoded_len = frame.encoded_len as usize;
+    let expected_chunks = encoded_len.div_ceil(FRAME_CHUNK_SIZE);
+    if !valid_frame_dimensions(frame.width, frame.height)
+        || encoded_len == 0
+        || encoded_len > MAX_FRAME_BYTES
+        || frame.chunk_count as usize != expected_chunks
+    {
+        return Err(ProtocolError::InvalidMessage("invalid frame descriptor"));
+    }
+    Ok(())
+}
+
 impl RemoteMessage {
     pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
         match self {
             Self::Hello(hello) => {
+                validate_hello(hello)?;
                 let name = hello.agent_name.as_bytes();
-                if name.is_empty() || name.len() > u16::MAX as usize {
-                    return Err(ProtocolError::InvalidHello);
-                }
                 let mut output = Vec::with_capacity(14 + name.len());
                 output.push(MESSAGE_HELLO);
                 output.extend_from_slice(&hello.protocol_version.to_be_bytes());
@@ -120,6 +154,7 @@ impl RemoteMessage {
                 Ok(output)
             }
             Self::FrameStart(frame) => {
+                validate_frame_descriptor(frame)?;
                 let mut output = Vec::with_capacity(24);
                 output.push(MESSAGE_FRAME_START);
                 output.extend_from_slice(&frame.frame_id.to_be_bytes());
@@ -148,7 +183,7 @@ impl RemoteMessage {
             Self::KeepAlive => Ok(vec![MESSAGE_KEEP_ALIVE]),
             Self::Close(reason) => {
                 let bytes = reason.as_bytes();
-                if bytes.len() > 1024 {
+                if bytes.len() > MAX_CLOSE_REASON_BYTES {
                     return Err(ProtocolError::InvalidMessage("close reason is too long"));
                 }
                 let mut output = Vec::with_capacity(1 + bytes.len());
@@ -185,29 +220,30 @@ impl RemoteMessage {
                 let agent_name = std::str::from_utf8(&body[13..])
                     .map_err(|_| ProtocolError::InvalidText)?
                     .to_string();
-                if width == 0 || height == 0 {
-                    return Err(ProtocolError::InvalidHello);
-                }
-                Ok(Self::Hello(RemoteHello {
+                let hello = RemoteHello {
                     protocol_version,
                     agent_name,
                     width,
                     height,
                     view_only,
-                }))
+                };
+                validate_hello(&hello)?;
+                Ok(Self::Hello(hello))
             }
             MESSAGE_FRAME_START => {
                 if body.len() != 23 {
                     return Err(ProtocolError::InvalidMessage("invalid frame start length"));
                 }
-                Ok(Self::FrameStart(FrameDescriptor {
+                let descriptor = FrameDescriptor {
                     frame_id: read_u64(body, 0)?,
                     width: read_u32(body, 8)?,
                     height: read_u32(body, 12)?,
                     encoded_len: read_u32(body, 16)?,
                     chunk_count: read_u16(body, 20)?,
                     format: FrameFormat::decode(body[22])?,
-                }))
+                };
+                validate_frame_descriptor(&descriptor)?;
+                Ok(Self::FrameStart(descriptor))
             }
             MESSAGE_FRAME_CHUNK => {
                 if body.len() < 10 {
@@ -224,11 +260,16 @@ impl RemoteMessage {
                 })
             }
             MESSAGE_KEEP_ALIVE if body.is_empty() => Ok(Self::KeepAlive),
-            MESSAGE_CLOSE => Ok(Self::Close(
-                std::str::from_utf8(body)
-                    .map_err(|_| ProtocolError::InvalidText)?
-                    .to_string(),
-            )),
+            MESSAGE_CLOSE => {
+                if body.len() > MAX_CLOSE_REASON_BYTES {
+                    return Err(ProtocolError::InvalidMessage("close reason is too long"));
+                }
+                Ok(Self::Close(
+                    std::str::from_utf8(body)
+                        .map_err(|_| ProtocolError::InvalidText)?
+                        .to_string(),
+                ))
+            }
             _ => Err(ProtocolError::InvalidMessage("unknown message type")),
         }
     }
@@ -277,15 +318,18 @@ pub fn frame_messages(
         return Err(ProtocolError::FrameTooLarge(bytes.len()));
     }
 
-    let mut messages = Vec::with_capacity(chunks + 1);
-    messages.push(RemoteMessage::FrameStart(FrameDescriptor {
+    let descriptor = FrameDescriptor {
         frame_id,
         width,
         height,
         encoded_len: bytes.len() as u32,
         chunk_count: chunks as u16,
         format,
-    }));
+    };
+    validate_frame_descriptor(&descriptor)?;
+
+    let mut messages = Vec::with_capacity(chunks + 1);
+    messages.push(RemoteMessage::FrameStart(descriptor));
     for (index, chunk) in bytes.chunks(FRAME_CHUNK_SIZE).enumerate() {
         messages.push(RemoteMessage::FrameChunk {
             frame_id,
@@ -316,16 +360,8 @@ impl FrameAssembler {
     pub fn push(&mut self, message: RemoteMessage) -> Result<Option<CompleteFrame>, ProtocolError> {
         match message {
             RemoteMessage::FrameStart(descriptor) => {
+                validate_frame_descriptor(&descriptor)?;
                 let encoded_len = descriptor.encoded_len as usize;
-                let expected_chunks = encoded_len.div_ceil(FRAME_CHUNK_SIZE);
-                if descriptor.width == 0
-                    || descriptor.height == 0
-                    || encoded_len == 0
-                    || encoded_len > MAX_FRAME_BYTES
-                    || descriptor.chunk_count as usize != expected_chunks
-                {
-                    return Err(ProtocolError::InvalidMessage("invalid frame descriptor"));
-                }
                 self.pending = Some(PendingFrame {
                     descriptor,
                     next_chunk: 0,
@@ -389,6 +425,91 @@ mod tests {
         assert_eq!(
             RemoteMessage::decode(&message.encode().unwrap()).unwrap(),
             message
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_hello_metadata_on_encode_and_decode() {
+        let oversized_name = RemoteMessage::Hello(RemoteHello {
+            protocol_version: PROTOCOL_VERSION,
+            agent_name: "a".repeat(MAX_AGENT_NAME_BYTES + 1),
+            width: 1280,
+            height: 720,
+            view_only: true,
+        });
+        assert_eq!(oversized_name.encode(), Err(ProtocolError::InvalidHello));
+
+        let control_name = RemoteMessage::Hello(RemoteHello {
+            protocol_version: PROTOCOL_VERSION,
+            agent_name: "host\nname".into(),
+            width: 1280,
+            height: 720,
+            view_only: true,
+        });
+        assert_eq!(control_name.encode(), Err(ProtocolError::InvalidHello));
+
+        let mut oversized_dimensions = RemoteMessage::Hello(RemoteHello {
+            protocol_version: PROTOCOL_VERSION,
+            agent_name: "Studio Mac".into(),
+            width: 1280,
+            height: 720,
+            view_only: true,
+        })
+        .encode()
+        .unwrap();
+        oversized_dimensions[3..7].copy_from_slice(&(MAX_FRAME_DIMENSION + 1).to_be_bytes());
+        assert_eq!(
+            RemoteMessage::decode(&oversized_dimensions),
+            Err(ProtocolError::InvalidHello)
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_frame_dimensions_before_assembly() {
+        let one_pixel = [0x5a];
+        assert!(
+            frame_messages(1, MAX_FRAME_DIMENSION + 1, 1, FrameFormat::Jpeg, &one_pixel,).is_err()
+        );
+        assert!(frame_messages(
+            1,
+            MAX_FRAME_DIMENSION,
+            (MAX_FRAME_PIXELS / u64::from(MAX_FRAME_DIMENSION)) as u32 + 1,
+            FrameFormat::Jpeg,
+            &one_pixel,
+        )
+        .is_err());
+        assert!(frame_messages(1, 8192, 4096, FrameFormat::Jpeg, &one_pixel).is_ok());
+
+        let mut invalid_wire = RemoteMessage::FrameStart(FrameDescriptor {
+            frame_id: 1,
+            width: 1280,
+            height: 720,
+            encoded_len: 1,
+            chunk_count: 1,
+            format: FrameFormat::Jpeg,
+        })
+        .encode()
+        .unwrap();
+        invalid_wire[9..13].copy_from_slice(&(MAX_FRAME_DIMENSION + 1).to_be_bytes());
+        assert_eq!(
+            RemoteMessage::decode(&invalid_wire),
+            Err(ProtocolError::InvalidMessage("invalid frame descriptor"))
+        );
+    }
+
+    #[test]
+    fn enforces_close_reason_limit_on_send_and_receive() {
+        let reason = "x".repeat(MAX_CLOSE_REASON_BYTES + 1);
+        assert_eq!(
+            RemoteMessage::Close(reason.clone()).encode(),
+            Err(ProtocolError::InvalidMessage("close reason is too long"))
+        );
+
+        let mut wire = vec![MESSAGE_CLOSE];
+        wire.extend_from_slice(reason.as_bytes());
+        assert_eq!(
+            RemoteMessage::decode(&wire),
+            Err(ProtocolError::InvalidMessage("close reason is too long"))
         );
     }
 

@@ -175,6 +175,7 @@
 ## 12. Lattice Remote
 
 - `crates/lattice-remote` 定義版本化二進位訊息、分塊畫面與 Noise `XXpsk3_25519_ChaChaPoly_BLAKE2s` 傳輸。
+- 協定送出、解碼與 frame assembler 共用同一組資源驗證：Agent 名稱最多 256 bytes 且不能含控制字元，Close 原因最多 1,024 bytes；JPEG 最多 8 MiB、單邊最多 16,384 px、總像素最多 32 Mi，異常尺寸不會進入 Tauri 事件或 WebView Canvas。
 - `lattice-agent` 預設只監聽 `127.0.0.1:44900`；分享區域為完整主螢幕，使用者必須在被控端看到並提供一次性八位數配對碼；配對碼五分鐘後失效，連續五次失敗即停止。
 - `RemoteHostDialog` 提供「分享這台裝置」的明確開始／停止操作，可指定 loopback 或特定 LAN IP、連接埠與 1–10 FPS；萬用與 multicast 位址會由原生層拒絕。
 - 複製配對碼會走 `SensitiveClipboard` 原生狀態；只保存摘要並在可調整期限後比對、清除相同內容。新複製內容不會被覆蓋，設定頁亦可立即清除目前仍相符的敏感值；browser preview 以相同規則使用 Web Clipboard fallback。
