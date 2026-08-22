@@ -640,6 +640,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
       {remoteHostOpen && (
         <RemoteHostDialog
           host={remoteHost}
+          sensitiveClipboardClear={preferences.sensitiveClipboardClear}
           onClose={() => setRemoteHostOpen(false)}
         />
       )}

@@ -335,7 +335,7 @@ export const zhTW = {
   "settings.motion.reduced": "減少動態",
   "settings.security": "安全性",
   "settings.securityHint":
-    "主機金鑰嚴格驗證、系統認證儲存與保管庫自動鎖定已啟用；剪貼簿清除與加密備份仍在開發中。",
+    "主機金鑰嚴格驗證、系統認證儲存、保管庫自動鎖定與敏感剪貼簿清除已啟用；加密備份仍在開發中。",
   "settings.security.title": "主機信任與系統認證儲存已啟用",
   "settings.security.body":
     "SSH/SFTP/RDP 密碼預設只用於當次連線；明確勾選後，也只有驗證成功才交給作業系統安全保存，連線設定檔仍不含機密。",
@@ -355,7 +355,22 @@ export const zhTW = {
   "settings.security.hostKey": "主機金鑰驗證原則",
   "settings.security.hostKeyDetail": "嚴格比對已知主機，第一次連線時由你明確決定是否信任。",
   "settings.security.clipboard": "剪貼簿清除",
-  "settings.security.clipboardDetail": "複製機密內容後倒數清除，並提供立即清除。",
+  "settings.security.clipboardDetail":
+    "Lattice Remote 配對碼複製後自動清除；若剪貼簿已換成其他內容，就不會覆蓋。",
+  "settings.security.clipboard.off": "關閉",
+  "settings.security.clipboard.15sec": "15 秒",
+  "settings.security.clipboard.30sec": "30 秒",
+  "settings.security.clipboard.60sec": "60 秒",
+  "settings.security.clipboard.120sec": "2 分鐘",
+  "settings.security.clipboard.clearNow": "清除本程式複製的敏感內容",
+  "settings.security.clipboard.clearNowDetail":
+    "只在剪貼簿仍是 LatticeTerm 最後複製的配對碼時清除，不會刪除後來複製的其他文字。",
+  "settings.security.clipboard.clearAction": "立即清除",
+  "settings.security.clipboard.clearing": "清除中…",
+  "settings.security.clipboard.cleared": "已清除敏感剪貼簿內容。",
+  "settings.security.clipboard.nothing": "目前沒有由 LatticeTerm 追蹤的敏感剪貼簿內容。",
+  "settings.security.clipboard.preserved": "剪貼簿已有其他內容，已保留不變。",
+  "settings.security.clipboard.unavailable": "目前無法讀取剪貼簿，因此未清除任何內容。",
   "settings.security.backup": "加密備份與還原",
   "settings.security.backupDetail": "匯出與還原本機資料，過程不會產生明文檔案。",
   "settings.about": "關於",
@@ -710,6 +725,8 @@ export const zhTW = {
   "remote.host.copyAddress": "複製連線位址",
   "remote.host.copyCode": "複製配對碼",
   "remote.host.copied": "已複製到剪貼簿",
+  "remote.host.copiedAutoClear":
+    "已複製到剪貼簿，若內容未被取代，將於 {seconds} 秒後清除",
   "remote.host.expires": "配對碼將於 {time} 後失效",
   "remote.host.attempts": "剩餘嘗試次數：{count}",
   "remote.host.bindAddress": "分享介面 IP",

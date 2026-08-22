@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import type { SensitiveClipboardClearChoice } from "../../app/preferences";
+import { copySensitiveText } from "../../app/sensitiveClipboard";
 import type { RemoteHostApi } from "../../app/useRemoteHost";
 import { useI18n } from "../../i18n";
 import { Callout } from "../common/Callout";
@@ -7,9 +9,11 @@ import { CloseIcon, CopyIcon, ScreenShareIcon, ShieldIcon } from "../icons";
 
 export function RemoteHostDialog({
   host,
+  sensitiveClipboardClear,
   onClose,
 }: {
   host: RemoteHostApi;
+  sensitiveClipboardClear: SensitiveClipboardClearChoice;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -79,7 +83,11 @@ export function RemoteHostDialog({
 
   async function copy(kind: "address" | "code", value: string) {
     try {
-      await navigator.clipboard.writeText(value);
+      if (kind === "code") {
+        await copySensitiveText(value, sensitiveClipboardClear);
+      } else {
+        await navigator.clipboard.writeText(value);
+      }
       setCopied(kind);
       window.setTimeout(() => setCopied(null), 1_500);
     } catch (error) {
@@ -198,7 +206,11 @@ export function RemoteHostDialog({
 
               {copied && (
                 <p className="text-muted" aria-live="polite">
-                  {t("remote.host.copied")}
+                  {copied === "code" && sensitiveClipboardClear !== "off"
+                    ? t("remote.host.copiedAutoClear", {
+                        seconds: sensitiveClipboardClear,
+                      })
+                    : t("remote.host.copied")}
                 </p>
               )}
 

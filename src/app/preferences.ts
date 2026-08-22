@@ -13,6 +13,12 @@ import { resolveTheme, themeIds, type ThemeChoice, type ThemeId } from "./themes
 export type DensityChoice = "comfortable" | "compact";
 export type MotionChoice = "system" | "reduced";
 export type VaultAutoLockChoice = "off" | "5" | "15" | "30" | "60";
+export type SensitiveClipboardClearChoice =
+  | "off"
+  | "15"
+  | "30"
+  | "60"
+  | "120";
 
 export interface Preferences {
   theme: ThemeChoice;
@@ -21,6 +27,7 @@ export interface Preferences {
   motion: MotionChoice;
   vaultAutoLock: VaultAutoLockChoice;
   vaultLockOnBackground: boolean;
+  sensitiveClipboardClear: SensitiveClipboardClearChoice;
   sidebarCollapsed: boolean;
   inspectorOpen: boolean;
 }
@@ -32,6 +39,7 @@ export const defaultPreferences: Preferences = {
   motion: "system",
   vaultAutoLock: "15",
   vaultLockOnBackground: true,
+  sensitiveClipboardClear: "30",
   sidebarCollapsed: false,
   inspectorOpen: true,
 };
@@ -46,6 +54,13 @@ const knownVaultAutoLockChoices = new Set<string>([
   "15",
   "30",
   "60",
+]);
+const knownSensitiveClipboardClearChoices = new Set<string>([
+  "off",
+  "15",
+  "30",
+  "60",
+  "120",
 ]);
 
 /**
@@ -69,6 +84,11 @@ export function sanitizePreferences(stored: Partial<Preferences>): Preferences {
       typeof stored.vaultLockOnBackground === "boolean"
         ? stored.vaultLockOnBackground
         : defaultPreferences.vaultLockOnBackground,
+    sensitiveClipboardClear: knownSensitiveClipboardClearChoices.has(
+      String(stored.sensitiveClipboardClear),
+    )
+      ? (stored.sensitiveClipboardClear as SensitiveClipboardClearChoice)
+      : defaultPreferences.sensitiveClipboardClear,
     sidebarCollapsed: Boolean(stored.sidebarCollapsed),
     inspectorOpen: stored.inspectorOpen !== false,
   };

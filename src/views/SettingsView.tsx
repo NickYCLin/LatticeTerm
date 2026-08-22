@@ -1,11 +1,11 @@
 /**
  * Settings.
  *
- * Two kinds of entry, kept visually distinct: preferences that take effect
- * immediately, and security settings that are described but not offered,
- * because the subsystem behind them does not exist yet.
+ * Active preferences take effect immediately. Planned security features stay
+ * visually separate and never render a control before their backend exists.
  */
 
+import { useState } from "react";
 import type {
   DensityChoice,
   MotionChoice,
@@ -22,6 +22,10 @@ import { Callout } from "../components/common/Callout";
 import { CheckIcon } from "../components/icons";
 import { useAppUpdater } from "../app/useAppUpdater";
 import { APP_VERSION } from "../app/version";
+import {
+  clearSensitiveClipboard,
+  type SensitiveClipboardClearOutcome,
+} from "../app/sensitiveClipboard";
 
 interface Choice<T> {
   value: T;
@@ -53,17 +57,30 @@ const backgroundLockChoices: Choice<ToggleChoice>[] = [
   { value: "disabled", labelKey: "settings.security.background.disabled" },
 ];
 
+const clipboardClearChoices: Choice<Preferences["sensitiveClipboardClear"]>[] = [
+  { value: "off", labelKey: "settings.security.clipboard.off" },
+  { value: "15", labelKey: "settings.security.clipboard.15sec" },
+  { value: "30", labelKey: "settings.security.clipboard.30sec" },
+  { value: "60", labelKey: "settings.security.clipboard.60sec" },
+  { value: "120", labelKey: "settings.security.clipboard.120sec" },
+];
+
 const plannedSecurity: { titleKey: MessageKey; detailKey: MessageKey }[] = [
-  {
-    titleKey: "settings.security.clipboard",
-    detailKey: "settings.security.clipboardDetail",
-  },
   {
     titleKey: "settings.security.backup",
     detailKey: "settings.security.backupDetail",
   },
 ];
 
+const clipboardOutcomeKeys: Record<
+  SensitiveClipboardClearOutcome,
+  MessageKey
+> = {
+  cleared: "settings.security.clipboard.cleared",
+  nothing: "settings.security.clipboard.nothing",
+  preserved: "settings.security.clipboard.preserved",
+  unavailable: "settings.security.clipboard.unavailable",
+};
 function SegmentedSetting<T extends string>({
   title,
   description,
@@ -117,6 +134,9 @@ export function SettingsView({
   const { t } = useI18n();
   const { summary, host } = runtime;
   const updater = useAppUpdater(summary?.version);
+  const [clipboardBusy, setClipboardBusy] = useState(false);
+  const [clipboardNotice, setClipboardNotice] =
+    useState<MessageKey | null>(null);
 
   return (
     <div className="stack">
@@ -280,6 +300,51 @@ export function SettingsView({
               onChange({ vaultLockOnBackground: choice === "enabled" })
             }
           />
+          <SegmentedSetting
+            title={t("settings.security.clipboard")}
+            description={t("settings.security.clipboardDetail")}
+            choices={clipboardClearChoices.map((choice) => ({
+              value: choice.value,
+              label: t(choice.labelKey),
+            }))}
+            value={preferences.sensitiveClipboardClear}
+            onChange={(sensitiveClipboardClear) =>
+              onChange({ sensitiveClipboardClear })
+            }
+          />
+          <div className="setting">
+            <div className="setting__text">
+              <strong className="setting__title">
+                {t("settings.security.clipboard.clearNow")}
+              </strong>
+              <p className="setting__description">
+                {t("settings.security.clipboard.clearNowDetail")}
+              </p>
+              {clipboardNotice && (
+                <p className="setting__description" aria-live="polite">
+                  {t(clipboardNotice)}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              className="button button--secondary"
+              disabled={clipboardBusy}
+              onClick={() => {
+                setClipboardBusy(true);
+                setClipboardNotice(null);
+                void clearSensitiveClipboard()
+                  .then((outcome) => {
+                    setClipboardNotice(clipboardOutcomeKeys[outcome]);
+                  })
+                  .finally(() => setClipboardBusy(false));
+              }}
+            >
+              {clipboardBusy
+                ? t("settings.security.clipboard.clearing")
+                : t("settings.security.clipboard.clearAction")}
+            </button>
+          </div>
         </div>
 
         <ul className="planned-list">

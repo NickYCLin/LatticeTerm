@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod agent_plans;
+pub mod clipboard;
 pub mod credentials;
 pub mod domain;
 pub mod hostkeys;
@@ -21,6 +22,7 @@ use crate::agent::{
     MAX_SAVED_AGENT_PLANS,
 };
 use crate::agent_plans::{AgentPlanSnapshot, FileAgentPlanStore};
+use crate::clipboard::{SensitiveClipboard, SensitiveClipboardClearOutcome};
 use crate::credentials::{CredentialKind, CredentialStoreStatus};
 use crate::domain::{ConnectionProfile, Protocol};
 use crate::hostkeys::{HostKeyRecord, HostTrustStore};
@@ -413,6 +415,24 @@ async fn vault_change_password(
         crate::vault::manager()?.change_password(&current_password, &new_password)
     })
     .await
+}
+
+#[tauri::command]
+fn sensitive_clipboard_copy(
+    app: AppHandle,
+    value: String,
+    clear_after_seconds: Option<u64>,
+    clipboard: State<'_, Arc<SensitiveClipboard>>,
+) -> Result<(), String> {
+    clipboard.copy(&app, value, clear_after_seconds)
+}
+
+#[tauri::command]
+fn sensitive_clipboard_clear(
+    app: AppHandle,
+    clipboard: State<'_, Arc<SensitiveClipboard>>,
+) -> SensitiveClipboardClearOutcome {
+    clipboard.clear_current(&app)
 }
 
 #[tauri::command]
@@ -1154,7 +1174,7 @@ fn tunnel_list(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().plugin(tauri_plugin_clipboard_manager::init());
     // Auto-update and relaunch are desktop concerns; mobile installs come
     // from a package manager and restart through the OS.
     #[cfg(desktop)]
@@ -1191,6 +1211,7 @@ pub fn run() {
             app.manage(Arc::new(RdpRegistry::new()));
             app.manage(Arc::new(VncRegistry::new()));
             app.manage(Arc::new(TunnelRegistry::new()));
+            app.manage(Arc::new(SensitiveClipboard::default()));
             let agent_registry = AgentRegistry::with_local_reporter(Arc::new(
                 crate::agent::EventSink(app.handle().clone()),
             ))
@@ -1222,6 +1243,8 @@ pub fn run() {
             vault_unlock,
             vault_lock,
             vault_change_password,
+            sensitive_clipboard_copy,
+            sensitive_clipboard_clear,
             credential_exists,
             credential_delete,
             storage_status,
@@ -1280,6 +1303,9 @@ pub fn run() {
         if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
             handle.state::<Arc<AgentRegistry>>().stop_all();
             handle.state::<Arc<TunnelRegistry>>().stop_all();
+            handle
+                .state::<Arc<SensitiveClipboard>>()
+                .clear_auto_on_exit(handle);
         }
     });
 }

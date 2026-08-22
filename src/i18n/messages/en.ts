@@ -349,7 +349,7 @@ export const en: Messages = {
   "settings.motion.reduced": "Reduce motion",
   "settings.security": "Security",
   "settings.securityHint":
-    "Strict host-key verification, system credential storage, and vault auto-lock are active. Clipboard clearing and encrypted backup are still in development.",
+    "Strict host-key verification, system credential storage, vault auto-lock, and sensitive clipboard clearing are active. Encrypted backup is still in development.",
   "settings.security.title": "Host trust and system credential storage are active",
   "settings.security.body":
     "SSH, SFTP, and RDP passwords default to one connection attempt. When explicitly selected, only a successfully verified password is saved by the operating system; connection profiles remain secret-free.",
@@ -371,7 +371,21 @@ export const en: Messages = {
     "Strict known-host checking, with an explicit trust decision on first connect.",
   "settings.security.clipboard": "Clipboard clearing",
   "settings.security.clipboardDetail":
-    "Clear copied secrets after a countdown, with an option to clear immediately.",
+    "Automatically clear copied Lattice Remote pairing codes without overwriting newer clipboard content.",
+  "settings.security.clipboard.off": "Off",
+  "settings.security.clipboard.15sec": "15 seconds",
+  "settings.security.clipboard.30sec": "30 seconds",
+  "settings.security.clipboard.60sec": "60 seconds",
+  "settings.security.clipboard.120sec": "2 minutes",
+  "settings.security.clipboard.clearNow": "Clear sensitive content copied by this app",
+  "settings.security.clipboard.clearNowDetail":
+    "Only clears when the clipboard still contains the last pairing code copied by LatticeTerm, preserving anything copied later.",
+  "settings.security.clipboard.clearAction": "Clear now",
+  "settings.security.clipboard.clearing": "Clearing…",
+  "settings.security.clipboard.cleared": "Sensitive clipboard content was cleared.",
+  "settings.security.clipboard.nothing": "LatticeTerm is not tracking sensitive clipboard content right now.",
+  "settings.security.clipboard.preserved": "The clipboard contains something newer and was left unchanged.",
+  "settings.security.clipboard.unavailable": "The clipboard could not be read, so nothing was cleared.",
   "settings.security.backup": "Encrypted backup and recovery",
   "settings.security.backupDetail":
     "Export and restore local data without producing a plain-text file.",
@@ -773,6 +787,8 @@ export const en: Messages = {
   "remote.host.copyAddress": "Copy connection address",
   "remote.host.copyCode": "Copy pairing code",
   "remote.host.copied": "Copied to clipboard",
+  "remote.host.copiedAutoClear":
+    "Copied to clipboard; it will clear in {seconds} seconds if unchanged",
   "remote.host.expires": "Pairing code expires in {time}",
   "remote.host.attempts": "Attempts remaining: {count}",
   "remote.host.bindAddress": "Interface IP to share",
