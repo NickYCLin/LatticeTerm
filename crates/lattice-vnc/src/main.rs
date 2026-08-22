@@ -13,6 +13,7 @@ use base64::Engine as _;
 use image::codecs::jpeg::JpegEncoder;
 use image::ExtendedColorType;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, Lines, Stdin, Stdout};
 use tokio::net::TcpStream;
@@ -20,6 +21,10 @@ use vnc::{ClientKeyEvent, ClientMouseEvent, PixelFormat, VncConnector, VncEvent,
 
 /// How often, at most, a fresh composited frame goes out.
 const FRAME_INTERVAL: Duration = Duration::from_millis(66);
+/// Bounds allocations requested by an untrusted VNC server. This permits 4K,
+/// 5K ultrawide, and other large desktops while keeping one RGBA framebuffer
+/// at or below 64 MiB.
+const MAX_FRAMEBUFFER_PIXELS: usize = 16 * 1024 * 1024;
 /// VNC pointer button bits, per RFC 6143 §7.5.5.
 const BUTTON_LEFT: u8 = 1 << 0;
 const BUTTON_MIDDLE: u8 = 1 << 1;
@@ -99,54 +104,97 @@ impl Framebuffer {
         }
     }
 
-    fn resize(&mut self, width: u16, height: u16) {
+    fn resize(&mut self, width: u16, height: u16) -> Result<(), String> {
+        let pixel_count = usize::from(width)
+            .checked_mul(usize::from(height))
+            .filter(|count| *count > 0 && *count <= MAX_FRAMEBUFFER_PIXELS)
+            .ok_or_else(|| {
+                format!(
+                    "VNC framebuffer {width}x{height} exceeds the safety limit of {MAX_FRAMEBUFFER_PIXELS} pixels."
+                )
+            })?;
+        let byte_count = pixel_count
+            .checked_mul(4)
+            .ok_or_else(|| "VNC framebuffer byte size overflowed.".to_string())?;
+        let mut pixels = Vec::new();
+        pixels
+            .try_reserve_exact(byte_count)
+            .map_err(|error| format!("Unable to allocate the VNC framebuffer: {error}"))?;
+        pixels.resize(byte_count, 0);
+
         self.width = width;
         self.height = height;
-        self.pixels = vec![0u8; usize::from(width) * usize::from(height) * 4];
+        self.pixels = pixels;
         self.dirty = true;
+        Ok(())
     }
 
     /// Blits one server rectangle into the screen. Rectangles that fall
     /// outside the current resolution are clipped rather than trusted.
     fn blit(&mut self, rect: vnc::Rect, data: &[u8]) {
         let screen_width = usize::from(self.width);
+        let screen_height = usize::from(self.height);
+        let target_x = usize::from(rect.x);
+        let target_y = usize::from(rect.y);
         let rect_width = usize::from(rect.width);
-        let bytes_per_row = rect_width * 4;
-        for row in 0..usize::from(rect.height) {
-            let source_start = row * bytes_per_row;
-            let Some(source) = data.get(source_start..source_start + bytes_per_row) else {
+        let source_bytes_per_row = rect_width * 4;
+        let copy_width = rect_width.min(screen_width.saturating_sub(target_x));
+        let copy_height = usize::from(rect.height).min(screen_height.saturating_sub(target_y));
+        let copy_bytes_per_row = copy_width * 4;
+        if copy_bytes_per_row == 0 || copy_height == 0 {
+            return;
+        }
+
+        let mut copied = false;
+        for row in 0..copy_height {
+            let source_start = row * source_bytes_per_row;
+            let Some(source) = data.get(source_start..source_start + copy_bytes_per_row) else {
                 break;
             };
-            let target_y = usize::from(rect.y) + row;
-            if target_y >= usize::from(self.height) {
-                break;
-            }
-            let target_start = (target_y * screen_width + usize::from(rect.x)) * 4;
+            let target_start = ((target_y + row) * screen_width + target_x) * 4;
             let Some(target) = self
                 .pixels
-                .get_mut(target_start..target_start + bytes_per_row)
+                .get_mut(target_start..target_start + copy_bytes_per_row)
             else {
                 break;
             };
             target.copy_from_slice(source);
+            copied = true;
         }
-        self.dirty = true;
+        if copied {
+            self.dirty = true;
+        }
     }
 
     /// CopyRect: moves one on-screen rectangle to another position.
     fn copy_rect(&mut self, dst: vnc::Rect, src_x: u16, src_y: u16) {
         let screen_width = usize::from(self.width);
-        let bytes_per_row = usize::from(dst.width) * 4;
-        let mut rows = Vec::with_capacity(usize::from(dst.height));
-        for row in 0..usize::from(dst.height) {
-            let from = ((usize::from(src_y) + row) * screen_width + usize::from(src_x)) * 4;
+        let screen_height = usize::from(self.height);
+        let source_x = usize::from(src_x);
+        let source_y = usize::from(src_y);
+        let target_x = usize::from(dst.x);
+        let target_y = usize::from(dst.y);
+        let copy_width = usize::from(dst.width)
+            .min(screen_width.saturating_sub(source_x))
+            .min(screen_width.saturating_sub(target_x));
+        let copy_height = usize::from(dst.height)
+            .min(screen_height.saturating_sub(source_y))
+            .min(screen_height.saturating_sub(target_y));
+        let bytes_per_row = copy_width * 4;
+        if bytes_per_row == 0 || copy_height == 0 {
+            return;
+        }
+
+        let mut rows = Vec::with_capacity(copy_height);
+        for row in 0..copy_height {
+            let from = ((source_y + row) * screen_width + source_x) * 4;
             match self.pixels.get(from..from + bytes_per_row) {
                 Some(slice) => rows.push(slice.to_vec()),
                 None => return,
             }
         }
         for (row, data) in rows.into_iter().enumerate() {
-            let to = ((usize::from(dst.y) + row) * screen_width + usize::from(dst.x)) * 4;
+            let to = ((target_y + row) * screen_width + target_x) * 4;
             if let Some(target) = self.pixels.get_mut(to..to + bytes_per_row) {
                 target.copy_from_slice(&data);
             }
@@ -196,18 +244,20 @@ async fn read_command(lines: &mut Lines<BufReader<Stdin>>) -> Result<Option<Comm
 }
 
 /// Tracks the pointer so button changes always carry the current position.
-struct Pointer {
+struct InputState {
     x: u16,
     y: u16,
     buttons: u8,
+    pressed_keys: BTreeSet<u32>,
 }
 
-impl Pointer {
+impl InputState {
     fn new() -> Self {
         Self {
             x: 0,
             y: 0,
             buttons: 0,
+            pressed_keys: BTreeSet::new(),
         }
     }
 
@@ -230,23 +280,23 @@ fn button_bit(button: u8) -> Option<u8> {
 }
 
 /// Turns one interface command into the X11 events the server expects.
-fn input_events(pointer: &mut Pointer, command: &Command) -> Vec<X11Event> {
+fn input_events(state: &mut InputState, command: &Command) -> Vec<X11Event> {
     match command {
         Command::MouseMove { x, y } => {
-            pointer.x = *x;
-            pointer.y = *y;
-            vec![pointer.event()]
+            state.x = *x;
+            state.y = *y;
+            vec![state.event()]
         }
         Command::MouseButton { button, pressed } => {
             let Some(bit) = button_bit(*button) else {
                 return Vec::new();
             };
             if *pressed {
-                pointer.buttons |= bit;
+                state.buttons |= bit;
             } else {
-                pointer.buttons &= !bit;
+                state.buttons &= !bit;
             }
-            vec![pointer.event()]
+            vec![state.event()]
         }
         Command::Wheel { horizontal, units } => {
             // Each unit is a press-release pulse of the matching wheel bit.
@@ -259,23 +309,37 @@ fn input_events(pointer: &mut Pointer, command: &Command) -> Vec<X11Event> {
             let pulses = units.unsigned_abs().min(8);
             let mut events = Vec::with_capacity(usize::from(pulses) * 2);
             for _ in 0..pulses {
-                pointer.buttons |= bit;
-                events.push(pointer.event());
-                pointer.buttons &= !bit;
-                events.push(pointer.event());
+                state.buttons |= bit;
+                events.push(state.event());
+                state.buttons &= !bit;
+                events.push(state.event());
             }
             events
         }
-        Command::Key { keysym, pressed } => vec![X11Event::KeyEvent(ClientKeyEvent {
-            keycode: *keysym,
-            down: *pressed,
-        })],
-        Command::ReleaseAll => {
-            if pointer.buttons == 0 {
-                return Vec::new();
+        Command::Key { keysym, pressed } => {
+            if *pressed {
+                state.pressed_keys.insert(*keysym);
+            } else {
+                state.pressed_keys.remove(keysym);
             }
-            pointer.buttons = 0;
-            vec![pointer.event()]
+            vec![X11Event::KeyEvent(ClientKeyEvent {
+                keycode: *keysym,
+                down: *pressed,
+            })]
+        }
+        Command::ReleaseAll => {
+            let mut events = Vec::with_capacity(state.pressed_keys.len() + 1);
+            for keysym in std::mem::take(&mut state.pressed_keys) {
+                events.push(X11Event::KeyEvent(ClientKeyEvent {
+                    keycode: keysym,
+                    down: false,
+                }));
+            }
+            if state.buttons != 0 {
+                state.buttons = 0;
+                events.push(state.event());
+            }
+            events
         }
         Command::Connect { .. } | Command::Close => Vec::new(),
     }
@@ -330,7 +394,7 @@ async fn run_session(
     };
 
     let mut framebuffer = Framebuffer::new();
-    let mut pointer = Pointer::new();
+    let mut input_state = InputState::new();
     let mut announced = false;
     let mut frame_id = 0_u64;
     let mut ticker = tokio::time::interval(FRAME_INTERVAL);
@@ -346,7 +410,7 @@ async fn run_session(
                         return Ok(());
                     }
                     Some(command) => {
-                        for event in input_events(&mut pointer, &command) {
+                        for event in input_events(&mut input_state, &command) {
                             client
                                 .input(event)
                                 .await
@@ -358,7 +422,7 @@ async fn run_session(
             event = client.poll_event() => {
                 match event.map_err(|error| error.to_string())? {
                     Some(VncEvent::SetResolution(screen)) => {
-                        framebuffer.resize(screen.width, screen.height);
+                        framebuffer.resize(screen.width, screen.height)?;
                         if !announced {
                             announced = true;
                             emit(stdout, &Event::Connected {
@@ -472,7 +536,7 @@ mod tests {
     #[test]
     fn rectangles_land_where_the_server_says() {
         let mut framebuffer = Framebuffer::new();
-        framebuffer.resize(4, 4);
+        framebuffer.resize(4, 4).unwrap();
 
         // A 2x2 red square at (1, 1).
         let red = [255, 0, 0, 255].repeat(4);
@@ -489,21 +553,43 @@ mod tests {
     }
 
     #[test]
-    fn oversized_rectangles_are_clipped_not_trusted() {
+    fn rectangles_are_clipped_on_both_axes_without_crossing_rows() {
         let mut framebuffer = Framebuffer::new();
-        framebuffer.resize(2, 2);
+        framebuffer.resize(3, 2).unwrap();
+        let data = [
+            1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, 4, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255,
+        ];
 
-        // Claims to be 4x4 at the origin of a 2x2 screen.
-        let data = [9u8; 4 * 4 * 4];
-        framebuffer.blit(rect(0, 0, 4, 4), &data);
-        // No panic and the buffer stays its own size.
-        assert_eq!(framebuffer.pixels.len(), 2 * 2 * 4);
+        framebuffer.blit(rect(2, 0, 2, 3), &data);
+
+        let pixel = |x: usize, y: usize| {
+            let start = (y * 3 + x) * 4;
+            &framebuffer.pixels[start..start + 4]
+        };
+        assert_eq!(pixel(2, 0), &[1, 0, 0, 255]);
+        assert_eq!(pixel(2, 1), &[3, 0, 0, 255]);
+        assert_eq!(pixel(0, 1), &[0, 0, 0, 0]);
+        assert_eq!(pixel(1, 1), &[0, 0, 0, 0]);
+        assert_eq!(framebuffer.pixels.len(), 3 * 2 * 4);
+    }
+
+    #[test]
+    fn resize_rejects_oversized_or_empty_framebuffers_without_losing_the_current_frame() {
+        let mut framebuffer = Framebuffer::new();
+        framebuffer.resize(2, 2).unwrap();
+        framebuffer.pixels[0] = 42;
+
+        let error = framebuffer.resize(u16::MAX, u16::MAX).unwrap_err();
+        assert!(error.contains("exceeds the safety limit"));
+        assert_eq!((framebuffer.width, framebuffer.height), (2, 2));
+        assert_eq!(framebuffer.pixels[0], 42);
+        assert!(Framebuffer::new().resize(0, 1080).is_err());
     }
 
     #[test]
     fn copyrect_moves_pixels_within_the_screen() {
         let mut framebuffer = Framebuffer::new();
-        framebuffer.resize(4, 1);
+        framebuffer.resize(4, 1).unwrap();
         framebuffer.blit(rect(0, 0, 1, 1), &[1, 2, 3, 4]);
 
         framebuffer.copy_rect(rect(2, 0, 1, 1), 0, 0);
@@ -513,8 +599,29 @@ mod tests {
     }
 
     #[test]
+    fn copyrect_clips_source_and_destination_without_crossing_rows() {
+        let mut framebuffer = Framebuffer::new();
+        framebuffer.resize(3, 2).unwrap();
+        let data = [
+            1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, 4, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255,
+        ];
+        framebuffer.blit(rect(0, 0, 3, 2), &data);
+
+        framebuffer.copy_rect(rect(2, 0, 2, 3), 0, 0);
+
+        let pixel = |x: usize, y: usize| {
+            let start = (y * 3 + x) * 4;
+            &framebuffer.pixels[start..start + 4]
+        };
+        assert_eq!(pixel(2, 0), &[1, 0, 0, 255]);
+        assert_eq!(pixel(2, 1), &[4, 0, 0, 255]);
+        assert_eq!(pixel(0, 1), &[4, 0, 0, 255]);
+        assert_eq!(pixel(1, 1), &[5, 0, 0, 255]);
+    }
+
+    #[test]
     fn wheel_units_become_press_release_pulses() {
-        let mut pointer = Pointer::new();
+        let mut pointer = InputState::new();
         let events = input_events(
             &mut pointer,
             &Command::Wheel {
@@ -529,7 +636,7 @@ mod tests {
 
     #[test]
     fn button_state_accumulates_and_release_all_clears_it() {
-        let mut pointer = Pointer::new();
+        let mut pointer = InputState::new();
         input_events(
             &mut pointer,
             &Command::MouseButton {
@@ -549,6 +656,41 @@ mod tests {
         let release = input_events(&mut pointer, &Command::ReleaseAll);
         assert_eq!(release.len(), 1);
         assert_eq!(pointer.buttons, 0);
+    }
+
+    #[test]
+    fn release_all_releases_each_pressed_key_and_pointer_button() {
+        let mut state = InputState::new();
+        for keysym in [0xFFE1, 0xFFE3] {
+            input_events(
+                &mut state,
+                &Command::Key {
+                    keysym,
+                    pressed: true,
+                },
+            );
+        }
+        input_events(
+            &mut state,
+            &Command::MouseButton {
+                button: 0,
+                pressed: true,
+            },
+        );
+
+        let release = input_events(&mut state, &Command::ReleaseAll);
+
+        assert_eq!(release.len(), 3);
+        assert!(
+            matches!(&release[0], X11Event::KeyEvent(event) if event.keycode == 0xFFE1 && !event.down)
+        );
+        assert!(
+            matches!(&release[1], X11Event::KeyEvent(event) if event.keycode == 0xFFE3 && !event.down)
+        );
+        assert!(matches!(&release[2], X11Event::PointerEvent(event) if event.bottons == 0));
+        assert!(state.pressed_keys.is_empty());
+        assert_eq!(state.buttons, 0);
+        assert!(input_events(&mut state, &Command::ReleaseAll).is_empty());
     }
 
     #[test]
