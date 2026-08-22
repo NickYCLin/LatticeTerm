@@ -4,6 +4,13 @@
 
 ---
 
+## [0.12.1](https://github.com/NickYCLin/LatticeTerm/compare/v0.12.0...v0.12.1) (2026-08-22)
+
+
+### ⚡ 效能與體驗優化
+
+* **介面:** 拆分大型前端啟動模組 ([3ba7345](https://github.com/NickYCLin/LatticeTerm/commit/3ba7345dee3eceaf27fa760a4b0c46af1d6093df))
+
 ## [0.12.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.11.0...v0.12.0) (2026-08-22)
 
 
