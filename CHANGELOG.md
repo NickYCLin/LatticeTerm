@@ -4,6 +4,13 @@
 
 ---
 
+## [0.13.2](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.1...v0.13.2) (2026-08-22)
+
+
+### 🛠️ 問題修正
+
+* **遠端:** 修正分享狀態同步競態 ([2e2989b](https://github.com/NickYCLin/LatticeTerm/commit/2e2989bba2f65d3ebb0d0e6d1a1d525ab14fee53))
+
 ## [0.13.1](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.0...v0.13.1) (2026-08-22)
 
 
