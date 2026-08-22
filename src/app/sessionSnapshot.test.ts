@@ -3,12 +3,25 @@ import {
   createSessionClosedNotice,
   reconcileSessionSnapshot,
   reconcileSingletonSnapshot,
+  shouldClearSessionSelection,
 } from "./sessionSnapshot";
 
 interface TestSession {
   sessionId: string;
   revision: number;
 }
+
+describe("shouldClearSessionSelection", () => {
+  it("clears the selection when the visible session closes", () => {
+    expect(shouldClearSessionSelection("ssh-active", "ssh-active")).toBe(true);
+  });
+
+  it("keeps the visible selection when a background session closes", () => {
+    expect(
+      shouldClearSessionSelection("ssh-active", "agent-background"),
+    ).toBe(false);
+  });
+});
 
 describe("createSessionClosedNotice", () => {
   it("keeps a readable close notice after the matching pane is removed", () => {

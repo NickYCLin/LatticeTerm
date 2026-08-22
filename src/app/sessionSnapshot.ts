@@ -9,6 +9,18 @@ export interface SessionClosedNotice extends SessionIdentity {
 }
 
 /**
+ * Returns whether a closed pane owns the currently visible workspace tab.
+ * Background terminal panes remain mounted, so their close callbacks must not
+ * clear the user's selection while another session is active.
+ */
+export function shouldClearSessionSelection(
+  activeSessionId: string,
+  closedSessionId: string,
+): boolean {
+  return activeSessionId === closedSessionId;
+}
+
+/**
  * Builds the durable notice shown after a session pane has already unmounted.
  * The id fallback matters during initial hydration, where a close event can
  * arrive before the matching backend snapshot.

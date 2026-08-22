@@ -3,7 +3,10 @@
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
 import type { VncApi } from "../app/useVncSessions";
-import type { SessionClosedNotice } from "../app/sessionSnapshot";
+import {
+  shouldClearSessionSelection,
+  type SessionClosedNotice,
+} from "../app/sessionSnapshot";
 import type { AgentApi } from "../app/useAgentSessions";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
@@ -220,7 +223,13 @@ export function SessionsView({
               sessionId={session.sessionId}
               agents={agents}
               theme={theme}
-              onClosed={() => onSelect(null)}
+              onClosed={() => {
+                if (
+                  shouldClearSessionSelection(active.sessionId, session.sessionId)
+                ) {
+                  onSelect(null);
+                }
+              }}
             />
           </div>
         ))}
@@ -234,7 +243,13 @@ export function SessionsView({
               sessionId={session.sessionId}
               ssh={ssh}
               theme={theme}
-              onClosed={() => onSelect(null)}
+              onClosed={() => {
+                if (
+                  shouldClearSessionSelection(active.sessionId, session.sessionId)
+                ) {
+                  onSelect(null);
+                }
+              }}
             />
           </div>
         ))}
