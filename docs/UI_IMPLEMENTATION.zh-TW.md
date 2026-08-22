@@ -1,7 +1,7 @@
 # LatticeTerm 介面實作說明
 
-文件版本：1.0  
-更新日期：2026-08-21<br>
+文件版本：1.1
+更新日期：2026-08-22<br>
 對應文件：[UI/UX 設計規格書](UI_UX_DESIGN_BRIEF.zh-TW.md)  
 
 本文件說明前端與桌面端元件的架構實作、狀態管理以及與設計規格書的對照。
@@ -27,7 +27,8 @@
 | **Web RDP Canvas** | `RdpPane` | `src/components/rdp/RdpPane.tsx` | Canvas 畫面、座標縮放、滑鼠、滾輪、掃描碼鍵盤與失焦釋放。 |
 | **金鑰保管庫** | `VaultView` | `src/views/VaultView.tsx` | 管理 Rust 核心的主機信任、認證參照與 Argon2id／XChaCha20-Poly1305 加密保管庫；可建立、解鎖、鎖定、改主密碼及切換認證後端，但不把密碼內容交給前端。 |
 | **活動紀錄** | `ActivityView` | `src/views/ActivityView.tsx` | 活動日誌清單、關鍵字搜尋、事件類型篩選與純文字日誌匯出。 |
-| **設定檢視** | `SettingsView` | `src/views/SettingsView.tsx` | 外觀設定（主題、密度、動態效果）、安全機制說明與執行環境資訊。 |
+| **設定檢視** | `SettingsView` | `src/views/SettingsView.tsx` | 外觀設定、安全機制、加密備份／還原與執行環境資訊。 |
+| **加密備份面板** | `EncryptedBackupPanel` | `src/components/settings/EncryptedBackupPanel.tsx` | 收集 allowlist 設定、要求 12 字元以上密碼、匯出加密檔，並在明確確認後執行完整驗證、逐檔原子替換與失敗回滾。 |
 | **狀態列** | `StatusBar` | `src/components/shell/StatusBar.tsx` | 28 px 底部狀態列，顯示連線數、記憶體/儲存模式與認證儲存區就緒狀態。 |
 
 ---
@@ -45,6 +46,8 @@
   - 整合 Profiles 集合、即時搜尋過濾、群組與標籤收集、CRUD 操作與批次匯入。
 - **Preferences Hook (`src/app/preferences.ts`)**：
   - 管理主題（深色/淺色/跟隨系統）、密度（舒適/緊湊）與動態偏好，並同步至 DOM 與 localStorage。
+- **加密備份橋接 (`src/app/encryptedBackup.ts`)**：
+  - 只收集版本化 allowlist localStorage 鍵；Rust 完成驗證加密後才把密文交給瀏覽器下載，還原時精確移除備份中不存在的 allowlist 設定，避免混合兩台裝置的狀態。
 - **Agent Sessions Hook (`src/app/useAgentSessions.ts`)**：
   - 管理本機 PTY 工作階段、語意狀態事件、原生 Session ID 擷取、批次提示，以及安全啟動工作區的名稱、順序與 v3 儲存 command。
 

@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod agent_plans;
+pub mod backup;
 pub mod clipboard;
 pub mod credentials;
 pub mod domain;
@@ -22,6 +23,7 @@ use crate::agent::{
     MAX_SAVED_AGENT_PLANS,
 };
 use crate::agent_plans::{AgentPlanSnapshot, FileAgentPlanStore};
+use crate::backup::{DecryptedBackup, ValidatedAppData};
 use crate::clipboard::{SensitiveClipboard, SensitiveClipboardClearOutcome};
 use crate::credentials::{CredentialKind, CredentialStoreStatus};
 use crate::domain::{ConnectionProfile, Protocol};
@@ -39,12 +41,12 @@ use crate::sftp::{
 use crate::sftp_transfers::{TransferRegistry, TransferState};
 use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
-use crate::tunnel::{StartTunnelRequest, TunnelRegistry, TunnelStatusSummary};
+use crate::tunnel::{StartTunnelRequest, TunnelRegistry, TunnelStatus, TunnelStatusSummary};
 use crate::vnc::{
     VncConnectOutcome, VncConnectRequest, VncInputRequest, VncRegistry, VncSessionSummary,
 };
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
@@ -80,6 +82,16 @@ where
         .map_err(|error| format!("Credential operation did not complete: {error}"))?
 }
 
+async fn backup_call<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("Backup operation did not complete: {error}"))?
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeSummary {
@@ -92,6 +104,27 @@ struct RuntimeSummary {
     platform: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EncryptedBackupExport {
+    contents: String,
+    created_at: u64,
+    app_file_count: usize,
+    vault_included: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EncryptedBackupRestore {
+    source_created_at: u64,
+    source_app_version: String,
+    profile_count: usize,
+    trusted_host_count: usize,
+    agent_plan_count: usize,
+    vault_included: bool,
+    local_storage: BTreeMap<String, String>,
+}
+
 #[tauri::command]
 fn runtime_summary() -> RuntimeSummary {
     RuntimeSummary {
@@ -101,6 +134,174 @@ fn runtime_summary() -> RuntimeSummary {
         credential_storage_ready: crate::credentials::status().ready,
         platform: std::env::consts::OS,
     }
+}
+
+fn backup_trust_guard(
+    trust: &TrustState,
+) -> Result<std::sync::MutexGuard<'_, HostTrustStore>, String> {
+    match trust {
+        TrustState::Ready(store) => store.lock().map_err(|error| error.to_string()),
+        TrustState::Unavailable(reason) => Err(format!(
+            "Host trust data is unavailable and cannot be backed up: {reason}"
+        )),
+    }
+}
+
+#[tauri::command]
+async fn encrypted_backup_export(
+    app: AppHandle,
+    password: String,
+    local_storage: BTreeMap<String, String>,
+    storage: State<'_, AppStorage>,
+    plans: State<'_, AppAgentPlans>,
+    trust: State<'_, TrustState>,
+) -> Result<EncryptedBackupExport, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let (files, validated) = crate::vault::manager()?.run_while_locked(|| {
+        // Hold every mutable file-backed store while taking the snapshot, so
+        // one logical backup cannot contain half of a concurrent mutation.
+        let _storage = storage.lock().map_err(|error| error.to_string())?;
+        let _plans = plans.lock().map_err(|error| error.to_string())?;
+        let _trust = backup_trust_guard(trust.inner())?;
+        let files = crate::backup::read_app_files(&directory)?;
+        let validated = crate::backup::validate_app_files(&files)?;
+        Ok((files, validated))
+    })?;
+    let created_at = now_seconds();
+    let app_file_count = files.len();
+    let contents = backup_call(move || {
+        let password = Zeroizing::new(password);
+        crate::backup::create_encrypted_backup(
+            env!("CARGO_PKG_VERSION"),
+            created_at,
+            files,
+            local_storage,
+            password.as_str(),
+        )
+    })
+    .await?;
+    Ok(EncryptedBackupExport {
+        contents,
+        created_at,
+        app_file_count,
+        vault_included: validated.vault_included,
+    })
+}
+
+fn restore_loaded_stores(
+    directory: &std::path::Path,
+) -> Result<(FileStorage, FileAgentPlanStore, HostTrustStore), String> {
+    let storage = FileStorage::open(directory).map_err(|error| error.to_string())?;
+    if let Some(recovery) = storage.recovery() {
+        return Err(format!(
+            "Restored connection data is invalid: {}",
+            recovery.reason
+        ));
+    }
+    let plans = FileAgentPlanStore::open(directory)?;
+    if let Some(recovery) = plans.snapshot().recovery {
+        return Err(format!(
+            "Restored Agent workspace data is invalid: {}",
+            recovery.reason
+        ));
+    }
+    let trust = HostTrustStore::open(directory).map_err(|error| error.to_string())?;
+    Ok((storage, plans, trust))
+}
+
+fn restore_failure_with_rollback(
+    directory: &std::path::Path,
+    previous: &BTreeMap<String, String>,
+    error: String,
+) -> String {
+    match crate::backup::rollback_app_files(directory, previous) {
+        Ok(()) => format!("The backup restore was rolled back: {error}"),
+        Err(rollback_error) => format!(
+            "The backup restore failed ({error}), and rollback also failed ({rollback_error})."
+        ),
+    }
+}
+
+#[tauri::command]
+async fn encrypted_backup_restore(
+    app: AppHandle,
+    contents: String,
+    password: String,
+    storage: State<'_, AppStorage>,
+    plans: State<'_, AppAgentPlans>,
+    trust: State<'_, TrustState>,
+    tunnels: State<'_, Arc<TunnelRegistry>>,
+) -> Result<EncryptedBackupRestore, String> {
+    if tunnels
+        .list()
+        .iter()
+        .any(|entry| matches!(entry.status, TunnelStatus::Starting | TunnelStatus::Active))
+    {
+        return Err("Stop every running SSH tunnel before restoring a backup.".to_string());
+    }
+
+    let (decrypted, validated) = backup_call(move || {
+        let password = Zeroizing::new(password);
+        let decrypted = crate::backup::open_encrypted_backup(&contents, password.as_str())?;
+        let validated = crate::backup::validate_app_files(&decrypted.files)?;
+        Ok((decrypted, validated))
+    })
+    .await?;
+    let DecryptedBackup {
+        created_at,
+        app_version,
+        files,
+        local_storage,
+    } = decrypted;
+    let ValidatedAppData {
+        profile_count,
+        trusted_host_count,
+        agent_plan_count,
+        vault_included,
+    } = validated;
+
+    if tunnels
+        .list()
+        .iter()
+        .any(|entry| matches!(entry.status, TunnelStatus::Starting | TunnelStatus::Active))
+    {
+        return Err("Stop every running SSH tunnel before restoring a backup.".to_string());
+    }
+
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    crate::vault::manager()?.run_while_locked(|| {
+        let mut storage_guard = storage.lock().map_err(|error| error.to_string())?;
+        let mut plans_guard = plans.lock().map_err(|error| error.to_string())?;
+        let mut trust_guard = backup_trust_guard(trust.inner())?;
+        let previous = crate::backup::replace_app_files(&directory, &files)?;
+        let (next_storage, next_plans, next_trust) = match restore_loaded_stores(&directory) {
+            Ok(stores) => stores,
+            Err(error) => {
+                return Err(restore_failure_with_rollback(&directory, &previous, error));
+            }
+        };
+
+        *storage_guard = next_storage;
+        *plans_guard = next_plans;
+        *trust_guard = next_trust;
+        Ok(())
+    })?;
+
+    Ok(EncryptedBackupRestore {
+        source_created_at: created_at,
+        source_app_version: app_version,
+        profile_count,
+        trusted_host_count,
+        agent_plan_count,
+        vault_included,
+        local_storage,
+    })
 }
 
 #[tauri::command]
@@ -1221,6 +1422,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             runtime_summary,
+            encrypted_backup_export,
+            encrypted_backup_restore,
             agent_catalog,
             agent_default_working_directory,
             agent_launch,

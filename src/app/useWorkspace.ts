@@ -83,6 +83,20 @@ export function useWorkspace() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("name");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+
+  const refreshProfiles = useCallback(async (): Promise<void> => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    const backendProfiles = await invoke<ConnectionProfile[]>(
+      "list_connection_profiles",
+    );
+    const next = Array.isArray(backendProfiles) ? backendProfiles : [];
+    setProfiles(next);
+    setSelectedId((current) =>
+      current && next.some((profile) => profile.id === current) ? current : null,
+    );
+  }, []);
+
   // Sync initial list from Rust backend storage if running inside Tauri
   useEffect(() => {
     let cancelled = false;
@@ -330,6 +344,7 @@ export function useWorkspace() {
     toggleFavorite,
     loadSamples,
     importProfiles,
+    refreshProfiles,
     clearActivity,
     logActivity,
   };

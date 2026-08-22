@@ -1,0 +1,254 @@
+import { useRef, useState } from "react";
+import type { Preferences } from "../../app/preferences";
+import {
+  applyRestoredLocalStorage,
+  backupPasswordIsValid,
+  BACKUP_EXTENSION,
+  exportEncryptedBackup,
+  readEncryptedBackupFile,
+  restoreEncryptedBackup,
+  type EncryptedBackupRestore,
+} from "../../app/encryptedBackup";
+import { useI18n } from "../../i18n";
+import { Callout } from "../common/Callout";
+import { ConfirmDialog } from "../overlays/ConfirmDialog";
+
+interface EncryptedBackupPanelProps {
+  preferences: Preferences;
+  vaultUnlocked: boolean;
+  onRestored: (
+    result: EncryptedBackupRestore,
+    preferences: Preferences,
+  ) => Promise<void>;
+}
+
+type Notice = { tone: "info" | "danger"; message: string } | null;
+
+function reasonText(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
+}
+
+export function EncryptedBackupPanel({
+  preferences,
+  vaultUnlocked,
+  onRestored,
+}: EncryptedBackupPanelProps) {
+  const { t } = useI18n();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [exportPassword, setExportPassword] = useState("");
+  const [exportConfirmation, setExportConfirmation] = useState("");
+  const [restorePassword, setRestorePassword] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [confirmRestore, setConfirmRestore] = useState(false);
+  const [busy, setBusy] = useState<"export" | "restore" | null>(null);
+  const [notice, setNotice] = useState<Notice>(null);
+
+  const exportReady =
+    !vaultUnlocked &&
+    !busy &&
+    backupPasswordIsValid(exportPassword) &&
+    exportPassword === exportConfirmation;
+  const restoreReady =
+    !vaultUnlocked &&
+    !busy &&
+    backupPasswordIsValid(restorePassword) &&
+    selectedFile !== null;
+
+  async function runExport() {
+    if (!exportReady) return;
+    setBusy("export");
+    setNotice(null);
+    try {
+      const result = await exportEncryptedBackup(exportPassword, preferences);
+      setNotice({
+        tone: "info",
+        message: t("settings.backup.exported", {
+          count: result.appFileCount,
+        }),
+      });
+      setExportPassword("");
+      setExportConfirmation("");
+    } catch (reason) {
+      setNotice({
+        tone: "danger",
+        message: t("settings.backup.failed", { error: reasonText(reason) }),
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runRestore() {
+    if (!restoreReady || !selectedFile) return;
+    setConfirmRestore(false);
+    setBusy("restore");
+    setNotice(null);
+    try {
+      const contents = await readEncryptedBackupFile(selectedFile);
+      const result = await restoreEncryptedBackup(contents, restorePassword);
+      const restoredPreferences = applyRestoredLocalStorage(
+        window.localStorage,
+        result.localStorage,
+      );
+      await onRestored(result, restoredPreferences);
+      setNotice({
+        tone: "info",
+        message: t("settings.backup.restored", {
+          profiles: result.profileCount,
+          hosts: result.trustedHostCount,
+          plans: result.agentPlanCount,
+        }),
+      });
+      setRestorePassword("");
+      setSelectedFile(null);
+      if (fileRef.current) fileRef.current.value = "";
+    } catch (reason) {
+      setNotice({
+        tone: "danger",
+        message: t("settings.backup.failed", { error: reasonText(reason) }),
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="setting-list">
+      <div className="setting">
+        <div className="setting__text">
+          <strong className="setting__title">{t("settings.security.backup")}</strong>
+          <p className="setting__description">
+            {t("settings.security.backupDetail")}
+          </p>
+        </div>
+      </div>
+
+      <Callout tone="security" title={t("settings.backup.scope.title")}>
+        {t("settings.backup.scope.body")}
+      </Callout>
+
+      {vaultUnlocked && (
+        <Callout tone="warn" title={t("settings.backup.vaultUnlocked.title")}>
+          {t("settings.backup.vaultUnlocked.body")}
+        </Callout>
+      )}
+
+      {notice && (
+        <Callout
+          tone={notice.tone === "danger" ? "danger" : "info"}
+          title={
+            notice.tone === "danger"
+              ? t("settings.backup.errorTitle")
+              : t("settings.backup.doneTitle")
+          }
+        >
+          {notice.message}
+        </Callout>
+      )}
+
+      <div className="setting">
+        <div className="setting__text">
+          <strong className="setting__title">{t("settings.backup.export.title")}</strong>
+          <p className="setting__description">
+            {t("settings.backup.export.body")}
+          </p>
+        </div>
+        <div className="dialog__stack">
+          <label className="field">
+            <span className="field__label">{t("settings.backup.password")}</span>
+            <input
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              value={exportPassword}
+              onChange={(event) => setExportPassword(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="field__label">
+              {t("settings.backup.passwordConfirm")}
+            </span>
+            <input
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              value={exportConfirmation}
+              onChange={(event) => setExportConfirmation(event.target.value)}
+            />
+          </label>
+          {exportPassword && !backupPasswordIsValid(exportPassword) && (
+            <span className="field__error">{t("settings.backup.passwordHint")}</span>
+          )}
+          {exportConfirmation && exportPassword !== exportConfirmation && (
+            <span className="field__error">{t("settings.backup.passwordMismatch")}</span>
+          )}
+          <button
+            type="button"
+            className="button button--secondary"
+            disabled={!exportReady}
+            onClick={() => void runExport()}
+          >
+            {busy === "export"
+              ? t("settings.backup.exporting")
+              : t("settings.backup.export.action")}
+          </button>
+        </div>
+      </div>
+
+      <div className="setting">
+        <div className="setting__text">
+          <strong className="setting__title">{t("settings.backup.restore.title")}</strong>
+          <p className="setting__description">
+            {t("settings.backup.restore.body")}
+          </p>
+        </div>
+        <div className="dialog__stack">
+          <label className="field">
+            <span className="field__label">{t("settings.backup.file")}</span>
+            <input
+              ref={fileRef}
+              className="input"
+              type="file"
+              accept={BACKUP_EXTENSION}
+              onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          <label className="field">
+            <span className="field__label">{t("settings.backup.password")}</span>
+            <input
+              className="input"
+              type="password"
+              autoComplete="current-password"
+              value={restorePassword}
+              onChange={(event) => setRestorePassword(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="button button--danger"
+            disabled={!restoreReady}
+            onClick={() => setConfirmRestore(true)}
+          >
+            {busy === "restore"
+              ? t("settings.backup.restoring")
+              : t("settings.backup.restore.action")}
+          </button>
+        </div>
+      </div>
+
+      {confirmRestore && (
+        <ConfirmDialog
+          title={t("settings.backup.confirm.title")}
+          body={t("settings.backup.confirm.body", {
+            file: selectedFile?.name ?? "",
+          })}
+          confirmLabel={t("settings.backup.confirm.action")}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => void runRestore()}
+          onCancel={() => setConfirmRestore(false)}
+        />
+      )}
+    </div>
+  );
+}

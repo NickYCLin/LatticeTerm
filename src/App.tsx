@@ -13,7 +13,12 @@ import {
   navigationItemsFor,
   type ViewId,
 } from "./app/navigation";
-import { usePreferences, type PreferencesValue } from "./app/preferences";
+import {
+  usePreferences,
+  type Preferences,
+  type PreferencesValue,
+} from "./app/preferences";
+import type { EncryptedBackupRestore } from "./app/encryptedBackup";
 import { findTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
 import { APP_VERSION } from "./app/version";
@@ -162,6 +167,32 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
       setDrawer({ open: false, profileId: null });
     },
     [drawer.profileId, addProfile, updateProfile],
+  );
+
+
+  const applyRestoredBackup = useCallback(
+    async (
+      result: EncryptedBackupRestore,
+      restoredPreferences: Preferences,
+    ) => {
+      update(restoredPreferences);
+      await Promise.all([
+        workspace.refreshProfiles(),
+        agents.refreshCatalog(),
+        vault.refresh(),
+      ]);
+      storage.refresh();
+      workspace.logActivity({
+        type: "workspace",
+        message: t("settings.backup.activity"),
+        detail: t("settings.backup.restored", {
+          profiles: result.profileCount,
+          hosts: result.trustedHostCount,
+          plans: result.agentPlanCount,
+        }),
+      });
+    },
+    [agents, storage, t, update, vault, workspace],
   );
 
   const commands = useMemo<Command[]>(() => {
@@ -433,6 +464,8 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 onChange={update}
                 runtime={runtime}
                 storage={storage}
+                vaultUnlocked={vault.status?.state === "unlocked"}
+                onBackupRestored={applyRestoredBackup}
               />
             )}
           </div>

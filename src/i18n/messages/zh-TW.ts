@@ -335,7 +335,7 @@ export const zhTW = {
   "settings.motion.reduced": "減少動態",
   "settings.security": "安全性",
   "settings.securityHint":
-    "主機金鑰嚴格驗證、系統認證儲存、保管庫自動鎖定與敏感剪貼簿清除已啟用；加密備份仍在開發中。",
+    "主機金鑰嚴格驗證、系統認證儲存、保管庫自動鎖定、敏感剪貼簿清除與加密備份已啟用。",
   "settings.security.title": "主機信任與系統認證儲存已啟用",
   "settings.security.body":
     "SSH/SFTP/RDP 密碼預設只用於當次連線；明確勾選後，也只有驗證成功才交給作業系統安全保存，連線設定檔仍不含機密。",
@@ -373,6 +373,38 @@ export const zhTW = {
   "settings.security.clipboard.unavailable": "目前無法讀取剪貼簿，因此未清除任何內容。",
   "settings.security.backup": "加密備份與還原",
   "settings.security.backupDetail": "匯出與還原本機資料，過程不會產生明文檔案。",
+  "settings.backup.scope.title": "備份範圍",
+  "settings.backup.scope.body":
+    "包含連線、主機信任、Agent 工作區、通道、介面與 SSH 驗證偏好，以及加密保管庫。作業系統認證儲存區中的密碼、外部私鑰、工作階段輸出、截圖與錄影不會匯出。",
+  "settings.backup.vaultUnlocked.title": "請先鎖定加密保管庫",
+  "settings.backup.vaultUnlocked.body":
+    "備份與還原只會在保管庫鎖定時執行，避免解密中的機密與備份操作交錯。",
+  "settings.backup.errorTitle": "備份操作失敗",
+  "settings.backup.doneTitle": "備份操作完成",
+  "settings.backup.export.title": "匯出加密備份",
+  "settings.backup.export.body":
+    "使用 Argon2id 與 XChaCha20-Poly1305 產生可攜式備份檔。請妥善保存密碼，LatticeTerm 無法替你找回。",
+  "settings.backup.password": "備份密碼",
+  "settings.backup.passwordConfirm": "再次輸入備份密碼",
+  "settings.backup.passwordHint": "密碼至少需要 12 個字元，且不可超過 1024 bytes。",
+  "settings.backup.passwordMismatch": "兩次輸入的密碼不一致。",
+  "settings.backup.exporting": "正在加密…",
+  "settings.backup.export.action": "匯出備份",
+  "settings.backup.restore.title": "還原加密備份",
+  "settings.backup.restore.body":
+    "還原會完整取代本機連線、主機信任、Agent 工作區與可攜式設定。開始前請停止所有 SSH 通道。",
+  "settings.backup.file": "備份檔案",
+  "settings.backup.restoring": "正在驗證並還原…",
+  "settings.backup.restore.action": "還原備份",
+  "settings.backup.confirm.title": "取代目前的本機資料？",
+  "settings.backup.confirm.body":
+    "「{file}」通過解密與驗證後，會以其中的資料取代目前的本機工作區。此動作無法從介面復原。",
+  "settings.backup.confirm.action": "確認還原",
+  "settings.backup.exported": "已匯出加密備份，共包含 {count} 個本機資料檔。",
+  "settings.backup.failed": "{error}",
+  "settings.backup.restored":
+    "還原完成：{profiles} 個連線、{hosts} 個信任主機、{plans} 個 Agent 啟動計畫。",
+  "settings.backup.activity": "已還原加密備份",
   "settings.about": "關於",
   "settings.aboutHint": "由執行中的程式回報。",
   "settings.about.application": "應用程式",

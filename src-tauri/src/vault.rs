@@ -95,6 +95,7 @@ pub struct VaultStatus {
 
 pub struct VaultManager {
     directory: PathBuf,
+    operations: Mutex<()>,
     unlocked: Mutex<Option<UnlockedVault>>,
 }
 
@@ -104,6 +105,7 @@ static MANAGER: OnceLock<VaultManager> = OnceLock::new();
 pub fn initialize(directory: PathBuf) {
     let _ = MANAGER.set(VaultManager {
         directory,
+        operations: Mutex::new(()),
         unlocked: Mutex::new(None),
     });
 }
@@ -230,6 +232,24 @@ impl VaultManager {
         self.directory.join(VAULT_FILE)
     }
 
+    /// Serialises a backup file snapshot or replacement with every operation
+    /// that can decrypt or rewrite the vault.
+    pub fn run_while_locked<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _operation = self.operations.lock().map_err(|error| error.to_string())?;
+        let unlocked = self.unlocked.lock().map_err(|error| error.to_string())?;
+        if unlocked.is_some() {
+            return Err(
+                "Lock the encrypted vault before creating or restoring a backup.".to_string(),
+            );
+        }
+        let result = operation();
+        drop(unlocked);
+        result
+    }
+
     pub fn exists(&self) -> bool {
         self.path().is_file()
     }
@@ -275,6 +295,7 @@ impl VaultManager {
     }
 
     pub fn create(&self, master_password: &str) -> Result<VaultStatus, String> {
+        let _operation = self.operations.lock().map_err(|error| error.to_string())?;
         if master_password.chars().count() < MIN_MASTER_PASSWORD_CHARS {
             return Err(format!(
                 "the master password needs at least {MIN_MASTER_PASSWORD_CHARS} characters"
@@ -296,6 +317,7 @@ impl VaultManager {
     }
 
     pub fn unlock(&self, master_password: &str) -> Result<VaultStatus, String> {
+        let _operation = self.operations.lock().map_err(|error| error.to_string())?;
         if !self.exists() {
             return Err("no vault exists yet — create one first".to_string());
         }
@@ -312,6 +334,9 @@ impl VaultManager {
 
     /// Drops the key and the decrypted entries. The file stays.
     pub fn lock(&self) -> VaultStatus {
+        let Ok(_operation) = self.operations.lock() else {
+            return self.status();
+        };
         if let Ok(mut guard) = self.unlocked.lock() {
             *guard = None;
         }
@@ -319,6 +344,7 @@ impl VaultManager {
     }
 
     pub fn change_password(&self, current: &str, next: &str) -> Result<VaultStatus, String> {
+        let _operation = self.operations.lock().map_err(|error| error.to_string())?;
         if next.chars().count() < MIN_MASTER_PASSWORD_CHARS {
             return Err(format!(
                 "the master password needs at least {MIN_MASTER_PASSWORD_CHARS} characters"
@@ -346,6 +372,7 @@ impl VaultManager {
         &self,
         operation: impl FnOnce(&mut UnlockedVault) -> Result<T, String>,
     ) -> Result<T, String> {
+        let _operation = self.operations.lock().map_err(|error| error.to_string())?;
         let mut guard = self.unlocked.lock().map_err(|error| error.to_string())?;
         let vault = guard
             .as_mut()
@@ -403,6 +430,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         VaultManager {
             directory,
+            operations: Mutex::new(()),
             unlocked: Mutex::new(None),
         }
     }
@@ -518,5 +546,18 @@ mod tests {
         assert!(!raw.contains("super-secret-value"));
         assert!(!raw.contains("correct horse battery"));
         assert!(!raw.contains("ssh-password"), "entry names are sealed too");
+    }
+
+    #[test]
+    fn backup_file_operations_require_a_locked_vault() {
+        let vault = test_manager();
+        vault.create("correct horse battery").unwrap();
+
+        assert!(vault.run_while_locked(|| Ok(())).is_err());
+        vault.lock();
+        assert_eq!(
+            vault.run_while_locked(|| Ok("snapshot")).unwrap(),
+            "snapshot"
+        );
     }
 }

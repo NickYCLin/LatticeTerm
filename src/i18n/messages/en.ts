@@ -349,7 +349,7 @@ export const en: Messages = {
   "settings.motion.reduced": "Reduce motion",
   "settings.security": "Security",
   "settings.securityHint":
-    "Strict host-key verification, system credential storage, vault auto-lock, and sensitive clipboard clearing are active. Encrypted backup is still in development.",
+    "Strict host-key verification, system credential storage, vault auto-lock, sensitive clipboard clearing, and encrypted backup are active.",
   "settings.security.title": "Host trust and system credential storage are active",
   "settings.security.body":
     "SSH, SFTP, and RDP passwords default to one connection attempt. When explicitly selected, only a successfully verified password is saved by the operating system; connection profiles remain secret-free.",
@@ -389,6 +389,40 @@ export const en: Messages = {
   "settings.security.backup": "Encrypted backup and recovery",
   "settings.security.backupDetail":
     "Export and restore local data without producing a plain-text file.",
+  "settings.backup.scope.title": "Backup scope",
+  "settings.backup.scope.body":
+    "Includes connections, trusted hosts, Agent workspace, tunnels, interface and SSH authentication preferences, and the encrypted vault. Passwords in the operating-system credential store, external private keys, session output, screenshots, and recordings are not exported.",
+  "settings.backup.vaultUnlocked.title": "Lock the encrypted vault first",
+  "settings.backup.vaultUnlocked.body":
+    "Backup and restore run only while the vault is locked, keeping decrypted secrets separate from the operation.",
+  "settings.backup.errorTitle": "Backup operation failed",
+  "settings.backup.doneTitle": "Backup operation complete",
+  "settings.backup.export.title": "Export an encrypted backup",
+  "settings.backup.export.body":
+    "Create a portable backup with Argon2id and XChaCha20-Poly1305. Keep the password safe; LatticeTerm cannot recover it for you.",
+  "settings.backup.password": "Backup password",
+  "settings.backup.passwordConfirm": "Confirm backup password",
+  "settings.backup.passwordHint":
+    "Use at least 12 characters and no more than 1,024 bytes.",
+  "settings.backup.passwordMismatch": "The passwords do not match.",
+  "settings.backup.exporting": "Encrypting…",
+  "settings.backup.export.action": "Export backup",
+  "settings.backup.restore.title": "Restore an encrypted backup",
+  "settings.backup.restore.body":
+    "Restore replaces local connections, trusted hosts, Agent workspace, and portable settings. Stop every SSH tunnel before starting.",
+  "settings.backup.file": "Backup file",
+  "settings.backup.restoring": "Validating and restoring…",
+  "settings.backup.restore.action": "Restore backup",
+  "settings.backup.confirm.title": "Replace the current local data?",
+  "settings.backup.confirm.body":
+    "After “{file}” is decrypted and validated, its data will replace the current local workspace. This cannot be undone from the interface.",
+  "settings.backup.confirm.action": "Confirm restore",
+  "settings.backup.exported":
+    "Encrypted backup exported with {count} local data files.",
+  "settings.backup.failed": "{error}",
+  "settings.backup.restored":
+    "Restore complete: {profiles} connections, {hosts} trusted hosts, and {plans} Agent launch plans.",
+  "settings.backup.activity": "Encrypted backup restored",
   "settings.about": "About",
   "settings.aboutHint": "Reported by the running build.",
   "settings.about.application": "Application",

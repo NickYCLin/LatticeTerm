@@ -1,8 +1,7 @@
 /**
  * Settings.
  *
- * Active preferences take effect immediately. Planned security features stay
- * visually separate and never render a control before their backend exists.
+ * Active preferences and local-data security tools take effect immediately.
  */
 
 import { useState } from "react";
@@ -22,6 +21,8 @@ import { Callout } from "../components/common/Callout";
 import { CheckIcon } from "../components/icons";
 import { useAppUpdater } from "../app/useAppUpdater";
 import { APP_VERSION } from "../app/version";
+import type { EncryptedBackupRestore } from "../app/encryptedBackup";
+import { EncryptedBackupPanel } from "../components/settings/EncryptedBackupPanel";
 import {
   clearSensitiveClipboard,
   type SensitiveClipboardClearOutcome,
@@ -63,13 +64,6 @@ const clipboardClearChoices: Choice<Preferences["sensitiveClipboardClear"]>[] = 
   { value: "30", labelKey: "settings.security.clipboard.30sec" },
   { value: "60", labelKey: "settings.security.clipboard.60sec" },
   { value: "120", labelKey: "settings.security.clipboard.120sec" },
-];
-
-const plannedSecurity: { titleKey: MessageKey; detailKey: MessageKey }[] = [
-  {
-    titleKey: "settings.security.backup",
-    detailKey: "settings.security.backupDetail",
-  },
 ];
 
 const clipboardOutcomeKeys: Record<
@@ -125,11 +119,18 @@ export function SettingsView({
   onChange,
   runtime,
   storage,
+  vaultUnlocked,
+  onBackupRestored,
 }: {
   preferences: Preferences;
   onChange: (patch: Partial<Preferences>) => void;
   runtime: RuntimeState;
   storage: StorageState;
+  vaultUnlocked: boolean;
+  onBackupRestored: (
+    result: EncryptedBackupRestore,
+    restoredPreferences: Preferences,
+  ) => Promise<void>;
 }) {
   const { t } = useI18n();
   const { summary, host } = runtime;
@@ -347,17 +348,11 @@ export function SettingsView({
           </div>
         </div>
 
-        <ul className="planned-list">
-          {plannedSecurity.map((entry) => (
-            <li className="planned-list__item" key={entry.titleKey}>
-              <div className="planned-list__text">
-                <strong>{t(entry.titleKey)}</strong>
-                <small>{t(entry.detailKey)}</small>
-              </div>
-              <Chip tone="planned">{t("common.comingSoon")}</Chip>
-            </li>
-          ))}
-        </ul>
+        <EncryptedBackupPanel
+          preferences={preferences}
+          vaultUnlocked={vaultUnlocked}
+          onRestored={onBackupRestored}
+        />
       </section>
 
       <section className="panel glass glass--sheen">
