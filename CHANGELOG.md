@@ -4,6 +4,13 @@
 
 ---
 
+## [0.10.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.9...v0.10.0) (2026-08-22)
+
+
+### 🚀 新增功能
+
+* **保管庫:** 加入閒置與背景自動鎖定 ([fd0375d](https://github.com/NickYCLin/LatticeTerm/commit/fd0375d0ea67e0029a52d7e8213239727717febe))
+
 ## [0.9.9](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.8...v0.9.9) (2026-08-22)
 
 
