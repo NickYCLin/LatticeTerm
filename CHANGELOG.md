@@ -4,6 +4,13 @@
 
 ---
 
+## [0.13.5](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.4...v0.13.5) (2026-08-22)
+
+
+### 🛠️ 問題修正
+
+* **分頁:** 避免背景工作階段關閉切換目前分頁 ([80e9905](https://github.com/NickYCLin/LatticeTerm/commit/80e9905b73658179c3a1d405eb497e14f384009a))
+
 ## [0.13.4](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.3...v0.13.4) (2026-08-22)
 
 
