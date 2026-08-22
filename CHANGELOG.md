@@ -4,6 +4,15 @@
 
 ---
 
+## [0.9.9](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.8...v0.9.9) (2026-08-22)
+
+
+### 🛠️ 問題修正
+
+* **儲存:** 確保批次匯入採用原子寫入 ([842c8fe](https://github.com/NickYCLin/LatticeTerm/commit/842c8fe96193a8971a6f23db2937439dbb0c122d))
+* **工作階段:** 重載後恢復現有連線 ([0b3cfcf](https://github.com/NickYCLin/LatticeTerm/commit/0b3cfcfdf4ec8668929b3df83167c09d8ca83676))
+* **遠端:** 顯示非預期中斷原因 ([7f8d6b6](https://github.com/NickYCLin/LatticeTerm/commit/7f8d6b67f26ae9415685c16fb9bdfac212d5eab7))
+
 ## [0.9.8](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.7...v0.9.8) (2026-08-22)
 
 
