@@ -109,7 +109,7 @@ fn fingerprint(der: &[u8]) -> String {
         .join(":")
 }
 
-fn encode_frame(buffer: &[u32], width: u16, height: u16) -> Result<Vec<u8>, String> {
+fn rgba_frame(buffer: &[u32], width: u16, height: u16) -> Result<Vec<u8>, String> {
     let expected = usize::from(width) * usize::from(height);
     if buffer.len() != expected {
         return Err("IronRDP returned an invalid framebuffer size.".to_string());
@@ -117,8 +117,17 @@ fn encode_frame(buffer: &[u32], width: u16, height: u16) -> Result<Vec<u8>, Stri
 
     let mut rgba = Vec::with_capacity(expected * 4);
     for pixel in buffer {
-        rgba.extend_from_slice(&pixel.to_le_bytes());
+        // IronRDP stores each pixel as 0x00RRGGBB. Converting the integer with
+        // the host's byte order would swap red and blue on little-endian
+        // machines and leave a zero alpha channel.
+        let [_, red, green, blue] = pixel.to_be_bytes();
+        rgba.extend_from_slice(&[red, green, blue, u8::MAX]);
     }
+    Ok(rgba)
+}
+
+fn encode_frame(buffer: &[u32], width: u16, height: u16) -> Result<Vec<u8>, String> {
+    let rgba = rgba_frame(buffer, width, height)?;
     let mut jpeg = Vec::new();
     JpegEncoder::new_with_quality(&mut jpeg, 78)
         .write_image(
@@ -378,5 +387,17 @@ mod tests {
     #[test]
     fn rejects_short_certificate_fingerprint() {
         assert!(normalize_fingerprint("AA:BB").is_none());
+    }
+
+    #[test]
+    fn converts_ironrdp_pixels_to_opaque_rgba_without_swapping_colours() {
+        let rgba = rgba_frame(&[0x00FF_0000, 0x0000_00FF], 2, 1).expect("valid frame");
+
+        assert_eq!(rgba, [255, 0, 0, 255, 0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn rejects_a_framebuffer_with_the_wrong_pixel_count() {
+        assert!(rgba_frame(&[0], 2, 1).is_err());
     }
 }
