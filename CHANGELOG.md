@@ -4,6 +4,13 @@
 
 ---
 
+## [0.11.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.10.0...v0.11.0) (2026-08-22)
+
+
+### 🚀 新增功能
+
+* **安全性:** 加入敏感剪貼簿自動清除 ([3e8e185](https://github.com/NickYCLin/LatticeTerm/commit/3e8e185495e26648afe633e15bb02cf7db4f2222))
+
 ## [0.10.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.9...v0.10.0) (2026-08-22)
 
 
