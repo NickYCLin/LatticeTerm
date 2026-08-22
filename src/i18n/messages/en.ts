@@ -600,7 +600,7 @@ export const en: Messages = {
   "terminal.empty.title": "No session is open",
   "terminal.empty.body":
     "Launch a CLI from AI Agent Fleet or pick a host to open its session here.",
-  "terminal.sessionClosed.title": "Remote session disconnected",
+  "terminal.sessionClosed.title": "Session disconnected",
   "terminal.sessionClosed.body": "{name} stopped unexpectedly: {reason}",
 
   // AI Agent Fleet --------------------------------------------------------

@@ -93,6 +93,15 @@ export function SessionsView({
   ];
 
   const closedNotices: ClosedNoticeSource[] = [];
+  if (agents.lastClosed) {
+    closedNotices.push({
+      notice: agents.lastClosed,
+      clear: agents.clearLastClosed,
+    });
+  }
+  if (ssh.lastClosed) {
+    closedNotices.push({ notice: ssh.lastClosed, clear: ssh.clearLastClosed });
+  }
   if (remote.lastClosed) {
     closedNotices.push({
       notice: remote.lastClosed,

@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { reconcileSessionSnapshot } from "./sessionSnapshot";
+import {
+  createSessionClosedNotice,
+  reconcileSessionSnapshot,
+  type SessionClosedNotice,
+} from "./sessionSnapshot";
 
 export type AgentLifecycle = "working" | "needsAttention" | "idle" | "done";
 export type AgentStateSource = "heuristic" | "integration";
@@ -222,6 +226,7 @@ export interface AgentApi {
   catalog: AgentDefinition[];
   defaultWorkingDirectory: string;
   sessions: AgentSessionSummary[];
+  lastClosed: SessionClosedNotice | null;
   workspaceName: string;
   plans: AgentLaunchPlan[];
   planRecovery: AgentPlanRecovery | null;
@@ -239,6 +244,7 @@ export interface AgentApi {
   ) => Promise<AgentBroadcastOutcome[]>;
   resize: (sessionId: string, cols: number, rows: number) => Promise<void>;
   disconnect: (sessionId: string) => Promise<void>;
+  clearLastClosed: () => void;
   onData: (
     sessionId: string,
     handler: (bytes: Uint8Array) => void,
@@ -255,6 +261,7 @@ export function useAgentSessions(): AgentApi {
   const [catalog, setCatalog] = useState<AgentDefinition[]>(FALLBACK_CATALOG);
   const [defaultWorkingDirectory, setDefaultWorkingDirectory] = useState("");
   const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
+  const [lastClosed, setLastClosed] = useState<SessionClosedNotice | null>(null);
   const [workspaceName, setWorkspaceName] = useState("");
   const [plans, setPlans] = useState<AgentLaunchPlan[]>([]);
   const [planRecovery, setPlanRecovery] = useState<AgentPlanRecovery | null>(
@@ -269,6 +276,9 @@ export function useAgentSessions(): AgentApi {
   const pendingOutput = useRef(new Map<string, Uint8Array[]>());
   const pendingBytes = useRef(new Map<string, number>());
   const outputOffsets = useRef(new Map<string, number>());
+  const sessionsRef = useRef(sessions);
+  const intentionalDisconnects = useRef(new Set<string>());
+  sessionsRef.current = sessions;
 
   const refreshCatalog = useCallback(async () => {
     try {
@@ -357,6 +367,17 @@ export function useAgentSessions(): AgentApi {
         }>("agent://closed", (event) => {
           const sessionId = event.payload.sessionId;
           if (hydrating) closedDuringHydration.add(sessionId);
+          const intentional = intentionalDisconnects.current.delete(sessionId);
+          if (!intentional) {
+            setLastClosed(
+              createSessionClosedNotice(
+                sessionsRef.current,
+                sessionId,
+                event.payload.reason,
+                (session) => session.label,
+              ),
+            );
+          }
           setSessions((current) =>
             current.filter((session) => session.sessionId !== sessionId),
           );
@@ -600,15 +621,21 @@ export function useAgentSessions(): AgentApi {
   );
 
   const disconnect = useCallback(async (sessionId: string) => {
-    const { invoke } = await core();
+    intentionalDisconnects.current.add(sessionId);
     try {
+      const { invoke } = await core();
       await invoke("agent_disconnect", { sessionId });
+    } catch (reason) {
+      intentionalDisconnects.current.delete(sessionId);
+      throw reason;
     } finally {
       setSessions((current) =>
         current.filter((session) => session.sessionId !== sessionId),
       );
     }
   }, []);
+
+  const clearLastClosed = useCallback(() => setLastClosed(null), []);
 
   const onData = useCallback(
     (sessionId: string, handler: (bytes: Uint8Array) => void) => {
@@ -650,6 +677,7 @@ export function useAgentSessions(): AgentApi {
     catalog,
     defaultWorkingDirectory,
     sessions,
+    lastClosed,
     workspaceName,
     plans,
     planRecovery,
@@ -664,6 +692,7 @@ export function useAgentSessions(): AgentApi {
     broadcast,
     resize,
     disconnect,
+    clearLastClosed,
     onData,
     onClosed,
   };

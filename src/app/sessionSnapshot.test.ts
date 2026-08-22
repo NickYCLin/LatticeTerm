@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createSessionClosedNotice,
   reconcileSessionSnapshot,
   reconcileSingletonSnapshot,
 } from "./sessionSnapshot";
@@ -8,6 +9,39 @@ interface TestSession {
   sessionId: string;
   revision: number;
 }
+
+describe("createSessionClosedNotice", () => {
+  it("keeps a readable close notice after the matching pane is removed", () => {
+    const sessions = [{ sessionId: "agent-1", label: "Review agent" }];
+
+    expect(
+      createSessionClosedNotice(
+        sessions,
+        "agent-1",
+        "Process exited: 1",
+        (session) => session.label,
+        42,
+      ),
+    ).toEqual({
+      sessionId: "agent-1",
+      label: "Review agent",
+      reason: "Process exited: 1",
+      at: 42,
+    });
+  });
+
+  it("falls back to the id when a close races the initial snapshot", () => {
+    expect(
+      createSessionClosedNotice(
+        [],
+        "ssh-early-close",
+        "Connection lost",
+        () => "unused",
+        43,
+      ).label,
+    ).toBe("ssh-early-close");
+  });
+});
 
 describe("reconcileSessionSnapshot", () => {
   it("restores backend sessions and keeps newer local state", () => {

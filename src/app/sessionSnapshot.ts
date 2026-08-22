@@ -9,6 +9,27 @@ export interface SessionClosedNotice extends SessionIdentity {
 }
 
 /**
+ * Builds the durable notice shown after a session pane has already unmounted.
+ * The id fallback matters during initial hydration, where a close event can
+ * arrive before the matching backend snapshot.
+ */
+export function createSessionClosedNotice<T extends SessionIdentity>(
+  sessions: readonly T[],
+  sessionId: string,
+  reason: string,
+  label: (session: T) => string,
+  at = Date.now(),
+): SessionClosedNotice {
+  const session = sessions.find((entry) => entry.sessionId === sessionId);
+  return {
+    sessionId,
+    label: session ? label(session) : sessionId,
+    reason,
+    at,
+  };
+}
+
+/**
  * Reconciles a backend snapshot with events or connections that landed while
  * the snapshot request was in flight. Current entries win so a newer frame or
  * local connection is never replaced by an older snapshot, while sessions

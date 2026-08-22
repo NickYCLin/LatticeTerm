@@ -9,7 +9,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostKeyRecord } from "../domain/security";
-import { reconcileSessionSnapshot } from "./sessionSnapshot";
+import {
+  createSessionClosedNotice,
+  reconcileSessionSnapshot,
+  type SessionClosedNotice,
+} from "./sessionSnapshot";
 
 export type { HostKeyRecord } from "../domain/security";
 
@@ -83,10 +87,12 @@ const MAX_PENDING_OUTPUT_BYTES = 256 * 1024;
 
 export interface SshApi {
   sessions: SessionSummary[];
+  lastClosed: SessionClosedNotice | null;
   connect: (request: ConnectRequest) => Promise<ConnectOutcome>;
   send: (sessionId: string, data: string) => Promise<void>;
   resize: (sessionId: string, cols: number, rows: number) => Promise<void>;
   disconnect: (sessionId: string) => Promise<void>;
+  clearLastClosed: () => void;
   trustHost: (
     host: string,
     port: number,
@@ -105,10 +111,14 @@ export interface SshApi {
 
 export function useSshSessions(): SshApi {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [lastClosed, setLastClosed] = useState<SessionClosedNotice | null>(null);
   const dataHandlers = useRef(new Map<string, Set<(bytes: Uint8Array) => void>>());
   const closeHandlers = useRef(new Map<string, Set<(reason: string) => void>>());
   const pendingOutput = useRef(new Map<string, Uint8Array[]>());
   const pendingBytes = useRef(new Map<string, number>());
+  const sessionsRef = useRef(sessions);
+  const intentionalDisconnects = useRef(new Set<string>());
+  sessionsRef.current = sessions;
 
   // One listener pair for the whole app, fanned out by session id: a terminal
   // pane mounting must not cost another IPC subscription.
@@ -141,6 +151,17 @@ export function useSshSessions(): SshApi {
           (event) => {
             const sessionId = event.payload.sessionId;
             if (hydrating) closedDuringHydration.add(sessionId);
+            const intentional = intentionalDisconnects.current.delete(sessionId);
+            if (!intentional) {
+              setLastClosed(
+                createSessionClosedNotice(
+                  sessionsRef.current,
+                  sessionId,
+                  event.payload.reason,
+                  (session) => session.username + "@" + session.host,
+                ),
+              );
+            }
             const handlers = closeHandlers.current.get(sessionId);
             if (handlers) {
               for (const handler of handlers) handler(event.payload.reason);
@@ -256,9 +277,13 @@ export function useSshSessions(): SshApi {
   );
 
   const disconnect = useCallback(async (sessionId: string) => {
+    intentionalDisconnects.current.add(sessionId);
     try {
       const { invoke } = await core();
       await invoke("ssh_disconnect", { sessionId });
+    } catch (reason) {
+      intentionalDisconnects.current.delete(sessionId);
+      throw reason;
     } finally {
       // Even if the backend refused, the session is over as far as this
       // window is concerned; leaving the tab would strand the user with
@@ -268,6 +293,8 @@ export function useSshSessions(): SshApi {
       );
     }
   }, []);
+
+  const clearLastClosed = useCallback(() => setLastClosed(null), []);
 
   const trustHost = useCallback(
     async (
@@ -328,10 +355,12 @@ export function useSshSessions(): SshApi {
 
   return {
     sessions,
+    lastClosed,
     connect,
     send,
     resize,
     disconnect,
+    clearLastClosed,
     trustHost,
     defaultKeys,
     onData,
