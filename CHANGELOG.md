@@ -4,6 +4,17 @@
 
 ---
 
+## [0.9.7](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.6...v0.9.7) (2026-08-22)
+
+
+### 🛠️ 問題修正
+
+* **RDP:** 修正遠端畫面色彩通道 ([8a43683](https://github.com/NickYCLin/LatticeTerm/commit/8a436839e41b76cbf96d18bbd4a9b1e8c0682669))
+* **RDP:** 區分憑證拒絕與連線失敗 ([740e75f](https://github.com/NickYCLin/LatticeTerm/commit/740e75f09e67ab7e5aac22722460043846fbf260))
+* **VNC:** 防止畫面越界與遠端輸入卡住 ([253aeb4](https://github.com/NickYCLin/LatticeTerm/commit/253aeb4dba8d697e0394684877b5cf0b7306d37e))
+* **發布:** 統一版本說明項目符號 ([d1497c0](https://github.com/NickYCLin/LatticeTerm/commit/d1497c0d0d1fd44b3c066c73c6b46e9f1d50e747))
+* **通道:** 保留停止失敗的活躍設定 ([73cd7c7](https://github.com/NickYCLin/LatticeTerm/commit/73cd7c70e7a3abfc307559df3fd13eb2107a46ff))
+
 ## [0.9.6](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.5...v0.9.6) (2026-08-21)
 
 
