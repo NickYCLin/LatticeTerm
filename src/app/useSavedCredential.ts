@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ConnectionProfile } from "../domain/connection";
+import { hasDesktopBackend } from "./nativeRuntime";
 
 export type CredentialKind =
   | "sshPassword"
@@ -16,7 +17,12 @@ export interface CredentialStoreStatus {
 export type SavedCredentialState =
   | { mode: "loading"; provider: string | null; detail: null }
   | { mode: "saved" | "missing"; provider: string; detail: null }
-  | { mode: "unavailable"; provider: string | null; detail: string };
+  | {
+      mode: "unavailable";
+      provider: string | null;
+      detail: string;
+      runtimeUnavailable: boolean;
+    };
 
 export interface CredentialInventoryEntry {
   profileId: string;
@@ -27,7 +33,12 @@ export type CredentialDeleteGuardState =
   | { mode: "clear"; provider: null; detail: null }
   | { mode: "loading"; provider: null; detail: null }
   | { mode: "saved"; provider: string; detail: null }
-  | { mode: "unavailable"; provider: string | null; detail: string };
+  | {
+      mode: "unavailable";
+      provider: string | null;
+      detail: string;
+      runtimeUnavailable: boolean;
+    };
 
 export type CredentialInventoryState =
   | {
@@ -46,6 +57,7 @@ export type CredentialInventoryState =
       mode: "unavailable";
       provider: string | null;
       detail: string;
+      runtimeUnavailable: boolean;
       entries: CredentialInventoryEntry[];
     };
 
@@ -80,6 +92,15 @@ async function readState(
   profileId: string,
   kind: CredentialKind,
 ): Promise<SavedCredentialState> {
+  if (!hasDesktopBackend()) {
+    return {
+      mode: "unavailable",
+      provider: null,
+      detail: "",
+      runtimeUnavailable: true,
+    };
+  }
+
   try {
     const status = await readStatus();
     if (!status.ready) {
@@ -87,6 +108,7 @@ async function readState(
         mode: "unavailable",
         provider: status.provider,
         detail: status.detail ?? "Credential storage is unavailable.",
+        runtimeUnavailable: false,
       };
     }
 
@@ -100,6 +122,7 @@ async function readState(
       mode: "unavailable",
       provider: null,
       detail: reason instanceof Error ? reason.message : String(reason),
+      runtimeUnavailable: false,
     };
   }
 }
@@ -107,6 +130,16 @@ async function readState(
 async function readInventory(
   profiles: ConnectionProfile[],
 ): Promise<CredentialInventoryState> {
+  if (!hasDesktopBackend()) {
+    return {
+      mode: "unavailable",
+      provider: null,
+      detail: "",
+      runtimeUnavailable: true,
+      entries: [],
+    };
+  }
+
   try {
     const status = await readStatus();
     if (!status.ready) {
@@ -114,6 +147,7 @@ async function readInventory(
         mode: "unavailable",
         provider: status.provider,
         detail: status.detail ?? "Credential storage is unavailable.",
+        runtimeUnavailable: false,
         entries: [],
       };
     }
@@ -140,6 +174,7 @@ async function readInventory(
       mode: "unavailable",
       provider: null,
       detail: reason instanceof Error ? reason.message : String(reason),
+      runtimeUnavailable: false,
       entries: [],
     };
   }
@@ -200,7 +235,7 @@ export function useCredentialDeleteGuard(
   });
 
   useEffect(() => {
-    if (!profile || !("__TAURI_INTERNALS__" in window)) {
+    if (!profile || !hasDesktopBackend()) {
       setState({ mode: "clear", provider: null, detail: null });
       return;
     }

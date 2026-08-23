@@ -134,6 +134,7 @@ export function SettingsView({
 }) {
   const { t } = useI18n();
   const { summary, host } = runtime;
+  const desktopBackendAvailable = host === "tauri";
   const updater = useAppUpdater(summary?.version);
   const [clipboardBusy, setClipboardBusy] = useState(false);
   const [clipboardNotice, setClipboardNotice] =
@@ -268,13 +269,25 @@ export function SettingsView({
         <header className="panel__head">
           <div>
             <h2 className="panel__title">{t("settings.security")}</h2>
-            <p className="panel__hint">{t("settings.securityHint")}</p>
+            <p className="panel__hint">
+              {host === "tauri"
+                ? t("settings.securityHint")
+                : host === "browser"
+                  ? t("settings.security.browserHint")
+                  : t("common.detecting")}
+            </p>
           </div>
         </header>
 
-        <Callout tone="security" title={t("settings.security.title")}>
-          {t("settings.security.body")}
-        </Callout>
+        {desktopBackendAvailable ? (
+          <Callout tone="security" title={t("settings.security.title")}>
+            {t("settings.security.body")}
+          </Callout>
+        ) : host === "browser" ? (
+          <Callout tone="info" title={t("settings.security.browser.title")}>
+            {t("settings.security.browser.body")}
+          </Callout>
+        ) : null}
 
         <div className="setting-list">
           <SegmentedSetting
@@ -350,6 +363,7 @@ export function SettingsView({
 
         <EncryptedBackupPanel
           preferences={preferences}
+          backendAvailable={desktopBackendAvailable}
           vaultUnlocked={vaultUnlocked}
           onRestored={onBackupRestored}
         />
@@ -425,45 +439,51 @@ export function SettingsView({
           <div className="field-row">
             <dt className="field-row__label">{t("settings.updater.status")}</dt>
             <dd className="field-row__value">
-              {updater.status === "checking" && (
+              {host === "unknown" && (
+                <Chip tone="info">{t("common.detecting")}</Chip>
+              )}
+              {host === "browser" && (
+                <Chip tone="planned">{t("settings.updater.desktopOnly")}</Chip>
+              )}
+              {desktopBackendAvailable && updater.status === "checking" && (
                 <Chip tone="info">{t("settings.updater.checking")}</Chip>
               )}
-              {updater.status === "up-to-date" && (
+              {desktopBackendAvailable && updater.status === "up-to-date" && (
                 <Chip tone="ok">{t("settings.updater.upToDate")}</Chip>
               )}
-              {updater.status === "available" && (
+              {desktopBackendAvailable && updater.status === "available" && (
                 <Chip tone="warn">
                   {t("settings.updater.available", {
                     version: updater.availableVersion ?? "",
                   })}
                 </Chip>
               )}
-              {updater.status === "downloading" && (
+              {desktopBackendAvailable && updater.status === "downloading" && (
                 <Chip tone="info">
                   {t("settings.updater.downloading", {
                     percent: updater.progressPercent,
                   })}
                 </Chip>
               )}
-              {updater.status === "installing" && (
+              {desktopBackendAvailable && updater.status === "installing" && (
                 <Chip tone="info">{t("settings.updater.installing")}</Chip>
               )}
-              {updater.status === "downloaded" && (
+              {desktopBackendAvailable && updater.status === "downloaded" && (
                 <Chip tone="ok">{t("settings.updater.downloaded")}</Chip>
               )}
-              {updater.status === "error" && (
+              {desktopBackendAvailable && updater.status === "error" && (
                 <Chip tone="danger">
                   {t("settings.updater.error", { error: updater.error ?? "" })}
                 </Chip>
               )}
-              {updater.status === "idle" && (
+              {desktopBackendAvailable && updater.status === "idle" && (
                 <span className="text-muted">—</span>
               )}
             </dd>
           </div>
         </dl>
 
-        {updater.status === "available" && (
+        {desktopBackendAvailable && updater.status === "available" && (
           <div className="stack" style={{ gap: "var(--space-3)", marginTop: "var(--space-4)" }}>
             <Callout
               tone="info"
@@ -494,7 +514,7 @@ export function SettingsView({
           </div>
         )}
 
-        {updater.status === "downloaded" && (
+        {desktopBackendAvailable && updater.status === "downloaded" && (
           <div className="stack" style={{ gap: "var(--space-3)", marginTop: "var(--space-4)" }}>
             <Callout tone="info" title={t("settings.updater.downloaded")}>
               <p>{t("settings.updater.relaunch")}</p>
@@ -524,10 +544,16 @@ export function SettingsView({
             <button
               type="button"
               className="button button--ghost"
-              disabled={updater.status === "checking" || updater.status === "downloading"}
-              onClick={() => void updater.checkForUpdates()}
+              disabled={
+                !desktopBackendAvailable ||
+                updater.status === "checking" ||
+                updater.status === "downloading"
+              }
+              onClick={() => {
+                if (desktopBackendAvailable) void updater.checkForUpdates();
+              }}
             >
-              {updater.status === "checking"
+              {desktopBackendAvailable && updater.status === "checking"
                 ? t("settings.updater.checking")
                 : t("settings.updater.check")}
             </button>

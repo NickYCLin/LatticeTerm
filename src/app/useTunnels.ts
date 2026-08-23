@@ -20,6 +20,7 @@ import {
   type TunnelValidationError,
 } from "../domain/tunnel";
 import type { ConnectionProfile } from "../domain/connection";
+import { DESKTOP_BACKEND_UNAVAILABLE } from "./nativeRuntime";
 
 const TUNNELS_STORAGE_KEY = "latticeterm.tunnels.v1";
 
@@ -89,7 +90,8 @@ export interface UseTunnelsResult {
 
 export function useTunnels(
   profiles: ConnectionProfile[],
-  onActivity?: (type: string, detail: string) => void,
+  onActivity: ((type: string, detail: string) => void) | undefined,
+  backendAvailable: boolean,
 ): UseTunnelsResult {
   const [tunnels, setTunnels] = useState<TunnelConfig[]>(() => {
     try {
@@ -119,6 +121,8 @@ export function useTunnels(
   // overwritten, so an error recorded at start time survives until the next
   // successful start of that tunnel.
   useEffect(() => {
+    if (!backendAvailable) return;
+
     let cancelled = false;
 
     async function poll() {
@@ -167,7 +171,7 @@ export function useTunnels(
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [backendAvailable]);
 
   const addTunnel = useCallback(
     (draft: TunnelDraft) => {
@@ -253,6 +257,10 @@ export function useTunnels(
     async (id: string): Promise<{ success: boolean; error?: string }> => {
       const target = tunnels.find((t) => t.id === id);
       if (!target) return { success: false, error: "connect:tunnel not found" };
+      if (!backendAvailable) {
+        markError(id, DESKTOP_BACKEND_UNAVAILABLE);
+        return { success: false, error: DESKTOP_BACKEND_UNAVAILABLE };
+      }
 
       const profile = profiles.find((p) => p.id === target.profileId);
       if (!profile || profile.protocol !== "ssh") {
@@ -308,26 +316,31 @@ export function useTunnels(
         return { success: false, error };
       }
     },
-    [tunnels, profiles, onActivity, markError],
+    [tunnels, profiles, backendAvailable, onActivity, markError],
   );
 
   // Start opted-in tunnels once per application lifetime. Waiting until at
   // least one profile exists avoids consuming the attempt while profile state
   // is still being restored during startup.
   useEffect(() => {
-    if (profiles.length === 0) return;
+    if (!backendAvailable || profiles.length === 0) return;
     for (const tunnel of tunnels) {
       if (!tunnel.autoStart || autoStartAttempted.current.has(tunnel.id)) continue;
       autoStartAttempted.current.add(tunnel.id);
       void startTunnel(tunnel.id);
     }
-  }, [profiles.length, startTunnel, tunnels]);
+  }, [backendAvailable, profiles.length, startTunnel, tunnels]);
 
   const stopTunnel = useCallback(
     async (id: string): Promise<TunnelActionResult> => {
       const target = tunnels.find((t) => t.id === id);
       if (!target) {
         return tunnelStopFailure(new Error("tunnel not found"));
+      }
+      if (!backendAvailable) {
+        const outcome = { success: false, error: DESKTOP_BACKEND_UNAVAILABLE };
+        markStopError(id, DESKTOP_BACKEND_UNAVAILABLE);
+        return outcome;
       }
 
       let outcome: TunnelActionResult;
@@ -360,7 +373,7 @@ export function useTunnels(
       onActivity?.("tunnel_stop", target.name);
       return { success: true };
     },
-    [markStopError, tunnels, onActivity],
+    [backendAvailable, markStopError, tunnels, onActivity],
   );
 
   const deleteTunnel = useCallback(

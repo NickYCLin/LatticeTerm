@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { APP_VERSION } from "./version";
+import { hasDesktopBackend } from "./nativeRuntime";
 
 export interface RuntimeSummary {
   appName: string;
@@ -43,6 +44,11 @@ export function useRuntimeSummary(): RuntimeState {
     let cancelled = false;
 
     async function load() {
+      if (!hasDesktopBackend()) {
+        if (!cancelled) setState({ summary: fallback, host: "browser" });
+        return;
+      }
+
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         const summary = await invoke<RuntimeSummary>("runtime_summary");

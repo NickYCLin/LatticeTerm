@@ -40,8 +40,13 @@ export const zhTW = {
   "credential.unavailable.title": "系統安全儲存區目前無法使用",
   "credential.unavailable.body":
     "這次仍可手動輸入密碼，但不會保存。原因：{detail}",
+  "credential.unavailable.browserBody":
+    "瀏覽器預覽沒有桌面安全後端；這次仍可手動輸入密碼，但不會保存。",
 
   // 導覽 ------------------------------------------------------------------
+  "desktopBackend.required.title": "需要 LatticeTerm 桌面應用程式",
+  "desktopBackend.required.body":
+    "瀏覽器預覽可以管理連線設定，但實際連線、桌面分享與本機服務需要桌面後端。",
   "mobile.desktopOnly.title": "桌面版限定功能",
   "mobile.desktopOnly.body": "RDP 與 VNC 需要獨立的原生引擎程序，行動裝置的系統不允許執行。請在桌面版使用這個連線。",
   "terminal.keybar.ctrl": "Ctrl",
@@ -259,6 +264,9 @@ export const zhTW = {
   "tunnels.stopAll": "全部停止",
   "tunnels.add": "新增通道",
   "tunnels.sshRequired": "請先建立至少一個 SSH 連線設定，才能建立或啟動通道。",
+  "tunnels.desktopOnly.title": "通道執行需要桌面後端",
+  "tunnels.desktopOnly.body":
+    "瀏覽器預覽可建立、編輯與複製通道設定；啟動、停止與流量監控請在 LatticeTerm 桌面應用程式使用。",
   "tunnels.empty": "尚無任何通道設定",
   "tunnels.emptySearch": "找不到符合的通道",
   "tunnels.emptyHint": "建立 SSH 通道以安全轉送內網資料庫、Web 服務或建立 SOCKS5 代理。",
@@ -307,6 +315,7 @@ export const zhTW = {
   "tunnels.error.trustRequired": "尚未信任此主機的金鑰——請先建立一次 SSH 連線完成指紋確認",
   "tunnels.error.authFailed": "主機拒絕了登入憑證，請重新連線並更新已儲存的密碼",
   "tunnels.error.profileMissing": "關聯的閘道設定不存在或不是 SSH 連線，請編輯通道重新選擇",
+  "tunnels.error.desktopOnly": "通道只能在 LatticeTerm 桌面應用程式啟動或停止",
   "tunnels.error.startFailed": "通道啟動失敗：{detail}",
   "tunnels.error.stopFailed": "通道停止失敗：{detail}",
   "tunnels.error.deleteFailed": "通道刪除失敗：{detail}",
@@ -338,6 +347,11 @@ export const zhTW = {
   "settings.securityHint":
     "主機金鑰嚴格驗證、系統認證儲存、保管庫自動鎖定、敏感剪貼簿清除與加密備份已啟用。",
   "settings.security.title": "主機信任與系統認證儲存已啟用",
+  "settings.security.browserHint":
+    "可預覽本機介面偏好；需要桌面安全後端的功能已停用。",
+  "settings.security.browser.title": "瀏覽器預覽沒有桌面安全後端",
+  "settings.security.browser.body":
+    "主機信任、系統認證儲存與加密備份只能在 LatticeTerm 桌面應用程式使用。",
   "settings.security.body":
     "SSH/SFTP/RDP 密碼預設只用於當次連線；明確勾選後，也只有驗證成功才交給作業系統安全保存，連線設定檔仍不含機密。",
   "settings.security.autoLock": "自動鎖定保管庫",
@@ -374,6 +388,9 @@ export const zhTW = {
   "settings.security.clipboard.unavailable": "目前無法讀取剪貼簿，因此未清除任何內容。",
   "settings.security.backup": "加密備份與還原",
   "settings.security.backupDetail": "匯出與還原本機資料，過程不會產生明文檔案。",
+  "settings.backup.desktopOnly.title": "加密備份需要桌面後端",
+  "settings.backup.desktopOnly.body":
+    "瀏覽器預覽不會讀取或取代桌面資料；請在 LatticeTerm 桌面應用程式匯出或還原備份。",
   "settings.backup.scope.title": "備份範圍",
   "settings.backup.scope.body":
     "包含連線、主機信任、Agent 工作區、通道、介面與 SSH 驗證偏好，以及加密保管庫。作業系統認證儲存區中的密碼、外部私鑰、工作階段輸出、截圖與錄影不會匯出。",
@@ -421,6 +438,7 @@ export const zhTW = {
   "settings.updaterHint": "透過 GitHub Releases 檢查更新。下載完成後會自動安裝並重新啟動，不用自己跑安裝程式。",
   "settings.updater.current": "目前版本",
   "settings.updater.status": "更新狀態",
+  "settings.updater.desktopOnly": "請在桌面應用程式檢查與安裝更新",
   "settings.updater.check": "檢查更新",
   "settings.updater.checking": "正在檢查更新...",
   "settings.updater.upToDate": "目前已是最新版本",

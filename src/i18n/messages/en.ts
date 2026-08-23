@@ -43,8 +43,13 @@ export const en: Messages = {
   "credential.unavailable.title": "System credential storage is unavailable",
   "credential.unavailable.body":
     "You can still enter a password for this attempt, but it will not be saved. Reason: {detail}",
+  "credential.unavailable.browserBody":
+    "The browser preview has no desktop security backend. You can still enter a password for this connection, but it will not be saved.",
 
   // Navigation ------------------------------------------------------------
+  "desktopBackend.required.title": "The LatticeTerm desktop app is required",
+  "desktopBackend.required.body":
+    "The browser preview can manage connection settings, but live connections, screen sharing, and local services require the desktop backend.",
   "mobile.desktopOnly.title": "Desktop-only feature",
   "mobile.desktopOnly.body": "RDP and VNC run in separate native engine processes, which mobile operating systems do not allow. Use this connection on the desktop app.",
   "terminal.keybar.ctrl": "Ctrl",
@@ -272,6 +277,9 @@ export const en: Messages = {
   "tunnels.stopAll": "Stop All",
   "tunnels.add": "Add Tunnel",
   "tunnels.sshRequired": "Create at least one SSH connection profile before creating or starting a tunnel.",
+  "tunnels.desktopOnly.title": "Running tunnels requires the desktop backend",
+  "tunnels.desktopOnly.body":
+    "The browser preview can create, edit, and copy tunnel settings. Start, stop, and traffic monitoring are available in the LatticeTerm desktop app.",
   "tunnels.empty": "No Tunnels Configured",
   "tunnels.emptySearch": "No Tunnels Match Search",
   "tunnels.emptyHint": "Create SSH tunnels to securely forward internal databases, web services, or create SOCKS5 proxies.",
@@ -320,6 +328,7 @@ export const en: Messages = {
   "tunnels.error.trustRequired": "This host's key is not trusted yet — connect over SSH once to confirm its fingerprint",
   "tunnels.error.authFailed": "The host rejected the credentials — reconnect and update the saved password",
   "tunnels.error.profileMissing": "The linked gateway is missing or is not an SSH profile — edit the tunnel and pick one",
+  "tunnels.error.desktopOnly": "Tunnels can only be started or stopped in the LatticeTerm desktop app",
   "tunnels.error.startFailed": "The tunnel failed to start: {detail}",
   "tunnels.error.stopFailed": "The tunnel failed to stop: {detail}",
   "tunnels.error.deleteFailed": "The tunnel could not be deleted: {detail}",
@@ -352,6 +361,11 @@ export const en: Messages = {
   "settings.securityHint":
     "Strict host-key verification, system credential storage, vault auto-lock, sensitive clipboard clearing, and encrypted backup are active.",
   "settings.security.title": "Host trust and system credential storage are active",
+  "settings.security.browserHint":
+    "Local interface preferences remain available; features that require the desktop security backend are disabled.",
+  "settings.security.browser.title": "The browser preview has no desktop security backend",
+  "settings.security.browser.body":
+    "Host trust, system credential storage, and encrypted backups are available only in the LatticeTerm desktop app.",
   "settings.security.body":
     "SSH, SFTP, and RDP passwords default to one connection attempt. When explicitly selected, only a successfully verified password is saved by the operating system; connection profiles remain secret-free.",
   "settings.security.autoLock": "Auto-lock the vault",
@@ -390,6 +404,9 @@ export const en: Messages = {
   "settings.security.backup": "Encrypted backup and recovery",
   "settings.security.backupDetail":
     "Export and restore local data without producing a plain-text file.",
+  "settings.backup.desktopOnly.title": "Encrypted backups require the desktop backend",
+  "settings.backup.desktopOnly.body":
+    "The browser preview does not read or replace desktop data. Export or restore backups from the LatticeTerm desktop app.",
   "settings.backup.scope.title": "Backup scope",
   "settings.backup.scope.body":
     "Includes connections, trusted hosts, Agent workspace, tunnels, interface and SSH authentication preferences, and the encrypted vault. Passwords in the operating-system credential store, external private keys, session output, screenshots, and recordings are not exported.",
@@ -439,6 +456,7 @@ export const en: Messages = {
   "settings.updaterHint": "Check for updates from GitHub Releases and update directly in-app without reinstalling.",
   "settings.updater.current": "Current version",
   "settings.updater.status": "Update status",
+  "settings.updater.desktopOnly": "Check and install updates in the desktop app",
   "settings.updater.check": "Check for updates",
   "settings.updater.checking": "Checking for updates...",
   "settings.updater.upToDate": "You are up to date",

@@ -53,6 +53,7 @@ import { ConnectionInspector } from "./components/connections/ConnectionInspecto
 import { useHostMetrics } from "./app/useHostMetrics";
 import type { Command } from "./components/overlays/CommandPalette";
 import { ConfirmDialog } from "./components/overlays/ConfirmDialog";
+import { DesktopBackendRequiredDialog } from "./components/overlays/DesktopBackendRequiredDialog";
 import { PlusIcon, ScreenShareIcon } from "./components/icons";
 import "./styles/index.css";
 
@@ -567,6 +568,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
               // profile here would fail at start every time.
               <TunnelsView
                 profiles={profiles.filter((entry) => entry.protocol === "ssh")}
+                backendAvailable={runtime.host === "tauri"}
               />
             )}
             {view === "vault" && (
@@ -683,7 +685,11 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       )}
 
-      {connectTarget?.protocol === "ssh" && (
+      {connectTarget && runtime.host === "browser" && (
+        <DesktopBackendRequiredDialog onClose={() => setConnectTarget(null)} />
+      )}
+
+      {runtime.host === "tauri" && connectTarget?.protocol === "ssh" && (
         <ConnectFlow
           profile={connectTarget}
           ssh={ssh}
@@ -696,7 +702,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       )}
 
-      {connectTarget?.protocol === "lattice" && (
+      {runtime.host === "tauri" && connectTarget?.protocol === "lattice" && (
         <RemoteConnectFlow
           profile={connectTarget}
           remote={remote}
@@ -709,7 +715,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       )}
 
-      {connectTarget?.protocol === "sftp" && (
+      {runtime.host === "tauri" && connectTarget?.protocol === "sftp" && (
         <SftpConnectFlow
           profile={connectTarget}
           sftp={sftp}
@@ -722,7 +728,10 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       )}
 
-      {connectTarget && onMobile && (connectTarget.protocol === "rdp" || connectTarget.protocol === "vnc") && (
+      {runtime.host === "tauri" &&
+        connectTarget &&
+        onMobile &&
+        (connectTarget.protocol === "rdp" || connectTarget.protocol === "vnc") && (
         <div className="scrim scrim--center" role="presentation" onMouseDown={() => setConnectTarget(null)}>
           <div
             className="dialog"
@@ -749,7 +758,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         </div>
       )}
 
-      {!onMobile && connectTarget?.protocol === "rdp" && (
+      {runtime.host === "tauri" &&
+        !onMobile &&
+        connectTarget?.protocol === "rdp" && (
         <RdpConnectFlow
           profile={connectTarget}
           rdp={rdp}
@@ -762,7 +773,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       )}
 
-      {!onMobile && connectTarget?.protocol === "vnc" && (
+      {runtime.host === "tauri" &&
+        !onMobile &&
+        connectTarget?.protocol === "vnc" && (
         <VncConnectFlow
           profile={connectTarget}
           vnc={vnc}
@@ -787,7 +800,11 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         />
       )}
 
-      {remoteHostOpen && (
+      {remoteHostOpen && runtime.host === "browser" && (
+        <DesktopBackendRequiredDialog onClose={() => setRemoteHostOpen(false)} />
+      )}
+
+      {remoteHostOpen && runtime.host === "tauri" && (
         <RemoteHostDialog
           host={remoteHost}
           sensitiveClipboardClear={preferences.sensitiveClipboardClear}

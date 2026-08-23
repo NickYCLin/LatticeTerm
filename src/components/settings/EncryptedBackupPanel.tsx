@@ -15,6 +15,7 @@ import { ConfirmDialog } from "../overlays/ConfirmDialog";
 
 interface EncryptedBackupPanelProps {
   preferences: Preferences;
+  backendAvailable: boolean;
   vaultUnlocked: boolean;
   onRestored: (
     result: EncryptedBackupRestore,
@@ -30,6 +31,7 @@ function reasonText(reason: unknown): string {
 
 export function EncryptedBackupPanel({
   preferences,
+  backendAvailable,
   vaultUnlocked,
   onRestored,
 }: EncryptedBackupPanelProps) {
@@ -44,11 +46,13 @@ export function EncryptedBackupPanel({
   const [notice, setNotice] = useState<Notice>(null);
 
   const exportReady =
+    backendAvailable &&
     !vaultUnlocked &&
     !busy &&
     backupPasswordIsValid(exportPassword) &&
     exportPassword === exportConfirmation;
   const restoreReady =
+    backendAvailable &&
     !vaultUnlocked &&
     !busy &&
     backupPasswordIsValid(restorePassword) &&
@@ -123,6 +127,12 @@ export function EncryptedBackupPanel({
         </div>
       </div>
 
+      {!backendAvailable && (
+        <Callout tone="info" title={t("settings.backup.desktopOnly.title")}>
+          {t("settings.backup.desktopOnly.body")}
+        </Callout>
+      )}
+
       <Callout tone="security" title={t("settings.backup.scope.title")}>
         {t("settings.backup.scope.body")}
       </Callout>
@@ -159,6 +169,7 @@ export function EncryptedBackupPanel({
             <input
               className="input"
               type="password"
+              disabled={!backendAvailable}
               autoComplete="new-password"
               value={exportPassword}
               onChange={(event) => setExportPassword(event.target.value)}
@@ -171,6 +182,7 @@ export function EncryptedBackupPanel({
             <input
               className="input"
               type="password"
+              disabled={!backendAvailable}
               autoComplete="new-password"
               value={exportConfirmation}
               onChange={(event) => setExportConfirmation(event.target.value)}
@@ -210,6 +222,7 @@ export function EncryptedBackupPanel({
               className="input"
               type="file"
               accept={BACKUP_EXTENSION}
+              disabled={!backendAvailable}
               onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
             />
           </label>
@@ -218,6 +231,7 @@ export function EncryptedBackupPanel({
             <input
               className="input"
               type="password"
+              disabled={!backendAvailable}
               autoComplete="current-password"
               value={restorePassword}
               onChange={(event) => setRestorePassword(event.target.value)}

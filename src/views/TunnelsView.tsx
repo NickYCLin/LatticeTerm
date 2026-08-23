@@ -19,6 +19,7 @@ import { useTunnels } from "../app/useTunnels";
 import type { ConnectionProfile } from "../domain/connection";
 import { useI18n } from "../i18n";
 import { Chip } from "../components/common/Badge";
+import { Callout } from "../components/common/Callout";
 import {
   CheckIcon,
   CloseIcon,
@@ -35,10 +36,15 @@ import {
 
 interface TunnelsViewProps {
   profiles: ConnectionProfile[];
+  backendAvailable: boolean;
   onActivity?: (type: string, detail: string) => void;
 }
 
-export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
+export function TunnelsView({
+  profiles,
+  backendAvailable,
+  onActivity,
+}: TunnelsViewProps) {
   const { t } = useI18n();
   const sshProfiles = useMemo(() => profiles.filter((profile) => profile.protocol === "ssh"), [profiles]);
   const {
@@ -52,7 +58,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
     stopTunnel,
     startAll,
     stopAll,
-  } = useTunnels(profiles, onActivity);
+  } = useTunnels(profiles, onActivity, backendAvailable);
 
   // Backend failures arrive as "code:detail"; the code picks the translated
   // explanation and the detail fills in the specifics where useful.
@@ -69,6 +75,8 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
         return t("tunnels.error.authFailed");
       case "profile":
         return t("tunnels.error.profileMissing");
+      case "runtime":
+        return t("tunnels.error.desktopOnly");
       case "stop":
         return t("tunnels.error.stopFailed", { detail });
       case "delete":
@@ -190,6 +198,12 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
         </div>
       </div>
 
+      {!backendAvailable && (
+        <Callout tone="info" title={t("tunnels.desktopOnly.title")}>
+          {t("tunnels.desktopOnly.body")}
+        </Callout>
+      )}
+
       {/* 2. Control Toolbar */}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "var(--space-4)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flex: "1 1 300px" }}>
@@ -224,7 +238,12 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
 
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
           {activeCount > 0 ? (
-            <button type="button" className="button button--ghost" onClick={() => void stopAll()}>
+            <button
+              type="button"
+              className="button button--ghost"
+              disabled={!backendAvailable}
+              onClick={() => void stopAll()}
+            >
               <StopIcon size={14} />
               {t("tunnels.stopAll")}
             </button>
@@ -232,7 +251,7 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
             <button
               type="button"
               className="button button--ghost"
-              disabled={sshProfiles.length === 0}
+              disabled={!backendAvailable || sshProfiles.length === 0}
               onClick={() => void startAll()}
             >
               <PlayIcon size={14} />
@@ -328,7 +347,11 @@ export function TunnelsView({ profiles, onActivity }: TunnelsViewProps) {
                       type="button"
                       className={`button ${isActive ? "button--secondary" : "button--primary"}`}
                       style={{ padding: "0.35rem 0.85rem", height: "auto" }}
-                      disabled={isStarting || (!isActive && !profile)}
+                      disabled={
+                        isStarting ||
+                        !backendAvailable ||
+                        (!isActive && !profile)
+                      }
                       onClick={() => {
                         if (isActive) {
                           void stopTunnel(tunnel.id);

@@ -525,7 +525,7 @@ export function VaultView({
             <Callout
               tone="warn"
               title={t("credential.unavailable.title")}
-              actions={
+              actions={credentials.state.runtimeUnavailable ? undefined : (
                 <button
                   type="button"
                   className="button button--secondary button--sm"
@@ -534,11 +534,14 @@ export function VaultView({
                   <RefreshIcon size={13} />
                   {t("vault.retry")}
                 </button>
-              }
+              )}
             >
-              {t("credential.unavailable.body", {
-                detail: credentials.state.detail,
-              })}
+              {t(
+                credentials.state.runtimeUnavailable
+                  ? "credential.unavailable.browserBody"
+                  : "credential.unavailable.body",
+                { detail: credentials.state.detail },
+              )}
             </Callout>
           )}
 

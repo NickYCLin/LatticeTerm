@@ -177,9 +177,12 @@ export function VncConnectFlow({
 
           {savedCredential.state.mode === "unavailable" && (
             <Callout tone="warn" title={t("credential.unavailable.title")}>
-              {t("credential.unavailable.body", {
-                detail: savedCredential.state.detail,
-              })}
+              {t(
+                savedCredential.state.runtimeUnavailable
+                  ? "credential.unavailable.browserBody"
+                  : "credential.unavailable.body",
+                { detail: savedCredential.state.detail },
+              )}
             </Callout>
           )}
 
