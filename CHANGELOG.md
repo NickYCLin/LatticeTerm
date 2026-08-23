@@ -4,6 +4,15 @@
 
 ---
 
+## [0.13.8](https://github.com/NickYCLin/lattice-term/compare/v0.13.7...v0.13.8) (2026-08-23)
+
+
+### 🛠️ 問題修正
+
+* **Linux:** 修正 NVIDIA X11 啟動黑畫面 ([8e1920c](https://github.com/NickYCLin/lattice-term/commit/8e1920c5048349e6e88a435331959519ef5b5d5a))
+* **執行環境:** 阻止瀏覽器預覽誤觸桌面後端 ([7a8d0b8](https://github.com/NickYCLin/lattice-term/commit/7a8d0b81178830345a8b100bb5d886883c7a842c))
+* **終端:** 補送 WebKit 遺失的中文輸入 ([23d2984](https://github.com/NickYCLin/lattice-term/commit/23d2984420de0269296a9bb0e6039527bed83fda))
+
 ## [0.13.7](https://github.com/NickYCLin/lattice-term/compare/v0.13.6...v0.13.7) (2026-08-23)
 
 
