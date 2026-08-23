@@ -5,6 +5,8 @@ pub mod clipboard;
 pub mod credentials;
 pub mod domain;
 pub mod hostkeys;
+#[cfg(target_os = "linux")]
+pub mod linux_webkit;
 pub mod metrics;
 pub mod rdp;
 pub mod remote;

@@ -5,5 +5,10 @@ fn main() {
     if let Some(code) = latticeterm_lib::agent::run_reporter_cli(std::env::args_os().skip(1)) {
         std::process::exit(code);
     }
+
+    #[cfg(target_os = "linux")]
+    if let Err(error) = latticeterm_lib::linux_webkit::restart_if_needed() {
+        eprintln!("Could not restart with Linux WebKit compatibility settings: {error}");
+    }
     latticeterm_lib::run()
 }
