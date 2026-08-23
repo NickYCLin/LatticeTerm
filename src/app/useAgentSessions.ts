@@ -625,13 +625,12 @@ export function useAgentSessions(): AgentApi {
     try {
       const { invoke } = await core();
       await invoke("agent_disconnect", { sessionId });
-    } catch (reason) {
-      intentionalDisconnects.current.delete(sessionId);
-      throw reason;
-    } finally {
       setSessions((current) =>
         current.filter((session) => session.sessionId !== sessionId),
       );
+    } catch (reason) {
+      intentionalDisconnects.current.delete(sessionId);
+      throw reason;
     }
   }, []);
 

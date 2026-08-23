@@ -606,11 +606,47 @@ impl AgentRegistry {
             Err(_) => return,
         };
         for entry in entries {
-            if let Ok(mut killer) = entry.killer.lock() {
-                let _ = killer.kill();
-            }
+            let _ = terminate_agent_entry(entry.as_ref());
         }
     }
+}
+
+fn terminate_agent_entry(entry: &AgentSessionEntry) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let process_id = entry
+            .summary
+            .lock()
+            .map_err(|error| error.to_string())?
+            .process_id;
+        if let Some(process_id) = process_id {
+            let process_group = i32::try_from(process_id)
+                .map_err(|_| "The agent process ID is invalid.".to_string())?;
+
+            // portable-pty creates the child with setsid(), so its PID is also
+            // the PTY process-group ID. ChildKiller only sends SIGHUP to the
+            // leader on Unix; interactive Node CLIs such as Codex can keep
+            // running after that signal. Terminating the group lets the CLI
+            // perform its normal child cleanup instead of orphaning it.
+            let result = unsafe { libc::kill(-process_group, libc::SIGTERM) };
+            if result == 0 {
+                return Ok(());
+            }
+
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(());
+            }
+            return Err(format!("Cannot stop the agent process group: {error}"));
+        }
+    }
+
+    entry
+        .killer
+        .lock()
+        .map_err(|error| error.to_string())?
+        .kill()
+        .map_err(|error| format!("Cannot stop the agent process: {error}"))
 }
 
 fn random_report_token() -> Result<String, String> {
@@ -1312,9 +1348,7 @@ pub fn launch(
         output: Mutex::new(OutputBuffer::default()),
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
-        if let Ok(mut killer) = entry.killer.lock() {
-            let _ = killer.kill();
-        }
+        let _ = terminate_agent_entry(entry.as_ref());
         return Err(error);
     }
 
@@ -1472,9 +1506,7 @@ pub fn disconnect(
     session_id: &str,
 ) -> Result<(), String> {
     let entry = registry.get(session_id)?;
-    if let Ok(mut killer) = entry.killer.lock() {
-        let _ = killer.kill();
-    }
+    terminate_agent_entry(entry.as_ref())?;
     if registry.remove(session_id).is_some() {
         sink.closed(session_id, "Stopped by user");
     }
@@ -1927,6 +1959,42 @@ session id: 0199aa11-"
             replay.len() as u64
         );
         disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disconnect_terminates_a_pty_process_group_that_ignores_sighup() {
+        let sink: Arc<dyn AgentSink> = Arc::new(TestSink::default());
+        let registry = Arc::new(AgentRegistry::new());
+        let request = AgentLaunchRequest {
+            definition_id: "custom".to_string(),
+            label: "Signal-resistant shell".to_string(),
+            executable: "/bin/sh".to_string(),
+            arguments: vec!["-c".to_string(), "trap '' HUP; sleep 30 & wait".to_string()],
+            resume_session_id: None,
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 80,
+            rows: 24,
+        };
+        let session = launch(sink.clone(), registry.clone(), request).unwrap();
+        let process_group = i32::try_from(session.process_id.expect("PTY process ID")).unwrap();
+
+        assert_eq!(unsafe { libc::kill(-process_group, 0) }, 0);
+        disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            let result = unsafe { libc::kill(-process_group, 0) };
+            if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(unsafe { libc::kill(-process_group, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH),
+        );
     }
 
     #[cfg(unix)]
