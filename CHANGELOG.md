@@ -4,6 +4,14 @@
 
 ---
 
+## [0.13.6](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.5...v0.13.6) (2026-08-23)
+
+
+### 🛠️ 問題修正
+
+* **終端:** 修正 Agent Fleet 中文輸入法 ([c861b2f](https://github.com/NickYCLin/LatticeTerm/commit/c861b2fe33adfbc27980eafa4135630a272f11b4))
+* **開發:** 排除 Rust 產物監看 ([4dc83a2](https://github.com/NickYCLin/LatticeTerm/commit/4dc83a24613fad18c77b78c9b520dccc81198291))
+
 ## [0.13.5](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.4...v0.13.5) (2026-08-22)
 
 
