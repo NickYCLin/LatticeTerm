@@ -38,6 +38,7 @@ import { useI18n } from "../../i18n";
 import { Chip, EnvironmentBadge, ProtocolTile } from "../common/Badge";
 import { Callout } from "../common/Callout";
 import { AlertIcon, CheckIcon, CloseIcon } from "../icons";
+import { clearValidationError } from "./connectionValidation";
 
 function sameDraft(a: ConnectionDraft, b: ConnectionDraft): boolean {
   return (
@@ -160,8 +161,14 @@ export function ConnectionDrawer({
     return () => document.removeEventListener("keydown", onKeyDown, true);
   });
 
-  function patch(next: Partial<ConnectionDraft>) {
+  function patch(
+    next: Partial<ConnectionDraft>,
+    changedField?: keyof ValidationErrors,
+  ) {
     setDraft((current) => ({ ...current, ...next }));
+    if (changedField) {
+      setErrors((current) => clearValidationError(current, changedField));
+    }
     setCheckResult(null);
   }
 
@@ -292,7 +299,9 @@ export function ConnectionDrawer({
                 className={`input${errors.name ? " is-invalid" : ""}`}
                 value={draft.name}
                 maxLength={limits.nameLength}
-                onChange={(event) => patch({ name: event.currentTarget.value })}
+                onChange={(event) =>
+                  patch({ name: event.currentTarget.value }, "name")
+                }
                 placeholder={t("form.namePlaceholder")}
                 aria-invalid={Boolean(errors.name)}
                 aria-describedby={
@@ -317,7 +326,7 @@ export function ConnectionDrawer({
                 className={`input mono${errors.hostname ? " is-invalid" : ""}`}
                 value={draft.hostname}
                 onChange={(event) =>
-                  patch({ hostname: event.currentTarget.value })
+                  patch({ hostname: event.currentTarget.value }, "hostname")
                 }
                 placeholder={t("form.hostnamePlaceholder")}
                 autoCapitalize="none"
@@ -345,7 +354,7 @@ export function ConnectionDrawer({
                   className={`input mono${errors.username ? " is-invalid" : ""}`}
                   value={draft.username}
                   onChange={(event) =>
-                    patch({ username: event.currentTarget.value })
+                    patch({ username: event.currentTarget.value }, "username")
                   }
                   placeholder={t("form.usernamePlaceholder")}
                   autoCapitalize="none"
@@ -375,7 +384,7 @@ export function ConnectionDrawer({
                   className={`input mono${errors.port ? " is-invalid" : ""}`}
                   value={Number.isFinite(draft.port) ? draft.port : ""}
                   onChange={(event) =>
-                    patch({ port: Number(event.currentTarget.value) })
+                    patch({ port: Number(event.currentTarget.value) }, "port")
                   }
                   aria-invalid={Boolean(errors.port)}
                 />
@@ -440,7 +449,7 @@ export function ConnectionDrawer({
                   value={draft.group ?? ""}
                   maxLength={limits.groupLength}
                   onChange={(event) =>
-                    patch({ group: event.currentTarget.value })
+                    patch({ group: event.currentTarget.value }, "group")
                   }
                   placeholder={t("form.groupPlaceholder")}
                   list={`${formId}-groups`}
@@ -473,6 +482,9 @@ export function ConnectionDrawer({
                   value={tagInput}
                   onChange={(event) => {
                     setTagInput(event.currentTarget.value);
+                    setErrors((current) =>
+                      clearValidationError(current, "tags"),
+                    );
                     setCheckResult(null);
                   }}
                   placeholder={t("form.tagsPlaceholder")}
