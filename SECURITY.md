@@ -6,7 +6,7 @@ LatticeTerm handles remote-host identities and authentication material. Security
 
 Please do not open a public issue for a suspected vulnerability or include credentials, private keys, host inventories, or exploit details in public discussions.
 
-Use the repository's private [GitHub Security Advisory form](https://github.com/NickYCLin/LatticeTerm/security/advisories/new). Include:
+Use the repository's private [GitHub Security Advisory form](https://github.com/NickYCLin/lattice-term/security/advisories/new). Include:
 
 - the affected commit or version;
 - operating system and architecture;

@@ -5,7 +5,7 @@ description = "A secure, cross-platform workspace for local AI CLIs, SSH, SFTP, 
 authors = ["NickYCLin"]
 edition = "2021"
 license = "MPL-2.0"
-repository = "https://github.com/NickYCLin/LatticeTerm"
+repository = "https://github.com/NickYCLin/lattice-term"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -4,167 +4,167 @@
 
 ---
 
-## [0.13.7](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.6...v0.13.7) (2026-08-23)
+## [0.13.7](https://github.com/NickYCLin/lattice-term/compare/v0.13.6...v0.13.7) (2026-08-23)
 
 
 ### 🛠️ 問題修正
 
-* **代理:** 關閉工作階段時終止程序群組 ([d12e53d](https://github.com/NickYCLin/LatticeTerm/commit/d12e53d92e600d3ba841891cfa66581d4ee7a877))
-* **連線:** 修改欄位時清除驗證錯誤 ([5c7c756](https://github.com/NickYCLin/LatticeTerm/commit/5c7c756875c2aac03d2a0a4a9585ae092d453b98))
+* **代理:** 關閉工作階段時終止程序群組 ([d12e53d](https://github.com/NickYCLin/lattice-term/commit/d12e53d92e600d3ba841891cfa66581d4ee7a877))
+* **連線:** 修改欄位時清除驗證錯誤 ([5c7c756](https://github.com/NickYCLin/lattice-term/commit/5c7c756875c2aac03d2a0a4a9585ae092d453b98))
 
-## [0.13.6](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.5...v0.13.6) (2026-08-23)
-
-
-### 🛠️ 問題修正
-
-* **終端:** 修正 Agent Fleet 中文輸入法 ([c861b2f](https://github.com/NickYCLin/LatticeTerm/commit/c861b2fe33adfbc27980eafa4135630a272f11b4))
-* **開發:** 排除 Rust 產物監看 ([4dc83a2](https://github.com/NickYCLin/LatticeTerm/commit/4dc83a24613fad18c77b78c9b520dccc81198291))
-
-## [0.13.5](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.4...v0.13.5) (2026-08-22)
+## [0.13.6](https://github.com/NickYCLin/lattice-term/compare/v0.13.5...v0.13.6) (2026-08-23)
 
 
 ### 🛠️ 問題修正
 
-* **分頁:** 避免背景工作階段關閉切換目前分頁 ([80e9905](https://github.com/NickYCLin/LatticeTerm/commit/80e9905b73658179c3a1d405eb497e14f384009a))
+* **終端:** 修正 Agent Fleet 中文輸入法 ([c861b2f](https://github.com/NickYCLin/lattice-term/commit/c861b2fe33adfbc27980eafa4135630a272f11b4))
+* **開發:** 排除 Rust 產物監看 ([4dc83a2](https://github.com/NickYCLin/lattice-term/commit/4dc83a24613fad18c77b78c9b520dccc81198291))
 
-## [0.13.4](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.3...v0.13.4) (2026-08-22)
-
-
-### 🛠️ 問題修正
-
-* **工作階段:** 保留 Agent 與 SSH 非預期中斷原因 ([a338099](https://github.com/NickYCLin/LatticeTerm/commit/a33809968f47977464d4afd8615ec3a072c8ac13))
-
-## [0.13.3](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.2...v0.13.3) (2026-08-22)
+## [0.13.5](https://github.com/NickYCLin/lattice-term/compare/v0.13.4...v0.13.5) (2026-08-22)
 
 
 ### 🛠️ 問題修正
 
-* **SFTP:** 修正傳輸清除狀態同步 ([e4284c9](https://github.com/NickYCLin/LatticeTerm/commit/e4284c9baf6bbdb08f299d05390585f662953fd9))
+* **分頁:** 避免背景工作階段關閉切換目前分頁 ([80e9905](https://github.com/NickYCLin/lattice-term/commit/80e9905b73658179c3a1d405eb497e14f384009a))
 
-## [0.13.2](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.1...v0.13.2) (2026-08-22)
-
-
-### 🛠️ 問題修正
-
-* **遠端:** 修正分享狀態同步競態 ([2e2989b](https://github.com/NickYCLin/LatticeTerm/commit/2e2989bba2f65d3ebb0d0e6d1a1d525ab14fee53))
-
-## [0.13.1](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.0...v0.13.1) (2026-08-22)
+## [0.13.4](https://github.com/NickYCLin/lattice-term/compare/v0.13.3...v0.13.4) (2026-08-22)
 
 
 ### 🛠️ 問題修正
 
-* **遠端:** 限制畫面協定資源使用 ([ab2f5e2](https://github.com/NickYCLin/LatticeTerm/commit/ab2f5e205834c50d5ffb9eaab38dbde12232cb76))
+* **工作階段:** 保留 Agent 與 SSH 非預期中斷原因 ([a338099](https://github.com/NickYCLin/lattice-term/commit/a33809968f47977464d4afd8615ec3a072c8ac13))
 
-## [0.13.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.12.1...v0.13.0) (2026-08-22)
+## [0.13.3](https://github.com/NickYCLin/lattice-term/compare/v0.13.2...v0.13.3) (2026-08-22)
+
+
+### 🛠️ 問題修正
+
+* **SFTP:** 修正傳輸清除狀態同步 ([e4284c9](https://github.com/NickYCLin/lattice-term/commit/e4284c9baf6bbdb08f299d05390585f662953fd9))
+
+## [0.13.2](https://github.com/NickYCLin/lattice-term/compare/v0.13.1...v0.13.2) (2026-08-22)
+
+
+### 🛠️ 問題修正
+
+* **遠端:** 修正分享狀態同步競態 ([2e2989b](https://github.com/NickYCLin/lattice-term/commit/2e2989bba2f65d3ebb0d0e6d1a1d525ab14fee53))
+
+## [0.13.1](https://github.com/NickYCLin/lattice-term/compare/v0.13.0...v0.13.1) (2026-08-22)
+
+
+### 🛠️ 問題修正
+
+* **遠端:** 限制畫面協定資源使用 ([ab2f5e2](https://github.com/NickYCLin/lattice-term/commit/ab2f5e205834c50d5ffb9eaab38dbde12232cb76))
+
+## [0.13.0](https://github.com/NickYCLin/lattice-term/compare/v0.12.1...v0.13.0) (2026-08-22)
 
 
 ### 🚀 新增功能
 
-* **代理:** 支援同程序工作階段重新連接 ([76d0560](https://github.com/NickYCLin/LatticeTerm/commit/76d0560f9603bd2be11f061be6a41a313e1cf545))
+* **代理:** 支援同程序工作階段重新連接 ([76d0560](https://github.com/NickYCLin/lattice-term/commit/76d0560f9603bd2be11f061be6a41a313e1cf545))
 
-## [0.12.1](https://github.com/NickYCLin/LatticeTerm/compare/v0.12.0...v0.12.1) (2026-08-22)
+## [0.12.1](https://github.com/NickYCLin/lattice-term/compare/v0.12.0...v0.12.1) (2026-08-22)
 
 
 ### ⚡ 效能與體驗優化
 
-* **介面:** 拆分大型前端啟動模組 ([3ba7345](https://github.com/NickYCLin/LatticeTerm/commit/3ba7345dee3eceaf27fa760a4b0c46af1d6093df))
+* **介面:** 拆分大型前端啟動模組 ([3ba7345](https://github.com/NickYCLin/lattice-term/commit/3ba7345dee3eceaf27fa760a4b0c46af1d6093df))
 
-## [0.12.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.11.0...v0.12.0) (2026-08-22)
-
-
-### 🚀 新增功能
-
-* **備份:** 加入完整工作區加密匯出與還原 ([fc36800](https://github.com/NickYCLin/LatticeTerm/commit/fc36800c2c97ee1004ddbfdb3ab58bc6a38dd035))
-
-
-### 🛠️ 問題修正
-
-* **介面:** 強化停用按鈕的視覺狀態 ([07f76ba](https://github.com/NickYCLin/LatticeTerm/commit/07f76ba06e7bd7611356153a6a38abe1b3df70ad))
-
-## [0.11.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.10.0...v0.11.0) (2026-08-22)
+## [0.12.0](https://github.com/NickYCLin/lattice-term/compare/v0.11.0...v0.12.0) (2026-08-22)
 
 
 ### 🚀 新增功能
 
-* **安全性:** 加入敏感剪貼簿自動清除 ([3e8e185](https://github.com/NickYCLin/LatticeTerm/commit/3e8e185495e26648afe633e15bb02cf7db4f2222))
+* **備份:** 加入完整工作區加密匯出與還原 ([fc36800](https://github.com/NickYCLin/lattice-term/commit/fc36800c2c97ee1004ddbfdb3ab58bc6a38dd035))
 
-## [0.10.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.9...v0.10.0) (2026-08-22)
+
+### 🛠️ 問題修正
+
+* **介面:** 強化停用按鈕的視覺狀態 ([07f76ba](https://github.com/NickYCLin/lattice-term/commit/07f76ba06e7bd7611356153a6a38abe1b3df70ad))
+
+## [0.11.0](https://github.com/NickYCLin/lattice-term/compare/v0.10.0...v0.11.0) (2026-08-22)
 
 
 ### 🚀 新增功能
 
-* **保管庫:** 加入閒置與背景自動鎖定 ([fd0375d](https://github.com/NickYCLin/LatticeTerm/commit/fd0375d0ea67e0029a52d7e8213239727717febe))
+* **安全性:** 加入敏感剪貼簿自動清除 ([3e8e185](https://github.com/NickYCLin/lattice-term/commit/3e8e185495e26648afe633e15bb02cf7db4f2222))
 
-## [0.9.9](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.8...v0.9.9) (2026-08-22)
+## [0.10.0](https://github.com/NickYCLin/lattice-term/compare/v0.9.9...v0.10.0) (2026-08-22)
 
 
-### 🛠️ 問題修正
+### 🚀 新增功能
 
-* **儲存:** 確保批次匯入採用原子寫入 ([842c8fe](https://github.com/NickYCLin/LatticeTerm/commit/842c8fe96193a8971a6f23db2937439dbb0c122d))
-* **工作階段:** 重載後恢復現有連線 ([0b3cfcf](https://github.com/NickYCLin/LatticeTerm/commit/0b3cfcfdf4ec8668929b3df83167c09d8ca83676))
-* **遠端:** 顯示非預期中斷原因 ([7f8d6b6](https://github.com/NickYCLin/LatticeTerm/commit/7f8d6b67f26ae9415685c16fb9bdfac212d5eab7))
+* **保管庫:** 加入閒置與背景自動鎖定 ([fd0375d](https://github.com/NickYCLin/lattice-term/commit/fd0375d0ea67e0029a52d7e8213239727717febe))
 
-## [0.9.8](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.7...v0.9.8) (2026-08-22)
+## [0.9.9](https://github.com/NickYCLin/lattice-term/compare/v0.9.8...v0.9.9) (2026-08-22)
 
 
 ### 🛠️ 問題修正
 
-* **發布:** 避免版本標題重複分類 ([0cb4296](https://github.com/NickYCLin/LatticeTerm/commit/0cb42969963fe16846326edd8a9a47c1fbf44831))
+* **儲存:** 確保批次匯入採用原子寫入 ([842c8fe](https://github.com/NickYCLin/lattice-term/commit/842c8fe96193a8971a6f23db2937439dbb0c122d))
+* **工作階段:** 重載後恢復現有連線 ([0b3cfcf](https://github.com/NickYCLin/lattice-term/commit/0b3cfcfdf4ec8668929b3df83167c09d8ca83676))
+* **遠端:** 顯示非預期中斷原因 ([7f8d6b6](https://github.com/NickYCLin/lattice-term/commit/7f8d6b67f26ae9415685c16fb9bdfac212d5eab7))
 
-## [0.9.7](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.6...v0.9.7) (2026-08-22)
-
-
-### 🛠️ 問題修正
-
-* **RDP:** 修正遠端畫面色彩通道 ([8a43683](https://github.com/NickYCLin/LatticeTerm/commit/8a436839e41b76cbf96d18bbd4a9b1e8c0682669))
-* **RDP:** 區分憑證拒絕與連線失敗 ([740e75f](https://github.com/NickYCLin/LatticeTerm/commit/740e75f09e67ab7e5aac22722460043846fbf260))
-* **VNC:** 防止畫面越界與遠端輸入卡住 ([253aeb4](https://github.com/NickYCLin/LatticeTerm/commit/253aeb4dba8d697e0394684877b5cf0b7306d37e))
-* **發布:** 統一版本說明項目符號 ([d1497c0](https://github.com/NickYCLin/LatticeTerm/commit/d1497c0d0d1fd44b3c066c73c6b46e9f1d50e747))
-* **通道:** 保留停止失敗的活躍設定 ([73cd7c7](https://github.com/NickYCLin/LatticeTerm/commit/73cd7c70e7a3abfc307559df3fd13eb2107a46ff))
-
-## [0.9.6](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.5...v0.9.6) (2026-08-21)
+## [0.9.8](https://github.com/NickYCLin/lattice-term/compare/v0.9.7...v0.9.8) (2026-08-22)
 
 
 ### 🛠️ 問題修正
 
-* **SFTP:** 保護串流覆寫的原始檔案 ([835a4c5](https://github.com/NickYCLin/LatticeTerm/commit/835a4c5bf73ae67790eb95ed34b9811e2190d69d))
+* **發布:** 避免版本標題重複分類 ([0cb4296](https://github.com/NickYCLin/lattice-term/commit/0cb42969963fe16846326edd8a9a47c1fbf44831))
 
-## [0.9.5](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.4...v0.9.5) (2026-08-21)
-
-
-### 🛠️ 問題修正
-
-* **發布:** 排除版本標題參照連結 ([#39](https://github.com/NickYCLin/LatticeTerm/issues/39)) ([e2dda53](https://github.com/NickYCLin/LatticeTerm/commit/e2dda53ef6e41c96d6f16b79c8438ee569f015e8))
-
-## [0.9.4](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.3...v0.9.4) (2026-08-21)
+## [0.9.7](https://github.com/NickYCLin/lattice-term/compare/v0.9.6...v0.9.7) (2026-08-22)
 
 
 ### 🛠️ 問題修正
 
-* **更新:** 安裝完成後自動重新啟動 ([#37](https://github.com/NickYCLin/LatticeTerm/issues/37)) ([33192e5](https://github.com/NickYCLin/LatticeTerm/commit/33192e53c8ab43833aabdc578c29047d9fa0c5c9))
+* **RDP:** 修正遠端畫面色彩通道 ([8a43683](https://github.com/NickYCLin/lattice-term/commit/8a436839e41b76cbf96d18bbd4a9b1e8c0682669))
+* **RDP:** 區分憑證拒絕與連線失敗 ([740e75f](https://github.com/NickYCLin/lattice-term/commit/740e75f09e67ab7e5aac22722460043846fbf260))
+* **VNC:** 防止畫面越界與遠端輸入卡住 ([253aeb4](https://github.com/NickYCLin/lattice-term/commit/253aeb4dba8d697e0394684877b5cf0b7306d37e))
+* **發布:** 統一版本說明項目符號 ([d1497c0](https://github.com/NickYCLin/lattice-term/commit/d1497c0d0d1fd44b3c066c73c6b46e9f1d50e747))
+* **通道:** 保留停止失敗的活躍設定 ([73cd7c7](https://github.com/NickYCLin/lattice-term/commit/73cd7c70e7a3abfc307559df3fd13eb2107a46ff))
 
-## [0.9.3](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.2...v0.9.3) (2026-08-21)
-
-
-### 🛠️ 問題修正
-
-* **發布:** 統一版本說明格式 ([57a49e6](https://github.com/NickYCLin/LatticeTerm/commit/57a49e691e37d5cbbb2665c2cd31a35bd6aa0885))
-
-## [0.9.2](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.1...v0.9.2) (2026-08-21)
+## [0.9.6](https://github.com/NickYCLin/lattice-term/compare/v0.9.5...v0.9.6) (2026-08-21)
 
 
 ### 🛠️ 問題修正
 
-* **VNC:** 補發新版 Rust 像素分塊相容修正 ([73a3155](https://github.com/NickYCLin/LatticeTerm/commit/73a3155415c2109d315d9e1bab3ad554bb93607c))
+* **SFTP:** 保護串流覆寫的原始檔案 ([835a4c5](https://github.com/NickYCLin/lattice-term/commit/835a4c5bf73ae67790eb95ed34b9811e2190d69d))
 
-## [0.9.1](https://github.com/NickYCLin/LatticeTerm/compare/v0.9.0...v0.9.1) (2026-08-21)
+## [0.9.5](https://github.com/NickYCLin/lattice-term/compare/v0.9.4...v0.9.5) (2026-08-21)
 
 
 ### 🛠️ 問題修正
 
-* **更新:** 修好「有下載卻沒安裝」，更新改成全自動不跳安裝視窗 ([69f53c3](https://github.com/NickYCLin/LatticeTerm/commit/69f53c3faa0747310c3b350c36782f4ba928a428))
+* **發布:** 排除版本標題參照連結 ([#39](https://github.com/NickYCLin/lattice-term/issues/39)) ([e2dda53](https://github.com/NickYCLin/lattice-term/commit/e2dda53ef6e41c96d6f16b79c8438ee569f015e8))
 
-## [0.9.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.8.0...v0.9.0) (2026-08-21)
+## [0.9.4](https://github.com/NickYCLin/lattice-term/compare/v0.9.3...v0.9.4) (2026-08-21)
+
+
+### 🛠️ 問題修正
+
+* **更新:** 安裝完成後自動重新啟動 ([#37](https://github.com/NickYCLin/lattice-term/issues/37)) ([33192e5](https://github.com/NickYCLin/lattice-term/commit/33192e53c8ab43833aabdc578c29047d9fa0c5c9))
+
+## [0.9.3](https://github.com/NickYCLin/lattice-term/compare/v0.9.2...v0.9.3) (2026-08-21)
+
+
+### 🛠️ 問題修正
+
+* **發布:** 統一版本說明格式 ([57a49e6](https://github.com/NickYCLin/lattice-term/commit/57a49e691e37d5cbbb2665c2cd31a35bd6aa0885))
+
+## [0.9.2](https://github.com/NickYCLin/lattice-term/compare/v0.9.1...v0.9.2) (2026-08-21)
+
+
+### 🛠️ 問題修正
+
+* **VNC:** 補發新版 Rust 像素分塊相容修正 ([73a3155](https://github.com/NickYCLin/lattice-term/commit/73a3155415c2109d315d9e1bab3ad554bb93607c))
+
+## [0.9.1](https://github.com/NickYCLin/lattice-term/compare/v0.9.0...v0.9.1) (2026-08-21)
+
+
+### 🛠️ 問題修正
+
+* **更新:** 修好「有下載卻沒安裝」，更新改成全自動不跳安裝視窗 ([69f53c3](https://github.com/NickYCLin/lattice-term/commit/69f53c3faa0747310c3b350c36782f4ba928a428))
+
+## [0.9.0](https://github.com/NickYCLin/lattice-term/compare/v0.8.0...v0.9.0) (2026-08-21)
 
 ### 🚀 新增功能
 * **左側功能列圖示最佳化**：
@@ -181,7 +181,7 @@
 * **行動版支援架構**：
   - 完成 Android 行動裝置執行支援與跨端適配。
 
-## [0.8.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.7.0...v0.8.0) (2026-08-21)
+## [0.8.0](https://github.com/NickYCLin/lattice-term/compare/v0.7.0...v0.8.0) (2026-08-21)
 
 ### 🚀 新增功能
 
@@ -202,7 +202,7 @@
 
 - **主導覽圖示**：重新繪製七個主要功能的向量圖示。
 
-## [0.7.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.6.0...v0.7.0) (2026-08-21)
+## [0.7.0](https://github.com/NickYCLin/lattice-term/compare/v0.6.0...v0.7.0) (2026-08-21)
 
 ### 🚀 新增功能
 
@@ -213,7 +213,7 @@
 
 ---
 
-## [0.6.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.5.0...v0.6.0) (2026-08-20)
+## [0.6.0](https://github.com/NickYCLin/lattice-term/compare/v0.5.0...v0.6.0) (2026-08-20)
 
 ### 🚀 新增功能
 * **工作區命名與拖曳排序**：
@@ -226,7 +226,7 @@
 
 ---
 
-## [0.5.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.4.0...v0.5.0) (2026-08-20)
+## [0.5.0](https://github.com/NickYCLin/lattice-term/compare/v0.4.0...v0.5.0) (2026-08-20)
 
 ### 🚀 新增功能
 * **工作區獨立儲存**：
@@ -235,7 +235,7 @@
 
 ---
 
-## [0.4.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.3.0...v0.4.0) (2026-08-20)
+## [0.4.0](https://github.com/NickYCLin/lattice-term/compare/v0.3.0...v0.4.0) (2026-08-20)
 
 ### 🚀 新增功能
 * **批次指令廣播 (Fleet Broadcast)**：
@@ -244,7 +244,7 @@
 
 ---
 
-## [0.3.0](https://github.com/NickYCLin/LatticeTerm/compare/v0.2.0...v0.3.0) (2026-08-20)
+## [0.3.0](https://github.com/NickYCLin/lattice-term/compare/v0.2.0...v0.3.0) (2026-08-20)
 
 ### 🚀 新增功能
 * **AI Agent Fleet 多工作階段管理**：

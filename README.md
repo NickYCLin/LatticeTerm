@@ -41,7 +41,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 
 ## 📥 下載與安裝 (Downloads)
 
-你可以直接前往 [GitHub Releases](https://github.com/NickYCLin/LatticeTerm/releases) 取得最新發行版本的安裝檔與執行檔：
+你可以直接前往 [GitHub Releases](https://github.com/NickYCLin/lattice-term/releases) 取得最新發行版本的安裝檔與執行檔：
 
 | 平台 | 安裝包格式 | 系統支援 |
 |---|---|---|
@@ -50,7 +50,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | **macOS** | `.dmg` / `.app` | macOS 12+ (Apple Silicon) |
 
 > [!TIP]
-> 歡迎至 [Releases 列表](https://github.com/NickYCLin/LatticeTerm/releases) 下載對應平台的安裝檔或檢視各版本更新說明。
+> 歡迎至 [Releases 列表](https://github.com/NickYCLin/lattice-term/releases) 下載對應平台的安裝檔或檢視各版本更新說明。
 > 維護者可參考 [Release 自動化與版本規則](docs/RELEASE_AUTOMATION.zh-TW.md)；版本會由 Conventional Commits 自動計算，合併 Release PR 後才正式發布。
 
 ## 誠實呈現的介面原則

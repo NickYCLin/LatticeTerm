@@ -52,7 +52,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/NickYCLin/LatticeTerm/releases/latest/download/latest.json"
+        "https://github.com/NickYCLin/lattice-term/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdBNjI5RjRFQkE5NDAwRTMKUldUakFKUzZUcDlpZW1nVzNpK0dROWtzTTBYUjlxREdTc2dDUmNlbGFBaEtFYVJodk9PZlFodlIK",
       "windows": {
