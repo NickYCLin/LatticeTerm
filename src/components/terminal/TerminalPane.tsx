@@ -14,6 +14,7 @@ import "@xterm/xterm/css/xterm.css";
 import type { SshApi } from "../../app/useSshSessions";
 import { useI18n } from "../../i18n";
 import type { ThemeId } from "../../app/themes";
+import { TerminalImeFallback } from "./terminalImeFallback";
 
 /** Reads the current theme's colours so the terminal matches the app. */
 function themeColours(): Record<string, string> {
@@ -97,7 +98,7 @@ export function TerminalPane({
     // Silence here is what made a broken session look like a dead keyboard:
     // say so once, in the terminal itself, rather than dropping keystrokes.
     let inputReported = false;
-    const typed = terminal.onData((rawData) => {
+    const sendInput = (rawData: string) => {
       let data = rawData;
       if (ctrlArmedRef.current && data.length === 1) {
         const code = data.toUpperCase().charCodeAt(0);
@@ -109,11 +110,24 @@ export function TerminalPane({
       void sshRef.current.send(sessionId, data).catch(() => {
         if (inputReported) return;
         inputReported = true;
-        terminal.write(`
-[31m${messageRef.current}[0m
-`);
+        terminal.write(`\r\n\x1b[31m${messageRef.current}\x1b[0m\r\n`);
       });
+    };
+    const imeFallback = new TerminalImeFallback(sendInput);
+    const typed = terminal.onData((rawData) => {
+      imeFallback.recordTerminalData(rawData);
+      sendInput(rawData);
     });
+    const textarea = terminal.textarea;
+    const handleInput = (event: Event) => {
+      const inputEvent = event as InputEvent;
+      imeFallback.recordInput(
+        inputEvent.data,
+        inputEvent.inputType,
+        inputEvent.isComposing,
+      );
+    };
+    textarea?.addEventListener("input", handleInput);
 
     const stopData = sshRef.current.onData(sessionId, (bytes) => {
       terminal.write(bytes);
@@ -147,6 +161,8 @@ export function TerminalPane({
       observer.disconnect();
       stopData();
       stopClosed();
+      textarea?.removeEventListener("input", handleInput);
+      imeFallback.dispose();
       typed.dispose();
       terminal.dispose();
       termRef.current = null;

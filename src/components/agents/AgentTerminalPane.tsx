@@ -5,6 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import type { AgentApi } from "../../app/useAgentSessions";
 import type { ThemeId } from "../../app/themes";
 import { useI18n } from "../../i18n";
+import { TerminalImeFallback } from "../terminal/terminalImeFallback";
 
 function themeColours(): Record<string, string> {
   const style = getComputedStyle(document.documentElement);
@@ -70,13 +71,28 @@ export function AgentTerminalPane({
     terminalRef.current = terminal;
 
     let inputReported = false;
-    const typed = terminal.onData((data) => {
+    const sendInput = (data: string) => {
       void agentsRef.current.send(sessionId, data).catch(() => {
         if (inputReported) return;
         inputReported = true;
         terminal.write(`\r\n\x1b[31m${errorRef.current}\x1b[0m\r\n`);
       });
+    };
+    const imeFallback = new TerminalImeFallback(sendInput);
+    const typed = terminal.onData((data) => {
+      imeFallback.recordTerminalData(data);
+      sendInput(data);
     });
+    const textarea = terminal.textarea;
+    const handleInput = (event: Event) => {
+      const inputEvent = event as InputEvent;
+      imeFallback.recordInput(
+        inputEvent.data,
+        inputEvent.inputType,
+        inputEvent.isComposing,
+      );
+    };
+    textarea?.addEventListener("input", handleInput);
     const stopData = agentsRef.current.onData(sessionId, (bytes) => {
       terminal.write(bytes);
     });
@@ -105,6 +121,8 @@ export function AgentTerminalPane({
       observer.disconnect();
       stopData();
       stopClosed();
+      textarea?.removeEventListener("input", handleInput);
+      imeFallback.dispose();
       typed.dispose();
       terminal.dispose();
       terminalRef.current = null;
