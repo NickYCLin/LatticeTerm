@@ -51,7 +51,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 
 > [!TIP]
 > 歡迎至 [Releases 列表](https://github.com/NickYCLin/lattice-term/releases) 下載對應平台的安裝檔或檢視各版本更新說明。
-> 維護者可參考 [Release 自動化與版本規則](docs/RELEASE_AUTOMATION.zh-TW.md)；版本會由 Conventional Commits 自動計算，合併 Release PR 後才正式發布。
+> 維護者可參考 [Release 自動化與版本規則](docs/RELEASE_AUTOMATION.zh-TW.md)；版本會由 Conventional Commits 自動計算，通常累積至少 3 個使用者可感知項目才發布，重大漏洞可提前發布。只有合併 Release PR 才會正式發布。
 
 ## 誠實呈現的介面原則
 
