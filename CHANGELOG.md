@@ -4,6 +4,14 @@
 
 ---
 
+## [0.13.7](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.6...v0.13.7) (2026-08-23)
+
+
+### 🛠️ 問題修正
+
+* **代理:** 關閉工作階段時終止程序群組 ([d12e53d](https://github.com/NickYCLin/LatticeTerm/commit/d12e53d92e600d3ba841891cfa66581d4ee7a877))
+* **連線:** 修改欄位時清除驗證錯誤 ([5c7c756](https://github.com/NickYCLin/LatticeTerm/commit/5c7c756875c2aac03d2a0a4a9585ae092d453b98))
+
 ## [0.13.6](https://github.com/NickYCLin/LatticeTerm/compare/v0.13.5...v0.13.6) (2026-08-23)
 
 
