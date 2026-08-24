@@ -95,6 +95,7 @@ async fn viewer_input_moves_the_host_cursor() {
         .await;
     let _ = connection.send(&RemoteMessage::Close("done".into())).await;
     let _ = agent.kill();
+    let _ = agent.wait();
 
     let target_x = display_width / 2;
     let target_y = display_height / 2;
