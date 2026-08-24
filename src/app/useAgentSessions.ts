@@ -235,6 +235,8 @@ export interface AgentApi {
   planRecovery: AgentPlanRecovery | null;
   refreshCatalog: () => Promise<void>;
   launch: (request: AgentLaunchRequest) => Promise<AgentSessionSummary>;
+  /** Renames a running session's tab label; persists so a reload keeps it. */
+  rename: (sessionId: string, label: string) => Promise<AgentSessionSummary>;
   savePlan: (draft: AgentLaunchPlanDraft) => Promise<AgentLaunchPlan>;
   renameWorkspace: (name: string) => Promise<string>;
   reorderPlans: (orderedIds: string[]) => Promise<AgentLaunchPlan[]>;
@@ -552,6 +554,22 @@ export function useAgentSessions(): AgentApi {
     return session;
   }, []);
 
+  const rename = useCallback(async (sessionId: string, label: string) => {
+    const { invoke } = await core();
+    const updated = await invoke<AgentSessionSummary>("agent_rename", {
+      sessionId,
+      label,
+    });
+    setSessions((current) =>
+      current.map((session) =>
+        session.sessionId === updated.sessionId
+          ? { ...session, label: updated.label }
+          : session,
+      ),
+    );
+    return updated;
+  }, []);
+
   const savePlan = useCallback(async (draft: AgentLaunchPlanDraft) => {
     const { invoke } = await core();
     const plan = await invoke<AgentLaunchPlan>("agent_plan_save", { draft });
@@ -685,6 +703,7 @@ export function useAgentSessions(): AgentApi {
     planRecovery,
     refreshCatalog,
     launch,
+    rename,
     savePlan,
     renameWorkspace,
     reorderPlans,

@@ -783,6 +783,32 @@
   font-weight: 600;
 }
 
+.session-tab__label--editing {
+  height: 2.125rem;
+}
+
+.session-tab__rename {
+  width: 8rem;
+  min-width: 0;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+/* The rename pencil stays out of the way until the tab is hovered, so the
+   tab strip is not cluttered with two buttons per agent tab. */
+.session-tab__rename-button {
+  opacity: 0;
+}
+
+.session-tab:hover .session-tab__rename-button,
+.session-tab.is-active .session-tab__rename-button {
+  opacity: 1;
+}
+
 .terminal-stack {
   flex: 1;
   min-height: 0;

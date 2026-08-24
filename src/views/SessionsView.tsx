@@ -1,5 +1,6 @@
 /** Unified workspace for text terminals and graphical remote sessions. */
 
+import { useState } from "react";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
 import type { VncApi } from "../app/useVncSessions";
@@ -16,6 +17,7 @@ import { Callout, EmptyState } from "../components/common/Callout";
 import {
   AgentIcon,
   CloseIcon,
+  EditIcon,
   ScreenShareIcon,
   TerminalIcon,
   TransferIcon,
@@ -62,6 +64,28 @@ export function SessionsView({
   theme: ThemeId;
 }) {
   const { t } = useI18n();
+  // Inline rename of a running agent tab: which session is being edited, and
+  // the working text. Committing calls the persisted backend rename.
+  const [editingTab, setEditingTab] = useState<string | null>(null);
+  const [tabDraft, setTabDraft] = useState("");
+
+  function beginRename(sessionId: string, label: string) {
+    setEditingTab(sessionId);
+    setTabDraft(label);
+  }
+
+  async function commitRename(sessionId: string) {
+    const label = tabDraft.trim();
+    setEditingTab(null);
+    if (label.length > 0) {
+      try {
+        await agents.rename(sessionId, label);
+      } catch {
+        // A rejected label just leaves the previous name in place.
+      }
+    }
+  }
+
   const sessions: SessionRef[] = [
     ...agents.sessions.map((session) => ({
       kind: "agent" as const,
@@ -188,16 +212,52 @@ export function SessionsView({
               className={`session-tab${selected ? " is-active" : ""}`}
               key={session.sessionId}
             >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                className="session-tab__label"
-                onClick={() => onSelect(session.sessionId)}
-              >
-                <Glyph size={13} />
-                <span className="truncate">{session.label}</span>
-              </button>
+              {editingTab === session.sessionId ? (
+                <span className="session-tab__label session-tab__label--editing">
+                  <Glyph size={13} />
+                  <input
+                    className="session-tab__rename"
+                    value={tabDraft}
+                    autoFocus
+                    maxLength={80}
+                    onChange={(event) => setTabDraft(event.currentTarget.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void commitRename(session.sessionId);
+                      else if (event.key === "Escape") setEditingTab(null);
+                    }}
+                    onBlur={() => void commitRename(session.sessionId)}
+                    aria-label={t("terminal.rename")}
+                  />
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  className="session-tab__label"
+                  onClick={() => onSelect(session.sessionId)}
+                  onDoubleClick={
+                    session.kind === "agent"
+                      ? () => beginRename(session.sessionId, session.label)
+                      : undefined
+                  }
+                  title={session.kind === "agent" ? t("terminal.renameHint") : undefined}
+                >
+                  <Glyph size={13} />
+                  <span className="truncate">{session.label}</span>
+                </button>
+              )}
+              {session.kind === "agent" && editingTab !== session.sessionId && (
+                <button
+                  type="button"
+                  className="icon-button icon-button--sm session-tab__rename-button"
+                  onClick={() => beginRename(session.sessionId, session.label)}
+                  aria-label={t("terminal.rename")}
+                  data-tooltip={t("terminal.rename")}
+                >
+                  <EditIcon size={12} />
+                </button>
+              )}
               <button
                 type="button"
                 className="icon-button icon-button--sm"

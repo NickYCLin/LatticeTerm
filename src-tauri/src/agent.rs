@@ -588,6 +588,16 @@ impl AgentRegistry {
         summaries
     }
 
+    /// Renames a running session's tab label. The new label also flows into the
+    /// next hydration snapshot from `list`, so it survives a WebView reload.
+    pub fn rename(&self, session_id: &str, label: &str) -> Result<AgentSessionSummary, String> {
+        let label = validate_text(label, "Session name", 80)?;
+        let entry = self.get(session_id)?;
+        let mut summary = entry.summary.lock().map_err(|error| error.to_string())?;
+        summary.label = label;
+        Ok(summary.clone())
+    }
+
     pub fn output_snapshots(&self) -> Vec<AgentOutputSnapshot> {
         let Ok(sessions) = self.sessions.lock() else {
             return Vec::new();
@@ -1989,6 +1999,18 @@ session id: 0199aa11-"
 
         let request = launch_request_from_plan(&plan, 80, 24).unwrap();
         assert_eq!(request.resume_session_id.as_deref(), Some("session-42"));
+    }
+
+    #[test]
+    fn rename_validates_label_and_requires_an_existing_session() {
+        let registry = AgentRegistry::new();
+        // Empty/blank labels are rejected before any lookup.
+        assert!(registry.rename("agent-session-1", "   ").is_err());
+        assert!(registry
+            .rename("agent-session-1", &"x".repeat(81))
+            .is_err());
+        // A valid label still fails when the session does not exist.
+        assert!(registry.rename("missing", "payments 重構").is_err());
     }
 
     #[test]

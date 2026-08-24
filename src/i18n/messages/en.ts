@@ -612,6 +612,8 @@ export const en: Messages = {
   "terminal.title": "Sessions",
   "terminal.desc": "Open AI CLI, SSH, SFTP, Lattice Remote, and Web RDP sessions",
   "terminal.disconnect": "Disconnect",
+  "terminal.rename": "Rename tab",
+  "terminal.renameHint": "Double-click to rename this tab",
   "terminal.backToList": "Back to connections",
   "terminal.closed": "Session ended ({reason})",
   "terminal.inputFailed":

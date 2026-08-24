@@ -385,6 +385,15 @@ fn agent_sessions(registry: State<'_, Arc<AgentRegistry>>) -> Vec<AgentSessionSu
 }
 
 #[tauri::command]
+fn agent_rename(
+    session_id: String,
+    label: String,
+    registry: State<'_, Arc<AgentRegistry>>,
+) -> Result<AgentSessionSummary, String> {
+    registry.rename(&session_id, &label)
+}
+
+#[tauri::command]
 fn agent_output_snapshots(registry: State<'_, Arc<AgentRegistry>>) -> Vec<AgentOutputSnapshot> {
     registry.output_snapshots()
 }
@@ -1495,6 +1504,7 @@ pub fn run() {
             agent_resize,
             agent_disconnect,
             agent_sessions,
+            agent_rename,
             agent_output_snapshots,
             agent_plan_snapshot,
             agent_plan_save,
