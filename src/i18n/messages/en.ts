@@ -614,6 +614,7 @@ export const en: Messages = {
   "terminal.disconnect": "Disconnect",
   "terminal.rename": "Rename tab",
   "terminal.renameHint": "Double-click to rename this tab",
+  "terminal.openFiles": "Open file browser (SFTP)",
   "terminal.backToList": "Back to connections",
   "terminal.closed": "Session ended ({reason})",
   "terminal.inputFailed":

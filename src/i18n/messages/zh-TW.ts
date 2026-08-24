@@ -585,6 +585,7 @@ export const zhTW = {
   "terminal.disconnect": "中斷連線",
   "terminal.rename": "重新命名分頁",
   "terminal.renameHint": "雙擊可重新命名這個分頁",
+  "terminal.openFiles": "開啟檔案總管（SFTP）",
   "terminal.backToList": "回到連線清單",
   "terminal.closed": "工作階段已結束（{reason}）",
   "terminal.inputFailed": "這個工作階段已經結束，輸入送不出去。請關閉分頁後重新連線。",

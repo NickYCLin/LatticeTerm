@@ -51,6 +51,7 @@ export function SessionsView({
   vnc,
   activeSessionId,
   onSelect,
+  onOpenSftp,
   theme,
 }: {
   agents: AgentApi;
@@ -61,6 +62,8 @@ export function SessionsView({
   vnc: VncApi;
   activeSessionId: string | null;
   onSelect: (sessionId: string | null) => void;
+  /** Opens a graphical SFTP file browser for a running SSH session. */
+  onOpenSftp?: (sshSessionId: string) => void;
   theme: ThemeId;
 }) {
   const { t } = useI18n();
@@ -256,6 +259,17 @@ export function SessionsView({
                   data-tooltip={t("terminal.rename")}
                 >
                   <EditIcon size={12} />
+                </button>
+              )}
+              {session.kind === "ssh" && onOpenSftp && (
+                <button
+                  type="button"
+                  className="icon-button icon-button--sm session-tab__files-button"
+                  onClick={() => onOpenSftp(session.sessionId)}
+                  aria-label={t("terminal.openFiles")}
+                  data-tooltip={t("terminal.openFiles")}
+                >
+                  <TransferIcon size={12} />
                 </button>
               )}
               <button

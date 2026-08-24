@@ -21,7 +21,7 @@
 | **主機資源面板** | `HostMetricsPanel` | `src/components/connections/HostMetricsPanel.tsx` | CPU、記憶體、磁碟與開機時間的量表；尚未連線時顯示原因而非假數值。 |
 | **新增/編輯抽屜** | `ConnectionDrawer` | `src/components/overlays/ConnectionDrawer.tsx` | 抽屜式連線表單，支援即時驗證、Tab 焦點循環鎖定與重複目標提醒。 |
 | **命令面板** | `CommandPalette` | `src/components/overlays/CommandPalette.tsx` | `Ctrl` + `K` 全域命令面板，支援搜尋連線與執行全域快捷動作。 |
-| **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、SFTP 檔案、Lattice Remote、Web RDP 與 VNC Canvas 分頁；執行中的 Agent 分頁可雙擊或按鉛筆就地改名，名稱由後端持久化（重載視窗仍在），並在續接面板點選偵測到的 session 時帶入備註。 |
+| **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、SFTP 檔案、Lattice Remote、Web RDP 與 VNC Canvas 分頁；執行中的 Agent 分頁可雙擊或按鉛筆就地改名，名稱由後端持久化（重載視窗仍在），並在續接面板點選偵測到的 session 時帶入備註；SSH 分頁另有「開啟檔案總管」按鈕，會沿用同主機／同認證開啟 SFTP（已有相同主機的 SFTP 工作階段則直接切換過去）。 |
 | **AI Agent Fleet** | `AgentsView` | `src/views/AgentsView.tsx` | 本機多 CLI 啟動、Reporter 狀態、批次提示、可命名排序的安全啟動工作區，以及同程序 WebView 重載後的 PTY 重新 attach。 |
 | **SFTP 檔案工作區** | `SftpPane` | `src/components/sftp/SftpPane.tsx` | 遠端路徑瀏覽、上下載、建立資料夾、改名與確認刪除。 |
 | **Web RDP Canvas** | `RdpPane` | `src/components/rdp/RdpPane.tsx` | Canvas 畫面、座標縮放、滑鼠、滾輪、掃描碼鍵盤與失焦釋放。 |

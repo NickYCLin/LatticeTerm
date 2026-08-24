@@ -249,6 +249,49 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     setPendingDelete(id);
   }, []);
 
+  // Opens a graphical file browser (SFTP) for a running SSH session: reuse an
+  // existing SFTP session to the same host, otherwise open the SFTP connect
+  // flow pre-filled from the SSH session's profile (saved password included).
+  const openSftpForSshSession = useCallback(
+    (sshSessionId: string) => {
+      const summary = ssh.sessions.find(
+        (session) => session.sessionId === sshSessionId,
+      );
+      if (!summary) return;
+      const existing = sftp.sessions.find(
+        (session) =>
+          session.host === summary.host &&
+          session.port === summary.port &&
+          session.username === summary.username,
+      );
+      if (existing) {
+        setActiveSessionId(existing.sessionId);
+        setView("terminal");
+        return;
+      }
+      const profile = profiles.find((entry) => entry.id === summary.profileId);
+      setConnectTarget(
+        profile
+          ? { ...profile, protocol: "sftp" }
+          : {
+              // The profile was deleted mid-session; rebuild the minimum the
+              // SFTP connect flow needs from the live session.
+              id: summary.profileId,
+              name: `${summary.username}@${summary.host}`,
+              protocol: "sftp",
+              hostname: summary.host,
+              username: summary.username,
+              port: summary.port,
+              environment: "development",
+              group: "",
+              tags: [],
+              favorite: false,
+            },
+      );
+    },
+    [ssh.sessions, sftp.sessions, profiles],
+  );
+
   const openCreate = useCallback(() => {
     setView("connections");
     setDrawer({ open: true, profileId: null });
@@ -549,6 +592,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                     vnc={vnc}
                     activeSessionId={activeSessionId}
                     onSelect={setActiveSessionId}
+                    onOpenSftp={openSftpForSshSession}
                     theme={activeTheme}
                   />
                 </div>

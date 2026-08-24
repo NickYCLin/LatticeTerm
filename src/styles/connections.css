@@ -805,8 +805,14 @@
 }
 
 .session-tab:hover .session-tab__rename-button,
-.session-tab.is-active .session-tab__rename-button {
+.session-tab.is-active .session-tab__rename-button,
+.session-tab:hover .session-tab__files-button,
+.session-tab.is-active .session-tab__files-button {
   opacity: 1;
+}
+
+.session-tab__files-button {
+  opacity: 0;
 }
 
 .terminal-stack {
