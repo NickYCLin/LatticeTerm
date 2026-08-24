@@ -1,12 +1,31 @@
-import { useEffect, useRef } from "react";
-import type { RemoteSessionSummary } from "../../app/useRemoteSessions";
+import { useCallback, useEffect, useRef } from "react";
+import type { KeyboardEvent, MouseEvent, WheelEvent } from "react";
+import type { RemoteApi, RemoteInput, RemoteSessionSummary } from "../../app/useRemoteSessions";
 import { useI18n } from "../../i18n/context";
 import { ScreenShareIcon, ShieldIcon } from "../icons";
 import { CanvasCaptureControls } from "./CanvasCaptureControls";
+import { keysymFor } from "./keysym";
 
-export function RemotePane({ session }: { session: RemoteSessionSummary }) {
+export function RemotePane({
+  session,
+  remote,
+}: {
+  session: RemoteSessionSummary;
+  remote: RemoteApi;
+}) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pendingMove = useRef<RemoteInput | null>(null);
+  const moveFrame = useRef<number | null>(null);
+  const interactive = !session.viewOnly;
+
+  const send = useCallback(
+    (request: RemoteInput) => {
+      if (!interactive) return;
+      void remote.input(session.sessionId, request).catch(() => undefined);
+    },
+    [interactive, remote, session.sessionId],
+  );
 
   useEffect(() => {
     const frame = session.frame;
@@ -28,6 +47,71 @@ export function RemotePane({ session }: { session: RemoteSessionSummary }) {
     };
   }, [session.frame]);
 
+  useEffect(
+    () => () => {
+      if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
+      if (interactive) send({ kind: "releaseAll" });
+    },
+    [interactive, send],
+  );
+
+  function position(event: MouseEvent<HTMLCanvasElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(
+        0,
+        Math.min(
+          session.width - 1,
+          Math.round(((event.clientX - bounds.left) / bounds.width) * session.width),
+        ),
+      ),
+      y: Math.max(
+        0,
+        Math.min(
+          session.height - 1,
+          Math.round(((event.clientY - bounds.top) / bounds.height) * session.height),
+        ),
+      ),
+    };
+  }
+
+  function mouseMove(event: MouseEvent<HTMLCanvasElement>) {
+    if (!interactive) return;
+    const point = position(event);
+    pendingMove.current = { kind: "mouseMove", ...point };
+    if (moveFrame.current !== null) return;
+    moveFrame.current = requestAnimationFrame(() => {
+      moveFrame.current = null;
+      if (pendingMove.current) send(pendingMove.current);
+      pendingMove.current = null;
+    });
+  }
+
+  function mouseButton(event: MouseEvent<HTMLCanvasElement>, pressed: boolean) {
+    if (!interactive) return;
+    event.preventDefault();
+    event.currentTarget.focus();
+    send({ kind: "mouseMove", ...position(event) });
+    send({ kind: "mouseButton", button: event.button, pressed });
+  }
+
+  function wheel(event: WheelEvent<HTMLCanvasElement>) {
+    if (!interactive) return;
+    event.preventDefault();
+    const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+    const delta = horizontal ? event.deltaX : event.deltaY;
+    if (delta === 0) return;
+    send({ kind: "wheel", horizontal, units: Math.sign(delta) });
+  }
+
+  function keyboard(event: KeyboardEvent<HTMLCanvasElement>, pressed: boolean) {
+    if (!interactive) return;
+    const keysym = keysymFor(event.key, event.code);
+    if (keysym === null) return;
+    event.preventDefault();
+    send({ kind: "key", keysym, pressed });
+  }
+
   return (
     <div className="remote-pane">
       <div className="remote-toolbar">
@@ -47,17 +131,31 @@ export function RemotePane({ session }: { session: RemoteSessionSummary }) {
           ready={session.frame !== null}
           label={session.agentName}
         />
-        <span className="badge tone-info">{t("remote.session.viewOnly")}</span>
+        <span className={interactive ? "badge tone-ok" : "badge tone-info"}>
+          {interactive
+            ? t("remote.session.interactive")
+            : t("remote.session.viewOnly")}
+        </span>
       </div>
 
       <div className="remote-canvas" aria-live="polite">
         <canvas
           ref={canvasRef}
-          className="remote-frame-canvas"
+          className={interactive ? "remote-frame-canvas rdp-canvas" : "remote-frame-canvas"}
           width={session.width}
           height={session.height}
-          role="img"
+          tabIndex={interactive ? 0 : undefined}
+          role={interactive ? "application" : "img"}
           aria-label={t("remote.session.frameAlt", { name: session.agentName })}
+          onMouseMove={interactive ? mouseMove : undefined}
+          onMouseDown={interactive ? (event) => mouseButton(event, true) : undefined}
+          onMouseUp={interactive ? (event) => mouseButton(event, false) : undefined}
+          onMouseLeave={interactive ? () => send({ kind: "releaseAll" }) : undefined}
+          onWheel={interactive ? wheel : undefined}
+          onKeyDown={interactive ? (event) => keyboard(event, true) : undefined}
+          onKeyUp={interactive ? (event) => keyboard(event, false) : undefined}
+          onBlur={interactive ? () => send({ kind: "releaseAll" }) : undefined}
+          onContextMenu={interactive ? (event) => event.preventDefault() : undefined}
         />
         {!session.frame && (
           <div className="remote-canvas__waiting">

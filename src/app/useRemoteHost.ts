@@ -18,6 +18,8 @@ export interface RemoteHostStartRequest {
   bindAddress: string;
   port: number;
   fps: number;
+  /** Let the paired viewer control this machine. Defaults to view-only. */
+  allowInput: boolean;
 }
 
 export interface RemoteHostApi {

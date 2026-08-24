@@ -34,7 +34,8 @@ use crate::rdp::{
     RdpConnectOutcome, RdpConnectRequest, RdpInputRequest, RdpRegistry, RdpSessionSummary,
 };
 use crate::remote::{
-    RemoteConnectOutcome, RemoteConnectRequest, RemoteRegistry, RemoteSessionSummary,
+    RemoteConnectOutcome, RemoteConnectRequest, RemoteInputRequest, RemoteRegistry,
+    RemoteSessionSummary,
 };
 use crate::remote_host::{RemoteHostRegistry, RemoteHostStartRequest, RemoteHostStatus};
 use crate::sftp::{
@@ -1080,6 +1081,15 @@ fn remote_sessions(registry: State<'_, Arc<RemoteRegistry>>) -> Vec<RemoteSessio
 }
 
 #[tauri::command]
+fn remote_input(
+    session_id: String,
+    request: RemoteInputRequest,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<(), String> {
+    crate::remote::input(registry.inner(), &session_id, request)
+}
+
+#[tauri::command]
 async fn remote_host_start(
     app: AppHandle,
     request: RemoteHostStartRequest,
@@ -1513,6 +1523,7 @@ pub fn run() {
             remote_connect,
             remote_disconnect,
             remote_sessions,
+            remote_input,
             remote_host_start,
             remote_host_stop,
             remote_host_status,

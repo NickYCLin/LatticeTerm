@@ -1,8 +1,10 @@
 use crate::{ProtocolError, RemoteMessage};
 use sha2::{Digest, Sha256};
 use snow::{params::NoiseParams, Builder, TransportState};
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
 const NOISE_PATTERN: &str = "Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s";
@@ -151,30 +153,87 @@ impl SecureConnection {
     }
 
     pub async fn send(&mut self, message: &RemoteMessage) -> Result<(), RemoteError> {
-        let plaintext = message.encode()?;
-        if plaintext.len() > MAX_PLAINTEXT {
-            return Err(RemoteError::MessageTooLarge);
-        }
-        let mut encrypted = vec![0u8; plaintext.len() + 16];
-        let written = self
-            .transport
-            .write_message(&plaintext, &mut encrypted)
-            .map_err(|_| RemoteError::Pairing)?;
-        write_wire(&mut self.stream, &encrypted[..written]).await
+        let encrypted = seal(&mut self.transport, message)?;
+        write_wire(&mut self.stream, &encrypted).await
     }
 
     pub async fn receive(&mut self) -> Result<RemoteMessage, RemoteError> {
         let encrypted = read_wire(&mut self.stream).await?;
-        let mut plaintext = vec![0u8; encrypted.len()];
-        let read = self
-            .transport
-            .read_message(&encrypted, &mut plaintext)
-            .map_err(|_| RemoteError::Pairing)?;
-        RemoteMessage::decode(&plaintext[..read]).map_err(RemoteError::from)
+        open(&mut self.transport, &encrypted)
+    }
+
+    /// Splits the connection so one task can receive while another sends.
+    ///
+    /// Noise keeps independent cipher states per direction, so this is safe
+    /// as long as each direction stays single-tasked — which the halves
+    /// enforce by taking `&mut self`. The shared mutex only serialises the
+    /// brief non-async encrypt/decrypt calls.
+    pub fn split(self) -> (SecureReader, SecureWriter) {
+        let (read_half, write_half) = self.stream.into_split();
+        let transport = Arc::new(Mutex::new(self.transport));
+        (
+            SecureReader {
+                stream: read_half,
+                transport: Arc::clone(&transport),
+            },
+            SecureWriter {
+                stream: write_half,
+                transport,
+            },
+        )
     }
 }
 
-async fn write_wire(stream: &mut TcpStream, bytes: &[u8]) -> Result<(), RemoteError> {
+pub struct SecureReader {
+    stream: OwnedReadHalf,
+    transport: Arc<Mutex<TransportState>>,
+}
+
+impl SecureReader {
+    pub async fn receive(&mut self) -> Result<RemoteMessage, RemoteError> {
+        let encrypted = read_wire(&mut self.stream).await?;
+        let mut transport = self.transport.lock().map_err(|_| RemoteError::Pairing)?;
+        open(&mut transport, &encrypted)
+    }
+}
+
+pub struct SecureWriter {
+    stream: OwnedWriteHalf,
+    transport: Arc<Mutex<TransportState>>,
+}
+
+impl SecureWriter {
+    pub async fn send(&mut self, message: &RemoteMessage) -> Result<(), RemoteError> {
+        let encrypted = {
+            let mut transport = self.transport.lock().map_err(|_| RemoteError::Pairing)?;
+            seal(&mut transport, message)?
+        };
+        write_wire(&mut self.stream, &encrypted).await
+    }
+}
+
+fn seal(transport: &mut TransportState, message: &RemoteMessage) -> Result<Vec<u8>, RemoteError> {
+    let plaintext = message.encode()?;
+    if plaintext.len() > MAX_PLAINTEXT {
+        return Err(RemoteError::MessageTooLarge);
+    }
+    let mut encrypted = vec![0u8; plaintext.len() + 16];
+    let written = transport
+        .write_message(&plaintext, &mut encrypted)
+        .map_err(|_| RemoteError::Pairing)?;
+    encrypted.truncate(written);
+    Ok(encrypted)
+}
+
+fn open(transport: &mut TransportState, encrypted: &[u8]) -> Result<RemoteMessage, RemoteError> {
+    let mut plaintext = vec![0u8; encrypted.len()];
+    let read = transport
+        .read_message(encrypted, &mut plaintext)
+        .map_err(|_| RemoteError::Pairing)?;
+    RemoteMessage::decode(&plaintext[..read]).map_err(RemoteError::from)
+}
+
+async fn write_wire<W: AsyncWrite + Unpin>(stream: &mut W, bytes: &[u8]) -> Result<(), RemoteError> {
     if bytes.is_empty() || bytes.len() > MAX_WIRE_MESSAGE {
         return Err(RemoteError::MessageTooLarge);
     }
@@ -184,7 +243,7 @@ async fn write_wire(stream: &mut TcpStream, bytes: &[u8]) -> Result<(), RemoteEr
     Ok(())
 }
 
-async fn read_wire(stream: &mut TcpStream) -> Result<Vec<u8>, RemoteError> {
+async fn read_wire<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Vec<u8>, RemoteError> {
     let length = match stream.read_u32().await {
         Ok(length) => length as usize,
         Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
@@ -250,6 +309,79 @@ mod tests {
         assert!(matches!(hello, RemoteMessage::Hello(_)));
         client.send(&RemoteMessage::KeepAlive).await.unwrap();
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn split_halves_exchange_messages_in_both_directions() {
+        use crate::{PointerButton, RemoteInput};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let secure = SecureConnection::accept(stream, "12345678").await.unwrap();
+            let (mut reader, mut writer) = secure.split();
+            // Send frames from one task while the other consumes input.
+            let sender = tokio::spawn(async move {
+                for _ in 0..3 {
+                    writer.send(&RemoteMessage::KeepAlive).await.unwrap();
+                }
+                writer
+                    .send(&RemoteMessage::Close("done".into()))
+                    .await
+                    .unwrap();
+            });
+            let mut inputs = Vec::new();
+            while let Ok(RemoteMessage::Input(input)) = reader.receive().await {
+                inputs.push(input);
+                if inputs.len() == 2 {
+                    break;
+                }
+            }
+            sender.await.unwrap();
+            inputs
+        });
+
+        let stream = TcpStream::connect(address).await.unwrap();
+        let client = SecureConnection::initiate(stream, "1234-5678")
+            .await
+            .unwrap();
+        let (mut reader, mut writer) = client.split();
+        writer
+            .send(&RemoteMessage::Input(RemoteInput::MouseMove { x: 10, y: 20 }))
+            .await
+            .unwrap();
+        writer
+            .send(&RemoteMessage::Input(RemoteInput::MouseButton {
+                button: PointerButton::Left,
+                pressed: true,
+            }))
+            .await
+            .unwrap();
+        let mut closes = 0;
+        loop {
+            match reader.receive().await.unwrap() {
+                RemoteMessage::Close(reason) => {
+                    assert_eq!(reason, "done");
+                    closes += 1;
+                    break;
+                }
+                RemoteMessage::KeepAlive => {}
+                other => panic!("unexpected message: {other:?}"),
+            }
+        }
+        assert_eq!(closes, 1);
+        assert_eq!(
+            server.await.unwrap(),
+            vec![
+                RemoteInput::MouseMove { x: 10, y: 20 },
+                RemoteInput::MouseButton {
+                    button: PointerButton::Left,
+                    pressed: true,
+                },
+            ],
+        );
     }
 
     #[tokio::test]

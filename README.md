@@ -12,7 +12,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | 桌面連線工作區 | **可用** | Windows、Linux 與 macOS 支援 SSH、SFTP、SSH Tunnel、Web RDP、VNC、主機資源與工作階段管理。 |
 | 安全與資料保護 | **可用** | 嚴格主機信任、作業系統認證儲存、主密碼加密保管庫、敏感剪貼簿與加密備份均已接入真實後端。 |
 | 本機 AI Agent Fleet | **可用** | 多 CLI PTY、Reporter、批次提示、原生 Session 續接、安全啟動工作區與同程序重新 attach 已完成。 |
-| Lattice Remote | **基礎功能可用** | 已完成使用者主動啟動、一次性配對、端對端加密與唯讀主螢幕直連；Relay、NAT 穿透、無人值守及遠端輸入尚未加入。 |
+| Lattice Remote | **基礎功能可用** | 已完成使用者主動啟動、一次性配對、端對端加密、主螢幕直連，以及由分享端明確授權的鍵盤／滑鼠遠端控制；Relay、NAT 穿透與無人值守尚未加入。 |
 | 發行與更新 | **可用** | Windows x64、Linux x64／arm64、macOS Apple Silicon 安裝檔、更新簽章、Release PR 與應用程式內更新已自動化。 |
 | Android | **預覽** | 共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面可建置；需要桌面 sidecar 的 RDP、VNC 與 Agent Fleet 不提供。 |
 | 進階 Agent 與行動能力 | **規劃中** | 跨程序 daemon、遠端 Fleet、任務編排、每 Agent 沙箱、Windows npm shim 與 iOS 尚未完成。 |
@@ -34,7 +34,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 - **SSH 連線**：以純 Rust 的 russh 實作，可使用密碼或本機 OpenSSH 私鑰建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼預設只用於當次連線，使用者可在驗證成功後明確保存到系統認證儲存區，私鑰內容與密語不會保存至連線設定。
 - **SSH Tunnel**：可建立本機、遠端與 SOCKS5 動態轉送，顯示即時狀態與連線數；動態代理若未設定驗證只允許綁定 loopback，遠端轉送則依 SSH 伺服器的 GatewayPorts 政策生效。
 - **SFTP 檔案工作區**：沿用 SSH 主機指紋驗證與獨立的認證項目，可瀏覽遠端路徑、上下載、新增資料夾、重新命名及確認刪除；大型檔案經有界分塊與原生串流佇列傳輸，不把整個檔案塞進 WebView／IPC 記憶體。上傳先寫入同目錄的私有暫存檔，只有位元組數完整且關檔成功才替換目標，取消、失敗或中斷連線不會把既有檔案變成半成品。
-- **Lattice Remote（唯讀 v1）**：桌面版內建「分享這台裝置」，由使用者明確啟動自建 Agent 擷取完整主螢幕，以 Noise XXpsk3 與一次性八位數配對碼建立端對端加密直連；協定在畫面進入 WebView 前限制編碼大小、邊長與總像素，避免異常 Agent 迫使 Canvas 配置無界資源；目前不注入鍵盤或滑鼠。
+- **Lattice Remote（直連 v1）**：桌面版內建「分享這台裝置」，由使用者明確啟動自建 Agent 擷取完整主螢幕，以 Noise XXpsk3 與一次性八位數配對碼建立端對端加密直連；協定在畫面進入 WebView 前限制編碼大小、邊長與總像素，避免異常 Agent 迫使 Canvas 配置無界資源。預設唯讀；分享端可勾選「允許對方操控」，配對成功後檢視端才能操作滑鼠與鍵盤，斷線或停止分享會立即釋放所有按住的按鍵。
 - **Web RDP Canvas**：IronRDP 原生 engine 以 TLS/NLA 連到 Windows，畫面繪入內嵌 Canvas，並支援滑鼠、滾輪與鍵盤。密碼只經本機 stdin 傳給隔離 engine，也可在成功驗證後安全保存。
 - **使用者控制的截圖與錄影**：Lattice Remote、Web RDP 與 VNC 都可手動擷取 PNG，或開始、停止並下載遠端 Canvas 錄影；不會自動錄製或上傳。
 - **跨平台支援**：桌面版支援 Windows、Linux 與 macOS；Android 版已可建置執行共用的純 Rust 核心功能，需本機程序的 RDP／VNC／CLI Fleet 維持桌面限定。
@@ -68,7 +68,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 
 ## 後續開發重點
 
-1. **Lattice Remote 連線範圍**：加入自建 Relay、NAT 穿透、裝置身分與重放防護，再分階段提供無人值守及由被控端明確授權的鍵盤／滑鼠輸入。
+1. **Lattice Remote 連線範圍**：鍵盤／滑鼠遠端控制已可用（由分享端明確授權）；接著加入自建 Relay、NAT 穿透、裝置身分與重放防護，再分階段提供無人值守。
 2. **Agent 常駐與遠端能力**：把 PTY owner 抽成使用者自行啟動的背景 daemon，支援跨程序重新 attach，並先以 SSH transport 實作遠端 Agent Fleet。
 3. **Agent 編排與隔離**：補齊工具 hook、token／cost 可觀測事件、依賴圖、佇列、排程、資源限制與每 Agent 沙箱／檔案範圍策略。
 4. **平台完整度**：設計安全的 Windows npm shim adapter、持續強化 Android 發行流程，並在 macOS／Xcode 環境啟動 iOS 建置與驗證。
@@ -109,13 +109,13 @@ npm run tauri dev
 
 ### 執行 Lattice Remote Agent
 
-桌面版可直接按「分享這台裝置」，選擇明確的介面 IP、連接埠與更新率，再自行決定是否讓分享留在背景。若要獨立執行 CLI，預設只監聽 loopback；從同一個區網連入時，必須明確指定該機器的 LAN 位址：
+桌面版可直接按「分享這台裝置」，選擇明確的介面 IP、連接埠與更新率，並勾選是否允許對方操控，再自行決定是否讓分享留在背景。若要獨立執行 CLI，預設只監聽 loopback 且只傳畫面；從同一個區網連入時，必須明確指定該機器的 LAN 位址，要開放遠端控制則加上 `--allow-input`：
 
 ```sh
-cargo run --manifest-path crates/lattice-remote/Cargo.toml --features agent --bin lattice-agent -- --bind 192.168.1.20:44900
+cargo run --manifest-path crates/lattice-remote/Cargo.toml --features agent --bin lattice-agent -- --bind 192.168.1.20:44900 --allow-input
 ```
 
-Agent 顯示的八位數配對碼五分鐘後失效，連續五次失敗就會停止；一次成功工作階段結束後程序也會退出。內嵌模式配對成功後會立即從介面清除配對碼；複製配對碼時預設 30 秒後清除剪貼簿，若內容已被其他複製操作取代則保留，使用者也可調整期限或停用。使用者可隨時停止分享。v1 僅傳畫面，不接受遠端輸入。
+Agent 顯示的八位數配對碼五分鐘後失效，連續五次失敗就會停止；一次成功工作階段結束後程序也會退出。內嵌模式配對成功後會立即從介面清除配對碼；複製配對碼時預設 30 秒後清除剪貼簿，若內容已被其他複製操作取代則保留，使用者也可調整期限或停用。使用者可隨時停止分享。預設唯讀；只有分享端明確加上 `--allow-input`（或介面勾選）才接受遠端滑鼠與鍵盤，且斷線或停止時會釋放所有按住的按鍵。
 
 ### 執行 AI Agent Fleet
 

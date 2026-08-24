@@ -239,6 +239,32 @@
   background: var(--surface-raised);
 }
 
+.remote-host-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  cursor: pointer;
+}
+
+.remote-host-toggle input {
+  margin-top: 0.15rem;
+  flex: none;
+}
+
+.remote-host-toggle > span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.remote-host-toggle small {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
 .remote-host-state > div {
   display: grid;
   gap: 0.2rem;

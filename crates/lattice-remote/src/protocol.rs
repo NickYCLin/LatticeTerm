@@ -14,6 +14,16 @@ const MESSAGE_FRAME_START: u8 = 2;
 const MESSAGE_FRAME_CHUNK: u8 = 3;
 const MESSAGE_KEEP_ALIVE: u8 = 4;
 const MESSAGE_CLOSE: u8 = 5;
+const MESSAGE_INPUT: u8 = 6;
+
+const INPUT_MOUSE_MOVE: u8 = 1;
+const INPUT_MOUSE_BUTTON: u8 = 2;
+const INPUT_WHEEL: u8 = 3;
+const INPUT_KEY: u8 = 4;
+const INPUT_RELEASE_ALL: u8 = 5;
+
+/// One wheel message may scroll at most this many notches in either direction.
+pub const MAX_WHEEL_UNITS: i8 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteHello {
@@ -60,6 +70,48 @@ pub struct FrameDescriptor {
     pub format: FrameFormat,
 }
 
+/// A mouse button in the three-button model every target platform shares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerButton {
+    Left,
+    Middle,
+    Right,
+}
+
+impl PointerButton {
+    fn encode(self) -> u8 {
+        match self {
+            Self::Left => 0,
+            Self::Middle => 1,
+            Self::Right => 2,
+        }
+    }
+
+    fn decode(value: u8) -> Result<Self, ProtocolError> {
+        match value {
+            0 => Ok(Self::Left),
+            1 => Ok(Self::Middle),
+            2 => Ok(Self::Right),
+            _ => Err(ProtocolError::InvalidMessage("unknown pointer button")),
+        }
+    }
+}
+
+/// Viewer-to-agent input. Only valid after a Hello that advertised
+/// `view_only: false`; a view-only agent drops these without acting on them.
+///
+/// Coordinates are in the agent's advertised stream space (the Hello
+/// width/height); the agent maps them onto the real display. Keys use X11
+/// keysyms, the same encoding the VNC pane already produces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteInput {
+    MouseMove { x: u16, y: u16 },
+    MouseButton { button: PointerButton, pressed: bool },
+    Wheel { horizontal: bool, units: i8 },
+    Key { keysym: u32, pressed: bool },
+    ReleaseAll,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteMessage {
     Hello(RemoteHello),
@@ -71,6 +123,7 @@ pub enum RemoteMessage {
     },
     KeepAlive,
     Close(String),
+    Input(RemoteInput),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +190,21 @@ fn validate_frame_descriptor(frame: &FrameDescriptor) -> Result<(), ProtocolErro
     Ok(())
 }
 
+fn validate_input(input: &RemoteInput) -> Result<(), ProtocolError> {
+    match input {
+        RemoteInput::Wheel { units, .. } => {
+            if *units == 0 || units.unsigned_abs() > MAX_WHEEL_UNITS.unsigned_abs() {
+                return Err(ProtocolError::InvalidMessage("wheel units out of range"));
+            }
+        }
+        RemoteInput::MouseMove { .. }
+        | RemoteInput::MouseButton { .. }
+        | RemoteInput::Key { .. }
+        | RemoteInput::ReleaseAll => {}
+    }
+    Ok(())
+}
+
 impl RemoteMessage {
     pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
         match self {
@@ -181,6 +249,35 @@ impl RemoteMessage {
                 Ok(output)
             }
             Self::KeepAlive => Ok(vec![MESSAGE_KEEP_ALIVE]),
+            Self::Input(input) => {
+                validate_input(input)?;
+                let mut output = Vec::with_capacity(8);
+                output.push(MESSAGE_INPUT);
+                match input {
+                    RemoteInput::MouseMove { x, y } => {
+                        output.push(INPUT_MOUSE_MOVE);
+                        output.extend_from_slice(&x.to_be_bytes());
+                        output.extend_from_slice(&y.to_be_bytes());
+                    }
+                    RemoteInput::MouseButton { button, pressed } => {
+                        output.push(INPUT_MOUSE_BUTTON);
+                        output.push(button.encode());
+                        output.push(u8::from(*pressed));
+                    }
+                    RemoteInput::Wheel { horizontal, units } => {
+                        output.push(INPUT_WHEEL);
+                        output.push(u8::from(*horizontal));
+                        output.push(units.to_be_bytes()[0]);
+                    }
+                    RemoteInput::Key { keysym, pressed } => {
+                        output.push(INPUT_KEY);
+                        output.extend_from_slice(&keysym.to_be_bytes());
+                        output.push(u8::from(*pressed));
+                    }
+                    RemoteInput::ReleaseAll => output.push(INPUT_RELEASE_ALL),
+                }
+                Ok(output)
+            }
             Self::Close(reason) => {
                 let bytes = reason.as_bytes();
                 if bytes.len() > MAX_CLOSE_REASON_BYTES {
@@ -260,6 +357,34 @@ impl RemoteMessage {
                 })
             }
             MESSAGE_KEEP_ALIVE if body.is_empty() => Ok(Self::KeepAlive),
+            MESSAGE_INPUT => {
+                let subkind = *body
+                    .first()
+                    .ok_or(ProtocolError::InvalidMessage("empty input message"))?;
+                let detail = &body[1..];
+                let input = match subkind {
+                    INPUT_MOUSE_MOVE if detail.len() == 4 => RemoteInput::MouseMove {
+                        x: read_u16(detail, 0)?,
+                        y: read_u16(detail, 2)?,
+                    },
+                    INPUT_MOUSE_BUTTON if detail.len() == 2 => RemoteInput::MouseButton {
+                        button: PointerButton::decode(detail[0])?,
+                        pressed: decode_bool(detail[1])?,
+                    },
+                    INPUT_WHEEL if detail.len() == 2 => RemoteInput::Wheel {
+                        horizontal: decode_bool(detail[0])?,
+                        units: i8::from_be_bytes([detail[1]]),
+                    },
+                    INPUT_KEY if detail.len() == 5 => RemoteInput::Key {
+                        keysym: read_u32(detail, 0)?,
+                        pressed: decode_bool(detail[4])?,
+                    },
+                    INPUT_RELEASE_ALL if detail.is_empty() => RemoteInput::ReleaseAll,
+                    _ => return Err(ProtocolError::InvalidMessage("invalid input message")),
+                };
+                validate_input(&input)?;
+                Ok(Self::Input(input))
+            }
             MESSAGE_CLOSE => {
                 if body.len() > MAX_CLOSE_REASON_BYTES {
                     return Err(ProtocolError::InvalidMessage("close reason is too long"));
@@ -272,6 +397,14 @@ impl RemoteMessage {
             }
             _ => Err(ProtocolError::InvalidMessage("unknown message type")),
         }
+    }
+}
+
+fn decode_bool(value: u8) -> Result<bool, ProtocolError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(ProtocolError::InvalidMessage("invalid boolean byte")),
     }
 }
 
@@ -540,6 +673,72 @@ mod tests {
             assembler.push(second_chunk),
             Err(ProtocolError::UnexpectedChunk)
         );
+    }
+
+    #[test]
+    fn input_messages_round_trip() {
+        let inputs = [
+            RemoteInput::MouseMove { x: 0, y: 719 },
+            RemoteInput::MouseMove {
+                x: u16::MAX,
+                y: u16::MAX,
+            },
+            RemoteInput::MouseButton {
+                button: PointerButton::Left,
+                pressed: true,
+            },
+            RemoteInput::MouseButton {
+                button: PointerButton::Right,
+                pressed: false,
+            },
+            RemoteInput::Wheel {
+                horizontal: false,
+                units: -3,
+            },
+            RemoteInput::Key {
+                keysym: 0x01000000 + 0x4e2d, // '中' beyond Latin-1
+                pressed: true,
+            },
+            RemoteInput::ReleaseAll,
+        ];
+        for input in inputs {
+            let message = RemoteMessage::Input(input);
+            assert_eq!(
+                RemoteMessage::decode(&message.encode().unwrap()).unwrap(),
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_input_messages() {
+        assert_eq!(
+            RemoteMessage::Input(RemoteInput::Wheel {
+                horizontal: true,
+                units: 0,
+            })
+            .encode(),
+            Err(ProtocolError::InvalidMessage("wheel units out of range"))
+        );
+        assert_eq!(
+            RemoteMessage::Input(RemoteInput::Wheel {
+                horizontal: true,
+                units: MAX_WHEEL_UNITS + 1,
+            })
+            .encode(),
+            Err(ProtocolError::InvalidMessage("wheel units out of range"))
+        );
+
+        // Unknown subkind, truncated body, bad button, non-binary boolean.
+        for wire in [
+            vec![6u8, 9],
+            vec![6u8, 1, 0, 0, 0],
+            vec![6u8, 2, 3, 1],
+            vec![6u8, 2, 0, 2],
+            vec![6u8],
+        ] {
+            assert!(RemoteMessage::decode(&wire).is_err(), "wire {wire:?}");
+        }
     }
 
     #[test]

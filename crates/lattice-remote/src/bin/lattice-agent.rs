@@ -1,7 +1,7 @@
 use image::{imageops::FilterType, DynamicImage};
 use lattice_remote::{
-    frame_messages, generate_pairing_code, normalize_pairing_code, FrameFormat, RemoteHello,
-    RemoteMessage, SecureConnection, DEFAULT_PORT, PROTOCOL_VERSION,
+    frame_messages, generate_pairing_code, host_input::InputInjector, normalize_pairing_code,
+    FrameFormat, RemoteHello, RemoteMessage, SecureConnection, DEFAULT_PORT, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use std::env;
@@ -9,6 +9,7 @@ use std::io::{Cursor, Write as _};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout};
 use xcap::Monitor;
 
@@ -24,6 +25,7 @@ struct Options {
     pairing_code: String,
     fps: u32,
     json: bool,
+    allow_input: bool,
 }
 
 #[derive(Serialize)]
@@ -68,12 +70,15 @@ fn emit_event(json: bool, event: &AgentEvent<'_>) {
 }
 
 fn help() -> &'static str {
-    "Lattice Remote view-only agent\n\n\
-Usage: lattice-agent [--bind ADDRESS:PORT] [--pair-code 1234-5678] [--fps 1-10] [--json]\n\n\
+    "Lattice Remote agent\n\n\
+Usage: lattice-agent [--bind ADDRESS:PORT] [--pair-code 1234-5678] [--fps 1-10] [--allow-input] [--json]\n\n\
 The safe default listens on 127.0.0.1 only. To receive a LAN connection, pass\n\
 the machine's LAN address explicitly, for example --bind 192.168.1.20:44900.\n\
 The agent accepts one successfully paired connection, streams the primary\n\
-display over an encrypted channel, then exits. It never accepts input.\n"
+display over an encrypted channel, then exits.\n\n\
+By default the session is view-only. Pass --allow-input to let the paired\n\
+viewer control this machine's mouse and keyboard; without it, input messages\n\
+are ignored.\n"
 }
 
 fn parse_options() -> Result<Options, String> {
@@ -83,6 +88,7 @@ fn parse_options() -> Result<Options, String> {
     let mut pairing_code = None;
     let mut fps = DEFAULT_FPS;
     let mut json = false;
+    let mut allow_input = false;
     let mut arguments = env::args().skip(1);
 
     while let Some(argument) = arguments.next() {
@@ -115,6 +121,7 @@ fn parse_options() -> Result<Options, String> {
                 }
             }
             "--json" => json = true,
+            "--allow-input" => allow_input = true,
             "--help" | "-h" => {
                 print!("{}", help());
                 std::process::exit(0);
@@ -131,6 +138,7 @@ fn parse_options() -> Result<Options, String> {
             .map_err(|error| error.to_string())?,
         fps,
         json,
+        allow_input,
     })
 }
 
@@ -145,13 +153,24 @@ fn target_size(width: u32, height: u32) -> (u32, u32) {
     )
 }
 
-fn capture_jpeg(monitor: &Monitor) -> Result<(u32, u32, Vec<u8>), String> {
+/// A single capture: the real captured size, the downscaled stream size, and
+/// the encoded JPEG at the stream size.
+struct Capture {
+    display_width: u32,
+    display_height: u32,
+    stream_width: u32,
+    stream_height: u32,
+    jpeg: Vec<u8>,
+}
+
+fn capture_jpeg(monitor: &Monitor) -> Result<Capture, String> {
     let captured = monitor.capture_image().map_err(|error| error.to_string())?;
-    let (width, height) = target_size(captured.width(), captured.height());
-    let image = if captured.width() == width && captured.height() == height {
+    let (display_width, display_height) = (captured.width(), captured.height());
+    let (stream_width, stream_height) = target_size(display_width, display_height);
+    let image = if display_width == stream_width && display_height == stream_height {
         captured
     } else {
-        image::imageops::resize(&captured, width, height, FilterType::Triangle)
+        image::imageops::resize(&captured, stream_width, stream_height, FilterType::Triangle)
     };
 
     let mut output = Cursor::new(Vec::new());
@@ -159,7 +178,41 @@ fn capture_jpeg(monitor: &Monitor) -> Result<(u32, u32, Vec<u8>), String> {
     encoder
         .encode_image(&DynamicImage::ImageRgba8(image))
         .map_err(|error| error.to_string())?;
-    Ok((width, height, output.into_inner()))
+    Ok(Capture {
+        display_width,
+        display_height,
+        stream_width,
+        stream_height,
+        jpeg: output.into_inner(),
+    })
+}
+
+/// Runs the OS input backend on its own thread. `enigo::Enigo` is not portable
+/// across async await points, so it lives here and consumes decoded inputs off
+/// a channel. Returns when the channel closes (viewer gone), releasing keys.
+fn spawn_input_thread(
+    stream_width: u32,
+    stream_height: u32,
+    display_width: u32,
+    display_height: u32,
+    mut inputs: mpsc::UnboundedReceiver<lattice_remote::RemoteInput>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut injector =
+            match InputInjector::new(stream_width, stream_height, display_width, display_height) {
+                Ok(injector) => injector,
+                Err(error) => {
+                    eprintln!("Input control unavailable: {error}");
+                    // Drain so the sender never blocks on a full channel.
+                    while inputs.blocking_recv().is_some() {}
+                    return;
+                }
+            };
+        while let Some(input) = inputs.blocking_recv() {
+            let _ = injector.apply(input);
+        }
+        injector.release_all();
+    })
 }
 
 fn agent_name() -> String {
@@ -170,44 +223,97 @@ fn agent_name() -> String {
         .unwrap_or_else(|| "Lattice Agent".to_string())
 }
 
-async fn serve(mut connection: SecureConnection, fps: u32) -> Result<(), String> {
+async fn serve(connection: SecureConnection, fps: u32, allow_input: bool) -> Result<(), String> {
     let monitors = Monitor::all().map_err(|error| error.to_string())?;
     let monitor = monitors
         .into_iter()
         .find(|monitor| monitor.is_primary().unwrap_or(false))
         .ok_or_else(|| "no primary display is available".to_string())?;
-    let (mut width, mut height, mut jpeg) = capture_jpeg(&monitor)?;
+    let mut capture = capture_jpeg(&monitor)?;
+    let mut width = capture.stream_width;
+    let mut height = capture.stream_height;
 
-    connection
+    let (mut reader, mut writer) = connection.split();
+
+    writer
         .send(&RemoteMessage::Hello(RemoteHello {
             protocol_version: PROTOCOL_VERSION,
             agent_name: agent_name(),
             width,
             height,
-            view_only: true,
+            view_only: !allow_input,
         }))
         .await
         .map_err(|error| error.to_string())?;
 
+    // Receiving runs on its own task; with input allowed it forwards each
+    // decoded input to the OS thread, otherwise it just watches for Close.
+    let (input_tx, input_thread) = if allow_input {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let handle = spawn_input_thread(
+            capture.stream_width,
+            capture.stream_height,
+            capture.display_width,
+            capture.display_height,
+            rx,
+        );
+        (Some(tx), Some(handle))
+    } else {
+        (None, None)
+    };
+
+    let receiver = tokio::spawn(async move {
+        loop {
+            match reader.receive().await {
+                Ok(RemoteMessage::Input(input)) => {
+                    if let Some(tx) = &input_tx {
+                        if tx.send(input).is_err() {
+                            break;
+                        }
+                    }
+                }
+                Ok(RemoteMessage::Close(_)) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+        // Dropping the sender ends the input thread and releases held keys.
+        drop(input_tx);
+        if let Some(handle) = input_thread {
+            let _ = handle.join();
+        }
+    });
+
     let interval = Duration::from_millis(1000 / fps as u64);
     let mut frame_id = 0u64;
-    loop {
+    let stream_result = loop {
+        if receiver.is_finished() {
+            break Ok(());
+        }
         let started = Instant::now();
         frame_id = frame_id.wrapping_add(1);
-        for message in frame_messages(frame_id, width, height, FrameFormat::Jpeg, &jpeg)
+        let mut send_error = None;
+        for message in frame_messages(frame_id, width, height, FrameFormat::Jpeg, &capture.jpeg)
             .map_err(|error| error.to_string())?
         {
-            connection
-                .send(&message)
-                .await
-                .map_err(|error| error.to_string())?;
+            if let Err(error) = writer.send(&message).await {
+                send_error = Some(error.to_string());
+                break;
+            }
+        }
+        if let Some(error) = send_error {
+            break Err(error);
         }
 
         if started.elapsed() < interval {
             sleep(interval - started.elapsed()).await;
         }
-        (width, height, jpeg) = capture_jpeg(&monitor)?;
-    }
+        capture = capture_jpeg(&monitor)?;
+        width = capture.stream_width;
+        height = capture.stream_height;
+    };
+
+    receiver.abort();
+    stream_result
 }
 
 #[tokio::main]
@@ -259,11 +365,16 @@ async fn main() {
             address: options.bind.to_string(),
             pairing_code: formatted_code.clone(),
             expires_in_seconds: PAIRING_LIFETIME.as_secs(),
-            view_only: true,
+            view_only: !options.allow_input,
         },
     );
     if !options.json {
-        println!("Lattice Remote is ready (view-only)");
+        let mode = if options.allow_input {
+            "remote control enabled"
+        } else {
+            "view-only"
+        };
+        println!("Lattice Remote is ready ({mode})");
         println!("Address: {}", options.bind);
         println!("Pairing code: {formatted_code}");
         println!("The code is valid for one successful connection and is not saved.");
@@ -327,9 +438,14 @@ async fn main() {
             },
         );
         if !options.json {
-            println!("Paired with {peer}. Starting encrypted view-only stream.");
+            let stream_kind = if options.allow_input {
+                "interactive"
+            } else {
+                "view-only"
+            };
+            println!("Paired with {peer}. Starting encrypted {stream_kind} stream.");
         }
-        break match serve(secure, options.fps).await {
+        break match serve(secure, options.fps, options.allow_input).await {
             Ok(()) => "Remote session completed.".to_string(),
             Err(error) => format!("Session ended: {error}"),
         };

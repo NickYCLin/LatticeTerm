@@ -37,6 +37,14 @@ export type RemoteConnectOutcome =
   | ({ outcome: "connected" } & Omit<RemoteSessionSummary, "frame">)
   | { outcome: "failed"; stage: string; detail: string };
 
+/** One control action sent to an interactive (non view-only) session. */
+export type RemoteInput =
+  | { kind: "mouseMove"; x: number; y: number }
+  | { kind: "mouseButton"; button: number; pressed: boolean }
+  | { kind: "wheel"; horizontal: boolean; units: number }
+  | { kind: "key"; keysym: number; pressed: boolean }
+  | { kind: "releaseAll" };
+
 interface FrameEvent {
   sessionId: string;
   frameId: number;
@@ -51,6 +59,7 @@ export interface RemoteApi {
   lastClosed: SessionClosedNotice | null;
   connect: (request: RemoteConnectRequest) => Promise<RemoteConnectOutcome>;
   disconnect: (sessionId: string) => Promise<void>;
+  input: (sessionId: string, request: RemoteInput) => Promise<void>;
   clearLastClosed: () => void;
 }
 
@@ -211,7 +220,15 @@ export function useRemoteSessions(): RemoteApi {
     }
   }, []);
 
+  const input = useCallback(
+    async (sessionId: string, request: RemoteInput) => {
+      const { invoke } = await core();
+      await invoke("remote_input", { sessionId, request });
+    },
+    [],
+  );
+
   const clearLastClosed = useCallback(() => setLastClosed(null), []);
 
-  return { sessions, lastClosed, connect, disconnect, clearLastClosed };
+  return { sessions, lastClosed, connect, disconnect, input, clearLastClosed };
 }

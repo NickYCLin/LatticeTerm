@@ -821,6 +821,7 @@ export const en: Messages = {
   "remote.connect.failedBody": "Stage: {stage}. {detail}",
   "remote.session.encrypted": "Encrypted direct link",
   "remote.session.viewOnly": "View only",
+  "remote.session.interactive": "Control",
   "remote.session.frameAlt": "Live remote display from {name}",
   "remote.session.waitingTitle": "Waiting for the first frame",
   "remote.session.waitingBody":
@@ -830,7 +831,7 @@ export const en: Messages = {
   "remote.host.activeAction": "Sharing active",
   "remote.host.securityTitle": "You choose when sharing starts",
   "remote.host.securityBody":
-    "The complete primary display is captured only after you press Start and is sent over an end-to-end encrypted direct connection. This version is view-only and requires a one-time code that expires in five minutes.",
+    "The complete primary display is captured only after you press Start and is sent over an end-to-end encrypted direct connection, using a one-time code that expires in five minutes. Sharing is view-only unless you choose to allow control.",
   "remote.host.problemTitle": "Sharing status changed",
   "remote.host.state.waiting": "Waiting for pairing",
   "remote.host.state.pairing": "Verifying pairing code",
@@ -856,6 +857,14 @@ export const en: Messages = {
   "remote.host.stop": "Stop sharing",
   "remote.host.stopping": "Stopping…",
   "remote.host.keepRunning": "Keep sharing in background",
+  "remote.host.allowInput": "Let the viewer control this device",
+  "remote.host.allowInputHint":
+    "Once paired, the viewer can drive this computer's mouse and keyboard. Leave unchecked for view-only.",
+  "remote.host.allowInputWarnTitle": "This hands over control",
+  "remote.host.allowInputWarnBody":
+    "With control enabled, a successfully paired viewer can operate your desktop. Only share with people you trust, and press Stop sharing when you are done.",
+  "remote.host.modeViewOnly": "View only",
+  "remote.host.modeInteractive": "Control enabled",
 
   // Web RDP ----------------------------------------------------------------
   "rdp.connect.title": "RDP connect to {name}",

@@ -268,7 +268,7 @@ export function SessionsView({
             key={session.sessionId}
             hidden={session.sessionId !== active.sessionId}
           >
-            <RemotePane session={session} />
+            <RemotePane session={session} remote={remote} />
           </div>
         ))}
         {rdp.sessions.map((session) => (

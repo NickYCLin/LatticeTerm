@@ -20,6 +20,7 @@ export function RemoteHostDialog({
   const [bindAddress, setBindAddress] = useState("127.0.0.1");
   const [port, setPort] = useState(44_900);
   const [fps, setFps] = useState(5);
+  const [allowInput, setAllowInput] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [copied, setCopied] = useState<"address" | "code" | null>(null);
@@ -60,7 +61,7 @@ export function RemoteHostDialog({
     setProblem(null);
     host.clearClosedReason();
     try {
-      await host.start({ bindAddress: bindAddress.trim(), port, fps });
+      await host.start({ bindAddress: bindAddress.trim(), port, fps, allowInput });
       setNow(Math.floor(Date.now() / 1_000));
     } catch (error) {
       setProblem(error instanceof Error ? error.message : String(error));
@@ -159,6 +160,14 @@ export function RemoteHostDialog({
                       : t("remote.host.waiting")}
                   </small>
                 </div>
+                <span
+                  className={host.status.viewOnly ? "badge tone-info" : "badge tone-warn"}
+                  style={{ marginLeft: "auto" }}
+                >
+                  {host.status.viewOnly
+                    ? t("remote.host.modeViewOnly")
+                    : t("remote.host.modeInteractive")}
+                </span>
               </div>
 
               <div className="remote-host-share-grid">
@@ -282,6 +291,25 @@ export function RemoteHostDialog({
                   onChange={(event) => setFps(Number(event.currentTarget.value))}
                 />
               </div>
+
+              <label className="remote-host-toggle">
+                <input
+                  type="checkbox"
+                  checked={allowInput}
+                  disabled={busy}
+                  onChange={(event) => setAllowInput(event.currentTarget.checked)}
+                />
+                <span>
+                  <strong>{t("remote.host.allowInput")}</strong>
+                  <small>{t("remote.host.allowInputHint")}</small>
+                </span>
+              </label>
+
+              {allowInput && (
+                <Callout tone="warn" title={t("remote.host.allowInputWarnTitle")}>
+                  {t("remote.host.allowInputWarnBody")}
+                </Callout>
+              )}
 
               <div className="dialog__actions">
                 <button

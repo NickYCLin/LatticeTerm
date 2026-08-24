@@ -24,6 +24,10 @@ pub struct RemoteHostStartRequest {
     pub bind_address: String,
     pub port: u16,
     pub fps: u32,
+    /// When true, the paired viewer may control this machine's mouse and
+    /// keyboard. Defaults to false so an unset field stays view-only.
+    #[serde(default)]
+    pub allow_input: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -217,13 +221,19 @@ fn bind_target(request: &RemoteHostStartRequest) -> Result<SocketAddr, String> {
 fn spawn_agent(
     target: SocketAddr,
     fps: u32,
+    allow_input: bool,
 ) -> Result<(Child, tokio::process::ChildStdout), String> {
-    let mut child = Command::new(agent_path()?)
+    let mut command = Command::new(agent_path()?);
+    command
         .arg("--json")
         .arg("--bind")
         .arg(target.to_string())
         .arg("--fps")
-        .arg(fps.to_string())
+        .arg(fps.to_string());
+    if allow_input {
+        command.arg("--allow-input");
+    }
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -256,7 +266,7 @@ pub async fn start(
     }
 
     let target = bind_target(&request)?;
-    let (mut child, stdout) = spawn_agent(target, request.fps)?;
+    let (mut child, stdout) = spawn_agent(target, request.fps, request.allow_input)?;
     let mut lines = BufReader::new(stdout).lines();
     let first = match timeout(Duration::from_secs(12), lines.next_line()).await {
         Ok(Ok(Some(line))) => parse_event(&line),
@@ -412,6 +422,7 @@ mod tests {
             bind_address: "192.168.1.20".to_string(),
             port: 44_900,
             fps: 5,
+            allow_input: false,
         })
         .unwrap();
         assert_eq!(ipv4.to_string(), "192.168.1.20:44900");
@@ -420,6 +431,7 @@ mod tests {
             bind_address: "::1".to_string(),
             port: 44_900,
             fps: 10,
+            allow_input: true,
         })
         .unwrap();
         assert_eq!(ipv6.to_string(), "[::1]:44900");
@@ -432,6 +444,7 @@ mod tests {
                 bind_address: bind_address.to_string(),
                 port: 44_900,
                 fps: 5,
+                allow_input: false,
             })
             .is_err());
         }
