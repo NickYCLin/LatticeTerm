@@ -9,9 +9,7 @@
 //! nothing stuck down.
 
 use crate::{PointerButton, RemoteInput};
-use enigo::{
-    Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings,
-};
+use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 
 /// Translates one viewer input stream onto the local machine.
 pub struct InputInjector {

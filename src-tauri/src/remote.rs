@@ -61,13 +61,29 @@ pub enum RemoteConnectOutcome {
 /// One control action from the viewer. Mirrors the browser event shapes the
 /// RDP/VNC panes already emit, so the same pointer/keyboard handlers apply.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum RemoteInputRequest {
-    MouseMove { x: u16, y: u16 },
+    MouseMove {
+        x: u16,
+        y: u16,
+    },
     /// Browser button numbers: 0 left, 1 middle, 2 right.
-    MouseButton { button: u8, pressed: bool },
-    Wheel { horizontal: bool, units: i32 },
-    Key { keysym: u32, pressed: bool },
+    MouseButton {
+        button: u8,
+        pressed: bool,
+    },
+    Wheel {
+        horizontal: bool,
+        units: i32,
+    },
+    Key {
+        keysym: u32,
+        pressed: bool,
+    },
     ReleaseAll,
 }
 
@@ -239,7 +255,11 @@ pub async fn connect(
         let mut writer_half = writer_half;
         tokio::spawn(async move {
             while let Some(input) = rx.recv().await {
-                if writer_half.send(&RemoteMessage::Input(input)).await.is_err() {
+                if writer_half
+                    .send(&RemoteMessage::Input(input))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -344,9 +364,7 @@ fn resolve_input(request: RemoteInputRequest) -> Option<RemoteInput> {
                 units: clamped,
             })
         }
-        RemoteInputRequest::Key { keysym, pressed } => {
-            Some(RemoteInput::Key { keysym, pressed })
-        }
+        RemoteInputRequest::Key { keysym, pressed } => Some(RemoteInput::Key { keysym, pressed }),
         RemoteInputRequest::ReleaseAll => Some(RemoteInput::ReleaseAll),
     }
 }
@@ -428,8 +446,7 @@ mod tests {
             request,
             RemoteInputRequest::MouseMove { x: 12, y: 34 }
         ));
-        let release: RemoteInputRequest =
-            serde_json::from_str(r#"{"kind":"releaseAll"}"#).unwrap();
+        let release: RemoteInputRequest = serde_json::from_str(r#"{"kind":"releaseAll"}"#).unwrap();
         assert!(matches!(release, RemoteInputRequest::ReleaseAll));
     }
 }

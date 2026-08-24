@@ -105,10 +105,22 @@ impl PointerButton {
 /// keysyms, the same encoding the VNC pane already produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteInput {
-    MouseMove { x: u16, y: u16 },
-    MouseButton { button: PointerButton, pressed: bool },
-    Wheel { horizontal: bool, units: i8 },
-    Key { keysym: u32, pressed: bool },
+    MouseMove {
+        x: u16,
+        y: u16,
+    },
+    MouseButton {
+        button: PointerButton,
+        pressed: bool,
+    },
+    Wheel {
+        horizontal: bool,
+        units: i8,
+    },
+    Key {
+        keysym: u32,
+        pressed: bool,
+    },
     ReleaseAll,
 }
 

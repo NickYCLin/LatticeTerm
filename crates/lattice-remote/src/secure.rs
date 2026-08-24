@@ -233,7 +233,10 @@ fn open(transport: &mut TransportState, encrypted: &[u8]) -> Result<RemoteMessag
     RemoteMessage::decode(&plaintext[..read]).map_err(RemoteError::from)
 }
 
-async fn write_wire<W: AsyncWrite + Unpin>(stream: &mut W, bytes: &[u8]) -> Result<(), RemoteError> {
+async fn write_wire<W: AsyncWrite + Unpin>(
+    stream: &mut W,
+    bytes: &[u8],
+) -> Result<(), RemoteError> {
     if bytes.is_empty() || bytes.len() > MAX_WIRE_MESSAGE {
         return Err(RemoteError::MessageTooLarge);
     }
@@ -349,7 +352,10 @@ mod tests {
             .unwrap();
         let (mut reader, mut writer) = client.split();
         writer
-            .send(&RemoteMessage::Input(RemoteInput::MouseMove { x: 10, y: 20 }))
+            .send(&RemoteMessage::Input(RemoteInput::MouseMove {
+                x: 10,
+                y: 20,
+            }))
             .await
             .unwrap();
         writer
