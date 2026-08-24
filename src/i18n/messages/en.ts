@@ -649,6 +649,10 @@ export const en: Messages = {
   "agents.cwd.placeholder": "For example /home/me/project",
   "agents.cwd.hint":
     "The agent starts in this folder and may read or change its files according to the CLI's permissions.",
+  "agents.launchNote": "Note (optional)",
+  "agents.launchNote.placeholder": "e.g. this CLI handles the payments project",
+  "agents.launchNote.hint":
+    "Saved with the item to the workspace, so the list shows at a glance what it is for. Just for you; up to 200 bytes.",
   "agents.installed": "Available",
   "agents.notInstalled": "Not detected",
   "agents.path.missing": "No directly executable program was found on PATH",

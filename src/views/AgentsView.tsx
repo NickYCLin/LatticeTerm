@@ -57,6 +57,7 @@ export function AgentsView({
 }) {
   const { t } = useI18n();
   const [workingDirectory, setWorkingDirectory] = useState("");
+  const [launchNote, setLaunchNote] = useState("");
   const [launching, setLaunching] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [customLabel, setCustomLabel] = useState("");
@@ -182,7 +183,7 @@ export function AgentsView({
       executable: custom ? customExecutable : "",
       arguments: custom ? splitAgentArguments(customArguments) : [],
       resumeSessionId: null,
-      note: "",
+      note: launchNote.trim(),
       workingDirectory,
     };
   }
@@ -231,6 +232,7 @@ export function AgentsView({
     try {
       const plan = await agents.savePlan(launchDraft(definition, custom));
       setWorkspaceNotice({ saved: plan.label });
+      setLaunchNote("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -484,6 +486,18 @@ export function AgentsView({
             spellCheck={false}
           />
           <span className="agents-field-hint">{t("agents.cwd.hint")}</span>
+        </label>
+
+        <label className="field agents-cwd">
+          <span className="field__label">{t("agents.launchNote")}</span>
+          <input
+            className="input"
+            value={launchNote}
+            onChange={(event) => setLaunchNote(event.currentTarget.value)}
+            placeholder={t("agents.launchNote.placeholder")}
+            maxLength={200}
+          />
+          <span className="agents-field-hint">{t("agents.launchNote.hint")}</span>
         </label>
 
         <div className="agent-grid">
