@@ -4,6 +4,13 @@
 
 ---
 
+## [0.15.0](https://github.com/NickYCLin/lattice-term/compare/v0.14.0...v0.15.0) (2026-08-24)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** 保存續接項目可以加備註 ([0291b26](https://github.com/NickYCLin/lattice-term/commit/0291b26b4f8528a470abc109dc0d7eea386fe440))
+
 ## [0.14.0](https://github.com/NickYCLin/lattice-term/compare/v0.13.8...v0.14.0) (2026-08-24)
 
 
