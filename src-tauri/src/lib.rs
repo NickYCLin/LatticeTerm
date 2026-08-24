@@ -1382,7 +1382,31 @@ fn tunnel_list(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().plugin(tauri_plugin_clipboard_manager::init());
+    #[cfg(desktop)]
+    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(
+        |app, _arguments, _working_directory| {
+            if let Some(window) = app.get_webview_window("main") {
+                let handle = window.clone();
+                let _ = window.run_on_main_thread(move || {
+                    let _ = handle.show();
+                    let _ = handle.unminimize();
+                    let _ = handle.set_focus();
+                    #[cfg(target_os = "linux")]
+                    if let Ok(gtk_window) = handle.gtk_window() {
+                        use gtk::prelude::{GtkWindowExt, WidgetExt};
+
+                        gtk_window.hide();
+                        gtk_window.show_all();
+                        gtk_window.deiconify();
+                        gtk_window.present();
+                    }
+                });
+            }
+        },
+    ));
+    #[cfg(mobile)]
+    let builder = tauri::Builder::default();
+    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
     // Auto-update and relaunch are desktop concerns; mobile installs come
     // from a package manager and restart through the OS.
     #[cfg(desktop)]
