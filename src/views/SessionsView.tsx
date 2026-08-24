@@ -259,7 +259,11 @@ export function SessionsView({
             key={session.sessionId}
             hidden={session.sessionId !== active.sessionId}
           >
-            <SftpPane session={session} sftp={sftp} />
+            <SftpPane
+              session={session}
+              sftp={sftp}
+              active={session.sessionId === active.sessionId}
+            />
           </div>
         ))}
         {remote.sessions.map((session) => (

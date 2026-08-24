@@ -902,6 +902,28 @@ async fn sftp_upload_begin(
 }
 
 #[tauri::command]
+async fn sftp_upload_path(
+    app: AppHandle,
+    session_id: String,
+    parent: String,
+    local_path: String,
+    overwrite: bool,
+    sessions: State<'_, Arc<SftpRegistry>>,
+    transfers: State<'_, Arc<TransferRegistry>>,
+) -> Result<TransferState, String> {
+    crate::sftp_transfers::start_upload_from_path(
+        Arc::clone(transfers.inner()),
+        sessions.inner(),
+        Arc::new(crate::sftp_transfers::EventSink(app.clone())),
+        &session_id,
+        &parent,
+        std::path::PathBuf::from(local_path),
+        overwrite,
+    )
+    .await
+}
+
+#[tauri::command]
 async fn sftp_upload_chunk(
     app: AppHandle,
     transfer_id: String,
@@ -1515,6 +1537,7 @@ pub fn run() {
             sftp_disconnect,
             sftp_download_start,
             sftp_upload_begin,
+            sftp_upload_path,
             sftp_upload_chunk,
             sftp_upload_finish,
             sftp_transfer_cancel,

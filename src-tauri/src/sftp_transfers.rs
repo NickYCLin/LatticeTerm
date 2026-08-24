@@ -499,6 +499,156 @@ pub async fn start_download(
     Ok(snapshot)
 }
 
+/// Streams a local file straight from disk into `parent` on the remote.
+///
+/// This is the drag-and-drop path: the OS hands us a local file path, so the
+/// whole read happens on the Rust side (no base64 chunks over IPC). It reuses
+/// the same staging-then-promote safety as the chunked upload, so a failure or
+/// cancel never leaves a half-written file at the visible target.
+pub async fn start_upload_from_path(
+    transfers: Arc<TransferRegistry>,
+    sessions: &SftpRegistry,
+    sink: Arc<dyn TransferSink>,
+    session_id: &str,
+    parent: &str,
+    local_path: PathBuf,
+    overwrite: bool,
+) -> Result<TransferState, String> {
+    let parent = validate_path(parent)?;
+    let metadata = std::fs::metadata(&local_path)
+        .map_err(|error| format!("cannot read the dropped file: {error}"))?;
+    if metadata.is_dir() {
+        return Err("folders cannot be uploaded yet — drop individual files".to_string());
+    }
+    if !metadata.is_file() {
+        return Err("only regular files can be uploaded".to_string());
+    }
+    let total = metadata.len();
+    let file_name = local_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "the dropped file has no usable name".to_string())?;
+    let name = validate_name(file_name)?;
+    let session = sessions.session(session_id)?;
+    let remote_path = join_path(&parent, &name);
+
+    if !overwrite
+        && session
+            .try_exists(remote_path.clone())
+            .await
+            .map_err(|error| error.to_string())?
+    {
+        return Err(format!("'{name}' already exists here; confirm overwrite first."));
+    }
+
+    let staging_path = temporary_remote_path(&parent, "upload")?;
+    let remote_file = session
+        .create(staging_path.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let entry = Arc::new(TransferEntry {
+        state: Mutex::new(TransferState {
+            transfer_id: transfers.next_id(),
+            session_id: session_id.to_string(),
+            kind: "upload",
+            name,
+            remote_path,
+            local_path: Some(local_path.display().to_string()),
+            bytes_done: 0,
+            total_bytes: Some(total),
+            state: "running",
+            detail: None,
+        }),
+        cancel: AtomicBool::new(false),
+        upload: AsyncMutex::new(Some(remote_file)),
+        upload_session: Some(session),
+        staging_path: Some(staging_path),
+        overwrite,
+    });
+    if let Err(error) = transfers.insert(Arc::clone(&entry)) {
+        entry.upload.lock().await.take();
+        let cleanup = remove_staging_file(&entry).await.err();
+        return Err(cleanup
+            .map(|cleanup| format!("{error}; {cleanup}"))
+            .unwrap_or(error));
+    }
+    let snapshot = entry.state.lock().map_err(|e| e.to_string())?.clone();
+    sink.update(&snapshot);
+
+    let task_entry = Arc::clone(&entry);
+    tokio::spawn(async move {
+        let result: Result<(), String> = async {
+            let mut local = tokio::fs::File::open(&local_path)
+                .await
+                .map_err(|error| format!("cannot open the dropped file: {error}"))?;
+            let mut buffer = vec![0u8; REMOTE_CHUNK];
+            let mut done: u64 = 0;
+            let mut last_emitted: u64 = 0;
+            loop {
+                if task_entry.cancel.load(Ordering::Relaxed) {
+                    return Err("cancelled".to_string());
+                }
+                let read = local
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if read == 0 {
+                    break;
+                }
+                {
+                    let mut slot = task_entry.upload.lock().await;
+                    let file = slot
+                        .as_mut()
+                        .ok_or_else(|| "the upload lost its remote file handle".to_string())?;
+                    file.write_all(&buffer[..read])
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                done += read as u64;
+                if done - last_emitted >= EMIT_EVERY_BYTES {
+                    last_emitted = done;
+                    task_entry.update(sink.as_ref(), |state| state.bytes_done = done);
+                }
+            }
+            {
+                let mut slot = task_entry.upload.lock().await;
+                if let Some(mut file) = slot.take() {
+                    file.flush().await.map_err(|error| error.to_string())?;
+                    file.shutdown().await.map_err(|error| error.to_string())?;
+                }
+            }
+            task_entry.update(sink.as_ref(), |state| state.bytes_done = done);
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => match promote_upload(&task_entry).await {
+                Ok(warning) => task_entry.update(sink.as_ref(), |state| {
+                    if state.state == "running" {
+                        state.state = "done";
+                        state.detail = warning;
+                    }
+                }),
+                Err(detail) => {
+                    let _ = abort_upload(&task_entry, sink.as_ref(), "error", &detail).await;
+                }
+            },
+            Err(detail) => {
+                let state = if detail == "cancelled" {
+                    "cancelled"
+                } else {
+                    "error"
+                };
+                let _ = abort_upload(&task_entry, sink.as_ref(), state, &detail).await;
+            }
+        }
+    });
+
+    Ok(snapshot)
+}
+
 /// What an upload needs before its first byte arrives.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

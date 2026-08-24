@@ -248,6 +248,13 @@ export interface SftpApi {
     file: File,
     overwrite: boolean,
   ) => Promise<void>;
+  /** Streams a dropped local file (by OS path) to the remote side. */
+  uploadPath: (
+    sessionId: string,
+    parent: string,
+    localPath: string,
+    overwrite: boolean,
+  ) => Promise<SftpTransfer>;
   cancelTransfer: (transferId: string) => Promise<void>;
   dismissTransfer: (transferId: string) => Promise<void>;
   trustHost: (
@@ -453,6 +460,26 @@ export function useSftpSessions(): SftpApi {
     [],
   );
 
+  const uploadPath = useCallback(
+    async (
+      sessionId: string,
+      parent: string,
+      localPath: string,
+      overwrite: boolean,
+    ) => {
+      const { invoke } = await core();
+      const transfer = await invoke<SftpTransfer>("sftp_upload_path", {
+        sessionId,
+        parent,
+        localPath,
+        overwrite,
+      });
+      setTransfers((current) => ({ ...current, [transfer.transferId]: transfer }));
+      return transfer;
+    },
+    [],
+  );
+
   const cancelTransfer = useCallback(async (transferId: string) => {
     const { invoke } = await core();
     await invoke("sftp_transfer_cancel", { transferId });
@@ -501,6 +528,7 @@ export function useSftpSessions(): SftpApi {
     transfers,
     downloadToDisk,
     uploadStream,
+    uploadPath,
     cancelTransfer,
     dismissTransfer,
     trustHost,

@@ -31,13 +31,21 @@ function parentPath(path: string): string {
   return boundary <= 0 ? "/" : normalized.slice(0, boundary);
 }
 
+/** Last path segment of an OS path, handling both `/` and `\` separators. */
+function baseName(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
 
 export function SftpPane({
   session,
   sftp,
+  active = false,
 }: {
   session: SftpSessionSummary;
   sftp: SftpApi;
+  active?: boolean;
 }) {
   const { t, tag } = useI18n();
   const [directory, setDirectory] = useState<SftpDirectory | null>(null);
@@ -45,6 +53,7 @@ export function SftpPane({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const uploadRef = useRef<HTMLInputElement>(null);
   const list = sftp.list;
   const sessionTransfers = Object.values(sftp.transfers)
@@ -152,6 +161,74 @@ export function SftpPane({
     if (uploadRef.current) uploadRef.current.value = "";
   }
 
+  async function dropFiles(paths: string[]) {
+    if (!directory || paths.length === 0) return;
+    setProblem(null);
+    let uploaded = false;
+    for (const path of paths) {
+      const name = baseName(path);
+      const existing = directory.entries.find((entry) => entry.name === name);
+      if (existing?.kind === "directory") {
+        setProblem(t("sftp.overwriteDirectory", { name }));
+        continue;
+      }
+      if (existing && !window.confirm(t("sftp.overwriteConfirm", { name }))) {
+        continue;
+      }
+      try {
+        await sftp.uploadPath(
+          session.sessionId,
+          directory.path,
+          path,
+          Boolean(existing),
+        );
+        uploaded = true;
+      } catch (reason) {
+        setProblem(reason instanceof Error ? reason.message : String(reason));
+      }
+    }
+    // Show the arrivals once the queue has them; progress lands in the strip.
+    if (uploaded) await open(directory.path);
+  }
+
+  // OS drag-and-drop is delivered by Tauri as file paths (the webview's own
+  // drop events are suppressed), so only the active pane binds the listener.
+  useEffect(() => {
+    if (!active) {
+      setDragging(false);
+      return;
+    }
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { getCurrentWebviewWindow } = await import(
+          "@tauri-apps/api/webviewWindow"
+        );
+        const stop = await getCurrentWebviewWindow().onDragDropEvent((event) => {
+          if (event.payload.type === "enter" || event.payload.type === "over") {
+            setDragging(true);
+          } else if (event.payload.type === "leave") {
+            setDragging(false);
+          } else if (event.payload.type === "drop") {
+            setDragging(false);
+            void dropFiles(event.payload.paths);
+          }
+        });
+        if (cancelled) stop();
+        else unlisten = stop;
+      } catch {
+        // Browser preview has no native drag-drop bridge.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      setDragging(false);
+    };
+    // Re-bind when the open directory changes so drops target the current one.
+  }, [active, directory?.path, session.sessionId]);
+
   async function transferAction(operation: () => Promise<void>) {
     setProblem(null);
     try {
@@ -184,7 +261,10 @@ export function SftpPane({
   }
 
   return (
-    <section className="sftp-pane" aria-label={t("sftp.title")}>
+    <section
+      className={`sftp-pane${dragging ? " sftp-pane--dropping" : ""}`}
+      aria-label={t("sftp.title")}
+    >
       <header className="sftp-toolbar">
         <form className="sftp-path" onSubmit={submitPath}>
           <label className="sr-only" htmlFor={`sftp-path-${session.sessionId}`}>
@@ -239,6 +319,7 @@ export function SftpPane({
             className="button button--primary button--sm"
             disabled={loading || busy || !directory}
             onClick={() => uploadRef.current?.click()}
+            title={t("sftp.upload.hint")}
           >
             <ImportIcon size={13} />
             {t("sftp.upload")}
@@ -430,6 +511,16 @@ export function SftpPane({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {dragging && directory && (
+        <div className="sftp-dropzone" aria-hidden="true">
+          <div className="sftp-dropzone__card">
+            <ImportIcon size={22} />
+            <strong>{t("sftp.drop.title")}</strong>
+            <span className="mono">{directory.path}</span>
+          </div>
         </div>
       )}
     </section>

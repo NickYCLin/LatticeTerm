@@ -779,6 +779,8 @@ export const en: Messages = {
   "sftp.refresh": "Refresh",
   "sftp.newFolder": "New folder",
   "sftp.upload": "Upload",
+  "sftp.upload.hint": "or drag files in",
+  "sftp.drop.title": "Drop to upload into this folder",
   "sftp.download": "Download",
   "sftp.rename": "Rename",
   "sftp.delete": "Delete",

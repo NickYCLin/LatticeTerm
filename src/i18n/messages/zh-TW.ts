@@ -722,6 +722,8 @@ export const zhTW = {
   "sftp.refresh": "重新整理",
   "sftp.newFolder": "新增資料夾",
   "sftp.upload": "上傳",
+  "sftp.upload.hint": "或直接把檔案拖進來",
+  "sftp.drop.title": "放開就上傳到這個資料夾",
   "sftp.download": "下載",
   "sftp.rename": "重新命名",
   "sftp.delete": "刪除",
