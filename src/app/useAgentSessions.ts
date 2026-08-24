@@ -43,7 +43,10 @@ export interface AgentLaunchRequest {
   rows: number;
 }
 
-export type AgentLaunchPlanDraft = Omit<AgentLaunchRequest, "cols" | "rows">;
+export type AgentLaunchPlanDraft = Omit<AgentLaunchRequest, "cols" | "rows"> & {
+  /** Free-text memo, e.g. which project this plan is for. "" means none. */
+  note: string;
+};
 
 export interface AgentLaunchPlan extends AgentLaunchPlanDraft {
   id: string;

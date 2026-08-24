@@ -283,6 +283,7 @@ mod tests {
             },
             arguments: vec!["--version".to_string()],
             resume_session_id: None,
+            note: String::new(),
             working_directory: directory.display().to_string(),
         }
     }
@@ -368,6 +369,7 @@ mod tests {
                 executable: String::new(),
                 arguments: Vec::new(),
                 resume_session_id: Some("  architecture review  ".to_string()),
+                note: "  接手上週的重構  ".to_string(),
                 working_directory: directory.display().to_string(),
             })
             .unwrap();
@@ -375,10 +377,12 @@ mod tests {
             saved.resume_session_id.as_deref(),
             Some("architecture review")
         );
+        assert_eq!(saved.note, "接手上週的重構");
 
         let raw = fs::read_to_string(directory.join(STORE_FILE)).unwrap();
         assert!(raw.contains("\"version\": 3"));
         assert!(raw.contains("\"resumeSessionId\": \"architecture review\""));
+        assert!(raw.contains("\"note\": \"接手上週的重構\""));
     }
 
     #[test]

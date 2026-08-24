@@ -26,6 +26,7 @@ const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 const MAX_RESUME_SESSION_ID_BYTES: usize = 512;
+const MAX_PLAN_NOTE_BYTES: usize = 200;
 const MAX_BROADCAST_TARGETS: usize = 32;
 pub const MAX_AGENT_SESSIONS: usize = 32;
 pub const MAX_SAVED_AGENT_PLANS: usize = 32;
@@ -224,6 +225,9 @@ pub struct AgentLaunchPlanDraft {
     pub arguments: Vec<String>,
     #[serde(default)]
     pub resume_session_id: Option<String>,
+    /// Free-text memo, e.g. which project this CLI works on. Never launched.
+    #[serde(default)]
+    pub note: String,
     pub working_directory: String,
 }
 
@@ -237,6 +241,9 @@ pub struct AgentLaunchPlan {
     pub arguments: Vec<String>,
     #[serde(default)]
     pub resume_session_id: Option<String>,
+    /// Free-text memo shown in the saved list so a plan's purpose is obvious.
+    #[serde(default)]
+    pub note: String,
     pub working_directory: String,
 }
 
@@ -982,6 +989,24 @@ fn validate_text(value: &str, field: &str, max_bytes: usize) -> Result<String, S
     Ok(trimmed.to_string())
 }
 
+/// Validates the optional free-text note on a saved launch plan. Unlike
+/// `validate_text`, an empty note is allowed and normalises to `""`.
+fn validate_optional_note(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    if trimmed.len() > MAX_PLAN_NOTE_BYTES {
+        return Err(format!(
+            "Note is too long (maximum {MAX_PLAN_NOTE_BYTES} bytes)."
+        ));
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("Note contains unsupported control characters.".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
 fn validate_arguments(arguments: &[String]) -> Result<Vec<String>, String> {
     if arguments.len() > MAX_ARGUMENTS {
         return Err(format!("At most {MAX_ARGUMENTS} arguments are allowed."));
@@ -1095,6 +1120,8 @@ pub fn normalize_launch_plan(
         return Err("Working directory is not a directory.".to_string());
     }
 
+    let note = validate_optional_note(&draft.note)?;
+
     Ok(AgentLaunchPlan {
         id,
         definition_id,
@@ -1102,6 +1129,7 @@ pub fn normalize_launch_plan(
         executable,
         arguments,
         resume_session_id,
+        note,
         working_directory: working_directory.display().to_string(),
     })
 }
@@ -1119,6 +1147,7 @@ pub fn launch_request_from_plan(
             executable: plan.executable.clone(),
             arguments: plan.arguments.clone(),
             resume_session_id: plan.resume_session_id.clone(),
+            note: plan.note.clone(),
             working_directory: plan.working_directory.clone(),
         },
     )?;
@@ -1883,11 +1912,14 @@ session id: 0199aa11-"
                 executable: String::new(),
                 arguments: vec!["--full-auto".to_string()],
                 resume_session_id: None,
+                note: "  審查 payments 專案  ".to_string(),
                 working_directory: directory.display().to_string(),
             },
         )
         .unwrap();
         assert_eq!(plan.executable, "codex");
+        // The note is trimmed and preserved for the saved list.
+        assert_eq!(plan.note, "審查 payments 專案");
         assert_eq!(
             PathBuf::from(&plan.working_directory),
             directory.canonicalize().unwrap()
@@ -1905,12 +1937,36 @@ session id: 0199aa11-"
                     executable: "/bin/echo".to_string(),
                     arguments: vec![argument.to_string()],
                     resume_session_id: None,
+                    note: String::new(),
                     working_directory: directory.display().to_string(),
                 },
             )
             .unwrap_err();
             assert!(error.contains("cannot contain"));
         }
+    }
+
+    #[test]
+    fn plan_notes_reject_oversized_or_control_characters() {
+        let directory = std::env::current_dir().unwrap();
+        let make = |note: &str| {
+            normalize_launch_plan(
+                "agent-plan-note".to_string(),
+                AgentLaunchPlanDraft {
+                    definition_id: "codex".to_string(),
+                    label: "Agent".to_string(),
+                    executable: String::new(),
+                    arguments: Vec::new(),
+                    resume_session_id: None,
+                    note: note.to_string(),
+                    working_directory: directory.display().to_string(),
+                },
+            )
+        };
+        // Empty is allowed and normalises to "".
+        assert_eq!(make("").unwrap().note, "");
+        assert!(make(&"x".repeat(MAX_PLAN_NOTE_BYTES + 1)).is_err());
+        assert!(make("line one\nline two").is_err());
     }
 
     #[test]
@@ -1924,6 +1980,7 @@ session id: 0199aa11-"
                 executable: String::new(),
                 arguments: Vec::new(),
                 resume_session_id: Some("  session-42  ".to_string()),
+                note: String::new(),
                 working_directory: directory.display().to_string(),
             },
         )

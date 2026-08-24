@@ -666,6 +666,10 @@ export const en: Messages = {
   "agents.resume.sessionId.placeholder": "Paste the session ID or existing title shown by the CLI",
   "agents.resume.sessionId.hint":
     "Up to 512 bytes, with no control characters or leading hyphen. Additional launch arguments cannot be mixed in.",
+  "agents.resume.note": "Note (optional)",
+  "agents.resume.note.placeholder": "e.g. refactor work on the payments project",
+  "agents.resume.note.hint":
+    "A memo just for you, shown in the list so you can tell at a glance what this CLI was for. Up to 200 bytes.",
   "agents.resume.save": "Save restore item",
   "agents.resume.launch": "Resume session",
   "agents.resume.resuming": "Resuming…",

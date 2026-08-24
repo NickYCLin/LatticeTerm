@@ -64,6 +64,7 @@ export function AgentsView({
   const [customArguments, setCustomArguments] = useState("");
   const [resumeDefinitionId, setResumeDefinitionId] = useState("");
   const [resumeSessionId, setResumeSessionId] = useState("");
+  const [resumeNote, setResumeNote] = useState("");
   const [resumeNotice, setResumeNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -175,6 +176,7 @@ export function AgentsView({
       executable: custom ? customExecutable : "",
       arguments: custom ? splitAgentArguments(customArguments) : [],
       resumeSessionId: null,
+      note: "",
       workingDirectory,
     };
   }
@@ -186,6 +188,7 @@ export function AgentsView({
       executable: "",
       arguments: [],
       resumeSessionId: resumeSessionId.trim(),
+      note: resumeNote.trim(),
       workingDirectory,
     };
   }
@@ -258,6 +261,7 @@ export function AgentsView({
     try {
       const plan = await agents.savePlan(nativeResumeDraft(resumeDefinition));
       setResumeNotice(plan.label);
+      setResumeNote("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -620,6 +624,22 @@ export function AgentsView({
               </span>
             )}
           </label>
+          <label className="field agents-resume__note">
+            <span className="field__label">{t("agents.resume.note")}</span>
+            <input
+              className="input"
+              value={resumeNote}
+              onChange={(event) => {
+                setResumeNote(event.currentTarget.value);
+                setResumeNotice(null);
+              }}
+              placeholder={t("agents.resume.note.placeholder")}
+              maxLength={200}
+            />
+            <span className="agents-field-hint">
+              {t("agents.resume.note.hint")}
+            </span>
+          </label>
           <div className="agents-resume__actions">
             <button
               type="button"
@@ -895,6 +915,9 @@ export function AgentsView({
               <article className="agent-plan-row" key={plan.id}>
                 <div className="agent-plan-row__main">
                   <strong>{plan.label}</strong>
+                  {plan.note && (
+                    <span className="agent-plan-row__note">{plan.note}</span>
+                  )}
                   <span className="mono">{plan.workingDirectory}</span>
                   <small>
                     {plan.resumeSessionId

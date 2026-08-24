@@ -112,6 +112,7 @@ describe("agent session transport", () => {
       executable: id,
       arguments: [],
       resumeSessionId: null,
+      note: "",
       workingDirectory: "/work",
     }));
 

@@ -304,6 +304,16 @@
   color: var(--text-faint);
 }
 
+/* The human-readable memo stands out from the path/command metadata: a touch
+   larger, accented, and allowed to wrap so the whole note stays readable. */
+.agent-plan-row__main .agent-plan-row__note {
+  color: var(--accent);
+  font-size: var(--text-xs);
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+}
+
 .agents-workspace__error {
   display: block;
   margin-top: var(--space-2);
