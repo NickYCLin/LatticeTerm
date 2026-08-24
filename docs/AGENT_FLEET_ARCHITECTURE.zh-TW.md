@@ -18,9 +18,9 @@ flowchart LR
   REG --> PTY["portable-pty"]
   PTY --> A["Codex / Claude / Gemini / ..."]
   PTY --> C["Custom CLI"]
-  A -->|"tool hook"] REP["LatticeTerm Reporter CLI"]
-  C -->|"custom hook"] REP
-  REP -->|"loopback + session token"] REG
+  A -->|"tool hook"| REP["LatticeTerm Reporter CLI"]
+  C -->|"custom hook"| REP
+  REP -->|"loopback + session token"| REG
   REG -->|"data / state / closed events"| UI
 ```
 
