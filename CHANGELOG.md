@@ -4,6 +4,15 @@
 
 ---
 
+## [0.16.0](https://github.com/NickYCLin/lattice-term/compare/v0.15.0...v0.16.0) (2026-08-24)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** 一般啟動的保存項目也能加備註 ([7580140](https://github.com/NickYCLin/lattice-term/commit/75801404a90c77b9120c7ecd3e9b48c403cdd557))
+* **Agent Fleet:** 執行中的分頁可以就地改名 ([f28f546](https://github.com/NickYCLin/lattice-term/commit/f28f546b5da598d268bdaded4e9ee1759064d947))
+* **SSH:** 從 SSH 分頁一鍵開啟 SFTP 檔案總管 ([3bc1aa8](https://github.com/NickYCLin/lattice-term/commit/3bc1aa886db6b17abaea52ea171a9345584fa670))
+
 ## [0.15.0](https://github.com/NickYCLin/lattice-term/compare/v0.14.0...v0.15.0) (2026-08-24)
 
 
