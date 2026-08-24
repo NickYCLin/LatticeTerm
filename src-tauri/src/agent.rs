@@ -1800,10 +1800,16 @@ session id: 0199aa11-"
 
         let (program, prefix) = launch_parts(&shim);
         assert!(
-            program.to_string_lossy().to_ascii_lowercase().contains("cmd"),
+            program
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("cmd"),
             "a .cmd shim must launch through the command processor"
         );
-        assert_eq!(prefix.first().map(|arg| arg.to_string_lossy().to_string()), Some("/c".to_string()));
+        assert_eq!(
+            prefix.first().map(|arg| arg.to_string_lossy().to_string()),
+            Some("/c".to_string())
+        );
 
         // A real .exe launches directly, with no wrapper.
         let exe = dir.path().join("faux-agent.exe");
