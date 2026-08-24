@@ -16,7 +16,7 @@ import {
   type ActivityEntry,
   type ActivityKind,
 } from "../domain/activity";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/context";
 import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import { ActivityIcon, ExportIcon, SearchIcon, TrashIcon } from "../components/icons";

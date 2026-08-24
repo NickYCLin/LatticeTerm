@@ -8,7 +8,7 @@
 
 import type { SshApi } from "../app/useSshSessions";
 import type { ThemeId } from "../app/themes";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/context";
 import { TerminalPane } from "../components/terminal/TerminalPane";
 import { EmptyState } from "../components/common/Callout";
 import { CloseIcon, TerminalIcon } from "../components/icons";

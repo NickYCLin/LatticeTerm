@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { KeyboardEvent, MouseEvent, WheelEvent } from "react";
 import type { VncApi, VncInput, VncSessionSummary } from "../../app/useVncSessions";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { ScreenShareIcon } from "../icons";
 import { CanvasCaptureControls } from "../remote/CanvasCaptureControls";
 

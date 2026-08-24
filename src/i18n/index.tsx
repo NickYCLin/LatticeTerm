@@ -6,28 +6,11 @@
  * translation is a build error instead of a blank label.
  */
 
-import { createContext, useCallback, useContext, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
-import { zhTW, type MessageKey, type Messages } from "./messages/zh-TW";
-import { en } from "./messages/en";
-
-export type Locale = "zh-TW" | "en";
-
-export const defaultLocale: Locale = "zh-TW";
-
-export const localeCatalog: {
-  id: Locale;
-  /** Written in its own language, so it is readable whatever is selected. */
-  label: string;
-  tag: string;
-}[] = [
-  { id: "zh-TW", label: "繁體中文", tag: "zh-Hant-TW" },
-  { id: "en", label: "English", tag: "en" },
-];
-
-const catalogues: Record<Locale, Messages> = { "zh-TW": zhTW, en };
-
-export type TranslateValues = Record<string, string | number>;
+import { catalogues, defaultLocale, localeCatalog, type Locale } from "./catalog";
+import { I18nContext, type I18nValue, type TranslateValues } from "./context";
+import { zhTW, type MessageKey } from "./messages/zh-TW";
 
 /** Replaces `{name}` placeholders; unknown placeholders are left untouched. */
 function interpolate(template: string, values?: TranslateValues): string {
@@ -36,15 +19,6 @@ function interpolate(template: string, values?: TranslateValues): string {
     key in values ? String(values[key]) : match,
   );
 }
-
-export interface I18nValue {
-  locale: Locale;
-  t: (key: MessageKey, values?: TranslateValues) => string;
-  /** Locale tag for `Intl`, so dates and numbers follow the same choice. */
-  tag: string;
-}
-
-const I18nContext = createContext<I18nValue | null>(null);
 
 export function I18nProvider({
   locale,
@@ -72,13 +46,3 @@ export function I18nProvider({
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
-
-export function useI18n(): I18nValue {
-  const value = useContext(I18nContext);
-  if (!value) {
-    throw new Error("useI18n must be used inside I18nProvider");
-  }
-  return value;
-}
-
-export type { MessageKey, Messages };

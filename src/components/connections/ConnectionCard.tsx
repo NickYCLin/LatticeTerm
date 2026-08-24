@@ -12,7 +12,7 @@ import {
   findProtocol,
   type ConnectionProfile,
 } from "../../domain/connection";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { EnvironmentBadge, ProtocolTile, TagChip } from "../common/Badge";
 import {
   DuplicateIcon,

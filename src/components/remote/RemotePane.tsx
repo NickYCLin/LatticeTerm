@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { RemoteSessionSummary } from "../../app/useRemoteSessions";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { ScreenShareIcon, ShieldIcon } from "../icons";
 import { CanvasCaptureControls } from "./CanvasCaptureControls";
 

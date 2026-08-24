@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { connectionTarget, type ConnectionProfile } from "../../domain/connection";
 import { matchesSearch } from "../../domain/query";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { ProtocolTile } from "../common/Badge";
 import { Kbd } from "../common/Callout";
 import { SearchIcon } from "../icons";

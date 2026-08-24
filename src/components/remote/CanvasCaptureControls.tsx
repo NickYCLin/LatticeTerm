@@ -6,7 +6,7 @@ import {
   preferredRecordingMimeType,
   recordingExtension,
 } from "../../domain/capture";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { AlertIcon, CameraIcon, RecordIcon, StopIcon } from "../icons";
 
 function download(blob: Blob, filename: string) {

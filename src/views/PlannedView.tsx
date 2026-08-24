@@ -7,8 +7,8 @@
  */
 
 import type { ReactNode } from "react";
-import { useI18n } from "../i18n";
-import type { MessageKey } from "../i18n";
+import { useI18n } from "../i18n/context";
+import type { MessageKey } from "../i18n/context";
 import { Chip } from "../components/common/Badge";
 import { Callout } from "../components/common/Callout";
 

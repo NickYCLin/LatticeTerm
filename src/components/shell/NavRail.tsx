@@ -7,7 +7,7 @@
  */
 
 import { navigationItems, type NavigationItem, type ViewId } from "../../app/navigation";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 
 export function NavRail({
   current,

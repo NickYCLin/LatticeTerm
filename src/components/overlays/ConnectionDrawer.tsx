@@ -34,7 +34,7 @@ import {
   type Protocol,
   type ValidationErrors,
 } from "../../domain/connection";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { Chip, EnvironmentBadge, ProtocolTile } from "../common/Badge";
 import { Callout } from "../common/Callout";
 import { AlertIcon, CheckIcon, CloseIcon } from "../icons";

@@ -19,8 +19,8 @@ import {
   type ConnectionProfile,
 } from "../../domain/connection";
 import type { ConnectOutcome, SshApi } from "../../app/useSshSessions";
-import { useI18n } from "../../i18n";
-import type { MessageKey } from "../../i18n";
+import { useI18n } from "../../i18n/context";
+import type { MessageKey } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { HostFingerprintDialog } from "../overlays/HostFingerprintDialog";
 import { HostKeyChangedDialog } from "../overlays/HostKeyChangedDialog";

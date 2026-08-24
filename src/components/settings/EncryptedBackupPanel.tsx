@@ -9,7 +9,7 @@ import {
   restoreEncryptedBackup,
   type EncryptedBackupRestore,
 } from "../../app/encryptedBackup";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { ConfirmDialog } from "../overlays/ConfirmDialog";
 
@@ -215,17 +215,31 @@ export function EncryptedBackupPanel({
           </p>
         </div>
         <div className="dialog__stack">
-          <label className="field">
+          <div className="field">
             <span className="field__label">{t("settings.backup.file")}</span>
             <input
               ref={fileRef}
-              className="input"
+              id="encrypted-backup-file"
+              className="visually-hidden"
               type="file"
               accept={BACKUP_EXTENSION}
               disabled={!backendAvailable}
               onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
             />
-          </label>
+            <div className="backup-file-picker">
+              <button
+                type="button"
+                className="button button--secondary"
+                disabled={!backendAvailable}
+                onClick={() => fileRef.current?.click()}
+              >
+                {t("settings.backup.fileChoose")}
+              </button>
+              <span className="backup-file-picker__name mono" title={selectedFile?.name}>
+                {selectedFile?.name ?? t("settings.backup.fileNone")}
+              </span>
+            </div>
+          </div>
           <label className="field">
             <span className="field__label">{t("settings.backup.password")}</span>
             <input

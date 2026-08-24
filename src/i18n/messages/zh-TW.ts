@@ -412,6 +412,8 @@ export const zhTW = {
   "settings.backup.restore.body":
     "還原會完整取代本機連線、主機信任、Agent 工作區與可攜式設定。開始前請停止所有 SSH 通道。",
   "settings.backup.file": "備份檔案",
+  "settings.backup.fileChoose": "選擇備份檔案",
+  "settings.backup.fileNone": "尚未選擇檔案",
   "settings.backup.restoring": "正在驗證並還原…",
   "settings.backup.restore.action": "還原備份",
   "settings.backup.confirm.title": "取代目前的本機資料？",

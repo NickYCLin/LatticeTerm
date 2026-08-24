@@ -12,7 +12,7 @@ import {
   type Environment,
   type Protocol,
 } from "../../domain/connection";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import {
   DesktopIcon,
   ScreenShareIcon,

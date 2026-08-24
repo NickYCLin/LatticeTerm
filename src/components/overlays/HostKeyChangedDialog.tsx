@@ -10,7 +10,7 @@
 import { useState } from "react";
 import type { HostFingerprint } from "../../domain/security";
 import { hostTargetKey } from "../../domain/security";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { AlertIcon, CloseIcon } from "../icons";
 
 export function HostKeyChangedDialog({

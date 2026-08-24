@@ -20,7 +20,7 @@ import {
   isValidHost,
   type HostKeyRecord,
 } from "../domain/security";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/context";
 import {
   CheckIcon,
   CloseIcon,

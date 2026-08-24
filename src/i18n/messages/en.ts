@@ -429,6 +429,8 @@ export const en: Messages = {
   "settings.backup.restore.body":
     "Restore replaces local connections, trusted hosts, Agent workspace, and portable settings. Stop every SSH tunnel before starting.",
   "settings.backup.file": "Backup file",
+  "settings.backup.fileChoose": "Choose backup file",
+  "settings.backup.fileNone": "No file selected",
   "settings.backup.restoring": "Validating and restoring…",
   "settings.backup.restore.action": "Restore backup",
   "settings.backup.confirm.title": "Replace the current local data?",

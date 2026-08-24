@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { RemoteApi } from "../../app/useRemoteSessions";
 import { connectionTarget, type ConnectionProfile } from "../../domain/connection";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { CloseIcon, ScreenShareIcon, ShieldIcon } from "../icons";
 

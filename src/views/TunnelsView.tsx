@@ -17,7 +17,7 @@ import {
 } from "../domain/tunnel";
 import { useTunnels } from "../app/useTunnels";
 import type { ConnectionProfile } from "../domain/connection";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/context";
 import { Chip } from "../components/common/Badge";
 import { Callout } from "../components/common/Callout";
 import {

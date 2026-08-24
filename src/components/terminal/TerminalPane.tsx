@@ -12,7 +12,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { SshApi } from "../../app/useSshSessions";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import type { ThemeId } from "../../app/themes";
 import { TerminalImeFallback } from "./terminalImeFallback";
 

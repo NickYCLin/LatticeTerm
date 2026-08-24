@@ -26,7 +26,7 @@ import {
   TrashIcon,
   TransferIcon,
 } from "../components/icons";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/context";
 import type { MessageKey } from "../i18n/messages/zh-TW";
 
 function stateKey(session: AgentSessionSummary): MessageKey {

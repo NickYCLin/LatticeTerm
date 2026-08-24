@@ -14,8 +14,9 @@ import type {
 import { themeCatalog } from "../app/themes";
 import type { RuntimeState } from "../app/useRuntimeSummary";
 import type { StorageState } from "../app/useStorageStatus";
-import { localeCatalog, useI18n, type Locale } from "../i18n";
-import type { MessageKey } from "../i18n";
+import { useI18n } from "../i18n/context";
+import { localeCatalog, type Locale } from "../i18n/catalog";
+import type { MessageKey } from "../i18n/context";
 import { Chip } from "../components/common/Badge";
 import { Callout } from "../components/common/Callout";
 import { CheckIcon } from "../components/icons";

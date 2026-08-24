@@ -180,6 +180,22 @@
   color: var(--danger);
 }
 
+.backup-file-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.backup-file-picker__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .field-grid {
   display: grid;
   grid-template-columns: 1fr 8rem;

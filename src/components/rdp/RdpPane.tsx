@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { KeyboardEvent, MouseEvent, WheelEvent } from "react";
 import type { RdpApi, RdpInput, RdpSessionSummary } from "../../app/useRdpSessions";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { ScreenShareIcon, ShieldIcon } from "../icons";
 import { CanvasCaptureControls } from "../remote/CanvasCaptureControls";
 

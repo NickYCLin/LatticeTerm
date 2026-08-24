@@ -15,7 +15,7 @@ import {
   usagePercent,
   type MetricsState,
 } from "../../domain/metrics";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { ClockIcon, CpuIcon, DiskIcon, MemoryIcon } from "../icons";
 import type { ReactNode } from "react";

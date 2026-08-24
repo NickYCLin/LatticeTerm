@@ -10,7 +10,7 @@ import type {
   SftpEntry,
   SftpSessionSummary,
 } from "../../app/useSftpSessions";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { formatBytes } from "../../domain/metrics";
 import { Callout } from "../common/Callout";
 import {

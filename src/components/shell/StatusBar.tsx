@@ -6,7 +6,7 @@
  * Both come from the running build rather than from hand-written copy.
  */
 
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { Kbd } from "../common/Callout";
 import type { StorageState } from "../../app/useStorageStatus";
 

@@ -17,8 +17,8 @@ import {
 import type { SortOrder } from "../domain/query";
 import { parseAndValidateImport, serializeProfiles } from "../domain/export";
 import type { ImportIssue } from "../domain/export";
-import { useI18n } from "../i18n";
-import type { MessageKey } from "../i18n";
+import { useI18n } from "../i18n/context";
+import type { MessageKey } from "../i18n/context";
 import { ConnectionCard } from "../components/connections/ConnectionCard";
 import { Callout, EmptyState } from "../components/common/Callout";
 import {

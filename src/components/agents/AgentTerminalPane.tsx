@@ -4,7 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { AgentApi } from "../../app/useAgentSessions";
 import type { ThemeId } from "../../app/themes";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { TerminalImeFallback } from "../terminal/terminalImeFallback";
 
 function themeColours(): Record<string, string> {

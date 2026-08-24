@@ -3,7 +3,7 @@ import type { FormEvent } from "react";
 import type { SensitiveClipboardClearChoice } from "../../app/preferences";
 import { copySensitiveText } from "../../app/sensitiveClipboard";
 import type { RemoteHostApi } from "../../app/useRemoteHost";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { CloseIcon, CopyIcon, ScreenShareIcon, ShieldIcon } from "../icons";
 

@@ -9,7 +9,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import type { VaultApi } from "../../app/useVault";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { Chip } from "../common/Badge";
 import { LockIcon, ShieldIcon, UnlockIcon } from "../icons";
@@ -54,6 +54,11 @@ export function EncryptedVaultPanel({ vault }: { vault: VaultApi }) {
       setNextPassword("");
       setNotice(t("vault.encrypted.changed"));
     }
+  }
+
+  function lockVault() {
+    setNotice(null);
+    void vault.lock();
   }
 
   if (!status) {
@@ -181,7 +186,7 @@ export function EncryptedVaultPanel({ vault }: { vault: VaultApi }) {
               type="button"
               className="button button--secondary"
               disabled={vault.busy}
-              onClick={() => void vault.lock()}
+              onClick={lockVault}
             >
               <LockIcon size={14} />
               {t("vault.encrypted.lock")}

@@ -6,7 +6,7 @@ import {
   type ConnectionProfile,
 } from "../../domain/connection";
 import type { HostFingerprint } from "../../domain/security";
-import { useI18n, type MessageKey } from "../../i18n";
+import { useI18n, type MessageKey } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import {
   CheckIcon,

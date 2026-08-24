@@ -1,7 +1,7 @@
 /** Header for the workspace column: area name, context and area actions. */
 
 import type { ReactNode } from "react";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { SidebarIcon } from "../icons";
 
 export function ViewHeader({

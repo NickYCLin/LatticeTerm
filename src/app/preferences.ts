@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { defaultLocale, localeCatalog, type Locale } from "../i18n";
+import { defaultLocale, localeCatalog, type Locale } from "../i18n/catalog";
 import { resolveTheme, themeIds, type ThemeChoice, type ThemeId } from "./themes";
 
 export type DensityChoice = "comfortable" | "compact";

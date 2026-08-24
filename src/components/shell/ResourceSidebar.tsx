@@ -16,7 +16,7 @@ import {
   type Protocol,
 } from "../../domain/connection";
 import type { ConnectionFilter, ConnectionGroup } from "../../domain/query";
-import { useI18n } from "../../i18n";
+import { useI18n } from "../../i18n/context";
 import { ProtocolIcon } from "../common/Badge";
 import { CloseIcon, SearchIcon, StarIcon } from "../icons";
 

@@ -11,7 +11,7 @@ import type { AgentApi } from "../app/useAgentSessions";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
-import { useI18n } from "../i18n";
+import { useI18n } from "../i18n/context";
 import { Callout, EmptyState } from "../components/common/Callout";
 import {
   AgentIcon,
