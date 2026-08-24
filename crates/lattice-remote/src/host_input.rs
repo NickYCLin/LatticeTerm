@@ -167,6 +167,11 @@ fn map_keysym(keysym: u32) -> Option<Key> {
         0xff55 => Key::PageUp,
         0xff56 => Key::PageDown,
         0xff57 => Key::End,
+        // enigo exposes the same physical key as Help on macOS; Insert is
+        // only available on its Linux and Windows backends.
+        #[cfg(target_os = "macos")]
+        0xff63 => Key::Help,
+        #[cfg(not(target_os = "macos"))]
         0xff63 => Key::Insert,
         0xffff => Key::Delete,
         0xffe1 | 0xffe2 => Key::Shift,
@@ -226,6 +231,14 @@ mod tests {
             map_keysym(0x0100_0000 + 0x4e2d),
             Some(Key::Unicode('中')),
         ));
+    }
+
+    #[test]
+    fn maps_insert_to_the_platform_equivalent() {
+        #[cfg(target_os = "macos")]
+        assert!(matches!(map_keysym(0xff63), Some(Key::Help)));
+        #[cfg(not(target_os = "macos"))]
+        assert!(matches!(map_keysym(0xff63), Some(Key::Insert)));
     }
 
     #[test]
