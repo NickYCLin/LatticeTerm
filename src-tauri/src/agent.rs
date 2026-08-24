@@ -853,7 +853,12 @@ fn is_executable(path: &Path) -> bool {
             .extension()
             .and_then(OsStr::to_str)
             .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("com")
+                // .cmd/.bat cover npm/pnpm/yarn global shims — how Claude Code,
+                // Gemini CLI and most Node-based agents land on Windows PATH.
+                extension.eq_ignore_ascii_case("exe")
+                    || extension.eq_ignore_ascii_case("com")
+                    || extension.eq_ignore_ascii_case("cmd")
+                    || extension.eq_ignore_ascii_case("bat")
             })
 }
 
@@ -869,13 +874,17 @@ fn executable_extensions(command: &OsStr) -> Vec<OsString> {
             return vec![OsString::new()];
         }
         let mut values = vec![OsString::new()];
-        let path_ext = std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE"));
+        let path_ext =
+            std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
         values.extend(
             path_ext
                 .to_string_lossy()
                 .split(';')
                 .filter(|value| {
-                    value.eq_ignore_ascii_case(".COM") || value.eq_ignore_ascii_case(".EXE")
+                    value.eq_ignore_ascii_case(".COM")
+                        || value.eq_ignore_ascii_case(".EXE")
+                        || value.eq_ignore_ascii_case(".CMD")
+                        || value.eq_ignore_ascii_case(".BAT")
                 })
                 .map(OsString::from),
         );
@@ -914,6 +923,37 @@ fn find_executable(command: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Resolves how to actually launch a detected executable.
+///
+/// Windows cannot `CreateProcess` a `.cmd`/`.bat` shim directly, so those are
+/// routed through the command processor (`cmd.exe /c <script>`). The verbatim
+/// `\\?\` prefix that `canonicalize` adds is stripped first because cmd.exe
+/// does not understand extended-length paths. Everything else launches as-is.
+#[cfg(windows)]
+fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
+    let is_script = executable
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        });
+    if !is_script {
+        return (executable.as_os_str().to_os_string(), Vec::new());
+    }
+    let raw = executable.to_string_lossy();
+    let plain = raw.strip_prefix(r"\\?\").unwrap_or(&raw);
+    let comspec = std::env::var_os("ComSpec").unwrap_or_else(|| OsString::from("cmd.exe"));
+    (
+        comspec,
+        vec![OsString::from("/c"), OsString::from(plain.to_string())],
+    )
+}
+
+#[cfg(not(windows))]
+fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
+    (executable.as_os_str().to_os_string(), Vec::new())
 }
 
 fn validated_size(cols: u32, rows: u32) -> Result<PtySize, String> {
@@ -1284,7 +1324,11 @@ pub fn launch(
     let pair = native_pty_system()
         .openpty(size)
         .map_err(|error| format!("Cannot create a local terminal: {error}"))?;
-    let mut command = CommandBuilder::new(&executable);
+    let (program, prefix_args) = launch_parts(&executable);
+    let mut command = CommandBuilder::new(&program);
+    for prefix in &prefix_args {
+        command.arg(prefix);
+    }
     command.args(arguments);
     command.cwd(&working_directory);
     command.env("TERM", "xterm-256color");
@@ -1709,6 +1753,64 @@ session id: 0199aa11-"
         )
         .unwrap_err()
         .contains("too long"));
+    }
+
+    #[test]
+    #[ignore = "depends on the host having claude installed on PATH"]
+    fn claude_is_detected_on_this_host() {
+        let claude = catalog()
+            .into_iter()
+            .find(|agent| agent.id == "claude")
+            .expect("claude is in the catalog");
+        println!("claude installed_path = {:?}", claude.installed_path);
+        assert!(claude.installed, "claude should be detected on PATH");
+    }
+
+    #[test]
+    #[ignore = "spawns the real claude CLI; run manually on a host that has it"]
+    fn claude_shim_launches_via_launch_parts() {
+        // Proves the resolved .cmd shim runs when driven through launch_parts.
+        // Uses a plain captured process (the PTY layer is portable_pty's job).
+        let executable = find_executable("claude").expect("claude on PATH");
+        let (program, prefix_args) = launch_parts(&executable);
+
+        let mut command = std::process::Command::new(&program);
+        command.args(&prefix_args);
+        command.arg("--version");
+        let output = command.output().expect("run claude --version");
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        println!("program={program:?} prefix={prefix_args:?} -> {text}");
+        assert!(
+            output.status.success() && text.chars().any(|character| character.is_ascii_digit()),
+            "expected a version string, got status={:?} out={text:?}",
+            output.status
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn detects_and_wraps_windows_script_shims() {
+        // npm/pnpm global installs land as .cmd shims (e.g. claude.cmd).
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("faux-agent.cmd");
+        std::fs::write(&shim, "@echo off\r\n").unwrap();
+
+        assert!(is_executable(&shim), ".cmd shims must count as executable");
+
+        let (program, prefix) = launch_parts(&shim);
+        assert!(
+            program.to_string_lossy().to_ascii_lowercase().contains("cmd"),
+            "a .cmd shim must launch through the command processor"
+        );
+        assert_eq!(prefix.first().map(|arg| arg.to_string_lossy().to_string()), Some("/c".to_string()));
+
+        // A real .exe launches directly, with no wrapper.
+        let exe = dir.path().join("faux-agent.exe");
+        std::fs::write(&exe, "MZ").unwrap();
+        let (exe_program, exe_prefix) = launch_parts(&exe);
+        assert_eq!(exe_program, exe.as_os_str());
+        assert!(exe_prefix.is_empty());
     }
 
     #[test]
