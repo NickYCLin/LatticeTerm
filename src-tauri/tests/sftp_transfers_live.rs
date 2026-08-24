@@ -173,6 +173,74 @@ async fn a_dropped_local_path_streams_to_the_remote_directory() {
 
 #[tokio::test]
 #[ignore = "needs the throwaway SSH container"]
+async fn a_dropped_file_that_changes_size_is_not_published() {
+    let sessions = Arc::new(SftpRegistry::new());
+    let session_id = connected_session(&sessions).await;
+    let transfers = Arc::new(TransferRegistry::new());
+    let sink = Arc::new(Collector::default());
+    let local_dir = temp_dir("changing-path-upload");
+    let name = format!("latticeterm-changing-{}.bin", std::process::id());
+    let local_path = local_dir.join(&name);
+    let local_file = std::fs::File::create(&local_path).unwrap();
+    local_file.set_len(64 * 1024 * 1024).unwrap();
+    drop(local_file);
+
+    let upload = start_upload_from_path(
+        Arc::clone(&transfers),
+        &sessions,
+        Arc::clone(&sink) as Arc<dyn TransferSink>,
+        &session_id,
+        "/config",
+        local_path.clone(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    // The native upload has already opened this exact file. Truncating the
+    // same inode must make the transfer fail instead of publishing a shorter
+    // file under the original advertised size.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&local_path)
+        .unwrap()
+        .set_len(1)
+        .unwrap();
+
+    let mut failed = None;
+    for _ in 0..600 {
+        let state = transfers
+            .list()
+            .into_iter()
+            .find(|state| state.transfer_id == upload.transfer_id)
+            .unwrap();
+        match state.state {
+            "error" => {
+                failed = Some(state);
+                break;
+            }
+            "done" | "cancelled" => {
+                panic!("changed path upload ended unexpectedly: {:?}", state.detail)
+            }
+            _ => tokio::time::sleep(Duration::from_millis(50)).await,
+        }
+    }
+    let failed = failed.expect("changed path upload did not fail within 30 seconds");
+    assert!(failed
+        .detail
+        .as_deref()
+        .unwrap_or_default()
+        .contains("changed size"));
+
+    let remote_path = format!("/config/{name}");
+    assert!(read_file(&sessions, &session_id, &remote_path)
+        .await
+        .is_err());
+    std::fs::remove_dir_all(local_dir).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "needs the throwaway SSH container"]
 async fn a_file_past_the_old_cap_survives_the_round_trip() {
     let sessions = Arc::new(SftpRegistry::new());
     let session_id = connected_session(&sessions).await;

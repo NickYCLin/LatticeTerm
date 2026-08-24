@@ -515,7 +515,15 @@ pub async fn start_upload_from_path(
     overwrite: bool,
 ) -> Result<TransferState, String> {
     let parent = validate_path(parent)?;
-    let metadata = std::fs::metadata(&local_path)
+    // Open first, then read metadata from that exact handle. The path may be
+    // replaced between the drop event and this command; keeping one handle
+    // ensures the advertised size and streamed bytes refer to the same file.
+    let mut local = tokio::fs::File::open(&local_path)
+        .await
+        .map_err(|error| format!("cannot open the dropped file: {error}"))?;
+    let metadata = local
+        .metadata()
+        .await
         .map_err(|error| format!("cannot read the dropped file: {error}"))?;
     if metadata.is_dir() {
         return Err("folders cannot be uploaded yet — drop individual files".to_string());
@@ -581,9 +589,6 @@ pub async fn start_upload_from_path(
     let task_entry = Arc::clone(&entry);
     tokio::spawn(async move {
         let result: Result<(), String> = async {
-            let mut local = tokio::fs::File::open(&local_path)
-                .await
-                .map_err(|error| format!("cannot open the dropped file: {error}"))?;
             let mut buffer = vec![0u8; REMOTE_CHUNK];
             let mut done: u64 = 0;
             let mut last_emitted: u64 = 0;
@@ -598,6 +603,8 @@ pub async fn start_upload_from_path(
                 if read == 0 {
                     break;
                 }
+                let next = next_upload_size(done, total, read)
+                    .map_err(|_| "the dropped file changed size while it was being uploaded")?;
                 {
                     let mut slot = task_entry.upload.lock().await;
                     let file = slot
@@ -607,12 +614,14 @@ pub async fn start_upload_from_path(
                         .await
                         .map_err(|error| error.to_string())?;
                 }
-                done += read as u64;
+                done = next;
                 if done - last_emitted >= EMIT_EVERY_BYTES {
                     last_emitted = done;
                     task_entry.update(sink.as_ref(), |state| state.bytes_done = done);
                 }
             }
+            require_complete_upload(done, total)
+                .map_err(|_| "the dropped file changed size while it was being uploaded")?;
             {
                 let mut slot = task_entry.upload.lock().await;
                 if let Some(mut file) = slot.take() {
