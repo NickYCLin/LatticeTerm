@@ -14,11 +14,11 @@
 use base64::Engine;
 use latticeterm_lib::hostkeys::HostTrustStore;
 use latticeterm_lib::sftp::{
-    connect, read_file, write_file, SftpConnectOutcome, SftpConnectRequest, SftpRegistry,
+    connect, read_file, remove, write_file, SftpConnectOutcome, SftpConnectRequest, SftpRegistry,
 };
 use latticeterm_lib::sftp_transfers::{
-    begin_upload, cancel, finish_upload, start_download, upload_chunk, TransferRegistry,
-    TransferSink, TransferState, UploadPlan,
+    begin_upload, cancel, finish_upload, start_download, start_upload_from_path, upload_chunk,
+    TransferRegistry, TransferSink, TransferState, UploadPlan,
 };
 use latticeterm_lib::ssh::AuthMethod;
 use std::sync::{Arc, Mutex};
@@ -82,7 +82,8 @@ fn payload() -> Vec<u8> {
 }
 
 async fn connected_session(registry: &Arc<SftpRegistry>) -> String {
-    let mut store = HostTrustStore::open(&temp_dir("trust")).unwrap();
+    let trust_dir = temp_dir("trust");
+    let mut store = HostTrustStore::open(&trust_dir).unwrap();
     let first = connect(Arc::clone(registry), None, request()).await;
     let SftpConnectOutcome::HostUnknown {
         host,
@@ -96,11 +97,78 @@ async fn connected_session(registry: &Arc<SftpRegistry>) -> String {
     let record = store
         .trust(&host, port, &algorithm, &fingerprint, 1)
         .unwrap();
+    drop(store);
+    std::fs::remove_dir_all(trust_dir).unwrap();
 
     match connect(Arc::clone(registry), Some(record), request()).await {
         SftpConnectOutcome::Connected { session } => session.session_id,
         other => panic!("expected a session, got {other:?}"),
     }
+}
+
+#[tokio::test]
+#[ignore = "needs the throwaway SSH container"]
+async fn a_dropped_local_path_streams_to_the_remote_directory() {
+    let sessions = Arc::new(SftpRegistry::new());
+    let session_id = connected_session(&sessions).await;
+    let transfers = Arc::new(TransferRegistry::new());
+    let sink = Arc::new(Collector::default());
+    let local_dir = temp_dir("path-upload");
+    let name = format!("latticeterm-dropped-{}.bin", std::process::id());
+    let local_path = local_dir.join(&name);
+    let original = (0..(2 * 1024 * 1024 + 17))
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    std::fs::write(&local_path, &original).unwrap();
+
+    let upload = start_upload_from_path(
+        Arc::clone(&transfers),
+        &sessions,
+        Arc::clone(&sink) as Arc<dyn TransferSink>,
+        &session_id,
+        "/config",
+        local_path.clone(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(upload.name, name);
+    assert_eq!(upload.local_path.as_deref(), local_path.to_str());
+
+    let mut finished = None;
+    for _ in 0..600 {
+        let state = transfers
+            .list()
+            .into_iter()
+            .find(|state| state.transfer_id == upload.transfer_id)
+            .unwrap();
+        match state.state {
+            "done" => {
+                finished = Some(state);
+                break;
+            }
+            "error" | "cancelled" => panic!("path upload ended early: {:?}", state.detail),
+            _ => tokio::time::sleep(Duration::from_millis(50)).await,
+        }
+    }
+    let finished = finished.expect("path upload did not finish within 30 seconds");
+    assert_eq!(finished.bytes_done, original.len() as u64);
+
+    let remote_path = format!("/config/{name}");
+    let returned = read_file(&sessions, &session_id, &remote_path)
+        .await
+        .unwrap();
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(returned)
+            .unwrap(),
+        original
+    );
+
+    remove(&sessions, &session_id, &remote_path, false)
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(local_dir).unwrap();
 }
 
 #[tokio::test]
