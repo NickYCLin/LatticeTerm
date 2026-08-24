@@ -37,7 +37,6 @@ function baseName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-
 export function SftpPane({
   session,
   sftp,
@@ -55,6 +54,7 @@ export function SftpPane({
   const [problem, setProblem] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const uploadRef = useRef<HTMLInputElement>(null);
+  const refreshedPathUploads = useRef(new Set<string>());
   const list = sftp.list;
   const sessionTransfers = Object.values(sftp.transfers)
     .filter((transfer) => transfer.sessionId === session.sessionId)
@@ -77,6 +77,35 @@ export function SftpPane({
   useEffect(() => {
     void open(session.currentPath);
   }, [list, session.currentPath, session.sessionId]);
+
+  // A path upload returns as soon as it enters the native queue. Refresh only
+  // after its completion event, otherwise the visible target does not exist
+  // yet and a fast drop appears to have done nothing.
+  useEffect(() => {
+    if (!directory) return;
+    const currentPath = directory.path;
+    const arrivals = sessionTransfers.filter(
+      (transfer) =>
+        transfer.kind === "upload" &&
+        transfer.localPath !== null &&
+        transfer.state === "done" &&
+        parentPath(transfer.remotePath) === currentPath &&
+        !refreshedPathUploads.current.has(transfer.transferId),
+    );
+    if (arrivals.length === 0) return;
+    for (const transfer of arrivals) {
+      refreshedPathUploads.current.add(transfer.transferId);
+    }
+    void list(session.sessionId, currentPath)
+      .then((next) => {
+        setDirectory((current) =>
+          current?.path === currentPath ? next : current,
+        );
+      })
+      .catch((reason: unknown) => {
+        setProblem(reason instanceof Error ? reason.message : String(reason));
+      });
+  }, [directory?.path, list, session.sessionId, sessionTransfers]);
 
   async function mutate(operation: () => Promise<void>) {
     setBusy(true);
@@ -164,7 +193,6 @@ export function SftpPane({
   async function dropFiles(paths: string[]) {
     if (!directory || paths.length === 0) return;
     setProblem(null);
-    let uploaded = false;
     for (const path of paths) {
       const name = baseName(path);
       const existing = directory.entries.find((entry) => entry.name === name);
@@ -182,13 +210,10 @@ export function SftpPane({
           path,
           Boolean(existing),
         );
-        uploaded = true;
       } catch (reason) {
         setProblem(reason instanceof Error ? reason.message : String(reason));
       }
     }
-    // Show the arrivals once the queue has them; progress lands in the strip.
-    if (uploaded) await open(directory.path);
   }
 
   // OS drag-and-drop is delivered by Tauri as file paths (the webview's own

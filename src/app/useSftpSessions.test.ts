@@ -4,6 +4,7 @@ import {
   dismissSftpTransfer,
   encodeSftpPayload,
   reconcileSftpTransferSnapshot,
+  reconcileSftpTransferUpdate,
   SFTP_MAX_TRANSFER_BYTES,
   streamSftpUpload,
   type SftpTransfer,
@@ -84,6 +85,21 @@ describe("SFTP IPC payloads", () => {
 });
 
 describe("SFTP transfer state reconciliation", () => {
+  it("does not let a late initial response revive a completed transfer", () => {
+    const completed = transfer("fast", "done", 100);
+    const initial = transfer("fast", "running", 0);
+
+    expect(reconcileSftpTransferUpdate(completed, initial)).toEqual(completed);
+  });
+
+  it("keeps the furthest running progress regardless of arrival order", () => {
+    const newer = transfer("shared", "running", 80);
+    const older = transfer("shared", "running", 20);
+
+    expect(reconcileSftpTransferUpdate(newer, older)).toEqual(newer);
+    expect(reconcileSftpTransferUpdate(older, newer)).toEqual(newer);
+  });
+
   it("keeps newer event progress and restores snapshot-only transfers", () => {
     const result = reconcileSftpTransferSnapshot(
       { shared: transfer("shared", "running", 80) },

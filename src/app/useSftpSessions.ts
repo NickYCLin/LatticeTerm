@@ -123,15 +123,42 @@ export function reconcileSftpTransferSnapshot(
   const reconciled: Record<string, SftpTransfer> = {};
   for (const transfer of snapshot) {
     if (!dismissedTransferIds.has(transfer.transferId)) {
-      reconciled[transfer.transferId] = transfer;
+      reconciled[transfer.transferId] = reconcileSftpTransferUpdate(
+        reconciled[transfer.transferId],
+        transfer,
+      );
     }
   }
   for (const transfer of Object.values(current)) {
     if (!dismissedTransferIds.has(transfer.transferId)) {
-      reconciled[transfer.transferId] = transfer;
+      reconciled[transfer.transferId] = reconcileSftpTransferUpdate(
+        reconciled[transfer.transferId],
+        transfer,
+      );
     }
   }
   return reconciled;
+}
+
+/**
+ * Merges one asynchronous transfer update without letting a late initial
+ * response rewind a newer progress event or revive a completed transfer.
+ */
+export function reconcileSftpTransferUpdate(
+  current: SftpTransfer | undefined,
+  candidate: SftpTransfer,
+): SftpTransfer {
+  if (!current) return candidate;
+
+  const currentEnded = current.state !== "running";
+  const candidateEnded = candidate.state !== "running";
+  if (currentEnded !== candidateEnded) {
+    return currentEnded ? current : candidate;
+  }
+  if (!currentEnded && candidate.bytesDone < current.bytesDone) {
+    return current;
+  }
+  return candidate;
 }
 
 /** Calls the backend first; the interface only removes an acknowledged row. */
@@ -289,7 +316,10 @@ export function useSftpSessions(): SftpApi {
           if (dismissedTransferIds.current.has(event.payload.transferId)) return;
           setTransfers((current) => ({
             ...current,
-            [event.payload.transferId]: event.payload,
+            [event.payload.transferId]: reconcileSftpTransferUpdate(
+              current[event.payload.transferId],
+              event.payload,
+            ),
           }));
         });
         if (cancelled) {
@@ -431,7 +461,13 @@ export function useSftpSessions(): SftpApi {
         sessionId,
         remotePath,
       });
-      setTransfers((current) => ({ ...current, [transfer.transferId]: transfer }));
+      setTransfers((current) => ({
+        ...current,
+        [transfer.transferId]: reconcileSftpTransferUpdate(
+          current[transfer.transferId],
+          transfer,
+        ),
+      }));
       return transfer;
     },
     [],
@@ -454,7 +490,13 @@ export function useSftpSessions(): SftpApi {
           overwrite,
         },
       });
-      setTransfers((current) => ({ ...current, [transfer.transferId]: transfer }));
+      setTransfers((current) => ({
+        ...current,
+        [transfer.transferId]: reconcileSftpTransferUpdate(
+          current[transfer.transferId],
+          transfer,
+        ),
+      }));
       await streamSftpUpload(file, transfer.transferId, invoke);
     },
     [],
@@ -474,7 +516,13 @@ export function useSftpSessions(): SftpApi {
         localPath,
         overwrite,
       });
-      setTransfers((current) => ({ ...current, [transfer.transferId]: transfer }));
+      setTransfers((current) => ({
+        ...current,
+        [transfer.transferId]: reconcileSftpTransferUpdate(
+          current[transfer.transferId],
+          transfer,
+        ),
+      }));
       return transfer;
     },
     [],

@@ -54,7 +54,7 @@ pub struct TransferState {
     /// The file name, for display.
     pub name: String,
     pub remote_path: String,
-    /// Set for downloads: where the file is being written.
+    /// Local source for path uploads, or local destination for downloads.
     pub local_path: Option<String>,
     pub bytes_done: u64,
     pub total_bytes: Option<u64>,
@@ -538,7 +538,9 @@ pub async fn start_upload_from_path(
             .await
             .map_err(|error| error.to_string())?
     {
-        return Err(format!("'{name}' already exists here; confirm overwrite first."));
+        return Err(format!(
+            "'{name}' already exists here; confirm overwrite first."
+        ));
     }
 
     let staging_path = temporary_remote_path(&parent, "upload")?;
