@@ -4,6 +4,25 @@
 
 ---
 
+## [0.14.0](https://github.com/NickYCLin/lattice-term/compare/v0.13.8...v0.14.0) (2026-08-24)
+
+
+### 🚀 新增功能
+
+* **SFTP:** 檔案總管支援拖曳上傳 ([0828167](https://github.com/NickYCLin/lattice-term/commit/082816758c01d6eebf925092480e06a411877beb))
+* **遠端:** Lattice Remote 加上遠端滑鼠鍵盤控制 ([20cb5cc](https://github.com/NickYCLin/lattice-term/commit/20cb5ccb2e76856c0c327dd1922e7e3ecbd22301))
+
+
+### 🛠️ 問題修正
+
+* **Agent Fleet:** 偵測得到 Windows 的 .cmd/.bat 版 CLI（例如 npm 裝的 Claude Code） ([aa70459](https://github.com/NickYCLin/lattice-term/commit/aa704592e3f75a38a88e58977591cc056c649a0a))
+* **macOS:** 相容遠端控制 Insert 鍵 ([e7e4328](https://github.com/NickYCLin/lattice-term/commit/e7e4328c155c913a71dd2312b5641cee32178ea2))
+* **SFTP:** 修正拖曳上傳完成狀態 ([e7f3a5f](https://github.com/NickYCLin/lattice-term/commit/e7f3a5ff9cb97021a588c2d97a8373ee2103cc1e))
+* **SFTP:** 防止變動中的拖曳檔案被發布 ([b1e8484](https://github.com/NickYCLin/lattice-term/commit/b1e8484423d2dc99eb9c617a6cc205ca3efc765e))
+* **介面:** 修正設定操作狀態與翻譯熱更新 ([9bae4c1](https://github.com/NickYCLin/lattice-term/commit/9bae4c1c5914cbdae69802470c67dd707d5cbf5d))
+* **桌面:** 防止重複啟動造成空白視窗 ([f37c3a7](https://github.com/NickYCLin/lattice-term/commit/f37c3a70792e38522c15203985c550f3b3480acf))
+* **測試:** 防止端到端測試殘留 Agent 程序 ([f0a2df4](https://github.com/NickYCLin/lattice-term/commit/f0a2df43b8878b9db0f96953e5347b8e20bccbce))
+
 ## [0.13.8](https://github.com/NickYCLin/lattice-term/compare/v0.13.7...v0.13.8) (2026-08-23)
 
 
