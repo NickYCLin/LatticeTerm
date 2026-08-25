@@ -16,9 +16,23 @@ const RECENT_DATA_WINDOW_MS = 100;
 const COMMITTED_INPUT_TYPES = new Set(["insertText", "insertFromComposition"]);
 
 /**
+ * Only WebKit (macOS WKWebView, Linux WebKitGTK) drops onData for some IME
+ * commits, so only WebKit needs the fallback. Chromium (Windows WebView2) and
+ * Gecko always emit onData for committed input — there, running the fallback
+ * only risks a duplicate send when xterm's deferred composition onData lands
+ * after our timer has already fired.
+ */
+function webkitImeFallbackNeeded(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return /AppleWebKit/.test(ua) && !/(Chrome|Chromium|Edg)\//.test(ua);
+}
+
+/**
  * Repairs WebKit IME input shapes that update xterm's hidden textarea without
  * producing onData. Normal xterm input remains authoritative and consumes the
- * matching pending fallback before it can send a duplicate.
+ * matching pending fallback before it can send a duplicate. On engines that do
+ * not need it the fallback is inert, so onData is the only path that can send.
  */
 export class TerminalImeFallback {
   private readonly pending: PendingInput[] = [];
@@ -32,9 +46,11 @@ export class TerminalImeFallback {
     ) => TimerHandle = globalThis.setTimeout,
     private readonly cancel: (timer: TimerHandle) => void = globalThis.clearTimeout,
     private readonly now: () => number = Date.now,
+    private readonly enabled: boolean = webkitImeFallbackNeeded(),
   ) {}
 
   recordTerminalData(data: string) {
+    if (!this.enabled) return;
     const pending = this.pending.find(
       (candidate) => !candidate.delivered && candidate.data === data,
     );
@@ -48,6 +64,7 @@ export class TerminalImeFallback {
   }
 
   recordInput(data: string | null, inputType: string, isComposing = false) {
+    if (!this.enabled) return;
     if (isComposing || !data || !COMMITTED_INPUT_TYPES.has(inputType)) return;
 
     this.trimRecent();
