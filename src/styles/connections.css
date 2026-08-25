@@ -431,6 +431,53 @@
   color: var(--text-muted);
 }
 
+.mobile-download {
+  display: flex;
+  gap: var(--space-5);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mobile-download__qr {
+  flex: 0 0 auto;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  /* The QR must stay dark-on-white to scan in any app theme. */
+  background: #ffffff;
+  line-height: 0;
+}
+
+.mobile-download__qr img {
+  display: block;
+  width: 168px;
+  height: 168px;
+  image-rendering: pixelated;
+}
+
+.mobile-download__body {
+  flex: 1 1 15rem;
+  min-width: 0;
+}
+
+.mobile-download__lead {
+  margin: 0 0 var(--space-2);
+  color: var(--text);
+}
+
+.mobile-download__list {
+  margin: 0 0 var(--space-3);
+  padding-left: 1.1rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.mobile-download__link {
+  font-size: var(--text-xs);
+  color: var(--accent);
+  word-break: break-all;
+}
+
 .panel__actions {
   display: flex;
   gap: var(--space-2);

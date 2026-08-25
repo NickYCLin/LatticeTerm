@@ -5,6 +5,7 @@
  */
 
 import { useState } from "react";
+import mobileDownloadQr from "../assets/mobile-download-qr.svg";
 import type {
   DensityChoice,
   MotionChoice,
@@ -579,6 +580,41 @@ export function SettingsView({
             </button>
           </div>
         )}
+      </section>
+
+      <section className="panel glass glass--sheen">
+        <header className="panel__head">
+          <div>
+            <h2 className="panel__title">{t("settings.mobile")}</h2>
+            <p className="panel__hint">{t("settings.mobileHint")}</p>
+          </div>
+        </header>
+
+        <div className="mobile-download">
+          <div className="mobile-download__qr">
+            <img
+              src={mobileDownloadQr}
+              alt={t("settings.mobile.qrAlt")}
+              width={168}
+              height={168}
+            />
+          </div>
+          <div className="mobile-download__body">
+            <p className="mobile-download__lead">{t("settings.mobile.scan")}</p>
+            <ul className="mobile-download__list">
+              <li>{t("settings.mobile.android")}</li>
+              <li>{t("settings.mobile.ios")}</li>
+            </ul>
+            <a
+              className="mobile-download__link mono"
+              href="https://nickyclin.github.io/lattice-term/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              nickyclin.github.io/lattice-term
+            </a>
+          </div>
+        </div>
       </section>
     </div>
   );

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>下載 LatticeTerm 行動版</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0f141b;
+        --card: #181d26;
+        --text: #e6edf3;
+        --muted: #9aa4b2;
+        --accent: #f59e0b;
+        --line: rgba(220, 200, 170, 0.16);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        font-family: ui-sans-serif, system-ui, "Noto Sans TC", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      .card {
+        width: min(440px, 100%);
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 28px 24px 24px;
+        text-align: center;
+      }
+      h1 { font-size: 1.35rem; margin: 0 0 4px; }
+      .brand { color: var(--accent); }
+      p { color: var(--muted); line-height: 1.7; margin: 8px 0; }
+      .status {
+        margin: 20px 0 8px;
+        font-size: 1.05rem;
+        color: var(--text);
+        min-height: 1.6em;
+      }
+      .spinner {
+        width: 22px; height: 22px; margin: 8px auto;
+        border: 3px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .btn {
+        display: inline-block;
+        margin-top: 14px;
+        padding: 12px 20px;
+        border-radius: 999px;
+        background: var(--accent);
+        color: #1a0f00;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .btn--ghost {
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--line);
+      }
+      .hint { font-size: 0.85rem; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1><span class="brand">LatticeTerm</span> 行動版</h1>
+      <p>安全、跨平台的遠端連線工作站</p>
+
+      <div id="status" class="status">正在辨識你的裝置…</div>
+      <div id="spinner" class="spinner"></div>
+
+      <div id="actions"></div>
+
+      <p class="hint" id="hint"></p>
+    </main>
+
+    <script>
+      // One link for everyone: sniff the device and route to the right build.
+      var REPO = "NickYCLin/lattice-term";
+      var RELEASES = "https://github.com/" + REPO + "/releases/latest";
+
+      var statusEl = document.getElementById("status");
+      var spinnerEl = document.getElementById("spinner");
+      var actionsEl = document.getElementById("actions");
+      var hintEl = document.getElementById("hint");
+
+      function stopSpinner() { spinnerEl.classList.add("hidden"); }
+      function button(label, href, ghost) {
+        var a = document.createElement("a");
+        a.className = "btn" + (ghost ? " btn--ghost" : "");
+        a.textContent = label;
+        a.href = href;
+        a.style.margin = "14px 6px 0";
+        return a;
+      }
+
+      var ua = navigator.userAgent || "";
+      var isIOS =
+        /iPad|iPhone|iPod/.test(ua) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      var isAndroid = /Android/.test(ua);
+
+      if (isAndroid) {
+        statusEl.textContent = "偵測到 Android，正在取得最新安裝檔…";
+        fetch("https://api.github.com/repos/" + REPO + "/releases/latest", {
+          headers: { Accept: "application/vnd.github+json" },
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (release) {
+            var assets = (release && release.assets) || [];
+            var apk = assets.filter(function (a) {
+              return /\.apk$/i.test(a.name);
+            })[0];
+            stopSpinner();
+            if (apk) {
+              statusEl.textContent = "開始下載 Android 版…";
+              hintEl.textContent =
+                "若沒有自動開始，請點下方按鈕。安裝時需允許「未知來源」。";
+              actionsEl.appendChild(button("下載 " + apk.name, apk.browser_download_url));
+              window.location.href = apk.browser_download_url;
+            } else {
+              statusEl.textContent = "Android 版還在準備中";
+              hintEl.textContent = "最新版本尚未附上 Android 安裝檔，請稍後再試。";
+              actionsEl.appendChild(button("查看所有版本", RELEASES, true));
+            }
+          })
+          .catch(function () {
+            stopSpinner();
+            statusEl.textContent = "取得安裝檔失敗";
+            hintEl.textContent = "請直接到發布頁下載。";
+            actionsEl.appendChild(button("前往發布頁", RELEASES, true));
+          });
+      } else if (isIOS) {
+        stopSpinner();
+        statusEl.textContent = "iOS 版尚未發布";
+        hintEl.textContent =
+          "目前還沒有 iOS 版本可以安裝，之後上架後會在這裡提供。你可以先用桌面版。";
+        actionsEl.appendChild(button("看桌面版", RELEASES, true));
+      } else {
+        stopSpinner();
+        statusEl.textContent = "在手機上掃描此頁的 QR，或直接下載桌面版";
+        hintEl.textContent = "這個頁面會自動把手機導向對應的 App。";
+        actionsEl.appendChild(button("桌面版下載", RELEASES));
+      }
+    </script>
+  </body>
+</html>

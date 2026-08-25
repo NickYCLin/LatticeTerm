@@ -13,6 +13,16 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release signing is read from keystore.properties when present (CI writes it
+// from secrets). Without it, release builds stay unsigned so a local
+// `tauri android build` still works with no keystore configured.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "io.github.nickyclin.latticeterm"
@@ -23,6 +33,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        create("release") {
+            (keystoreProperties["keyAlias"] as String?)?.let { keyAlias = it }
+            (keystoreProperties["password"] as String?)?.let {
+                keyPassword = it
+                storePassword = it
+            }
+            (keystoreProperties["storeFile"] as String?)?.let { storeFile = file(it) }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -38,6 +58,9 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
