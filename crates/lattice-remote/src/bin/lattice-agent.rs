@@ -6,7 +6,7 @@ use lattice_remote::{
     FILE_CHUNK_SIZE, MAX_FILE_ERROR_BYTES, PROTOCOL_VERSION,
 };
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::env;
 use std::io::{Cursor, Write as _};
 use std::net::SocketAddr;
@@ -480,13 +480,12 @@ async fn serve(
                             let cancelled = Arc::new(AtomicBool::new(false));
                             let inserted = receiver_downloads
                                 .lock()
-                                .map(|mut active| {
-                                    if active.contains_key(&transfer_id) {
-                                        false
-                                    } else {
-                                        active.insert(transfer_id, Arc::clone(&cancelled));
+                                .map(|mut active| match active.entry(transfer_id) {
+                                    Entry::Vacant(entry) => {
+                                        entry.insert(Arc::clone(&cancelled));
                                         true
                                     }
+                                    Entry::Occupied(_) => false,
                                 })
                                 .unwrap_or(false);
                             if inserted {

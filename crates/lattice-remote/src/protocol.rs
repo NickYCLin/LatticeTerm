@@ -313,7 +313,8 @@ fn validate_hello(hello: &RemoteHello) -> Result<(), ProtocolError> {
         || hello.agent_name.chars().any(char::is_control)
         || hello.file_root_label.len() > MAX_FILE_ROOT_LABEL_BYTES
         || hello.file_root_label.chars().any(char::is_control)
-        || hello.file_transfer != !hello.file_root_label.is_empty()
+        // Enabled sharing requires a label; disabled sharing requires none.
+        || hello.file_transfer == hello.file_root_label.is_empty()
         || !valid_frame_dimensions(hello.width, hello.height)
     {
         return Err(ProtocolError::InvalidHello);
