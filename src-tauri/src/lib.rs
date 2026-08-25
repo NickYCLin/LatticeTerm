@@ -422,8 +422,7 @@ fn agent_export_transcript(
     let Some(summary) = registry.session_summary(&session_id) else {
         return Ok(None);
     };
-    let Some(kind) =
-        crate::transcript::TranscriptKind::from_definition(&summary.definition_id)
+    let Some(kind) = crate::transcript::TranscriptKind::from_definition(&summary.definition_id)
     else {
         return Ok(None);
     };

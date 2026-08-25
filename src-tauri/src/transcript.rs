@@ -68,7 +68,10 @@ fn newest_matching(dir: &Path, keep: impl Fn(&Path) -> bool) -> Option<PathBuf> 
                 continue;
             }
             let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-            if best.as_ref().is_none_or(|(best_time, _)| modified > *best_time) {
+            if best
+                .as_ref()
+                .is_none_or(|(best_time, _)| modified > *best_time)
+            {
                 best = Some((modified, path));
             }
         }
@@ -171,10 +174,7 @@ fn parse_codex(path: &Path, max_chars: usize) -> Option<String> {
         if role != "user" && role != "assistant" {
             continue;
         }
-        let text = payload
-            .get("content")
-            .map(content_text)
-            .unwrap_or_default();
+        let text = payload.get("content").map(content_text).unwrap_or_default();
         push_turn(&mut out, role, &text);
     }
     let trimmed = out.trim().to_string();
@@ -195,8 +195,7 @@ fn locate_claude(working_directory: &str, captured: Option<&str>) -> Option<Path
     // Fall back to the newest top-level session file (a subagents/ child is not
     // the main conversation, so keep only files that sit directly in the dir).
     newest_matching(&dir, |path| {
-        path.extension().is_some_and(|ext| ext == "jsonl")
-            && path.parent() == Some(dir.as_path())
+        path.extension().is_some_and(|ext| ext == "jsonl") && path.parent() == Some(dir.as_path())
     })
 }
 
