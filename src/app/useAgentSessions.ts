@@ -15,6 +15,8 @@ export interface AgentDefinition {
   executable: string;
   adapterVersion: number;
   resumeSupported: boolean;
+  /** Whether this CLI's conversation can be read for a handoff to another CLI. */
+  transcriptSupported: boolean;
   installed: boolean;
   installedPath: string | null;
 }
@@ -42,6 +44,8 @@ export interface AgentLaunchRequest {
   resumeSessionId: string | null;
   /** Join an existing tab's CLI group; omit to start a new tab. */
   groupId?: string | null;
+  /** A handoff brief pasted in once the CLI is interactive; omit for none. */
+  seedInput?: string | null;
   workingDirectory: string;
   cols: number;
   rows: number;
@@ -137,6 +141,7 @@ const FALLBACK_CATALOG: AgentDefinition[] = FALLBACK_CATALOG_SOURCE.map(
   executable,
   adapterVersion: 1,
   resumeSupported,
+  transcriptSupported: id === "codex" || id === "claude",
   installed: false,
   installedPath: null,
   }),
@@ -249,6 +254,8 @@ export interface AgentApi {
   send: (sessionId: string, data: string) => Promise<void>;
   /** Writes a clipboard image to a temp file and returns its path, or null. */
   pasteClipboardImage: (sessionId: string) => Promise<string | null>;
+  /** Reads a CLI's conversation as text for a handoff, or null if unavailable. */
+  exportTranscript: (sessionId: string) => Promise<string | null>;
   broadcast: (
     sessionIds: string[],
     prompt: string,
@@ -639,6 +646,14 @@ export function useAgentSessions(): AgentApi {
     [],
   );
 
+  const exportTranscript = useCallback(
+    async (sessionId: string): Promise<string | null> => {
+      const { invoke } = await core();
+      return invoke<string | null>("agent_export_transcript", { sessionId });
+    },
+    [],
+  );
+
   const broadcast = useCallback(async (sessionIds: string[], prompt: string) => {
     const payload = buildAgentBroadcastPayload(prompt);
     if (!payload) throw new Error("A broadcast prompt is required.");
@@ -727,6 +742,7 @@ export function useAgentSessions(): AgentApi {
     restorePlans,
     send,
     pasteClipboardImage,
+    exportTranscript,
     broadcast,
     resize,
     disconnect,

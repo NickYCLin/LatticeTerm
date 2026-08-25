@@ -627,6 +627,10 @@ export const en: Messages = {
   "terminal.cliSwitch": "Switch the CLI in this tab",
   "terminal.addCli": "Add CLI",
   "terminal.addCli.none": "No installed CLI detected",
+  "terminal.handoff.carry": "Carry the current conversation (let the new CLI continue)",
+  "terminal.handoff.unsupported": "This CLI's conversation can't be exported",
+  "terminal.handoff.frame":
+    "Below is my full earlier conversation with another AI assistant. Please read it for context, then take over and keep helping me — I'll give you my next instruction shortly.\n\n===== earlier conversation start =====\n{transcript}\n===== earlier conversation end =====",
   "terminal.backToList": "Back to connections",
   "terminal.closed": "Session ended ({reason})",
   "terminal.inputFailed":

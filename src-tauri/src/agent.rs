@@ -143,6 +143,8 @@ pub struct AgentDefinition {
     pub executable: String,
     pub adapter_version: u32,
     pub resume_supported: bool,
+    /// Whether this CLI's conversation can be read for a handoff to another CLI.
+    pub transcript_supported: bool,
     pub installed: bool,
     pub installed_path: Option<String>,
 }
@@ -214,6 +216,10 @@ pub struct AgentLaunchRequest {
     /// present means it docks into an existing tab's CLI switcher.
     #[serde(default)]
     pub group_id: Option<String>,
+    /// A handoff brief pasted into the CLI once it is interactive, so a new CLI
+    /// can pick up the previous one's conversation. Absent means a clean start.
+    #[serde(default)]
+    pub seed_input: Option<String>,
     pub working_directory: String,
     pub cols: u32,
     pub rows: u32,
@@ -582,6 +588,12 @@ impl AgentRegistry {
         Some((endpoint.address, entry.report_token.clone()?))
     }
 
+    pub fn session_summary(&self, session_id: &str) -> Option<AgentSessionSummary> {
+        let sessions = self.sessions.lock().ok()?;
+        let entry = sessions.get(session_id)?;
+        entry.summary.lock().ok().map(|summary| summary.clone())
+    }
+
     pub fn list(&self) -> Vec<AgentSessionSummary> {
         let Ok(sessions) = self.sessions.lock() else {
             return Vec::new();
@@ -844,6 +856,10 @@ pub fn catalog() -> Vec<AgentDefinition> {
                 executable: agent.executable.to_string(),
                 adapter_version: AGENT_ADAPTER_VERSION,
                 resume_supported: agent.resume_recipe.is_some(),
+                transcript_supported: crate::transcript::TranscriptKind::from_definition(
+                    agent.id,
+                )
+                .is_some(),
                 installed: path.is_some(),
                 installed_path: path.map(|path| path.display().to_string()),
             }
@@ -1175,6 +1191,7 @@ pub fn launch_request_from_plan(
         resume_session_id: validated.resume_session_id,
         // A saved plan launches its own tab; grouping is a live-tab action.
         group_id: None,
+        seed_input: None,
         working_directory: validated.working_directory,
         cols,
         rows,
@@ -1477,6 +1494,28 @@ pub fn launch(
             }
         }
     });
+
+    if let Some(seed) = request
+        .seed_input
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let seed_id = session_id.clone();
+        let seed_registry = Arc::clone(&registry);
+        std::thread::spawn(move || {
+            // Give the CLI a moment to reach its interactive prompt and turn on
+            // bracketed paste, then deliver the handoff as one pasted block and
+            // submit it — so multi-line, arbitrary text never trips the shell.
+            std::thread::sleep(Duration::from_millis(1800));
+            let payload = format!("\u{1b}[200~{seed}\u{1b}[201~\r");
+            if let Ok(entry) = seed_registry.get(&seed_id) {
+                if let Ok(mut writer) = entry.writer.lock() {
+                    let _ = writer.write_all(payload.as_bytes());
+                    let _ = writer.flush();
+                }
+            }
+        });
+    }
 
     let wait_id = session_id;
     let wait_registry = Arc::clone(&registry);
@@ -2069,6 +2108,7 @@ session id: 0199aa11-"
             arguments,
             resume_session_id: None,
             group_id: None,
+            seed_input: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -2121,6 +2161,7 @@ session id: 0199aa11-"
             arguments: Vec::new(),
             resume_session_id: None,
             group_id: None,
+            seed_input: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -2174,6 +2215,7 @@ session id: 0199aa11-"
             arguments: vec!["-c".to_string(), "trap '' HUP; sleep 30 & wait".to_string()],
             resume_session_id: None,
             group_id: None,
+            seed_input: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -2218,6 +2260,7 @@ session id: 0199aa11-"
                         arguments: Vec::new(),
                         resume_session_id: None,
                         group_id: None,
+                        seed_input: None,
                         working_directory: std::env::current_dir().unwrap().display().to_string(),
                         cols: 80,
                         rows: 24,
@@ -2278,6 +2321,7 @@ session id: 0199aa11-"
             arguments: Vec::new(),
             resume_session_id: None,
             group_id: None,
+            seed_input: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,

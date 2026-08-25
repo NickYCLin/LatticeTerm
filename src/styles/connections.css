@@ -1057,6 +1057,28 @@
   font-size: var(--text-xs);
 }
 
+.cli-switch__carry {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.cli-switch__carry input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.cli-switch__menu-sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--line);
+}
+
 .cli-panes {
   flex: 1;
   min-height: 0;

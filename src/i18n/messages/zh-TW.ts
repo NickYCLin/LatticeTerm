@@ -598,6 +598,10 @@ export const zhTW = {
   "terminal.cliSwitch": "切換這個分頁裡的 CLI",
   "terminal.addCli": "加開 CLI",
   "terminal.addCli.none": "沒有偵測到已安裝的 CLI",
+  "terminal.handoff.carry": "帶入目前對話（讓新 CLI 接續脈絡）",
+  "terminal.handoff.unsupported": "目前這個 CLI 無法匯出對話",
+  "terminal.handoff.frame":
+    "以下是我和另一個 AI 助理先前的完整對話。請先讀懂脈絡，接著接手繼續協助我，我馬上會給你下一個指示。\n\n===== 先前對話開始 =====\n{transcript}\n===== 先前對話結束 =====",
   "terminal.backToList": "回到連線清單",
   "terminal.closed": "工作階段已結束（{reason}）",
   "terminal.inputFailed": "這個工作階段已經結束，輸入送不出去。請關閉分頁後重新連線。",

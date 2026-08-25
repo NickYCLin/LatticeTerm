@@ -135,6 +135,7 @@ export function SessionsView({
     Record<string, string>
   >({});
   const [addCliFor, setAddCliFor] = useState<string | null>(null);
+  const [carryContext, setCarryContext] = useState(true);
 
   function beginRename(sessionId: string, label: string) {
     setEditingTab(sessionId);
@@ -161,9 +162,23 @@ export function SessionsView({
   async function addCli(
     group: { groupId: string; members: AgentSessionSummary[] },
     definition: AgentDefinition,
+    carryContext: boolean,
   ) {
     setAddCliFor(null);
     const workingDirectory = group.members[0]?.workingDirectory ?? "";
+    let seedInput: string | null = null;
+    if (carryContext) {
+      // Read the CLI you are leaving and hand its conversation to the new one.
+      const sourceId = activeMemberId(group);
+      try {
+        const transcript = await agents.exportTranscript(sourceId);
+        if (transcript) {
+          seedInput = t("terminal.handoff.frame", { transcript });
+        }
+      } catch {
+        // No transcript available; fall through to a clean launch.
+      }
+    }
     try {
       const session = await agents.launch({
         definitionId: definition.id,
@@ -172,6 +187,7 @@ export function SessionsView({
         arguments: [],
         resumeSessionId: null,
         groupId: group.groupId,
+        seedInput,
         workingDirectory,
         cols: 80,
         rows: 24,
@@ -508,26 +524,55 @@ export function SessionsView({
                     <PlusIcon size={12} />
                     <span>{t("terminal.addCli")}</span>
                   </button>
-                  {addCliFor === group.groupId && (
-                    <div className="cli-switch__menu" role="menu">
-                      {installed.map((definition) => (
-                        <button
-                          key={definition.id}
-                          type="button"
-                          role="menuitem"
-                          className="cli-switch__menu-item"
-                          onClick={() => void addCli(group, definition)}
-                        >
-                          {definition.label}
-                        </button>
-                      ))}
-                      {installed.length === 0 && (
-                        <span className="cli-switch__menu-empty">
-                          {t("terminal.addCli.none")}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  {addCliFor === group.groupId &&
+                    (() => {
+                      const source = group.members.find(
+                        (member) => member.sessionId === memberId,
+                      );
+                      const canCarry = agents.catalog.some(
+                        (definition) =>
+                          definition.id === source?.definitionId &&
+                          definition.transcriptSupported,
+                      );
+                      const carry = canCarry && carryContext;
+                      return (
+                        <div className="cli-switch__menu" role="menu">
+                          {canCarry ? (
+                            <label className="cli-switch__carry">
+                              <input
+                                type="checkbox"
+                                checked={carryContext}
+                                onChange={(event) =>
+                                  setCarryContext(event.currentTarget.checked)
+                                }
+                              />
+                              <span>{t("terminal.handoff.carry")}</span>
+                            </label>
+                          ) : (
+                            <span className="cli-switch__menu-empty">
+                              {t("terminal.handoff.unsupported")}
+                            </span>
+                          )}
+                          <div className="cli-switch__menu-sep" />
+                          {installed.map((definition) => (
+                            <button
+                              key={definition.id}
+                              type="button"
+                              role="menuitem"
+                              className="cli-switch__menu-item"
+                              onClick={() => void addCli(group, definition, carry)}
+                            >
+                              {definition.label}
+                            </button>
+                          ))}
+                          {installed.length === 0 && (
+                            <span className="cli-switch__menu-empty">
+                              {t("terminal.addCli.none")}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                 </div>
               </div>
               <div className="cli-panes">

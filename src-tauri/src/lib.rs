@@ -15,6 +15,7 @@ pub mod sftp;
 pub mod sftp_transfers;
 pub mod ssh;
 pub mod storage;
+pub mod transcript;
 pub mod tunnel;
 pub mod vault;
 pub mod vnc;
@@ -407,6 +408,31 @@ fn agent_paste_clipboard_image(
         .keep()
         .map_err(|err| format!("Cannot save the pasted image: {err}"))?;
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// Reads a running CLI's own conversation into plain, role-labelled text so it
+/// can be handed to another CLI as an opening brief. `None` when the CLI's
+/// history format is unsupported or nothing was found.
+#[tauri::command]
+fn agent_export_transcript(
+    session_id: String,
+    registry: State<'_, Arc<AgentRegistry>>,
+) -> Result<Option<String>, String> {
+    const MAX_HANDOFF_CHARS: usize = 12000;
+    let Some(summary) = registry.session_summary(&session_id) else {
+        return Ok(None);
+    };
+    let Some(kind) =
+        crate::transcript::TranscriptKind::from_definition(&summary.definition_id)
+    else {
+        return Ok(None);
+    };
+    Ok(crate::transcript::export(
+        kind,
+        &summary.working_directory,
+        summary.captured_session_id.as_deref(),
+        MAX_HANDOFF_CHARS,
+    ))
 }
 
 #[tauri::command]
@@ -1565,6 +1591,7 @@ pub fn run() {
             agent_send,
             agent_broadcast,
             agent_paste_clipboard_image,
+            agent_export_transcript,
             agent_resize,
             agent_disconnect,
             agent_sessions,
