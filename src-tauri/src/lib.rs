@@ -10,6 +10,7 @@ pub mod linux_webkit;
 pub mod metrics;
 pub mod rdp;
 pub mod remote;
+pub mod remote_files;
 pub mod remote_host;
 pub mod sftp;
 pub mod sftp_transfers;
@@ -38,6 +39,7 @@ use crate::remote::{
     RemoteConnectOutcome, RemoteConnectRequest, RemoteInputRequest, RemoteRegistry,
     RemoteSessionSummary,
 };
+use crate::remote_files::{RemoteDirectory, RemoteFileTransfer};
 use crate::remote_host::{RemoteHostRegistry, RemoteHostStartRequest, RemoteHostStatus};
 use crate::sftp::{
     SftpConnectOutcome, SftpConnectRequest, SftpDirectory, SftpRegistry, SftpSessionSummary,
@@ -1206,12 +1208,12 @@ async fn remote_connect(
 }
 
 #[tauri::command]
-fn remote_disconnect(
+async fn remote_disconnect(
     app: AppHandle,
     session_id: String,
     registry: State<'_, Arc<RemoteRegistry>>,
 ) -> Result<(), String> {
-    crate::remote::disconnect(&app, registry.inner(), &session_id)
+    crate::remote::disconnect(&app, registry.inner(), &session_id).await
 }
 
 #[tauri::command]
@@ -1220,12 +1222,85 @@ fn remote_sessions(registry: State<'_, Arc<RemoteRegistry>>) -> Vec<RemoteSessio
 }
 
 #[tauri::command]
-fn remote_input(
+async fn remote_input(
     session_id: String,
     request: RemoteInputRequest,
     registry: State<'_, Arc<RemoteRegistry>>,
 ) -> Result<(), String> {
-    crate::remote::input(registry.inner(), &session_id, request)
+    crate::remote::input(registry.inner(), &session_id, request).await
+}
+
+#[tauri::command]
+async fn remote_file_list(
+    session_id: String,
+    path: String,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<RemoteDirectory, String> {
+    crate::remote::file_list(registry.inner(), &session_id, path).await
+}
+
+#[tauri::command]
+async fn remote_file_download_start(
+    session_id: String,
+    path: String,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<RemoteFileTransfer, String> {
+    crate::remote::file_download_start(registry.inner(), &session_id, path).await
+}
+
+#[tauri::command]
+async fn remote_file_upload_begin(
+    session_id: String,
+    parent: String,
+    name: String,
+    size: u64,
+    overwrite: bool,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<RemoteFileTransfer, String> {
+    crate::remote::file_upload_begin(registry.inner(), &session_id, parent, name, size, overwrite)
+        .await
+}
+
+#[tauri::command]
+async fn remote_file_upload_chunk(
+    session_id: String,
+    transfer_id: String,
+    data: String,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<(), String> {
+    crate::remote::file_upload_chunk(registry.inner(), &session_id, &transfer_id, &data).await
+}
+
+#[tauri::command]
+async fn remote_file_upload_finish(
+    session_id: String,
+    transfer_id: String,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<(), String> {
+    crate::remote::file_upload_finish(registry.inner(), &session_id, &transfer_id).await
+}
+
+#[tauri::command]
+async fn remote_file_transfer_cancel(
+    session_id: String,
+    transfer_id: String,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<(), String> {
+    crate::remote::file_transfer_cancel(registry.inner(), &session_id, &transfer_id).await
+}
+
+#[tauri::command]
+fn remote_file_transfer_dismiss(
+    session_id: String,
+    transfer_id: String,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<(), String> {
+    crate::remote::file_transfer_dismiss(registry.inner(), &session_id, &transfer_id)
+}
+
+#[tauri::command]
+fn remote_file_transfers(registry: State<'_, Arc<RemoteRegistry>>) -> Vec<RemoteFileTransfer> {
+    registry.transfers()
 }
 
 #[tauri::command]
@@ -1669,6 +1744,14 @@ pub fn run() {
             remote_disconnect,
             remote_sessions,
             remote_input,
+            remote_file_list,
+            remote_file_download_start,
+            remote_file_upload_begin,
+            remote_file_upload_chunk,
+            remote_file_upload_finish,
+            remote_file_transfer_cancel,
+            remote_file_transfer_dismiss,
+            remote_file_transfers,
             remote_host_start,
             remote_host_stop,
             remote_host_status,

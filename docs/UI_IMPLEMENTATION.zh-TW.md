@@ -21,7 +21,7 @@
 | **主機資源面板** | `HostMetricsPanel` | `src/components/connections/HostMetricsPanel.tsx` | CPU、記憶體、磁碟與開機時間的量表；尚未連線時顯示原因而非假數值。 |
 | **新增/編輯抽屜** | `ConnectionDrawer` | `src/components/overlays/ConnectionDrawer.tsx` | 抽屜式連線表單，支援即時驗證、Tab 焦點循環鎖定與重複目標提醒。 |
 | **命令面板** | `CommandPalette` | `src/components/overlays/CommandPalette.tsx` | `Ctrl` + `K` 全域命令面板，支援搜尋連線與執行全域快捷動作。 |
-| **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、SFTP 檔案、Lattice Remote、Web RDP 與 VNC Canvas 分頁；執行中的 Agent 分頁可雙擊或按鉛筆就地改名，名稱由後端持久化（重載視窗仍在），並在續接面板點選偵測到的 session 時帶入備註；SSH 分頁另有「開啟檔案總管」按鈕，會沿用同主機／同認證開啟 SFTP（已有相同主機的 SFTP 工作階段則直接切換過去）。 |
+| **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、SFTP 檔案、Lattice Remote、Web RDP 與 VNC Canvas 分頁；執行中的 Agent 分頁可雙擊或按鉛筆就地改名，名稱由後端持久化（重載視窗仍在），並在續接面板點選偵測到的 session 時帶入備註；SSH 分頁可沿用同主機／同認證開啟 SFTP，Lattice Remote 在主機另行授權檔案分享時也可展開同一加密連線的檔案側欄。 |
 | **AI Agent Fleet** | `AgentsView` | `src/views/AgentsView.tsx` | 本機多 CLI 啟動、Reporter 狀態、批次提示、可命名排序的安全啟動工作區，以及同程序 WebView 重載後的 PTY 重新 attach。 |
 | **SFTP 檔案工作區** | `SftpPane` | `src/components/sftp/SftpPane.tsx` | 遠端路徑瀏覽、上下載、建立資料夾、改名與確認刪除。 |
 | **Web RDP Canvas** | `RdpPane` | `src/components/rdp/RdpPane.tsx` | Canvas 畫面、座標縮放、滑鼠、滾輪、掃描碼鍵盤與失焦釋放。 |
@@ -182,6 +182,7 @@
 - 複製配對碼會走 `SensitiveClipboard` 原生狀態；只保存摘要並在可調整期限後比對、清除相同內容。新複製內容不會被覆蓋，設定頁亦可立即清除目前仍相符的敏感值；browser preview 以相同規則使用 Web Clipboard fallback。
 - Tauri 以 NDJSON 事件管理每次分享的 sidecar 生命週期。配對成功後立即從 UI 狀態移除配對碼；關閉對話框可選擇讓分享留在背景，但停止分享或應用程式結束時會終止 Agent。
 - 預設只傳送 JPEG 畫面（唯讀）。分享端可在 `RemoteHostDialog` 勾選「允許對方操控」（Agent 帶 `--allow-input`），Hello 的 `view_only` 隨之為 false；此時檢視端的滑鼠與鍵盤事件會以座標換算回真實螢幕後注入，斷線或停止時釋放所有按住的按鍵。UI 須依 `view_only` 標示目前是唯讀還是可操控。
+- 檔案分享是第二個獨立權限。主機勾選後可指定單一分享根目錄（留白由原生層解析家目錄），Agent 才會帶 `--file-root` 並在 Hello 宣告 `file_transfer`；檢視端可展開 `RemoteFilesPane` 查看虛擬 `/` 之下的資料夾清單、串流上傳與下載。主機端 canonicalize 每個既有路徑並限制在根目錄內，拒絕 `..`、控制字元與越界符號連結；上傳使用私有同目錄暫存檔，位元組完整、flush 與 sync 成功後才保護舊檔並替換，取消或斷線會移除半成品。
 - 目前版本仍是「主機位址＋連接埠」直連；不能先把欄位換成一組假裝可用的號碼。下一階段的產品目標是免帳戶裝置 ID：每次安裝產生穩定裝置金鑰與數字 ID，ID／Signal 服務只負責把 ID 對到在線端點與 Relay 路徑，畫面內容仍維持端對端加密。
 - 連線清單預設只存在本機，以名稱、裝置 ID 與最近連線時間辨識設備，不要求註冊帳戶。帳戶只作為後續的跨裝置清單同步、裝置歸屬、2FA 與團隊授權選配層。
 - 臨時支援採一次性密碼或被控端逐次接受；無人值守必須由被控端明確啟用並設定獨立密碼，搭配嘗試限速、撤銷與裝置金鑰驗證。Relay／目錄服務不得保存可直接登入的明文密碼，也不得取得桌面解密能力。

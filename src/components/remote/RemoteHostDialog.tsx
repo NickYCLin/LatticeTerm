@@ -21,6 +21,8 @@ export function RemoteHostDialog({
   const [port, setPort] = useState(44_900);
   const [fps, setFps] = useState(5);
   const [allowInput, setAllowInput] = useState(false);
+  const [allowFiles, setAllowFiles] = useState(false);
+  const [fileRoot, setFileRoot] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [copied, setCopied] = useState<"address" | "code" | null>(null);
@@ -61,7 +63,14 @@ export function RemoteHostDialog({
     setProblem(null);
     host.clearClosedReason();
     try {
-      await host.start({ bindAddress: bindAddress.trim(), port, fps, allowInput });
+      await host.start({
+        bindAddress: bindAddress.trim(),
+        port,
+        fps,
+        allowInput,
+        allowFiles,
+        fileRoot: fileRoot.trim(),
+      });
       setNow(Math.floor(Date.now() / 1_000));
     } catch (error) {
       setProblem(error instanceof Error ? error.message : String(error));
@@ -168,6 +177,11 @@ export function RemoteHostDialog({
                     ? t("remote.host.modeViewOnly")
                     : t("remote.host.modeInteractive")}
                 </span>
+                {host.status.fileTransfer && (
+                  <span className="badge tone-security">
+                    {t("remote.host.modeFiles")}
+                  </span>
+                )}
               </div>
 
               <div className="remote-host-share-grid">
@@ -197,6 +211,12 @@ export function RemoteHostDialog({
                     >
                       <CopyIcon size={13} />
                     </button>
+                  </div>
+                )}
+                {host.status.fileTransfer && host.status.fileRoot && (
+                  <div className="remote-host-value">
+                    <span>{t("remote.host.fileRoot")}</span>
+                    <code>{host.status.fileRoot}</code>
                   </div>
                 )}
               </div>
@@ -309,6 +329,43 @@ export function RemoteHostDialog({
                 <Callout tone="warn" title={t("remote.host.allowInputWarnTitle")}>
                   {t("remote.host.allowInputWarnBody")}
                 </Callout>
+              )}
+
+              <label className="remote-host-toggle">
+                <input
+                  type="checkbox"
+                  checked={allowFiles}
+                  disabled={busy}
+                  onChange={(event) => setAllowFiles(event.currentTarget.checked)}
+                />
+                <span>
+                  <strong>{t("remote.host.allowFiles")}</strong>
+                  <small>{t("remote.host.allowFilesHint")}</small>
+                </span>
+              </label>
+
+              {allowFiles && (
+                <>
+                  <div className="field">
+                    <label className="field__label" htmlFor="remote-host-file-root">
+                      {t("remote.host.fileRoot")}
+                    </label>
+                    <input
+                      id="remote-host-file-root"
+                      className="input mono"
+                      value={fileRoot}
+                      disabled={busy}
+                      placeholder={t("remote.host.fileRootPlaceholder")}
+                      onChange={(event) => setFileRoot(event.currentTarget.value)}
+                    />
+                    <small className="field__optional">
+                      {t("remote.host.fileRootHint")}
+                    </small>
+                  </div>
+                  <Callout tone="warn" title={t("remote.host.allowFilesWarnTitle")}>
+                    {t("remote.host.allowFilesWarnBody")}
+                  </Callout>
+                </>
               )}
 
               <div className="dialog__actions">

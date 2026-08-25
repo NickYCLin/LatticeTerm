@@ -9,6 +9,8 @@ export interface RemoteHostStatus {
   pairingCode: string;
   expiresAt: number;
   viewOnly: boolean;
+  fileTransfer: boolean;
+  fileRoot?: string;
   state: "waiting" | "pairing" | "streaming";
   peer?: string;
   attemptsRemaining: number;
@@ -20,6 +22,10 @@ export interface RemoteHostStartRequest {
   fps: number;
   /** Let the paired viewer control this machine. Defaults to view-only. */
   allowInput: boolean;
+  /** Independently authorises access to one shared folder. */
+  allowFiles: boolean;
+  /** Empty selects the current user's home folder in the native backend. */
+  fileRoot: string;
 }
 
 export interface RemoteHostApi {

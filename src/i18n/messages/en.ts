@@ -843,12 +843,12 @@ export const en: Messages = {
   "remote.connect.title": "Connect to {name}",
   "remote.connect.securityTitle": "One-time encrypted pairing",
   "remote.connect.securityBody":
-    "The code is used only for this Noise handshake and is not saved. Version 1 is view-only and cannot send keyboard or mouse input.",
+    "The code is used only for this Noise handshake and is not saved. The host independently authorises keyboard control and file access for each share.",
   "remote.connect.code": "Agent pairing code",
   "remote.connect.codeHint":
     "Enter the eight-digit code shown by lattice-agent on the remote device.",
   "remote.connect.codeInvalid": "The pairing code must contain eight digits.",
-  "remote.connect.submit": "Start view-only session",
+  "remote.connect.submit": "Start secure session",
   "remote.connect.connecting": "Pairing securely…",
   "remote.connect.failedTitle": "Lattice Remote could not connect",
   "remote.connect.failedBody": "Stage: {stage}. {detail}",
@@ -859,12 +859,35 @@ export const en: Messages = {
   "remote.session.waitingTitle": "Waiting for the first frame",
   "remote.session.waitingBody":
     "Pairing succeeded. The Agent is capturing and encoding its primary display.",
+  "remote.files.toggle": "Host files",
+  "remote.files.path": "Remote path",
+  "remote.files.up": "Up",
+  "remote.files.refresh": "Refresh",
+  "remote.files.upload": "Upload",
+  "remote.files.download": "Download",
+  "remote.files.sharedRoot": "Shared root: {name}",
+  "remote.files.problem": "Remote file operation failed",
+  "remote.files.loading": "Reading the host folder…",
+  "remote.files.empty": "This folder is empty.",
+  "remote.files.name": "Name",
+  "remote.files.size": "Size",
+  "remote.files.modified": "Modified",
+  "remote.files.actions": "Actions",
+  "remote.files.cannotOverwrite":
+    "“{name}” is a folder or link and cannot be replaced by an upload.",
+  "remote.files.overwriteConfirm":
+    "“{name}” already exists remotely. Replace it safely?",
+  "remote.files.transfer.done": "Completed",
+  "remote.files.transfer.error": "Failed",
+  "remote.files.transfer.cancelled": "Cancelled",
+  "remote.files.transfer.cancel": "Cancel transfer",
+  "remote.files.transfer.clear": "Clear transfer",
   "remote.host.title": "Share this device",
   "remote.host.action": "Share this device",
   "remote.host.activeAction": "Sharing active",
   "remote.host.securityTitle": "You choose when sharing starts",
   "remote.host.securityBody":
-    "The complete primary display is captured only after you press Start and is sent over an end-to-end encrypted direct connection, using a one-time code that expires in five minutes. Sharing is view-only unless you choose to allow control.",
+    "Your full primary display and any authorised file data use a direct end-to-end encrypted connection protected by a one-time code that expires in five minutes. Keyboard control and file sharing are authorised separately.",
   "remote.host.problemTitle": "Sharing status changed",
   "remote.host.state.waiting": "Waiting for pairing",
   "remote.host.state.pairing": "Verifying pairing code",
@@ -896,8 +919,19 @@ export const en: Messages = {
   "remote.host.allowInputWarnTitle": "This hands over control",
   "remote.host.allowInputWarnBody":
     "With control enabled, a successfully paired viewer can operate your desktop. Only share with people you trust, and press Stop sharing when you are done.",
+  "remote.host.allowFiles": "Let the viewer browse and transfer files",
+  "remote.host.allowFilesHint":
+    "Only the single root below is shared; the viewer may browse folders, download files, and upload files.",
+  "remote.host.allowFilesWarnTitle": "This grants file read and write access",
+  "remote.host.allowFilesWarnBody":
+    "The paired viewer can read files in the shared root and upload or replace files. Paths cannot leave this root. Stop sharing when finished.",
+  "remote.host.fileRoot": "File sharing root",
+  "remote.host.fileRootPlaceholder": "Leave blank for your home folder",
+  "remote.host.fileRootHint":
+    "Enter an absolute folder path, or leave it blank so the native app safely resolves the current user's home folder.",
   "remote.host.modeViewOnly": "View only",
   "remote.host.modeInteractive": "Control enabled",
+  "remote.host.modeFiles": "Files enabled",
 
   // Web RDP ----------------------------------------------------------------
   "rdp.connect.title": "RDP connect to {name}",

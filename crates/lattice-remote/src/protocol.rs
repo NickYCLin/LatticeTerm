@@ -1,10 +1,15 @@
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const DEFAULT_PORT: u16 = 44_900;
 pub const FRAME_CHUNK_SIZE: usize = 48 * 1024;
+pub const FILE_CHUNK_SIZE: usize = 48 * 1024;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_AGENT_NAME_BYTES: usize = 256;
+pub const MAX_FILE_ROOT_LABEL_BYTES: usize = 256;
+pub const MAX_REMOTE_PATH_BYTES: usize = 4 * 1024;
+pub const MAX_FILE_ERROR_BYTES: usize = 1024;
+pub const MAX_DIRECTORY_ENTRIES: usize = 4096;
 pub const MAX_FRAME_DIMENSION: u32 = 16_384;
 pub const MAX_FRAME_PIXELS: u64 = 32 * 1024 * 1024;
 pub const MAX_CLOSE_REASON_BYTES: usize = 1024;
@@ -15,12 +20,30 @@ const MESSAGE_FRAME_CHUNK: u8 = 3;
 const MESSAGE_KEEP_ALIVE: u8 = 4;
 const MESSAGE_CLOSE: u8 = 5;
 const MESSAGE_INPUT: u8 = 6;
+const MESSAGE_FILE_REQUEST: u8 = 7;
+const MESSAGE_FILE_RESPONSE: u8 = 8;
 
 const INPUT_MOUSE_MOVE: u8 = 1;
 const INPUT_MOUSE_BUTTON: u8 = 2;
 const INPUT_WHEEL: u8 = 3;
 const INPUT_KEY: u8 = 4;
 const INPUT_RELEASE_ALL: u8 = 5;
+
+const FILE_REQUEST_LIST: u8 = 1;
+const FILE_REQUEST_DOWNLOAD: u8 = 2;
+const FILE_REQUEST_UPLOAD_START: u8 = 3;
+const FILE_REQUEST_UPLOAD_CHUNK: u8 = 4;
+const FILE_REQUEST_UPLOAD_FINISH: u8 = 5;
+const FILE_REQUEST_CANCEL: u8 = 6;
+
+const FILE_RESPONSE_LIST_START: u8 = 1;
+const FILE_RESPONSE_LIST_ENTRY: u8 = 2;
+const FILE_RESPONSE_LIST_DONE: u8 = 3;
+const FILE_RESPONSE_DOWNLOAD_START: u8 = 4;
+const FILE_RESPONSE_DOWNLOAD_CHUNK: u8 = 5;
+const FILE_RESPONSE_UPLOAD_READY: u8 = 6;
+const FILE_RESPONSE_COMPLETE: u8 = 7;
+const FILE_RESPONSE_ERROR: u8 = 8;
 
 /// One wheel message may scroll at most this many notches in either direction.
 pub const MAX_WHEEL_UNITS: i8 = 8;
@@ -32,6 +55,110 @@ pub struct RemoteHello {
     pub width: u32,
     pub height: u32,
     pub view_only: bool,
+    pub file_transfer: bool,
+    /// Human-readable name for the explicitly shared root. Remote paths remain
+    /// virtual and never reveal the host's absolute filesystem location.
+    pub file_root_label: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteFileKind {
+    Directory,
+    File,
+    Symlink,
+    Other,
+}
+
+impl RemoteFileKind {
+    fn encode(self) -> u8 {
+        match self {
+            Self::Directory => 1,
+            Self::File => 2,
+            Self::Symlink => 3,
+            Self::Other => 4,
+        }
+    }
+
+    fn decode(value: u8) -> Result<Self, ProtocolError> {
+        match value {
+            1 => Ok(Self::Directory),
+            2 => Ok(Self::File),
+            3 => Ok(Self::Symlink),
+            4 => Ok(Self::Other),
+            _ => Err(ProtocolError::InvalidMessage("unknown file kind")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteFileEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: RemoteFileKind,
+    pub size: u64,
+    pub modified_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteFileRequest {
+    List {
+        request_id: u64,
+        path: String,
+    },
+    Download {
+        transfer_id: u64,
+        path: String,
+    },
+    UploadStart {
+        transfer_id: u64,
+        path: String,
+        size: u64,
+        overwrite: bool,
+    },
+    UploadChunk {
+        transfer_id: u64,
+        bytes: Vec<u8>,
+    },
+    UploadFinish {
+        transfer_id: u64,
+    },
+    Cancel {
+        transfer_id: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteFileResponse {
+    ListStart {
+        request_id: u64,
+        path: String,
+    },
+    ListEntry {
+        request_id: u64,
+        entry: RemoteFileEntry,
+    },
+    ListDone {
+        request_id: u64,
+    },
+    DownloadStart {
+        transfer_id: u64,
+        name: String,
+        size: u64,
+    },
+    DownloadChunk {
+        transfer_id: u64,
+        bytes: Vec<u8>,
+    },
+    UploadReady {
+        transfer_id: u64,
+    },
+    Complete {
+        transfer_id: u64,
+    },
+    Error {
+        operation_id: u64,
+        detail: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +263,8 @@ pub enum RemoteMessage {
     KeepAlive,
     Close(String),
     Input(RemoteInput),
+    FileRequest(RemoteFileRequest),
+    FileResponse(RemoteFileResponse),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +311,9 @@ fn validate_hello(hello: &RemoteHello) -> Result<(), ProtocolError> {
     if hello.agent_name.is_empty()
         || hello.agent_name.len() > MAX_AGENT_NAME_BYTES
         || hello.agent_name.chars().any(char::is_control)
+        || hello.file_root_label.len() > MAX_FILE_ROOT_LABEL_BYTES
+        || hello.file_root_label.chars().any(char::is_control)
+        || hello.file_transfer != !hello.file_root_label.is_empty()
         || !valid_frame_dimensions(hello.width, hello.height)
     {
         return Err(ProtocolError::InvalidHello);
@@ -223,14 +355,18 @@ impl RemoteMessage {
             Self::Hello(hello) => {
                 validate_hello(hello)?;
                 let name = hello.agent_name.as_bytes();
-                let mut output = Vec::with_capacity(14 + name.len());
+                let root = hello.file_root_label.as_bytes();
+                let mut output = Vec::with_capacity(16 + name.len() + root.len());
                 output.push(MESSAGE_HELLO);
                 output.extend_from_slice(&hello.protocol_version.to_be_bytes());
                 output.extend_from_slice(&hello.width.to_be_bytes());
                 output.extend_from_slice(&hello.height.to_be_bytes());
                 output.push(u8::from(hello.view_only));
+                output.push(u8::from(hello.file_transfer));
                 output.extend_from_slice(&(name.len() as u16).to_be_bytes());
+                output.extend_from_slice(&(root.len() as u16).to_be_bytes());
                 output.extend_from_slice(name);
+                output.extend_from_slice(root);
                 Ok(output)
             }
             Self::FrameStart(frame) => {
@@ -290,6 +426,8 @@ impl RemoteMessage {
                 }
                 Ok(output)
             }
+            Self::FileRequest(request) => encode_file_request(request),
+            Self::FileResponse(response) => encode_file_response(response),
             Self::Close(reason) => {
                 let bytes = reason.as_bytes();
                 if bytes.len() > MAX_CLOSE_REASON_BYTES {
@@ -311,7 +449,7 @@ impl RemoteMessage {
 
         match kind {
             MESSAGE_HELLO => {
-                if body.len() < 13 {
+                if body.len() < 16 {
                     return Err(ProtocolError::InvalidHello);
                 }
                 let protocol_version = read_u16(body, 0)?;
@@ -322,11 +460,16 @@ impl RemoteMessage {
                     1 => true,
                     _ => return Err(ProtocolError::InvalidHello),
                 };
-                let name_len = read_u16(body, 11)? as usize;
-                if name_len == 0 || body.len() != 13 + name_len {
+                let file_transfer = decode_bool(body[11])?;
+                let name_len = read_u16(body, 12)? as usize;
+                let root_len = read_u16(body, 14)? as usize;
+                if name_len == 0 || body.len() != 16 + name_len + root_len {
                     return Err(ProtocolError::InvalidHello);
                 }
-                let agent_name = std::str::from_utf8(&body[13..])
+                let agent_name = std::str::from_utf8(&body[16..16 + name_len])
+                    .map_err(|_| ProtocolError::InvalidText)?
+                    .to_string();
+                let file_root_label = std::str::from_utf8(&body[16 + name_len..])
                     .map_err(|_| ProtocolError::InvalidText)?
                     .to_string();
                 let hello = RemoteHello {
@@ -335,6 +478,8 @@ impl RemoteMessage {
                     width,
                     height,
                     view_only,
+                    file_transfer,
+                    file_root_label,
                 };
                 validate_hello(&hello)?;
                 Ok(Self::Hello(hello))
@@ -397,6 +542,8 @@ impl RemoteMessage {
                 validate_input(&input)?;
                 Ok(Self::Input(input))
             }
+            MESSAGE_FILE_REQUEST => decode_file_request(body).map(Self::FileRequest),
+            MESSAGE_FILE_RESPONSE => decode_file_response(body).map(Self::FileResponse),
             MESSAGE_CLOSE => {
                 if body.len() > MAX_CLOSE_REASON_BYTES {
                     return Err(ProtocolError::InvalidMessage("close reason is too long"));
@@ -409,6 +556,371 @@ impl RemoteMessage {
             }
             _ => Err(ProtocolError::InvalidMessage("unknown message type")),
         }
+    }
+}
+
+fn valid_remote_path(path: &str) -> bool {
+    let structure = path == "/"
+        || (!path.ends_with('/')
+            && path
+                .split('/')
+                .skip(1)
+                .all(|component| !component.is_empty() && component != "." && component != ".."));
+    structure
+        && !path.is_empty()
+        && path.len() <= MAX_REMOTE_PATH_BYTES
+        && path.starts_with('/')
+        && !path.contains('\0')
+        && !path.contains('\\')
+        && !path.chars().any(char::is_control)
+}
+
+fn valid_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name.len() <= MAX_FILE_ROOT_LABEL_BYTES
+        && !name.contains(['/', '\\', '\0'])
+        && !name.chars().any(char::is_control)
+}
+
+fn put_text(output: &mut Vec<u8>, value: &str) -> Result<(), ProtocolError> {
+    if value.len() > u16::MAX as usize {
+        return Err(ProtocolError::InvalidMessage("text field is too large"));
+    }
+    output.extend_from_slice(&(value.len() as u16).to_be_bytes());
+    output.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn read_text<'a>(input: &'a [u8], offset: &mut usize) -> Result<&'a str, ProtocolError> {
+    let length = read_u16(input, *offset)? as usize;
+    *offset += 2;
+    let bytes = input
+        .get(*offset..*offset + length)
+        .ok_or(ProtocolError::InvalidMessage("truncated text field"))?;
+    *offset += length;
+    std::str::from_utf8(bytes).map_err(|_| ProtocolError::InvalidText)
+}
+
+fn finish_decode(input: &[u8], offset: usize) -> Result<(), ProtocolError> {
+    if offset == input.len() {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidMessage("trailing message bytes"))
+    }
+}
+
+fn encode_file_request(request: &RemoteFileRequest) -> Result<Vec<u8>, ProtocolError> {
+    let mut output = Vec::with_capacity(64);
+    output.push(MESSAGE_FILE_REQUEST);
+    match request {
+        RemoteFileRequest::List { request_id, path } => {
+            if !valid_remote_path(path) {
+                return Err(ProtocolError::InvalidMessage("invalid remote path"));
+            }
+            output.push(FILE_REQUEST_LIST);
+            output.extend_from_slice(&request_id.to_be_bytes());
+            put_text(&mut output, path)?;
+        }
+        RemoteFileRequest::Download { transfer_id, path } => {
+            if !valid_remote_path(path) {
+                return Err(ProtocolError::InvalidMessage("invalid remote path"));
+            }
+            output.push(FILE_REQUEST_DOWNLOAD);
+            output.extend_from_slice(&transfer_id.to_be_bytes());
+            put_text(&mut output, path)?;
+        }
+        RemoteFileRequest::UploadStart {
+            transfer_id,
+            path,
+            size,
+            overwrite,
+        } => {
+            if !valid_remote_path(path) {
+                return Err(ProtocolError::InvalidMessage("invalid remote path"));
+            }
+            output.push(FILE_REQUEST_UPLOAD_START);
+            output.extend_from_slice(&transfer_id.to_be_bytes());
+            output.extend_from_slice(&size.to_be_bytes());
+            output.push(u8::from(*overwrite));
+            put_text(&mut output, path)?;
+        }
+        RemoteFileRequest::UploadChunk { transfer_id, bytes } => {
+            if bytes.is_empty() || bytes.len() > FILE_CHUNK_SIZE {
+                return Err(ProtocolError::InvalidMessage("invalid file chunk"));
+            }
+            output.push(FILE_REQUEST_UPLOAD_CHUNK);
+            output.extend_from_slice(&transfer_id.to_be_bytes());
+            output.extend_from_slice(bytes);
+        }
+        RemoteFileRequest::UploadFinish { transfer_id } => {
+            output.push(FILE_REQUEST_UPLOAD_FINISH);
+            output.extend_from_slice(&transfer_id.to_be_bytes());
+        }
+        RemoteFileRequest::Cancel { transfer_id } => {
+            output.push(FILE_REQUEST_CANCEL);
+            output.extend_from_slice(&transfer_id.to_be_bytes());
+        }
+    }
+    Ok(output)
+}
+
+fn decode_file_request(body: &[u8]) -> Result<RemoteFileRequest, ProtocolError> {
+    let subkind = *body
+        .first()
+        .ok_or(ProtocolError::InvalidMessage("empty file request"))?;
+    let detail = &body[1..];
+    if detail.len() < 8 {
+        return Err(ProtocolError::InvalidMessage("truncated file request"));
+    }
+    let operation_id = read_u64(detail, 0)?;
+    match subkind {
+        FILE_REQUEST_LIST | FILE_REQUEST_DOWNLOAD => {
+            let mut offset = 8;
+            let path = read_text(detail, &mut offset)?.to_string();
+            finish_decode(detail, offset)?;
+            if !valid_remote_path(&path) {
+                return Err(ProtocolError::InvalidMessage("invalid remote path"));
+            }
+            if subkind == FILE_REQUEST_LIST {
+                Ok(RemoteFileRequest::List {
+                    request_id: operation_id,
+                    path,
+                })
+            } else {
+                Ok(RemoteFileRequest::Download {
+                    transfer_id: operation_id,
+                    path,
+                })
+            }
+        }
+        FILE_REQUEST_UPLOAD_START => {
+            if detail.len() < 19 {
+                return Err(ProtocolError::InvalidMessage("truncated upload request"));
+            }
+            let size = read_u64(detail, 8)?;
+            let overwrite = decode_bool(detail[16])?;
+            let mut offset = 17;
+            let path = read_text(detail, &mut offset)?.to_string();
+            finish_decode(detail, offset)?;
+            if !valid_remote_path(&path) {
+                return Err(ProtocolError::InvalidMessage("invalid remote path"));
+            }
+            Ok(RemoteFileRequest::UploadStart {
+                transfer_id: operation_id,
+                path,
+                size,
+                overwrite,
+            })
+        }
+        FILE_REQUEST_UPLOAD_CHUNK => {
+            let bytes = detail[8..].to_vec();
+            if bytes.is_empty() || bytes.len() > FILE_CHUNK_SIZE {
+                return Err(ProtocolError::InvalidMessage("invalid file chunk"));
+            }
+            Ok(RemoteFileRequest::UploadChunk {
+                transfer_id: operation_id,
+                bytes,
+            })
+        }
+        FILE_REQUEST_UPLOAD_FINISH if detail.len() == 8 => Ok(RemoteFileRequest::UploadFinish {
+            transfer_id: operation_id,
+        }),
+        FILE_REQUEST_CANCEL if detail.len() == 8 => Ok(RemoteFileRequest::Cancel {
+            transfer_id: operation_id,
+        }),
+        _ => Err(ProtocolError::InvalidMessage("invalid file request")),
+    }
+}
+
+fn encode_file_response(response: &RemoteFileResponse) -> Result<Vec<u8>, ProtocolError> {
+    let mut output = Vec::with_capacity(64);
+    output.push(MESSAGE_FILE_RESPONSE);
+    match response {
+        RemoteFileResponse::ListStart { request_id, path } => {
+            if !valid_remote_path(path) {
+                return Err(ProtocolError::InvalidMessage("invalid remote path"));
+            }
+            output.push(FILE_RESPONSE_LIST_START);
+            output.extend_from_slice(&request_id.to_be_bytes());
+            put_text(&mut output, path)?;
+        }
+        RemoteFileResponse::ListEntry { request_id, entry } => {
+            if !valid_file_name(&entry.name) || !valid_remote_path(&entry.path) {
+                return Err(ProtocolError::InvalidMessage("invalid directory entry"));
+            }
+            output.push(FILE_RESPONSE_LIST_ENTRY);
+            output.extend_from_slice(&request_id.to_be_bytes());
+            output.push(entry.kind.encode());
+            output.extend_from_slice(&entry.size.to_be_bytes());
+            match entry.modified_at {
+                Some(value) => {
+                    output.push(1);
+                    output.extend_from_slice(&value.to_be_bytes());
+                }
+                None => output.push(0),
+            }
+            put_text(&mut output, &entry.name)?;
+            put_text(&mut output, &entry.path)?;
+        }
+        RemoteFileResponse::ListDone { request_id } => {
+            output.push(FILE_RESPONSE_LIST_DONE);
+            output.extend_from_slice(&request_id.to_be_bytes());
+        }
+        RemoteFileResponse::DownloadStart {
+            transfer_id,
+            name,
+            size,
+        } => {
+            if !valid_file_name(name) {
+                return Err(ProtocolError::InvalidMessage("invalid file name"));
+            }
+            output.push(FILE_RESPONSE_DOWNLOAD_START);
+            output.extend_from_slice(&transfer_id.to_be_bytes());
+            output.extend_from_slice(&size.to_be_bytes());
+            put_text(&mut output, name)?;
+        }
+        RemoteFileResponse::DownloadChunk { transfer_id, bytes } => {
+            if bytes.is_empty() || bytes.len() > FILE_CHUNK_SIZE {
+                return Err(ProtocolError::InvalidMessage("invalid file chunk"));
+            }
+            output.push(FILE_RESPONSE_DOWNLOAD_CHUNK);
+            output.extend_from_slice(&transfer_id.to_be_bytes());
+            output.extend_from_slice(bytes);
+        }
+        RemoteFileResponse::UploadReady { transfer_id } => {
+            output.push(FILE_RESPONSE_UPLOAD_READY);
+            output.extend_from_slice(&transfer_id.to_be_bytes());
+        }
+        RemoteFileResponse::Complete { transfer_id } => {
+            output.push(FILE_RESPONSE_COMPLETE);
+            output.extend_from_slice(&transfer_id.to_be_bytes());
+        }
+        RemoteFileResponse::Error {
+            operation_id,
+            detail,
+        } => {
+            if detail.is_empty()
+                || detail.len() > MAX_FILE_ERROR_BYTES
+                || detail.chars().any(char::is_control)
+            {
+                return Err(ProtocolError::InvalidMessage("invalid file error"));
+            }
+            output.push(FILE_RESPONSE_ERROR);
+            output.extend_from_slice(&operation_id.to_be_bytes());
+            put_text(&mut output, detail)?;
+        }
+    }
+    Ok(output)
+}
+
+fn decode_file_response(body: &[u8]) -> Result<RemoteFileResponse, ProtocolError> {
+    let subkind = *body
+        .first()
+        .ok_or(ProtocolError::InvalidMessage("empty file response"))?;
+    let detail = &body[1..];
+    if detail.len() < 8 {
+        return Err(ProtocolError::InvalidMessage("truncated file response"));
+    }
+    let operation_id = read_u64(detail, 0)?;
+    match subkind {
+        FILE_RESPONSE_LIST_START => {
+            let mut offset = 8;
+            let path = read_text(detail, &mut offset)?.to_string();
+            finish_decode(detail, offset)?;
+            if !valid_remote_path(&path) {
+                return Err(ProtocolError::InvalidMessage("invalid remote path"));
+            }
+            Ok(RemoteFileResponse::ListStart {
+                request_id: operation_id,
+                path,
+            })
+        }
+        FILE_RESPONSE_LIST_ENTRY => {
+            if detail.len() < 18 {
+                return Err(ProtocolError::InvalidMessage("truncated directory entry"));
+            }
+            let kind = RemoteFileKind::decode(detail[8])?;
+            let size = read_u64(detail, 9)?;
+            let has_modified = decode_bool(detail[17])?;
+            let mut offset = 18;
+            let modified_at = if has_modified {
+                let value = read_u64(detail, offset)?;
+                offset += 8;
+                Some(value)
+            } else {
+                None
+            };
+            let name = read_text(detail, &mut offset)?.to_string();
+            let path = read_text(detail, &mut offset)?.to_string();
+            finish_decode(detail, offset)?;
+            if !valid_file_name(&name) || !valid_remote_path(&path) {
+                return Err(ProtocolError::InvalidMessage("invalid directory entry"));
+            }
+            Ok(RemoteFileResponse::ListEntry {
+                request_id: operation_id,
+                entry: RemoteFileEntry {
+                    name,
+                    path,
+                    kind,
+                    size,
+                    modified_at,
+                },
+            })
+        }
+        FILE_RESPONSE_LIST_DONE if detail.len() == 8 => Ok(RemoteFileResponse::ListDone {
+            request_id: operation_id,
+        }),
+        FILE_RESPONSE_DOWNLOAD_START => {
+            if detail.len() < 18 {
+                return Err(ProtocolError::InvalidMessage("truncated download start"));
+            }
+            let size = read_u64(detail, 8)?;
+            let mut offset = 16;
+            let name = read_text(detail, &mut offset)?.to_string();
+            finish_decode(detail, offset)?;
+            if !valid_file_name(&name) {
+                return Err(ProtocolError::InvalidMessage("invalid file name"));
+            }
+            Ok(RemoteFileResponse::DownloadStart {
+                transfer_id: operation_id,
+                name,
+                size,
+            })
+        }
+        FILE_RESPONSE_DOWNLOAD_CHUNK => {
+            let bytes = detail[8..].to_vec();
+            if bytes.is_empty() || bytes.len() > FILE_CHUNK_SIZE {
+                return Err(ProtocolError::InvalidMessage("invalid file chunk"));
+            }
+            Ok(RemoteFileResponse::DownloadChunk {
+                transfer_id: operation_id,
+                bytes,
+            })
+        }
+        FILE_RESPONSE_UPLOAD_READY if detail.len() == 8 => Ok(RemoteFileResponse::UploadReady {
+            transfer_id: operation_id,
+        }),
+        FILE_RESPONSE_COMPLETE if detail.len() == 8 => Ok(RemoteFileResponse::Complete {
+            transfer_id: operation_id,
+        }),
+        FILE_RESPONSE_ERROR => {
+            let mut offset = 8;
+            let detail_text = read_text(detail, &mut offset)?.to_string();
+            finish_decode(detail, offset)?;
+            if detail_text.is_empty()
+                || detail_text.len() > MAX_FILE_ERROR_BYTES
+                || detail_text.chars().any(char::is_control)
+            {
+                return Err(ProtocolError::InvalidMessage("invalid file error"));
+            }
+            Ok(RemoteFileResponse::Error {
+                operation_id,
+                detail: detail_text,
+            })
+        }
+        _ => Err(ProtocolError::InvalidMessage("invalid file response")),
     }
 }
 
@@ -566,10 +1078,83 @@ mod tests {
             width: 1280,
             height: 720,
             view_only: true,
+            file_transfer: false,
+            file_root_label: String::new(),
         });
         assert_eq!(
             RemoteMessage::decode(&message.encode().unwrap()).unwrap(),
             message
+        );
+    }
+
+    #[test]
+    fn file_workspace_messages_round_trip() {
+        let messages = vec![
+            RemoteMessage::FileRequest(RemoteFileRequest::List {
+                request_id: 1,
+                path: "/docs".into(),
+            }),
+            RemoteMessage::FileRequest(RemoteFileRequest::UploadStart {
+                transfer_id: 2,
+                path: "/docs/report.bin".into(),
+                size: 3,
+                overwrite: true,
+            }),
+            RemoteMessage::FileRequest(RemoteFileRequest::UploadChunk {
+                transfer_id: 2,
+                bytes: vec![0, 128, 255],
+            }),
+            RemoteMessage::FileResponse(RemoteFileResponse::ListEntry {
+                request_id: 1,
+                entry: RemoteFileEntry {
+                    name: "report.bin".into(),
+                    path: "/docs/report.bin".into(),
+                    kind: RemoteFileKind::File,
+                    size: 3,
+                    modified_at: Some(123),
+                },
+            }),
+            RemoteMessage::FileResponse(RemoteFileResponse::DownloadStart {
+                transfer_id: 3,
+                name: "report.bin".into(),
+                size: 3,
+            }),
+            RemoteMessage::FileResponse(RemoteFileResponse::DownloadChunk {
+                transfer_id: 3,
+                bytes: vec![0, 128, 255],
+            }),
+            RemoteMessage::FileResponse(RemoteFileResponse::Complete { transfer_id: 3 }),
+        ];
+        for message in messages {
+            assert_eq!(
+                RemoteMessage::decode(&message.encode().unwrap()).unwrap(),
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn file_workspace_rejects_traversal_and_oversized_chunks() {
+        assert!(RemoteMessage::FileRequest(RemoteFileRequest::List {
+            request_id: 1,
+            path: "/../secret".into(),
+        })
+        .encode()
+        .is_err());
+        assert!(RemoteMessage::FileRequest(RemoteFileRequest::UploadChunk {
+            transfer_id: 2,
+            bytes: vec![0; FILE_CHUNK_SIZE + 1],
+        })
+        .encode()
+        .is_err());
+        assert!(
+            RemoteMessage::FileResponse(RemoteFileResponse::DownloadStart {
+                transfer_id: 3,
+                name: "..".into(),
+                size: 1,
+            })
+            .encode()
+            .is_err()
         );
     }
 
@@ -581,6 +1166,8 @@ mod tests {
             width: 1280,
             height: 720,
             view_only: true,
+            file_transfer: false,
+            file_root_label: String::new(),
         });
         assert_eq!(oversized_name.encode(), Err(ProtocolError::InvalidHello));
 
@@ -590,6 +1177,8 @@ mod tests {
             width: 1280,
             height: 720,
             view_only: true,
+            file_transfer: false,
+            file_root_label: String::new(),
         });
         assert_eq!(control_name.encode(), Err(ProtocolError::InvalidHello));
 
@@ -599,6 +1188,8 @@ mod tests {
             width: 1280,
             height: 720,
             view_only: true,
+            file_transfer: false,
+            file_root_label: String::new(),
         })
         .encode()
         .unwrap();

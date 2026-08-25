@@ -22,7 +22,35 @@ export interface RemoteSessionSummary {
   width: number;
   height: number;
   viewOnly: boolean;
+  fileTransfer: boolean;
+  fileRootLabel: string;
   frame: RemoteFrame | null;
+}
+
+export interface RemoteFileEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file" | "symlink" | "other";
+  size: number;
+  modifiedAt: number | null;
+}
+
+export interface RemoteDirectory {
+  path: string;
+  entries: RemoteFileEntry[];
+}
+
+export interface RemoteFileTransfer {
+  transferId: string;
+  sessionId: string;
+  kind: "download" | "upload";
+  name: string;
+  remotePath: string;
+  localPath: string | null;
+  bytesDone: number;
+  totalBytes: number | null;
+  state: "running" | "done" | "error" | "cancelled";
+  detail: string | null;
 }
 
 export interface RemoteConnectRequest {
@@ -56,11 +84,104 @@ interface FrameEvent {
 
 export interface RemoteApi {
   sessions: RemoteSessionSummary[];
+  transfers: Record<string, RemoteFileTransfer>;
   lastClosed: SessionClosedNotice | null;
   connect: (request: RemoteConnectRequest) => Promise<RemoteConnectOutcome>;
   disconnect: (sessionId: string) => Promise<void>;
   input: (sessionId: string, request: RemoteInput) => Promise<void>;
+  listFiles: (sessionId: string, path: string) => Promise<RemoteDirectory>;
+  downloadFile: (sessionId: string, path: string) => Promise<RemoteFileTransfer>;
+  uploadFile: (
+    sessionId: string,
+    parent: string,
+    file: File,
+    overwrite: boolean,
+  ) => Promise<void>;
+  cancelFileTransfer: (sessionId: string, transferId: string) => Promise<void>;
+  dismissFileTransfer: (sessionId: string, transferId: string) => Promise<void>;
   clearLastClosed: () => void;
+}
+
+const REMOTE_UPLOAD_CHUNK_BYTES = 48 * 1024;
+
+type RemoteInvoke = (
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<unknown>;
+
+export function encodeRemoteFilePayload(bytes: Uint8Array): string {
+  let binary = "";
+  const slice = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += slice) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + slice));
+  }
+  return btoa(binary);
+}
+
+export function reconcileRemoteFileTransfer(
+  current: RemoteFileTransfer | undefined,
+  candidate: RemoteFileTransfer,
+): RemoteFileTransfer {
+  if (!current) return candidate;
+  const currentEnded = current.state !== "running";
+  const candidateEnded = candidate.state !== "running";
+  if (currentEnded !== candidateEnded) return currentEnded ? current : candidate;
+  if (!currentEnded && candidate.bytesDone < current.bytesDone) return current;
+  return candidate;
+}
+
+export async function streamRemoteFileUpload(
+  file: Pick<File, "stream">,
+  sessionId: string,
+  transferId: string,
+  invoke: RemoteInvoke,
+): Promise<void> {
+  const reader = file.stream().getReader();
+  let pending = new Uint8Array(0);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.length > 0) {
+        const merged = new Uint8Array(pending.length + value.length);
+        merged.set(pending);
+        merged.set(value, pending.length);
+        pending = merged;
+      }
+      while (pending.length >= REMOTE_UPLOAD_CHUNK_BYTES) {
+        await invoke("remote_file_upload_chunk", {
+          sessionId,
+          transferId,
+          data: encodeRemoteFilePayload(
+            pending.subarray(0, REMOTE_UPLOAD_CHUNK_BYTES),
+          ),
+        });
+        pending = pending.slice(REMOTE_UPLOAD_CHUNK_BYTES);
+      }
+    }
+    if (pending.length > 0) {
+      await invoke("remote_file_upload_chunk", {
+        sessionId,
+        transferId,
+        data: encodeRemoteFilePayload(pending),
+      });
+    }
+    await invoke("remote_file_upload_finish", { sessionId, transferId });
+  } catch (reason) {
+    try {
+      await reader.cancel(reason);
+    } catch {
+      // The backend cancellation below owns authoritative remote cleanup.
+    }
+    try {
+      await invoke("remote_file_transfer_cancel", { sessionId, transferId });
+    } catch {
+      // Preserve the original local read or transport error.
+    }
+    throw reason;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function core() {
@@ -69,6 +190,9 @@ async function core() {
 
 export function useRemoteSessions(): RemoteApi {
   const [sessions, setSessions] = useState<RemoteSessionSummary[]>([]);
+  const [transfers, setTransfers] = useState<
+    Record<string, RemoteFileTransfer>
+  >({});
   const [lastClosed, setLastClosed] = useState<SessionClosedNotice | null>(null);
   const sessionsRef = useRef(sessions);
   const intentionalDisconnects = useRef(new Set<string>());
@@ -140,10 +264,24 @@ export function useRemoteSessions(): RemoteApi {
         });
         if (!keep(stopFrames)) return;
 
-        const existing =
-          await invoke<Array<Omit<RemoteSessionSummary, "frame">>>(
-            "remote_sessions",
-          );
+        const stopTransfers = await listen<RemoteFileTransfer>(
+          "remote://file-transfer",
+          (event) => {
+            setTransfers((current) => ({
+              ...current,
+              [event.payload.transferId]: reconcileRemoteFileTransfer(
+                current[event.payload.transferId],
+                event.payload,
+              ),
+            }));
+          },
+        );
+        if (!keep(stopTransfers)) return;
+
+        const [existing, existingTransfers] = await Promise.all([
+          invoke<Array<Omit<RemoteSessionSummary, "frame">>>("remote_sessions"),
+          invoke<RemoteFileTransfer[]>("remote_file_transfers"),
+        ]);
         if (!cancelled) {
           const restored = existing.map<RemoteSessionSummary>((session) => {
             const frame = pendingFrames.get(session.sessionId) ?? null;
@@ -158,6 +296,16 @@ export function useRemoteSessions(): RemoteApi {
               closedDuringHydration,
             ),
           );
+          setTransfers((current) => {
+            const next = { ...current };
+            for (const transfer of existingTransfers) {
+              next[transfer.transferId] = reconcileRemoteFileTransfer(
+                next[transfer.transferId],
+                transfer,
+              );
+            }
+            return next;
+          });
           hydrating = false;
           closedDuringHydration.clear();
           pendingFrames.clear();
@@ -228,7 +376,97 @@ export function useRemoteSessions(): RemoteApi {
     [],
   );
 
+  const listFiles = useCallback(async (sessionId: string, path: string) => {
+    const { invoke } = await core();
+    return invoke<RemoteDirectory>("remote_file_list", { sessionId, path });
+  }, []);
+
+  const downloadFile = useCallback(async (sessionId: string, path: string) => {
+    const { invoke } = await core();
+    const transfer = await invoke<RemoteFileTransfer>(
+      "remote_file_download_start",
+      { sessionId, path },
+    );
+    setTransfers((current) => ({
+      ...current,
+      [transfer.transferId]: reconcileRemoteFileTransfer(
+        current[transfer.transferId],
+        transfer,
+      ),
+    }));
+    return transfer;
+  }, []);
+
+  const uploadFile = useCallback(
+    async (
+      sessionId: string,
+      parent: string,
+      file: File,
+      overwrite: boolean,
+    ) => {
+      const { invoke } = await core();
+      const transfer = await invoke<RemoteFileTransfer>(
+        "remote_file_upload_begin",
+        {
+          sessionId,
+          parent,
+          name: file.name,
+          size: file.size,
+          overwrite,
+        },
+      );
+      setTransfers((current) => ({
+        ...current,
+        [transfer.transferId]: reconcileRemoteFileTransfer(
+          current[transfer.transferId],
+          transfer,
+        ),
+      }));
+      await streamRemoteFileUpload(
+        file,
+        sessionId,
+        transfer.transferId,
+        invoke as RemoteInvoke,
+      );
+    },
+    [],
+  );
+
+  const cancelFileTransfer = useCallback(
+    async (sessionId: string, transferId: string) => {
+      const { invoke } = await core();
+      await invoke("remote_file_transfer_cancel", { sessionId, transferId });
+    },
+    [],
+  );
+
+  const dismissFileTransfer = useCallback(
+    async (sessionId: string, transferId: string) => {
+      const { invoke } = await core();
+      await invoke("remote_file_transfer_dismiss", { sessionId, transferId });
+      setTransfers((current) => {
+        const next = { ...current };
+        delete next[transferId];
+        return next;
+      });
+    },
+    [],
+  );
+
   const clearLastClosed = useCallback(() => setLastClosed(null), []);
 
-  return { sessions, lastClosed, connect, disconnect, input, clearLastClosed };
+  return {
+    sessions,
+    transfers,
+    lastClosed,
+    connect,
+    disconnect,
+    input,
+    listFiles,
+    downloadFile,
+    uploadFile,
+    cancelFileTransfer,
+    dismissFileTransfer,
+    clearLastClosed,
+  };
 }

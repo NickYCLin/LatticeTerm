@@ -8,7 +8,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
 const NOISE_PATTERN: &str = "Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s";
-const PROLOGUE: &[u8] = b"Lattice Remote v1 direct view-only";
+const PROLOGUE: &[u8] = b"Lattice Remote v2 direct encrypted workspace";
 const MAX_WIRE_MESSAGE: usize = 65_535;
 const MAX_PLAINTEXT: usize = MAX_WIRE_MESSAGE - 16;
 
@@ -298,6 +298,8 @@ mod tests {
                     width: 640,
                     height: 360,
                     view_only: true,
+                    file_transfer: false,
+                    file_root_label: String::new(),
                 }))
                 .await
                 .unwrap();
