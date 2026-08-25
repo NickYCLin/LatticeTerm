@@ -243,6 +243,8 @@ export interface AgentApi {
   deletePlan: (id: string) => Promise<boolean>;
   restorePlans: (planIds: string[]) => Promise<AgentRestoreOutcome[]>;
   send: (sessionId: string, data: string) => Promise<void>;
+  /** Writes a clipboard image to a temp file and returns its path, or null. */
+  pasteClipboardImage: (sessionId: string) => Promise<string | null>;
   broadcast: (
     sessionIds: string[],
     prompt: string,
@@ -623,6 +625,16 @@ export function useAgentSessions(): AgentApi {
     });
   }, []);
 
+  const pasteClipboardImage = useCallback(
+    async (sessionId: string): Promise<string | null> => {
+      const { invoke } = await core();
+      return invoke<string | null>("agent_paste_clipboard_image", {
+        sessionId,
+      });
+    },
+    [],
+  );
+
   const broadcast = useCallback(async (sessionIds: string[], prompt: string) => {
     const payload = buildAgentBroadcastPayload(prompt);
     if (!payload) throw new Error("A broadcast prompt is required.");
@@ -710,6 +722,7 @@ export function useAgentSessions(): AgentApi {
     deletePlan,
     restorePlans,
     send,
+    pasteClipboardImage,
     broadcast,
     resize,
     disconnect,

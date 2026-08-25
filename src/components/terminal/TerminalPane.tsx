@@ -16,6 +16,7 @@ import { useI18n } from "../../i18n/context";
 import type { ThemeId } from "../../app/themes";
 import { TerminalImeFallback } from "./terminalImeFallback";
 import { terminalTheme } from "./terminalTheme";
+import { attachTerminalClipboard } from "./terminalClipboard";
 
 export function TerminalPane({
   sessionId,
@@ -72,6 +73,8 @@ export function TerminalPane({
 
     termRef.current = terminal;
     fitRef.current = fit;
+
+    attachTerminalClipboard(terminal);
 
     // Silence here is what made a broken session look like a dead keyboard:
     // say so once, in the terminal itself, rather than dropping keystrokes.

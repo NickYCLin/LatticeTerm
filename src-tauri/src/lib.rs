@@ -360,6 +360,55 @@ fn agent_broadcast(
     )
 }
 
+/// Writes an image sitting on the clipboard to a temp PNG and returns its path.
+///
+/// Local agent CLIs (Claude Code, Gemini, …) accept an image by its file path,
+/// so on Ctrl+V the frontend pastes this path in. Returns `None` when the
+/// clipboard holds no image, which the caller treats as "nothing to paste".
+#[tauri::command]
+fn agent_paste_clipboard_image(
+    app: AppHandle,
+    session_id: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    // Reserved for future per-session scoping; kept so the wire contract is
+    // stable if we ever route pastes to a session-specific staging area.
+    let _ = session_id;
+
+    let image = match app.clipboard().read_image() {
+        Ok(image) => image,
+        Err(_) => return Ok(None),
+    };
+    let width = image.width();
+    let height = image.height();
+    if width == 0 || height == 0 {
+        return Ok(None);
+    }
+    let rgba = image.rgba().to_vec();
+
+    let mut file = tempfile::Builder::new()
+        .prefix("latticeterm-clip-")
+        .suffix(".png")
+        .tempfile()
+        .map_err(|err| format!("Cannot stage the pasted image: {err}"))?;
+    {
+        let writer = std::io::BufWriter::new(file.as_file_mut());
+        let mut encoder = png::Encoder::new(writer, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut png_writer = encoder
+            .write_header()
+            .map_err(|err| format!("Cannot encode the pasted image: {err}"))?;
+        png_writer
+            .write_image_data(&rgba)
+            .map_err(|err| format!("Cannot encode the pasted image: {err}"))?;
+    }
+    let (_, path) = file
+        .keep()
+        .map_err(|err| format!("Cannot save the pasted image: {err}"))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 #[tauri::command]
 fn agent_resize(
     session_id: String,
@@ -1501,6 +1550,7 @@ pub fn run() {
             agent_launch,
             agent_send,
             agent_broadcast,
+            agent_paste_clipboard_image,
             agent_resize,
             agent_disconnect,
             agent_sessions,

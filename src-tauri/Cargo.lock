@@ -2914,6 +2914,7 @@ dependencies = [
  "keyring",
  "lattice-remote",
  "libc",
+ "png 0.17.16",
  "portable-pty",
  "russh",
  "russh-sftp",

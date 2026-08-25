@@ -7,6 +7,7 @@ import type { ThemeId } from "../../app/themes";
 import { useI18n } from "../../i18n/context";
 import { TerminalImeFallback } from "../terminal/terminalImeFallback";
 import { terminalTheme } from "../terminal/terminalTheme";
+import { attachTerminalClipboard } from "../terminal/terminalClipboard";
 
 export function AgentTerminalPane({
   sessionId,
@@ -49,6 +50,22 @@ export function AgentTerminalPane({
     terminal.open(host);
     fit.fit();
     terminalRef.current = terminal;
+
+    attachTerminalClipboard(terminal, {
+      // The agent runs locally, so an image on the clipboard can be written to
+      // a temp file and its path pasted in — the shape CLIs like Claude Code
+      // and Gemini accept for attaching an image.
+      onImagePaste: () => {
+        void (async () => {
+          try {
+            const path = await agentsRef.current.pasteClipboardImage(sessionId);
+            if (path) terminal.paste(path);
+          } catch {
+            // No image delivered; leave the prompt untouched.
+          }
+        })();
+      },
+    });
 
     let inputReported = false;
     const sendInput = (data: string) => {
