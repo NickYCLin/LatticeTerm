@@ -4,6 +4,19 @@
 
 ---
 
+## [0.21.0](https://github.com/NickYCLin/lattice-term/compare/v0.20.0...v0.21.0) (2026-08-25)
+
+
+### 🚀 新增功能
+
+* **app:** 完善工作階段與桌面使用體驗 ([6afbcdd](https://github.com/NickYCLin/lattice-term/commit/6afbcdd7daff842ea58a7774cbdee3540cad6ae0))
+* **遠端:** 支援主機檔案瀏覽與傳輸 ([#69](https://github.com/NickYCLin/lattice-term/issues/69)) ([87606ae](https://github.com/NickYCLin/lattice-term/commit/87606ae7ff29f3c06f8661c3bdc5b6504dce974f))
+
+
+### 🛠️ 問題修正
+
+* **終端機:** 修正 Linux 重複輸入與字距 ([8a41bf5](https://github.com/NickYCLin/lattice-term/commit/8a41bf58ce9e4f491d9c9f638a2950bef92c256b))
+
 ## [0.20.0](https://github.com/NickYCLin/lattice-term/compare/v0.19.0...v0.20.0) (2026-08-25)
 
 
