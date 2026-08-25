@@ -1,9 +1,11 @@
 //! Tauri bridge for Lattice Remote.
 //!
 //! Pairing secrets cross IPC for one call and are never placed in the
-//! registry. The registry retains only public session metadata and an abort
-//! handle. Frames are already encrypted on the wire before they reach here.
+//! registry. The registry retains only public session metadata, bounded writer
+//! state, file-transfer progress, and an abort handle. Frames and files are
+//! already encrypted on the wire before they reach here.
 
+use crate::remote_files::{RemoteDirectory, RemoteFileTransfer, RemoteFilesClient};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use lattice_remote::{
@@ -43,6 +45,8 @@ pub struct RemoteSessionSummary {
     pub width: u32,
     pub height: u32,
     pub view_only: bool,
+    pub file_transfer: bool,
+    pub file_root_label: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,8 +112,15 @@ struct RemoteClosedEvent {
 struct RemoteSessionRecord {
     summary: RemoteSessionSummary,
     abort: AbortHandle,
-    /// Present only for interactive sessions; sending drives the writer task.
-    input: Option<mpsc::UnboundedSender<RemoteInput>>,
+    outbound: mpsc::Sender<RemoteMessage>,
+    files: Option<Arc<RemoteFilesClient>>,
+}
+
+#[derive(Clone)]
+struct RemoteSessionAccess {
+    summary: RemoteSessionSummary,
+    outbound: mpsc::Sender<RemoteMessage>,
+    files: Option<Arc<RemoteFilesClient>>,
 }
 
 #[derive(Default)]
@@ -126,7 +137,8 @@ impl RemoteRegistry {
         &self,
         summary: RemoteSessionSummary,
         abort: AbortHandle,
-        input: Option<mpsc::UnboundedSender<RemoteInput>>,
+        outbound: mpsc::Sender<RemoteMessage>,
+        files: Option<Arc<RemoteFilesClient>>,
     ) -> Result<(), String> {
         self.sessions
             .lock()
@@ -136,24 +148,24 @@ impl RemoteRegistry {
                 RemoteSessionRecord {
                     summary,
                     abort,
-                    input,
+                    outbound,
+                    files,
                 },
             );
         Ok(())
     }
 
-    /// Hands the input channel for a session to the caller, if it is
-    /// interactive and still live. Cloning the sender keeps the lock brief.
-    fn input_sender(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<mpsc::UnboundedSender<RemoteInput>>, String> {
-        Ok(self
-            .sessions
+    fn access(&self, session_id: &str) -> Result<RemoteSessionAccess, String> {
+        self.sessions
             .lock()
             .map_err(|error| error.to_string())?
             .get(session_id)
-            .and_then(|record| record.input.clone()))
+            .map(|record| RemoteSessionAccess {
+                summary: record.summary.clone(),
+                outbound: record.outbound.clone(),
+                files: record.files.clone(),
+            })
+            .ok_or_else(|| format!("Lattice Remote session '{session_id}' is not connected."))
     }
 
     fn remove(&self, session_id: &str) -> Result<Option<RemoteSessionRecord>, String> {
@@ -174,6 +186,19 @@ impl RemoteRegistry {
             .collect();
         summaries.sort_by(|left, right| left.session_id.cmp(&right.session_id));
         summaries
+    }
+
+    pub fn transfers(&self) -> Vec<RemoteFileTransfer> {
+        let Ok(sessions) = self.sessions.lock() else {
+            return Vec::new();
+        };
+        let mut transfers: Vec<_> = sessions
+            .values()
+            .filter_map(|record| record.files.as_ref())
+            .flat_map(|files| files.transfers())
+            .collect();
+        transfers.sort_by(|left, right| left.transfer_id.cmp(&right.transfer_id));
+        transfers
     }
 }
 
@@ -242,37 +267,36 @@ pub async fn connect(
         width: hello.width,
         height: hello.height,
         view_only: hello.view_only,
+        file_transfer: hello.file_transfer,
+        file_root_label: hello.file_root_label,
     };
 
-    // Always split so the frame loop reads through one half. Interactive
-    // sessions drive the write half from a channel; view-only sessions hold it
-    // open (dropping it would half-close the socket and end the stream early).
-    let (mut reader, writer_half) = connection.split();
-    let (input, idle_writer) = if hello.view_only {
-        (None, Some(writer_half))
-    } else {
-        let (tx, mut rx) = mpsc::unbounded_channel::<RemoteInput>();
-        let mut writer_half = writer_half;
-        tokio::spawn(async move {
-            while let Some(input) = rx.recv().await {
-                if writer_half
-                    .send(&RemoteMessage::Input(input))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
+    // Input and file requests share one bounded encrypted writer queue. File
+    // access remains available to a view-only display session only when the
+    // host advertised its independently authorised shared root.
+    let (mut reader, mut writer_half) = connection.split();
+    let (outbound, mut outbound_rx) = mpsc::channel::<RemoteMessage>(128);
+    let writer = tokio::spawn(async move {
+        while let Some(message) = outbound_rx.recv().await {
+            if writer_half.send(&message).await.is_err() {
+                break;
             }
-        });
-        (Some(tx), None)
-    };
+        }
+    });
+    let files = session.file_transfer.then(|| {
+        Arc::new(RemoteFilesClient::new(
+            session.session_id.clone(),
+            app.clone(),
+            outbound.clone(),
+        ))
+    });
 
     let task_session_id = session.session_id.clone();
     let task_registry = Arc::clone(&registry);
     let task_app = app.clone();
+    let task_files = files.clone();
+    let writer_abort = writer.abort_handle();
     let task = tokio::spawn(async move {
-        // Keep the write half alive for view-only sessions until the stream ends.
-        let _idle_writer = idle_writer;
         let mut assembler = FrameAssembler::new();
         let reason = loop {
             match reader.receive().await {
@@ -299,12 +323,27 @@ pub async fn connect(
                 Ok(RemoteMessage::Input(_)) => {
                     break "The Agent echoed an input message.".to_string()
                 }
+                Ok(RemoteMessage::FileResponse(response)) => {
+                    if let Some(files) = &task_files {
+                        files.handle_response(response);
+                    } else {
+                        break "The Agent sent file data without advertising file sharing."
+                            .to_string();
+                    }
+                }
+                Ok(RemoteMessage::FileRequest(_)) => {
+                    break "The Agent sent a viewer-only file request.".to_string()
+                }
                 Ok(RemoteMessage::Hello(_)) => {
                     break "The Agent sent a second identity message.".to_string()
                 }
                 Err(error) => break error.to_string(),
             }
         };
+        writer_abort.abort();
+        if let Some(files) = &task_files {
+            files.close(&reason);
+        }
         let _ = task_registry.remove(&task_session_id);
         let _ = task_app.emit(
             "remote://closed",
@@ -314,8 +353,9 @@ pub async fn connect(
             },
         );
     });
-    if let Err(error) = registry.insert(session.clone(), task.abort_handle(), input) {
+    if let Err(error) = registry.insert(session.clone(), task.abort_handle(), outbound, files) {
         task.abort();
+        writer.abort();
         return failed("session", error);
     }
 
@@ -325,18 +365,125 @@ pub async fn connect(
 /// Sends one viewer control action to an interactive session. A view-only
 /// session (no input channel) or a closed session is a no-op — the frontend
 /// already gates on `viewOnly`, so this stays quiet rather than erroring.
-pub fn input(
+pub async fn input(
     registry: &RemoteRegistry,
     session_id: &str,
     request: RemoteInputRequest,
 ) -> Result<(), String> {
-    let Some(sender) = registry.input_sender(session_id)? else {
+    let access = registry.access(session_id)?;
+    if access.summary.view_only {
         return Ok(());
-    };
+    }
     if let Some(input) = resolve_input(request) {
-        let _ = sender.send(input);
+        access
+            .outbound
+            .send(RemoteMessage::Input(input))
+            .await
+            .map_err(|_| "The remote session is no longer connected.".to_string())?;
     }
     Ok(())
+}
+
+fn file_access(registry: &RemoteRegistry, session_id: &str) -> Result<RemoteSessionAccess, String> {
+    let access = registry.access(session_id)?;
+    if access.files.is_none() {
+        return Err("The remote host did not enable file sharing.".to_string());
+    }
+    Ok(access)
+}
+
+pub async fn file_list(
+    registry: &RemoteRegistry,
+    session_id: &str,
+    path: String,
+) -> Result<RemoteDirectory, String> {
+    let access = file_access(registry, session_id)?;
+    access
+        .files
+        .expect("file access checked")
+        .list(&access.outbound, path)
+        .await
+}
+
+pub async fn file_download_start(
+    registry: &RemoteRegistry,
+    session_id: &str,
+    path: String,
+) -> Result<RemoteFileTransfer, String> {
+    let access = file_access(registry, session_id)?;
+    access
+        .files
+        .expect("file access checked")
+        .download_start(&access.outbound, path)
+        .await
+}
+
+pub async fn file_upload_begin(
+    registry: &RemoteRegistry,
+    session_id: &str,
+    parent: String,
+    name: String,
+    size: u64,
+    overwrite: bool,
+) -> Result<RemoteFileTransfer, String> {
+    let access = file_access(registry, session_id)?;
+    access
+        .files
+        .expect("file access checked")
+        .upload_begin(&access.outbound, parent, name, size, overwrite)
+        .await
+}
+
+pub async fn file_upload_chunk(
+    registry: &RemoteRegistry,
+    session_id: &str,
+    transfer_id: &str,
+    data: &str,
+) -> Result<(), String> {
+    let access = file_access(registry, session_id)?;
+    access
+        .files
+        .expect("file access checked")
+        .upload_chunk(&access.outbound, transfer_id, data)
+        .await
+}
+
+pub async fn file_upload_finish(
+    registry: &RemoteRegistry,
+    session_id: &str,
+    transfer_id: &str,
+) -> Result<(), String> {
+    let access = file_access(registry, session_id)?;
+    access
+        .files
+        .expect("file access checked")
+        .upload_finish(&access.outbound, transfer_id)
+        .await
+}
+
+pub async fn file_transfer_cancel(
+    registry: &RemoteRegistry,
+    session_id: &str,
+    transfer_id: &str,
+) -> Result<(), String> {
+    let access = file_access(registry, session_id)?;
+    access
+        .files
+        .expect("file access checked")
+        .cancel(&access.outbound, transfer_id)
+        .await
+}
+
+pub fn file_transfer_dismiss(
+    registry: &RemoteRegistry,
+    session_id: &str,
+    transfer_id: &str,
+) -> Result<(), String> {
+    let access = file_access(registry, session_id)?;
+    access
+        .files
+        .expect("file access checked")
+        .dismiss(transfer_id)
 }
 
 /// Converts a browser-shaped request into a protocol input, dropping anything
@@ -369,12 +516,21 @@ fn resolve_input(request: RemoteInputRequest) -> Option<RemoteInput> {
     }
 }
 
-pub fn disconnect(
+pub async fn disconnect(
     app: &AppHandle,
     registry: &RemoteRegistry,
     session_id: &str,
 ) -> Result<(), String> {
     if let Some(record) = registry.remove(session_id)? {
+        if let Some(files) = &record.files {
+            files.close("Disconnected by the local user.");
+        }
+        let _ = record
+            .outbound
+            .send(RemoteMessage::Close(
+                "Disconnected by the local user.".to_string(),
+            ))
+            .await;
         record.abort.abort();
         let _ = app.emit(
             "remote://closed",

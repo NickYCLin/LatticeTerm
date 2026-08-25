@@ -10,7 +10,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex as AsyncMutex;
@@ -28,6 +28,12 @@ pub struct RemoteHostStartRequest {
     /// keyboard. Defaults to false so an unset field stays view-only.
     #[serde(default)]
     pub allow_input: bool,
+    /// File access is independently authorised from keyboard/mouse control.
+    #[serde(default)]
+    pub allow_files: bool,
+    /// Empty means the current user's home folder when file sharing is enabled.
+    #[serde(default)]
+    pub file_root: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -38,6 +44,8 @@ pub struct RemoteHostStatus {
     pub pairing_code: String,
     pub expires_at: u64,
     pub view_only: bool,
+    pub file_transfer: bool,
+    pub file_root: Option<String>,
     pub state: &'static str,
     pub peer: Option<String>,
     pub attempts_remaining: u32,
@@ -55,6 +63,8 @@ enum AgentEvent {
         pairing_code: String,
         expires_in_seconds: u64,
         view_only: bool,
+        file_transfer: bool,
+        file_root: Option<String>,
     },
     PairingRequest {
         peer: String,
@@ -222,6 +232,7 @@ fn spawn_agent(
     target: SocketAddr,
     fps: u32,
     allow_input: bool,
+    file_root: Option<&Path>,
 ) -> Result<(Child, tokio::process::ChildStdout), String> {
     let mut command = Command::new(agent_path()?);
     command
@@ -232,6 +243,9 @@ fn spawn_agent(
         .arg(fps.to_string());
     if allow_input {
         command.arg("--allow-input");
+    }
+    if let Some(file_root) = file_root {
+        command.arg("--file-root").arg(file_root);
     }
     let mut child = command
         .stdin(Stdio::null())
@@ -266,7 +280,30 @@ pub async fn start(
     }
 
     let target = bind_target(&request)?;
-    let (mut child, stdout) = spawn_agent(target, request.fps, request.allow_input)?;
+    let file_root = if request.allow_files {
+        let requested = request.file_root.trim();
+        let path = if requested.is_empty() {
+            app.path()
+                .home_dir()
+                .map_err(|error| format!("Cannot locate the home folder: {error}"))?
+        } else {
+            PathBuf::from(requested)
+        };
+        let canonical = std::fs::canonicalize(&path)
+            .map_err(|error| format!("Cannot open the shared folder: {error}"))?;
+        if !canonical.is_dir() {
+            return Err("The shared file root must be a folder.".to_string());
+        }
+        Some(canonical)
+    } else {
+        None
+    };
+    let (mut child, stdout) = spawn_agent(
+        target,
+        request.fps,
+        request.allow_input,
+        file_root.as_deref(),
+    )?;
     let mut lines = BufReader::new(stdout).lines();
     let first = match timeout(Duration::from_secs(12), lines.next_line()).await {
         Ok(Ok(Some(line))) => parse_event(&line),
@@ -275,26 +312,36 @@ pub async fn start(
         Err(_) => Err("The Lattice Agent did not become ready within 12 seconds.".to_string()),
     };
 
-    let (address, pairing_code, expires_in_seconds, view_only) = match first {
-        Ok(AgentEvent::Ready {
-            address,
-            pairing_code,
-            expires_in_seconds,
-            view_only,
-        }) => (address, pairing_code, expires_in_seconds, view_only),
-        Ok(AgentEvent::Failed { stage, detail }) => {
-            let _ = child.kill().await;
-            return Err(format!("{stage}: {detail}"));
-        }
-        Ok(_) => {
-            let _ = child.kill().await;
-            return Err("The Lattice Agent did not report a ready event first.".to_string());
-        }
-        Err(error) => {
-            let _ = child.kill().await;
-            return Err(error);
-        }
-    };
+    let (address, pairing_code, expires_in_seconds, view_only, file_transfer, file_root) =
+        match first {
+            Ok(AgentEvent::Ready {
+                address,
+                pairing_code,
+                expires_in_seconds,
+                view_only,
+                file_transfer,
+                file_root,
+            }) => (
+                address,
+                pairing_code,
+                expires_in_seconds,
+                view_only,
+                file_transfer,
+                file_root,
+            ),
+            Ok(AgentEvent::Failed { stage, detail }) => {
+                let _ = child.kill().await;
+                return Err(format!("{stage}: {detail}"));
+            }
+            Ok(_) => {
+                let _ = child.kill().await;
+                return Err("The Lattice Agent did not report a ready event first.".to_string());
+            }
+            Err(error) => {
+                let _ = child.kill().await;
+                return Err(error);
+            }
+        };
 
     let status = RemoteHostStatus {
         host_id: host_id(),
@@ -302,6 +349,8 @@ pub async fn start(
         pairing_code,
         expires_at: now_seconds().saturating_add(expires_in_seconds),
         view_only,
+        file_transfer,
+        file_root,
         state: "waiting",
         peer: None,
         attempts_remaining: 5,
@@ -423,6 +472,8 @@ mod tests {
             port: 44_900,
             fps: 5,
             allow_input: false,
+            allow_files: false,
+            file_root: String::new(),
         })
         .unwrap();
         assert_eq!(ipv4.to_string(), "192.168.1.20:44900");
@@ -432,6 +483,8 @@ mod tests {
             port: 44_900,
             fps: 10,
             allow_input: true,
+            allow_files: false,
+            file_root: String::new(),
         })
         .unwrap();
         assert_eq!(ipv6.to_string(), "[::1]:44900");
@@ -445,6 +498,8 @@ mod tests {
                 port: 44_900,
                 fps: 5,
                 allow_input: false,
+                allow_files: false,
+                file_root: String::new(),
             })
             .is_err());
         }

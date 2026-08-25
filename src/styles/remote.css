@@ -76,6 +76,220 @@
     #080a0d;
 }
 
+.remote-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.remote-workspace--files {
+  grid-template-columns: minmax(18rem, 28rem) minmax(0, 1fr);
+}
+
+.remote-workspace__files {
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.remote-files-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text);
+}
+
+.remote-files-toolbar {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-solid);
+}
+
+.remote-files-path,
+.remote-files-actions,
+.remote-files-transfer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.remote-files-path .input {
+  flex: 1;
+  min-width: 0;
+  height: 1.875rem;
+}
+
+.remote-files-actions {
+  justify-content: flex-end;
+}
+
+.remote-files-root {
+  padding: 0.35rem var(--space-3);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.remote-files-problem {
+  padding: var(--space-2);
+}
+
+.remote-files-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.remote-files-state {
+  display: grid;
+  place-items: center;
+  min-height: 10rem;
+  padding: var(--space-5);
+  color: var(--text-muted);
+  text-align: center;
+  font-size: var(--text-sm);
+}
+
+.remote-files-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--text-xs);
+}
+
+.remote-files-table th,
+.remote-files-table td {
+  padding: 0.32rem var(--space-2);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  color: var(--text-muted);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-files-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-solid);
+  color: var(--text-faint);
+  font-weight: 600;
+}
+
+.remote-files-table th:first-child {
+  width: 43%;
+}
+
+.remote-files-table th:nth-child(2) {
+  width: 18%;
+}
+
+.remote-files-table th:nth-child(3) {
+  width: 29%;
+}
+
+.remote-files-table th:last-child {
+  width: 2.2rem;
+}
+
+.remote-files-table tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.remote-files-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.remote-files-entry svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.remote-files-entry span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.remote-files-entry:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.remote-files-transfers {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 9rem;
+  padding: var(--space-2);
+  border-top: 1px solid var(--line);
+  overflow: auto;
+  background: var(--surface-solid);
+}
+
+.remote-files-transfer {
+  min-width: 0;
+  font-size: var(--text-xs);
+}
+
+.remote-files-transfer > .truncate {
+  flex: 0 1 7rem;
+}
+
+.remote-files-progress {
+  flex: 1 1 4rem;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--surface-raised);
+}
+
+.remote-files-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--duration-fast) var(--ease);
+}
+
+.remote-files-progress > .state-done {
+  background: var(--ok);
+}
+
+.remote-files-progress > .state-error {
+  background: var(--danger);
+}
+
+.remote-files-progress > .state-cancelled {
+  background: var(--text-faint);
+}
+
+.remote-files-transfer__detail {
+  flex: 0 1 auto;
+  max-width: 9rem;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capture-button.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .remote-frame-canvas,
 .rdp-canvas {
   display: block;
@@ -364,6 +578,17 @@
   }
 
   .capture-button__label {
+    display: none;
+  }
+
+  .remote-workspace--files {
+    grid-template-columns: minmax(12rem, 42%) minmax(0, 1fr);
+  }
+
+  .remote-files-table th:nth-child(2),
+  .remote-files-table td:nth-child(2),
+  .remote-files-table th:nth-child(3),
+  .remote-files-table td:nth-child(3) {
     display: none;
   }
 }

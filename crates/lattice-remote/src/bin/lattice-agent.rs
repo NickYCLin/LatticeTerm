@@ -1,12 +1,18 @@
 use image::{imageops::FilterType, DynamicImage};
 use lattice_remote::{
-    frame_messages, generate_pairing_code, host_input::InputInjector, normalize_pairing_code,
-    FrameFormat, RemoteHello, RemoteMessage, SecureConnection, DEFAULT_PORT, PROTOCOL_VERSION,
+    frame_messages, generate_pairing_code, host_files::HostUpload, host_files::SharedFiles,
+    host_input::InputInjector, normalize_pairing_code, FrameFormat, RemoteFileRequest,
+    RemoteFileResponse, RemoteHello, RemoteMessage, SecureConnection, DEFAULT_PORT,
+    FILE_CHUNK_SIZE, MAX_FILE_ERROR_BYTES, PROTOCOL_VERSION,
 };
 use serde::Serialize;
+use std::collections::{hash_map::Entry, HashMap};
 use std::env;
 use std::io::{Cursor, Write as _};
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -26,6 +32,7 @@ struct Options {
     fps: u32,
     json: bool,
     allow_input: bool,
+    file_root: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -40,6 +47,8 @@ enum AgentEvent<'a> {
         pairing_code: String,
         expires_in_seconds: u64,
         view_only: bool,
+        file_transfer: bool,
+        file_root: Option<String>,
     },
     PairingRequest {
         peer: String,
@@ -71,14 +80,15 @@ fn emit_event(json: bool, event: &AgentEvent<'_>) {
 
 fn help() -> &'static str {
     "Lattice Remote agent\n\n\
-Usage: lattice-agent [--bind ADDRESS:PORT] [--pair-code 1234-5678] [--fps 1-10] [--allow-input] [--json]\n\n\
+Usage: lattice-agent [--bind ADDRESS:PORT] [--pair-code 1234-5678] [--fps 1-10] [--allow-input] [--file-root PATH] [--json]\n\n\
 The safe default listens on 127.0.0.1 only. To receive a LAN connection, pass\n\
 the machine's LAN address explicitly, for example --bind 192.168.1.20:44900.\n\
 The agent accepts one successfully paired connection, streams the primary\n\
 display over an encrypted channel, then exits.\n\n\
 By default the session is view-only. Pass --allow-input to let the paired\n\
 viewer control this machine's mouse and keyboard; without it, input messages\n\
-are ignored.\n"
+are ignored. File access stays disabled unless --file-root explicitly shares\n\
+one folder; every remote path is then confined to that folder.\n"
 }
 
 fn parse_options() -> Result<Options, String> {
@@ -89,6 +99,7 @@ fn parse_options() -> Result<Options, String> {
     let mut fps = DEFAULT_FPS;
     let mut json = false;
     let mut allow_input = false;
+    let mut file_root = None;
     let mut arguments = env::args().skip(1);
 
     while let Some(argument) = arguments.next() {
@@ -122,6 +133,14 @@ fn parse_options() -> Result<Options, String> {
             }
             "--json" => json = true,
             "--allow-input" => allow_input = true,
+            "--file-root" => {
+                let path = PathBuf::from(
+                    arguments
+                        .next()
+                        .ok_or_else(|| "--file-root needs a folder path".to_string())?,
+                );
+                file_root = Some(SharedFiles::open(&path)?.root().to_path_buf());
+            }
             "--help" | "-h" => {
                 print!("{}", help());
                 std::process::exit(0);
@@ -139,6 +158,7 @@ fn parse_options() -> Result<Options, String> {
         fps,
         json,
         allow_input,
+        file_root,
     })
 }
 
@@ -223,7 +243,153 @@ fn agent_name() -> String {
         .unwrap_or_else(|| "Lattice Agent".to_string())
 }
 
-async fn serve(connection: SecureConnection, fps: u32, allow_input: bool) -> Result<(), String> {
+fn safe_file_error(detail: impl Into<String>) -> String {
+    let mut output = String::new();
+    for character in detail.into().chars() {
+        let character = if character.is_control() {
+            ' '
+        } else {
+            character
+        };
+        if output.len() + character.len_utf8() > MAX_FILE_ERROR_BYTES {
+            break;
+        }
+        output.push(character);
+    }
+    if output.trim().is_empty() {
+        "Remote file operation failed.".to_string()
+    } else {
+        output
+    }
+}
+
+fn file_error(operation_id: u64, detail: impl Into<String>) -> RemoteMessage {
+    RemoteMessage::FileResponse(RemoteFileResponse::Error {
+        operation_id,
+        detail: safe_file_error(detail),
+    })
+}
+
+fn spawn_directory_list(
+    files: Arc<SharedFiles>,
+    request_id: u64,
+    path: String,
+    outgoing: mpsc::Sender<RemoteMessage>,
+) {
+    tokio::task::spawn_blocking(move || match files.list(&path) {
+        Ok((path, entries)) => {
+            if outgoing
+                .blocking_send(RemoteMessage::FileResponse(RemoteFileResponse::ListStart {
+                    request_id,
+                    path,
+                }))
+                .is_err()
+            {
+                return;
+            }
+            for entry in entries {
+                if outgoing
+                    .blocking_send(RemoteMessage::FileResponse(RemoteFileResponse::ListEntry {
+                        request_id,
+                        entry,
+                    }))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            let _ =
+                outgoing.blocking_send(RemoteMessage::FileResponse(RemoteFileResponse::ListDone {
+                    request_id,
+                }));
+        }
+        Err(error) => {
+            let _ = outgoing.blocking_send(file_error(request_id, error));
+        }
+    });
+}
+
+fn spawn_download(
+    files: Arc<SharedFiles>,
+    transfer_id: u64,
+    path: String,
+    outgoing: mpsc::Sender<RemoteMessage>,
+    cancelled: Arc<AtomicBool>,
+    active_downloads: Arc<Mutex<HashMap<u64, Arc<AtomicBool>>>>,
+) {
+    tokio::task::spawn_blocking(move || {
+        let unregister = || {
+            if let Ok(mut active) = active_downloads.lock() {
+                active.remove(&transfer_id);
+            }
+        };
+        let mut download = match files.download(&path) {
+            Ok(download) => download,
+            Err(error) => {
+                let _ = outgoing.blocking_send(file_error(transfer_id, error));
+                unregister();
+                return;
+            }
+        };
+        if cancelled.load(Ordering::Relaxed) {
+            unregister();
+            return;
+        }
+        if outgoing
+            .blocking_send(RemoteMessage::FileResponse(
+                RemoteFileResponse::DownloadStart {
+                    transfer_id,
+                    name: download.name.clone(),
+                    size: download.size,
+                },
+            ))
+            .is_err()
+        {
+            unregister();
+            return;
+        }
+        let mut buffer = vec![0; FILE_CHUNK_SIZE];
+        loop {
+            if cancelled.load(Ordering::Relaxed) {
+                unregister();
+                return;
+            }
+            match download.read_chunk(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    if outgoing
+                        .blocking_send(RemoteMessage::FileResponse(
+                            RemoteFileResponse::DownloadChunk {
+                                transfer_id,
+                                bytes: buffer[..read].to_vec(),
+                            },
+                        ))
+                        .is_err()
+                    {
+                        unregister();
+                        return;
+                    }
+                }
+                Err(error) => {
+                    let _ = outgoing.blocking_send(file_error(transfer_id, error));
+                    unregister();
+                    return;
+                }
+            }
+        }
+        let _ = outgoing.blocking_send(RemoteMessage::FileResponse(RemoteFileResponse::Complete {
+            transfer_id,
+        }));
+        unregister();
+    });
+}
+
+async fn serve(
+    connection: SecureConnection,
+    fps: u32,
+    allow_input: bool,
+    file_root: Option<PathBuf>,
+) -> Result<(), String> {
     let monitors = Monitor::all().map_err(|error| error.to_string())?;
     let monitor = monitors
         .into_iter()
@@ -233,21 +399,38 @@ async fn serve(connection: SecureConnection, fps: u32, allow_input: bool) -> Res
     let mut width = capture.stream_width;
     let mut height = capture.stream_height;
 
-    let (mut reader, mut writer) = connection.split();
+    let shared_files = file_root.map(SharedFiles::open).transpose()?.map(Arc::new);
+    let (mut reader, mut writer_half) = connection.split();
 
-    writer
+    writer_half
         .send(&RemoteMessage::Hello(RemoteHello {
             protocol_version: PROTOCOL_VERSION,
             agent_name: agent_name(),
             width,
             height,
             view_only: !allow_input,
+            file_transfer: shared_files.is_some(),
+            file_root_label: shared_files
+                .as_ref()
+                .map(|files| files.label().to_string())
+                .unwrap_or_default(),
         }))
         .await
         .map_err(|error| error.to_string())?;
 
-    // Receiving runs on its own task; with input allowed it forwards each
-    // decoded input to the OS thread, otherwise it just watches for Close.
+    // One bounded writer queue serialises frames and file responses on the
+    // Noise send state while applying backpressure to large downloads.
+    let (outgoing, mut outgoing_rx) = mpsc::channel::<RemoteMessage>(128);
+    let writer = tokio::spawn(async move {
+        while let Some(message) = outgoing_rx.recv().await {
+            if writer_half.send(&message).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Receiving runs on its own task. Input remains independently authorised;
+    // file messages are accepted only when an explicit shared root exists.
     let (input_tx, input_thread) = if allow_input {
         let (tx, rx) = mpsc::unbounded_channel();
         let handle = spawn_input_thread(
@@ -262,7 +445,12 @@ async fn serve(connection: SecureConnection, fps: u32, allow_input: bool) -> Res
         (None, None)
     };
 
+    let receiver_files = shared_files.clone();
+    let receiver_outgoing = outgoing.clone();
+    let active_downloads = Arc::new(Mutex::new(HashMap::<u64, Arc<AtomicBool>>::new()));
+    let receiver_downloads = Arc::clone(&active_downloads);
     let receiver = tokio::spawn(async move {
+        let mut uploads = HashMap::<u64, HostUpload>::new();
         loop {
             match reader.receive().await {
                 Ok(RemoteMessage::Input(input)) => {
@@ -272,12 +460,139 @@ async fn serve(connection: SecureConnection, fps: u32, allow_input: bool) -> Res
                         }
                     }
                 }
+                Ok(RemoteMessage::FileRequest(request)) => match request {
+                    RemoteFileRequest::List { request_id, path } => {
+                        if let Some(files) = &receiver_files {
+                            spawn_directory_list(
+                                Arc::clone(files),
+                                request_id,
+                                path,
+                                receiver_outgoing.clone(),
+                            );
+                        } else {
+                            let _ = receiver_outgoing
+                                .send(file_error(request_id, "File sharing is not enabled."))
+                                .await;
+                        }
+                    }
+                    RemoteFileRequest::Download { transfer_id, path } => {
+                        if let Some(files) = &receiver_files {
+                            let cancelled = Arc::new(AtomicBool::new(false));
+                            let inserted = receiver_downloads
+                                .lock()
+                                .map(|mut active| match active.entry(transfer_id) {
+                                    Entry::Vacant(entry) => {
+                                        entry.insert(Arc::clone(&cancelled));
+                                        true
+                                    }
+                                    Entry::Occupied(_) => false,
+                                })
+                                .unwrap_or(false);
+                            if inserted {
+                                spawn_download(
+                                    Arc::clone(files),
+                                    transfer_id,
+                                    path,
+                                    receiver_outgoing.clone(),
+                                    cancelled,
+                                    Arc::clone(&receiver_downloads),
+                                );
+                            } else {
+                                let _ = receiver_outgoing
+                                    .send(file_error(
+                                        transfer_id,
+                                        "The download identifier is already active.",
+                                    ))
+                                    .await;
+                            }
+                        } else {
+                            let _ = receiver_outgoing
+                                .send(file_error(transfer_id, "File sharing is not enabled."))
+                                .await;
+                        }
+                    }
+                    RemoteFileRequest::UploadStart {
+                        transfer_id,
+                        path,
+                        size,
+                        overwrite,
+                    } => {
+                        let result = receiver_files
+                            .as_ref()
+                            .ok_or_else(|| "File sharing is not enabled.".to_string())
+                            .and_then(|files| {
+                                if uploads.contains_key(&transfer_id) {
+                                    return Err(
+                                        "The upload identifier is already active.".to_string()
+                                    );
+                                }
+                                files.begin_upload(transfer_id, &path, size, overwrite)
+                            });
+                        match result {
+                            Ok(upload) => {
+                                uploads.insert(transfer_id, upload);
+                                let _ = receiver_outgoing
+                                    .send(RemoteMessage::FileResponse(
+                                        RemoteFileResponse::UploadReady { transfer_id },
+                                    ))
+                                    .await;
+                            }
+                            Err(error) => {
+                                let _ =
+                                    receiver_outgoing.send(file_error(transfer_id, error)).await;
+                            }
+                        }
+                    }
+                    RemoteFileRequest::UploadChunk { transfer_id, bytes } => {
+                        let result = uploads
+                            .get_mut(&transfer_id)
+                            .ok_or_else(|| "The upload is not active.".to_string())
+                            .and_then(|upload| upload.write_chunk(&bytes).map(|_| ()));
+                        if let Err(error) = result {
+                            uploads.remove(&transfer_id);
+                            let _ = receiver_outgoing.send(file_error(transfer_id, error)).await;
+                        }
+                    }
+                    RemoteFileRequest::UploadFinish { transfer_id } => {
+                        let result = uploads
+                            .remove(&transfer_id)
+                            .ok_or_else(|| "The upload is not active.".to_string())
+                            .and_then(HostUpload::finish);
+                        let response = match result {
+                            Ok(()) => RemoteMessage::FileResponse(RemoteFileResponse::Complete {
+                                transfer_id,
+                            }),
+                            Err(error) => file_error(transfer_id, error),
+                        };
+                        let _ = receiver_outgoing.send(response).await;
+                    }
+                    RemoteFileRequest::Cancel { transfer_id } => {
+                        uploads.remove(&transfer_id);
+                        if let Some(cancelled) = receiver_downloads
+                            .lock()
+                            .ok()
+                            .and_then(|mut active| active.remove(&transfer_id))
+                        {
+                            cancelled.store(true, Ordering::Relaxed);
+                        }
+                        let _ = receiver_outgoing
+                            .send(RemoteMessage::FileResponse(RemoteFileResponse::Complete {
+                                transfer_id,
+                            }))
+                            .await;
+                    }
+                },
                 Ok(RemoteMessage::Close(_)) | Err(_) => break,
                 Ok(_) => {}
             }
         }
         // Dropping the sender ends the input thread and releases held keys.
         drop(input_tx);
+        if let Ok(mut active) = receiver_downloads.lock() {
+            for (_, cancelled) in active.drain() {
+                cancelled.store(true, Ordering::Relaxed);
+            }
+        }
         if let Some(handle) = input_thread {
             let _ = handle.join();
         }
@@ -295,8 +610,8 @@ async fn serve(connection: SecureConnection, fps: u32, allow_input: bool) -> Res
         for message in frame_messages(frame_id, width, height, FrameFormat::Jpeg, &capture.jpeg)
             .map_err(|error| error.to_string())?
         {
-            if let Err(error) = writer.send(&message).await {
-                send_error = Some(error.to_string());
+            if outgoing.send(message).await.is_err() {
+                send_error = Some("The encrypted writer stopped.".to_string());
                 break;
             }
         }
@@ -313,6 +628,8 @@ async fn serve(connection: SecureConnection, fps: u32, allow_input: bool) -> Res
     };
 
     receiver.abort();
+    drop(outgoing);
+    writer.abort();
     stream_result
 }
 
@@ -366,6 +683,11 @@ async fn main() {
             pairing_code: formatted_code.clone(),
             expires_in_seconds: PAIRING_LIFETIME.as_secs(),
             view_only: !options.allow_input,
+            file_transfer: options.file_root.is_some(),
+            file_root: options
+                .file_root
+                .as_ref()
+                .map(|path| path.display().to_string()),
         },
     );
     if !options.json {
@@ -445,7 +767,14 @@ async fn main() {
             };
             println!("Paired with {peer}. Starting encrypted {stream_kind} stream.");
         }
-        break match serve(secure, options.fps, options.allow_input).await {
+        break match serve(
+            secure,
+            options.fps,
+            options.allow_input,
+            options.file_root.clone(),
+        )
+        .await
+        {
             Ok(()) => "Remote session completed.".to_string(),
             Err(error) => format!("Session ended: {error}"),
         };
@@ -467,7 +796,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn downscales_to_the_v1_stream_boundary() {
+    fn downscales_to_the_stream_boundary() {
         assert_eq!(target_size(1920, 1080), (1280, 720));
         assert_eq!(target_size(1280, 1024), (900, 720));
         assert_eq!(target_size(800, 600), (800, 600));
@@ -480,6 +809,8 @@ mod tests {
             pairing_code: "1234-5678".to_string(),
             expires_in_seconds: 300,
             view_only: true,
+            file_transfer: false,
+            file_root: None,
         };
         let json = serde_json::to_value(event).expect("serialize agent event");
         assert_eq!(json["kind"], "ready");

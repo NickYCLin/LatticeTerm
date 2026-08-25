@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent, WheelEvent } from "react";
 import type { RemoteApi, RemoteInput, RemoteSessionSummary } from "../../app/useRemoteSessions";
 import { useI18n } from "../../i18n/context";
-import { ScreenShareIcon, ShieldIcon } from "../icons";
+import { FolderIcon, ScreenShareIcon, ShieldIcon } from "../icons";
 import { CanvasCaptureControls } from "./CanvasCaptureControls";
 import { keysymFor } from "./keysym";
+import { RemoteFilesPane } from "./RemoteFilesPane";
 
 export function RemotePane({
   session,
@@ -17,6 +18,7 @@ export function RemotePane({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pendingMove = useRef<RemoteInput | null>(null);
   const moveFrame = useRef<number | null>(null);
+  const [filesOpen, setFilesOpen] = useState(false);
   const interactive = !session.viewOnly;
 
   const send = useCallback(
@@ -131,6 +133,17 @@ export function RemotePane({
           ready={session.frame !== null}
           label={session.agentName}
         />
+        {session.fileTransfer && (
+          <button
+            type="button"
+            className={`capture-button${filesOpen ? " is-active" : ""}`}
+            onClick={() => setFilesOpen((current) => !current)}
+            aria-pressed={filesOpen}
+          >
+            <FolderIcon size={13} />
+            <span className="capture-button__label">{t("remote.files.toggle")}</span>
+          </button>
+        )}
         <span className={interactive ? "badge tone-ok" : "badge tone-info"}>
           {interactive
             ? t("remote.session.interactive")
@@ -138,34 +151,43 @@ export function RemotePane({
         </span>
       </div>
 
-      <div className="remote-canvas" aria-live="polite">
-        <canvas
-          ref={canvasRef}
-          className={interactive ? "remote-frame-canvas rdp-canvas" : "remote-frame-canvas"}
-          width={session.width}
-          height={session.height}
-          tabIndex={interactive ? 0 : undefined}
-          role={interactive ? "application" : "img"}
-          aria-label={t("remote.session.frameAlt", { name: session.agentName })}
-          onMouseMove={interactive ? mouseMove : undefined}
-          onMouseDown={interactive ? (event) => mouseButton(event, true) : undefined}
-          onMouseUp={interactive ? (event) => mouseButton(event, false) : undefined}
-          onMouseLeave={interactive ? () => send({ kind: "releaseAll" }) : undefined}
-          onWheel={interactive ? wheel : undefined}
-          onKeyDown={interactive ? (event) => keyboard(event, true) : undefined}
-          onKeyUp={interactive ? (event) => keyboard(event, false) : undefined}
-          onBlur={interactive ? () => send({ kind: "releaseAll" }) : undefined}
-          onContextMenu={interactive ? (event) => event.preventDefault() : undefined}
-        />
-        {!session.frame && (
-          <div className="remote-canvas__waiting">
-            <span className="remote-canvas__pulse" aria-hidden="true">
-              <ScreenShareIcon size={28} />
-            </span>
-            <strong>{t("remote.session.waitingTitle")}</strong>
-            <span>{t("remote.session.waitingBody")}</span>
-          </div>
+      <div className={`remote-workspace${filesOpen ? " remote-workspace--files" : ""}`}>
+        {filesOpen && session.fileTransfer && (
+          <aside className="remote-workspace__files">
+            <RemoteFilesPane session={session} remote={remote} />
+          </aside>
         )}
+        <div className="remote-canvas" aria-live="polite">
+          <canvas
+            ref={canvasRef}
+            className={
+              interactive ? "remote-frame-canvas rdp-canvas" : "remote-frame-canvas"
+            }
+            width={session.width}
+            height={session.height}
+            tabIndex={interactive ? 0 : undefined}
+            role={interactive ? "application" : "img"}
+            aria-label={t("remote.session.frameAlt", { name: session.agentName })}
+            onMouseMove={interactive ? mouseMove : undefined}
+            onMouseDown={interactive ? (event) => mouseButton(event, true) : undefined}
+            onMouseUp={interactive ? (event) => mouseButton(event, false) : undefined}
+            onMouseLeave={interactive ? () => send({ kind: "releaseAll" }) : undefined}
+            onWheel={interactive ? wheel : undefined}
+            onKeyDown={interactive ? (event) => keyboard(event, true) : undefined}
+            onKeyUp={interactive ? (event) => keyboard(event, false) : undefined}
+            onBlur={interactive ? () => send({ kind: "releaseAll" }) : undefined}
+            onContextMenu={interactive ? (event) => event.preventDefault() : undefined}
+          />
+          {!session.frame && (
+            <div className="remote-canvas__waiting">
+              <span className="remote-canvas__pulse" aria-hidden="true">
+                <ScreenShareIcon size={28} />
+              </span>
+              <strong>{t("remote.session.waitingTitle")}</strong>
+              <span>{t("remote.session.waitingBody")}</span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
