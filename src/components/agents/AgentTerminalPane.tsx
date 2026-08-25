@@ -20,7 +20,9 @@ function themeColours(): Record<string, string> {
     cursor: value("--accent", "#5fe3b0"),
     cursorAccent: background,
     selectionBackground: value("--accent-soft", "rgba(95,227,176,0.25)"),
-    black: background,
+    // ANSI black must stay distinct from the terminal background, otherwise
+    // CLIs that print black (or dim) text render invisibly on the dark surface.
+    black: value("--text-faint", "#6b7280"),
     red: value("--danger", "#ff8087"),
     green: value("--ok", "#56d9a3"),
     yellow: value("--warn", "#f2b658"),
@@ -28,6 +30,14 @@ function themeColours(): Record<string, string> {
     magenta: value("--planned", "#b09cf5"),
     cyan: value("--accent", "#5fe3b0"),
     white: foreground,
+    brightBlack: value("--text-muted", "#9ca3af"),
+    brightRed: value("--danger", "#ff8087"),
+    brightGreen: value("--ok", "#56d9a3"),
+    brightYellow: value("--warn", "#f2b658"),
+    brightBlue: value("--info", "#6fbcf5"),
+    brightMagenta: value("--planned", "#b09cf5"),
+    brightCyan: value("--accent", "#5fe3b0"),
+    brightWhite: foreground,
   };
 }
 
@@ -62,6 +72,9 @@ export function AgentTerminalPane({
       lineHeight: 1.2,
       cursorBlink: true,
       scrollback: 10000,
+      // Force a readable contrast so no CLI can paint text that blends into
+      // the dark background (e.g. black-on-black input).
+      minimumContrastRatio: 4.5,
       theme: themeColours(),
     });
     const fit = new FitAddon();
