@@ -4,6 +4,18 @@
 
 ---
 
+## [0.18.0](https://github.com/NickYCLin/lattice-term/compare/v0.17.0...v0.18.0) (2026-08-25)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** 同一分頁掛多個 CLI，一鍵切換、都保持在跑 ([2dfb1b0](https://github.com/NickYCLin/lattice-term/commit/2dfb1b0148e465597325f79255e0612fffc4be88))
+
+
+### 🛠️ 問題修正
+
+* **SSH:** 檔案總管改緊湊，日期不再折成三行、窄側欄自動精簡欄位 ([c4cbb28](https://github.com/NickYCLin/lattice-term/commit/c4cbb28fee49437daef9178b241749057bf5ba49))
+
 ## [0.17.0](https://github.com/NickYCLin/lattice-term/compare/v0.16.0...v0.17.0) (2026-08-25)
 
 
