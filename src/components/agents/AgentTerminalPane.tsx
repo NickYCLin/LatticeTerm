@@ -6,40 +6,7 @@ import type { AgentApi } from "../../app/useAgentSessions";
 import type { ThemeId } from "../../app/themes";
 import { useI18n } from "../../i18n/context";
 import { TerminalImeFallback } from "../terminal/terminalImeFallback";
-
-function themeColours(): Record<string, string> {
-  const style = getComputedStyle(document.documentElement);
-  const value = (name: string, fallback: string) =>
-    style.getPropertyValue(name).trim() || fallback;
-  const background = value("--surface-solid", "#161f25");
-  const foreground = value("--text", "#e9f1f3");
-
-  return {
-    background,
-    foreground,
-    cursor: value("--accent", "#5fe3b0"),
-    cursorAccent: background,
-    selectionBackground: value("--accent-soft", "rgba(95,227,176,0.25)"),
-    // ANSI black must stay distinct from the terminal background, otherwise
-    // CLIs that print black (or dim) text render invisibly on the dark surface.
-    black: value("--text-faint", "#6b7280"),
-    red: value("--danger", "#ff8087"),
-    green: value("--ok", "#56d9a3"),
-    yellow: value("--warn", "#f2b658"),
-    blue: value("--info", "#6fbcf5"),
-    magenta: value("--planned", "#b09cf5"),
-    cyan: value("--accent", "#5fe3b0"),
-    white: foreground,
-    brightBlack: value("--text-muted", "#9ca3af"),
-    brightRed: value("--danger", "#ff8087"),
-    brightGreen: value("--ok", "#56d9a3"),
-    brightYellow: value("--warn", "#f2b658"),
-    brightBlue: value("--info", "#6fbcf5"),
-    brightMagenta: value("--planned", "#b09cf5"),
-    brightCyan: value("--accent", "#5fe3b0"),
-    brightWhite: foreground,
-  };
-}
+import { terminalTheme } from "../terminal/terminalTheme";
 
 export function AgentTerminalPane({
   sessionId,
@@ -75,7 +42,7 @@ export function AgentTerminalPane({
       // Force a readable contrast so no CLI can paint text that blends into
       // the dark background (e.g. black-on-black input).
       minimumContrastRatio: 4.5,
-      theme: themeColours(),
+      theme: terminalTheme(),
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -144,7 +111,7 @@ export function AgentTerminalPane({
 
   useEffect(() => {
     if (terminalRef.current) {
-      terminalRef.current.options.theme = themeColours();
+      terminalRef.current.options.theme = terminalTheme();
     }
   }, [theme]);
 
