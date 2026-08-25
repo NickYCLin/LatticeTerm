@@ -4,6 +4,24 @@
 
 ---
 
+## [0.20.0](https://github.com/NickYCLin/lattice-term/compare/v0.19.0...v0.20.0) (2026-08-25)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** 補上 CLI 安裝與模型資訊 ([0d7b72a](https://github.com/NickYCLin/lattice-term/commit/0d7b72aa55112264bb8a6f4aa2fdd25bf3094e55))
+* **行動版:** 一個 QR 掃碼自動辨識手機下載，並建置發布 Android APK ([672db00](https://github.com/NickYCLin/lattice-term/commit/672db00f3c4e0203e712c9423fc46507878a1ddb))
+
+
+### 🛠️ 問題修正
+
+* **終端:** 修正底部遮擋與畫面閃跳 ([727a8ad](https://github.com/NickYCLin/lattice-term/commit/727a8adb7118be666c334402f29e6cc34c5cba82))
+
+
+### 🎨 介面與視覺調整
+
+* **Rust:** 補齊續接程式格式 ([d090e38](https://github.com/NickYCLin/lattice-term/commit/d090e38639b06cd3b677225f23ba050930f1d1cb))
+
 ## [0.19.0](https://github.com/NickYCLin/lattice-term/compare/v0.18.0...v0.19.0) (2026-08-25)
 
 
