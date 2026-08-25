@@ -2,8 +2,9 @@ type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
 type PendingInput = {
   data: string;
-  delivered: boolean;
+  fallbackDelivered: boolean;
   timer: TimerHandle;
+  cleanupTimer?: TimerHandle;
 };
 
 type RecentData = {
@@ -13,6 +14,7 @@ type RecentData = {
 
 const FALLBACK_DELAY_MS = 32;
 const RECENT_DATA_WINDOW_MS = 100;
+const LATE_DATA_WINDOW_MS = 250;
 const COMMITTED_INPUT_TYPES = new Set(["insertText", "insertFromComposition"]);
 
 /**
@@ -49,18 +51,27 @@ export class TerminalImeFallback {
     private readonly enabled: boolean = webkitImeFallbackNeeded(),
   ) {}
 
-  recordTerminalData(data: string) {
-    if (!this.enabled) return;
-    const pending = this.pending.find(
-      (candidate) => !candidate.delivered && candidate.data === data,
+  /** Returns whether the caller should forward this xterm data event. */
+  recordTerminalData(data: string): boolean {
+    if (!this.enabled) return true;
+    const pendingIndex = this.pending.findIndex(
+      (candidate) => candidate.data === data,
     );
-    if (pending) {
-      pending.delivered = true;
-      return;
+    if (pendingIndex >= 0) {
+      const [pending] = this.pending.splice(pendingIndex, 1);
+      this.cancel(pending.timer);
+      if (pending.cleanupTimer !== undefined) {
+        this.cancel(pending.cleanupTimer);
+      }
+      // WebKitGTK can emit xterm's authoritative onData well after the 32ms
+      // repair has already sent the same text. Consume that late event instead
+      // of forwarding the committed input twice.
+      return !pending.fallbackDelivered;
     }
 
     this.trimRecent();
     this.recent.push({ data, at: this.now() });
+    return true;
   }
 
   recordInput(data: string | null, inputType: string, isComposing = false) {
@@ -76,21 +87,33 @@ export class TerminalImeFallback {
       return;
     }
 
-    const pending = {
+    const pending: PendingInput = {
       data,
-      delivered: false,
+      fallbackDelivered: false,
       timer: undefined as unknown as TimerHandle,
     };
     pending.timer = this.schedule(() => {
-      const index = this.pending.indexOf(pending);
-      if (index >= 0) this.pending.splice(index, 1);
-      if (!pending.delivered) this.deliver(pending.data);
+      if (!this.pending.includes(pending)) return;
+      pending.fallbackDelivered = true;
+      this.deliver(pending.data);
+      // Keep the record briefly so a delayed xterm event can be identified.
+      // It must eventually expire because an actual missing onData has nothing
+      // left to match against.
+      pending.cleanupTimer = this.schedule(() => {
+        const index = this.pending.indexOf(pending);
+        if (index >= 0) this.pending.splice(index, 1);
+      }, LATE_DATA_WINDOW_MS);
     }, FALLBACK_DELAY_MS);
     this.pending.push(pending);
   }
 
   dispose() {
-    for (const pending of this.pending) this.cancel(pending.timer);
+    for (const pending of this.pending) {
+      this.cancel(pending.timer);
+      if (pending.cleanupTimer !== undefined) {
+        this.cancel(pending.cleanupTimer);
+      }
+    }
     this.pending.length = 0;
     this.recent.length = 0;
   }

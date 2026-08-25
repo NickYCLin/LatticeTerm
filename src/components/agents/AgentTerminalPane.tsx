@@ -6,7 +6,10 @@ import type { AgentApi } from "../../app/useAgentSessions";
 import type { ThemeId } from "../../app/themes";
 import { useI18n } from "../../i18n/context";
 import { TerminalImeFallback } from "../terminal/terminalImeFallback";
-import { terminalTheme } from "../terminal/terminalTheme";
+import {
+  TERMINAL_FONT_FAMILY,
+  terminalTheme,
+} from "../terminal/terminalTheme";
 import { attachTerminalClipboard } from "../terminal/terminalClipboard";
 
 export function AgentTerminalPane({
@@ -34,8 +37,7 @@ export function AgentTerminalPane({
     const host = hostRef.current;
     if (!host) return;
     const terminal = new Terminal({
-      fontFamily:
-        'ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace',
+      fontFamily: TERMINAL_FONT_FAMILY,
       fontSize: 13,
       lineHeight: 1.2,
       // A steady cursor avoids the distracting full-pane repaint/flicker that
@@ -104,8 +106,7 @@ export function AgentTerminalPane({
     };
     const imeFallback = new TerminalImeFallback(sendInput);
     const typed = terminal.onData((data) => {
-      imeFallback.recordTerminalData(data);
-      sendInput(data);
+      if (imeFallback.recordTerminalData(data)) sendInput(data);
     });
     const textarea = terminal.textarea;
     const handleInput = (event: Event) => {
