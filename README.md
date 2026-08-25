@@ -30,7 +30,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 - **六種主題**：深色、淺色、午夜藍、石墨黑、暖砂與高對比，另可跟隨系統；切換時原生標題列會一起換色。
 - **主機資源檢視**：活躍 SSH 工作階段可定期讀取 Linux 主機的 CPU、記憶體、磁碟與開機時間；未連線或不支援的平台會明確說明，不顯示假數值。
 - **本機持久化**：連線設定會存在本機的應用程式資料目錄，關閉再開仍在；檔案只含主機資訊，不含任何認證資料。
-- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、OpenCode、Hermes 等 12 種本機 LLM CLI；未偵測到工具時可先確認固定的上游安裝指令，再開啟看得到完整輸出的安裝終端。執行中的 CLI 會分開顯示工具名稱、分頁名稱，以及工具啟動畫面或 `--model` 實際回報的模型；沒有可靠值時會明確標成尚未回報。通用 Reporter 讓工具 hook 明確回報狀態，並可在二次確認後將同一段提示送給多個已選 Agent。執行中的分頁可直接加開另一個 CLI；Codex 與 Claude 之間可選擇帶入目前對話，讓新的 CLI 接續脈絡，不必再手動設定 Session ID。啟動項目可加入選填備註並保存到可命名、排序的工作區。同一桌面程序內若 WebView 重新載入，活躍 PTY 會重新 attach 並重播最近 256 KiB 記憶體輸出。登入資料仍由各 CLI 自行管理。
+- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、OpenCode、Hermes 等 12 種本機 LLM CLI；未偵測到工具時可先確認固定的上游安裝指令，再開啟看得到完整輸出的安裝終端。目錄會顯示 Codex、Claude 與 Gemini 自己保存在本機的目前登入帳號標籤，但 token 不會進入 WebView。執行中的 CLI 會分開顯示工具名稱、分頁名稱，以及工具啟動畫面或 `--model` 實際回報的模型；沒有可靠值時會明確標成尚未回報。使用者可選擇保存一份工作區共用啟動指示，讓之後每個新 CLI 進入互動提示後先讀取；內建繁中 Commit 範本採 `type(scope): subject`、Why／What 與單一意義提交，預設不啟用。通用 Reporter 讓工具 hook 明確回報狀態，並可在二次確認後將同一段提示送給多個已選 Agent。執行中的分頁可直接加開另一個 CLI；Codex 與 Claude 之間可選擇帶入目前對話，讓新的 CLI 接續脈絡，不必再手動設定 Session ID。啟動項目可加入選填備註並保存到可命名、排序的工作區；重新啟動已保存的 Codex 項目時，會由 Codex 續接同一工作目錄最近的對話。同一桌面程序內若 WebView 重新載入，活躍 PTY 會重新 attach 並重播最近 256 KiB 記憶體輸出。登入與 token 仍由各 CLI 自行管理。
 - **SSH 連線**：以純 Rust 的 russh 實作，可使用密碼或本機 OpenSSH 私鑰建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼預設只用於當次連線，使用者可在驗證成功後明確保存到系統認證儲存區，私鑰內容與密語不會保存至連線設定。執行中的 SSH 分頁可一鍵「開啟檔案總管」，以同一台主機、同一組認證開啟 SFTP 圖形化檔案瀏覽（已保存密碼免再輸入）。
 - **SSH Tunnel**：可建立本機、遠端與 SOCKS5 動態轉送，顯示即時狀態與連線數；動態代理若未設定驗證只允許綁定 loopback，遠端轉送則依 SSH 伺服器的 GatewayPorts 政策生效。
 - **SFTP 檔案工作區**：沿用 SSH 主機指紋驗證與獨立的認證項目，可瀏覽遠端路徑、上下載、新增資料夾、重新命名及確認刪除；上傳除了按鈕選檔，也可直接把檔案從檔案總管拖進面板上傳到目前資料夾。大型檔案經有界分塊與原生串流佇列傳輸，不把整個檔案塞進 WebView／IPC 記憶體。上傳先寫入同目錄的私有暫存檔，只有位元組數完整且關檔成功才替換目標，取消、失敗或中斷連線不會把既有檔案變成半成品。
@@ -68,7 +68,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 
 ## 後續開發重點
 
-1. **Lattice Remote 連線範圍**：鍵盤／滑鼠遠端控制已可用（由分享端明確授權）；接著加入自建 Relay、NAT 穿透、裝置身分與重放防護，再分階段提供無人值守。
+1. **Lattice Remote 連線範圍**：鍵盤／滑鼠遠端控制已可用（由分享端明確授權）；接著加入免帳戶數字裝置 ID、自建 Signal／Relay、NAT 穿透、裝置身分與重放防護，再分階段提供無人值守。連線清單先保存在本機，帳戶只作為日後跨裝置同步與團隊權限的選配層。
 2. **Agent 常駐與遠端能力**：把 PTY owner 抽成使用者自行啟動的背景 daemon，支援跨程序重新 attach，並先以 SSH transport 實作遠端 Agent Fleet。
 3. **Agent 編排與隔離**：補齊工具 hook、token／cost 可觀測事件、依賴圖、佇列、排程、資源限制與每 Agent 沙箱／檔案範圍策略。
 4. **平台完整度**：設計安全的 Windows npm shim adapter、持續強化 Android 發行流程，並在 macOS／Xcode 環境啟動 iOS 建置與驗證。
@@ -123,7 +123,7 @@ Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示
 
 若要讓另一個 CLI 接手，請在執行中的工作階段分頁選擇「加開 CLI」；來源為 Codex 或 Claude 時，可勾選「帶入目前對話」。新 CLI 會收到整理過的對話交接內容，但不會搬移模型內部狀態、登入資料或憑證。
 
-「保存啟動項目」會記錄內建 CLI 類型、標籤、工作目錄與選填備註，最多 32 個；工作區名稱與項目順序也會保存。密碼、Token、API Key、Passphrase、Secret 參數、提示、輸出與 Reporter 權杖都不會寫入工作區或磁碟。下次開啟應用程式時，使用者可逐項或依保存順序整批確認並建立新的 CLI 程序。既有 `agent-workspaces.json` 若包含舊版自訂 CLI 或原生 Session 續接項目，Rust 核心仍會重新驗證後相容還原，避免升級後破壞原有資料；新介面不再提供這兩種設定。工作階段本身仍只存於記憶體；Rust 核心會為每個活躍 PTY 保留最近 256 KiB 輸出，讓同一桌面程序內的 WebView 重新載入後安全重新 attach，不會寫入磁碟。停止工作階段或關閉應用程式仍會終止 CLI。
+「保存啟動項目」會記錄內建 CLI 類型、標籤、工作目錄與選填備註，最多 32 個；工作區名稱與項目順序也會保存。密碼、Token、API Key、Passphrase、Secret 參數、提示、輸出與 Reporter 權杖都不會寫入工作區或磁碟。下次開啟應用程式時，使用者可逐項或依保存順序整批確認並啟動 CLI 程序；沒有額外參數或舊版明確 Session ID 的 Codex 項目會執行 `codex resume --last`，由 Codex 在該工作目錄內續接最近的對話，不需讓 LatticeTerm 保存或讀取 Session ID。既有 `agent-workspaces.json` 若包含舊版自訂 CLI 或原生 Session 續接項目，Rust 核心仍會重新驗證後相容還原，避免升級後破壞原有資料；新介面不再提供這兩種設定。工作階段程序與終端輸出本身仍只存於記憶體；Rust 核心會為每個活躍 PTY 保留最近 256 KiB 輸出，讓同一桌面程序內的 WebView 重新載入後安全重新 attach，不會寫入磁碟。停止工作階段或關閉應用程式仍會終止 CLI 程序，但 Codex 自己保存的對話可在下次由 `resume --last` 續接。
 
 每個 CLI 都會收到本機 Reporter 環境變數。工具 hook 可執行 `"$LATTICETERM_AGENT_REPORTER" agent-report done`，並以 `working`、`needs-attention`、`idle` 或 `done` 回報狀態；Windows PowerShell 使用 `& $env:LATTICETERM_AGENT_REPORTER agent-report done`。Reporter 只接受該工作階段的隨機權杖，且只能更新狀態。完整協定與安全邊界請見架構文件。
 

@@ -143,6 +143,42 @@
   line-height: var(--leading);
 }
 
+.agents-startup-instructions {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 54rem;
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.agents-startup-instructions__heading,
+.agents-startup-instructions__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.agents-startup-instructions__heading {
+  justify-content: space-between;
+}
+
+.agents-startup-instructions__input {
+  min-height: 10rem;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.agents-startup-instructions__actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.agents-startup-instructions__actions .agents-field-hint {
+  margin-right: auto;
+}
+
 .agent-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
@@ -213,6 +249,26 @@
 
 .agent-card__path {
   color: var(--text-faint);
+}
+
+.agent-card__account {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  color: var(--text-faint);
+  font-size: var(--text-2xs);
+}
+
+.agent-card__account strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.agent-card__account small {
+  color: var(--text-muted);
+  font-size: inherit;
 }
 
 .agent-card .agent-card__install-command {

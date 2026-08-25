@@ -38,7 +38,9 @@ export function AgentTerminalPane({
         'ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace',
       fontSize: 13,
       lineHeight: 1.2,
-      cursorBlink: true,
+      // A steady cursor avoids the distracting full-pane repaint/flicker that
+      // becomes especially noticeable with several mounted Agent sessions.
+      cursorBlink: false,
       scrollback: 10000,
       // Force a readable contrast so no CLI can paint text that blends into
       // the dark background (e.g. black-on-black input).

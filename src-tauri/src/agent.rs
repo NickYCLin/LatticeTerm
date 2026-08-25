@@ -54,11 +54,25 @@ impl AgentResumeRecipe {
 }
 
 #[derive(Debug, Clone, Copy)]
+enum AgentResumeLatestRecipe {
+    Codex,
+}
+
+impl AgentResumeLatestRecipe {
+    fn arguments(self) -> Vec<String> {
+        match self {
+            Self::Codex => vec!["resume".to_string(), "--last".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 struct AgentSpec {
     id: &'static str,
     label: &'static str,
     executable: &'static str,
     resume_recipe: Option<AgentResumeRecipe>,
+    resume_latest_recipe: Option<AgentResumeLatestRecipe>,
 }
 
 const AGENTS: [AgentSpec; 12] = [
@@ -67,72 +81,84 @@ const AGENTS: [AgentSpec; 12] = [
         label: "OpenAI Codex",
         executable: "codex",
         resume_recipe: Some(AgentResumeRecipe::Subcommand),
+        resume_latest_recipe: Some(AgentResumeLatestRecipe::Codex),
     },
     AgentSpec {
         id: "claude",
         label: "Claude Code",
         executable: "claude",
         resume_recipe: Some(AgentResumeRecipe::Flag),
+        resume_latest_recipe: None,
     },
     AgentSpec {
         id: "gemini",
         label: "Gemini CLI",
         executable: "gemini",
         resume_recipe: Some(AgentResumeRecipe::Flag),
+        resume_latest_recipe: None,
     },
     AgentSpec {
         id: "opencode",
         label: "OpenCode",
         executable: "opencode",
         resume_recipe: None,
+        resume_latest_recipe: None,
     },
     AgentSpec {
         id: "copilot",
         label: "GitHub Copilot CLI",
         executable: "copilot",
         resume_recipe: None,
+        resume_latest_recipe: None,
     },
     AgentSpec {
         id: "hermes",
         label: "Hermes Agent",
         executable: "hermes",
         resume_recipe: Some(AgentResumeRecipe::Flag),
+        resume_latest_recipe: None,
     },
     AgentSpec {
         id: "cursor",
         label: "Cursor Agent",
         executable: "agent",
         resume_recipe: None,
+        resume_latest_recipe: None,
     },
     AgentSpec {
         id: "aider",
         label: "Aider",
         executable: "aider",
         resume_recipe: None,
+        resume_latest_recipe: None,
     },
     AgentSpec {
         id: "qwen",
         label: "Qwen Code",
         executable: "qwen",
         resume_recipe: None,
+        resume_latest_recipe: None,
     },
     AgentSpec {
         id: "kimi",
         label: "Kimi Code CLI",
         executable: "kimi",
         resume_recipe: None,
+        resume_latest_recipe: None,
     },
     AgentSpec {
         id: "droid",
         label: "Factory Droid",
         executable: "droid",
         resume_recipe: None,
+        resume_latest_recipe: None,
     },
     AgentSpec {
         id: "grok",
         label: "Grok CLI",
         executable: "grok",
         resume_recipe: None,
+        resume_latest_recipe: None,
     },
 ];
 
@@ -144,12 +170,35 @@ pub struct AgentDefinition {
     pub executable: String,
     pub adapter_version: u32,
     pub resume_supported: bool,
+    /// Whether a saved launch item can resume the latest context without
+    /// persisting a native session identifier.
+    pub resume_latest_supported: bool,
     /// Whether this CLI's conversation can be read for a handoff to another CLI.
     pub transcript_supported: bool,
     pub installed: bool,
     pub installed_path: Option<String>,
+    /// Non-secret identity metadata read from each CLI's own local account
+    /// file. Tokens and credential values never cross the Tauri boundary.
+    pub account: AgentAccountInfo,
     /// Fixed, source-reviewed installation command for this platform.
     pub install: AgentInstallDefinition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentAccountState {
+    SignedIn,
+    SignedOut,
+    Unknown,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAccountInfo {
+    pub state: AgentAccountState,
+    pub label: Option<String>,
+    pub method: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -511,6 +560,13 @@ impl ModelCaptureState {
 
     fn input(&mut self, bytes: &[u8]) {
         let input = strip_ansi(&String::from_utf8_lossy(bytes));
+        // xterm sends terminal-generated replies (device attributes, cursor
+        // position, focus, colour queries, and similar CSI/OSC sequences)
+        // through the same onData channel as keyboard input. Those replies are
+        // stripped to an empty string and must not end startup model capture.
+        if input.is_empty() {
+            return;
+        }
         if !self.model_command_active {
             self.enabled = false;
             self.buffer.clear();
@@ -1022,14 +1078,135 @@ pub fn catalog() -> Vec<AgentDefinition> {
                 executable: agent.executable.to_string(),
                 adapter_version: AGENT_ADAPTER_VERSION,
                 resume_supported: agent.resume_recipe.is_some(),
+                resume_latest_supported: agent.resume_latest_recipe.is_some(),
                 transcript_supported: crate::transcript::TranscriptKind::from_definition(agent.id)
                     .is_some(),
                 installed: path.is_some(),
                 installed_path: path.map(|path| path.display().to_string()),
+                account: detect_agent_account(agent.id),
                 install: install_definition(agent.id),
             }
         })
         .collect()
+}
+
+fn account_info(
+    state: AgentAccountState,
+    label: Option<String>,
+    method: Option<&str>,
+) -> AgentAccountInfo {
+    AgentAccountInfo {
+        state,
+        label,
+        method: method.map(str::to_string),
+    }
+}
+
+fn safe_account_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= 320 && !value.chars().any(char::is_control))
+        .then(|| value.to_string())
+}
+
+fn user_home_directory() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let variable = "USERPROFILE";
+    #[cfg(not(windows))]
+    let variable = "HOME";
+    std::env::var_os(variable)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn read_account_file(relative: &[&str]) -> Option<String> {
+    let mut path = user_home_directory()?;
+    for component in relative {
+        path.push(component);
+    }
+    std::fs::read_to_string(path).ok()
+}
+
+fn codex_account_from_json(raw: &str) -> AgentAccountInfo {
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return account_info(AgentAccountState::Unknown, None, None);
+    };
+    let mode = document
+        .get("auth_mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let method = if mode.eq_ignore_ascii_case("chatgpt") {
+        "ChatGPT"
+    } else if mode.to_ascii_lowercase().contains("api") {
+        "OpenAI API Key"
+    } else {
+        "OpenAI Codex"
+    };
+    let email = document
+        .pointer("/tokens/id_token")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|token| token.split('.').nth(1))
+        .and_then(|payload| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(payload)
+                .ok()
+        })
+        .and_then(|payload| serde_json::from_slice::<serde_json::Value>(&payload).ok())
+        .and_then(|claims| {
+            claims
+                .get("email")
+                .and_then(serde_json::Value::as_str)
+                .and_then(safe_account_label)
+        });
+    if email.is_some() || !mode.is_empty() {
+        account_info(AgentAccountState::SignedIn, email, Some(method))
+    } else {
+        account_info(AgentAccountState::Unknown, None, None)
+    }
+}
+
+fn claude_account_from_json(raw: &str) -> AgentAccountInfo {
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return account_info(AgentAccountState::Unknown, None, None);
+    };
+    let email = document
+        .pointer("/oauthAccount/emailAddress")
+        .and_then(serde_json::Value::as_str)
+        .and_then(safe_account_label);
+    if email.is_some() {
+        account_info(AgentAccountState::SignedIn, email, Some("Claude.ai"))
+    } else {
+        account_info(AgentAccountState::Unknown, None, None)
+    }
+}
+
+fn gemini_account_from_json(raw: &str) -> AgentAccountInfo {
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return account_info(AgentAccountState::Unknown, None, None);
+    };
+    let email = document
+        .get("active")
+        .and_then(serde_json::Value::as_str)
+        .and_then(safe_account_label);
+    if email.is_some() {
+        account_info(AgentAccountState::SignedIn, email, Some("Google"))
+    } else {
+        account_info(AgentAccountState::Unknown, None, None)
+    }
+}
+
+fn detect_agent_account(definition_id: &str) -> AgentAccountInfo {
+    match definition_id {
+        "codex" => read_account_file(&[".codex", "auth.json"])
+            .map(|raw| codex_account_from_json(&raw))
+            .unwrap_or_else(|| account_info(AgentAccountState::Unknown, None, None)),
+        "claude" => read_account_file(&[".claude.json"])
+            .map(|raw| claude_account_from_json(&raw))
+            .unwrap_or_else(|| account_info(AgentAccountState::Unknown, None, None)),
+        "gemini" => read_account_file(&[".gemini", "google_accounts.json"])
+            .map(|raw| gemini_account_from_json(&raw))
+            .unwrap_or_else(|| account_info(AgentAccountState::Unknown, None, None)),
+        _ => account_info(AgentAccountState::Unsupported, None, None),
+    }
 }
 
 fn find_agent_executable(agent: &AgentSpec) -> Option<PathBuf> {
@@ -1515,11 +1692,26 @@ pub fn launch_request_from_plan(
             working_directory: plan.working_directory.clone(),
         },
     )?;
+    // A saved Codex item means "continue this directory" rather than "open a
+    // blank chat". Codex itself resolves --last within the current working
+    // directory, so LatticeTerm does not need to persist a session id or read
+    // the CLI's private transcript store. Explicit legacy resume ids still win.
+    let arguments = if validated.resume_session_id.is_none() && validated.arguments.is_empty() {
+        AGENTS
+            .iter()
+            .find(|agent| agent.id == validated.definition_id)
+            .and_then(|agent| agent.resume_latest_recipe)
+            .map(AgentResumeLatestRecipe::arguments)
+            .unwrap_or_default()
+    } else {
+        validated.arguments
+    };
+
     Ok(AgentLaunchRequest {
         definition_id: validated.definition_id,
         label: validated.label,
         executable: validated.executable,
-        arguments: validated.arguments,
+        arguments,
         resume_session_id: validated.resume_session_id,
         // A saved plan launches its own tab; grouping is a live-tab action.
         group_id: None,
@@ -1528,6 +1720,33 @@ pub fn launch_request_from_plan(
         cols,
         rows,
     })
+}
+
+/// Adds the user's opt-in workspace instructions ahead of any one-off handoff
+/// seed. Custom sessions are installation/helper commands rather than AI CLIs
+/// and must never receive the workspace prompt.
+pub fn apply_startup_instructions(
+    request: &mut AgentLaunchRequest,
+    instructions: &str,
+) -> Result<(), String> {
+    let instructions = instructions.trim();
+    if instructions.is_empty() || request.definition_id == "custom" {
+        return Ok(());
+    }
+    let existing = request
+        .seed_input
+        .take()
+        .filter(|value| !value.trim().is_empty());
+    let merged = existing
+        .map(|seed| format!("{instructions}\n\n---\n\n{seed}"))
+        .unwrap_or_else(|| instructions.to_string());
+    if merged.len() > MAX_INPUT_BYTES {
+        return Err(format!(
+            "Startup instructions and handoff text exceed {MAX_INPUT_BYTES} bytes."
+        ));
+    }
+    request.seed_input = Some(merged);
+    Ok(())
 }
 
 fn resolve_launch(
@@ -2276,6 +2495,63 @@ session id: 0199aa11-"
     }
 
     #[test]
+    fn account_parsers_return_identity_metadata_without_credentials() {
+        let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"email":"developer@example.com"}"#);
+        let codex = codex_account_from_json(
+            &serde_json::json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "id_token": format!("header.{claims}.signature"),
+                    "access_token": "must-not-escape"
+                }
+            })
+            .to_string(),
+        );
+        assert_eq!(codex.state, AgentAccountState::SignedIn);
+        assert_eq!(codex.label.as_deref(), Some("developer@example.com"));
+        assert_eq!(codex.method.as_deref(), Some("ChatGPT"));
+        assert!(!format!("{codex:?}").contains("must-not-escape"));
+
+        let claude = claude_account_from_json(
+            r#"{"oauthAccount":{"emailAddress":"claude@example.com"},"token":"secret"}"#,
+        );
+        assert_eq!(claude.label.as_deref(), Some("claude@example.com"));
+        assert_eq!(claude.method.as_deref(), Some("Claude.ai"));
+
+        let gemini =
+            gemini_account_from_json(r#"{"active":"gemini@example.com","oauth":"secret"}"#);
+        assert_eq!(gemini.label.as_deref(), Some("gemini@example.com"));
+        assert_eq!(gemini.method.as_deref(), Some("Google"));
+    }
+
+    #[test]
+    fn workspace_instructions_precede_handoffs_but_skip_custom_commands() {
+        let mut request = AgentLaunchRequest {
+            definition_id: "codex".to_string(),
+            label: String::new(),
+            executable: String::new(),
+            arguments: Vec::new(),
+            resume_session_id: None,
+            group_id: None,
+            seed_input: Some("Continue the previous review.".to_string()),
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 120,
+            rows: 32,
+        };
+        apply_startup_instructions(&mut request, "Use Traditional Chinese commits.").unwrap();
+        assert_eq!(
+            request.seed_input.as_deref(),
+            Some("Use Traditional Chinese commits.\n\n---\n\nContinue the previous review.")
+        );
+
+        request.definition_id = "custom".to_string();
+        request.seed_input = None;
+        apply_startup_instructions(&mut request, "Never send this to installers.").unwrap();
+        assert!(request.seed_input.is_none());
+    }
+
+    #[test]
     fn explicit_model_arguments_are_available_before_startup_output() {
         assert_eq!(
             model_from_arguments(&["--model".to_string(), "gemini-2.5-pro".to_string()]).as_deref(),
@@ -2309,6 +2585,30 @@ session id: 0199aa11-"
             Some("gpt-5.6-sol")
         );
         assert!(!capture.model_command_active);
+    }
+
+    #[test]
+    fn terminal_protocol_replies_do_not_cancel_startup_model_capture() {
+        let mut capture = ModelCaptureState {
+            definition_id: "codex".to_string(),
+            enabled: true,
+            buffer: String::new(),
+            scanned_chars: 0,
+            input_buffer: String::new(),
+            model_command_active: false,
+        };
+
+        // xterm emits these through onData while a full-screen TUI starts.
+        capture.input(b"\x1b[?1;2c");
+        capture.input(b"\x1b[24;1R");
+        capture.input(b"\x1b[I");
+        assert!(capture.enabled);
+        assert_eq!(
+            capture
+                .feed(b"\x1b[2m model: \x1b[0mgpt-5.6-sol xhigh")
+                .as_deref(),
+            Some("gpt-5.6-sol")
+        );
     }
 
     #[test]
@@ -2369,6 +2669,16 @@ session id: 0199aa11-"
         assert_eq!(
             supported,
             HashSet::from(["codex", "claude", "gemini", "hermes"])
+        );
+        let latest_supported: HashSet<_> = definitions
+            .iter()
+            .filter(|definition| definition.resume_latest_supported)
+            .map(|definition| definition.id.as_str())
+            .collect();
+        assert_eq!(latest_supported, HashSet::from(["codex"]));
+        assert_eq!(
+            AGENTS[0].resume_latest_recipe.unwrap().arguments(),
+            vec!["resume", "--last"]
         );
         assert!(definitions
             .iter()
@@ -2619,6 +2929,47 @@ session id: 0199aa11-"
 
         let request = launch_request_from_plan(&plan, 80, 24).unwrap();
         assert_eq!(request.resume_session_id.as_deref(), Some("session-42"));
+        assert!(request.arguments.is_empty());
+    }
+
+    #[test]
+    fn saved_codex_launches_resume_the_latest_context_for_the_directory() {
+        let directory = std::env::current_dir().unwrap();
+        let plan = normalize_launch_plan(
+            "agent-plan-latest-codex".to_string(),
+            AgentLaunchPlanDraft {
+                definition_id: "codex".to_string(),
+                label: String::new(),
+                executable: String::new(),
+                arguments: Vec::new(),
+                resume_session_id: None,
+                note: String::new(),
+                working_directory: directory.display().to_string(),
+            },
+        )
+        .unwrap();
+
+        let request = launch_request_from_plan(&plan, 80, 24).unwrap();
+        assert_eq!(request.arguments, vec!["resume", "--last"]);
+        assert!(request.resume_session_id.is_none());
+
+        let hermes = normalize_launch_plan(
+            "agent-plan-fresh-hermes".to_string(),
+            AgentLaunchPlanDraft {
+                definition_id: "hermes".to_string(),
+                label: String::new(),
+                executable: String::new(),
+                arguments: Vec::new(),
+                resume_session_id: None,
+                note: String::new(),
+                working_directory: directory.display().to_string(),
+            },
+        )
+        .unwrap();
+        assert!(launch_request_from_plan(&hermes, 80, 24)
+            .unwrap()
+            .arguments
+            .is_empty());
     }
 
     #[test]

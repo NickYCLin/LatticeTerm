@@ -321,9 +321,16 @@ fn agent_default_working_directory() -> Result<String, String> {
 #[tauri::command]
 fn agent_launch(
     app: AppHandle,
-    request: AgentLaunchRequest,
+    mut request: AgentLaunchRequest,
     registry: State<'_, Arc<AgentRegistry>>,
+    plans: State<'_, AppAgentPlans>,
 ) -> Result<AgentSessionSummary, String> {
+    let startup_instructions = plans
+        .lock()
+        .map_err(|error| error.to_string())?
+        .snapshot()
+        .startup_instructions;
+    crate::agent::apply_startup_instructions(&mut request, &startup_instructions)?;
     crate::agent::launch(
         Arc::new(crate::agent::EventSink(app)),
         Arc::clone(registry.inner()),
@@ -499,6 +506,17 @@ fn agent_workspace_rename(name: String, plans: State<'_, AppAgentPlans>) -> Resu
 }
 
 #[tauri::command]
+fn agent_workspace_instructions_update(
+    instructions: String,
+    plans: State<'_, AppAgentPlans>,
+) -> Result<String, String> {
+    plans
+        .lock()
+        .map_err(|error| error.to_string())?
+        .update_startup_instructions(&instructions)
+}
+
+#[tauri::command]
 fn agent_plan_reorder(
     ordered_ids: Vec<String>,
     plans: State<'_, AppAgentPlans>,
@@ -536,16 +554,17 @@ fn agent_plan_restore(
         }
     }
 
-    let selected = {
+    let (selected, startup_instructions) = {
         let guard = plans.lock().map_err(|error| error.to_string())?;
-        plan_ids
+        let selected = plan_ids
             .iter()
             .map(|plan_id| {
                 guard
                     .find(plan_id)
                     .ok_or_else(|| format!("Saved launch plan '{plan_id}' no longer exists."))
             })
-            .collect::<Result<Vec<_>, _>>()?
+            .collect::<Result<Vec<_>, _>>()?;
+        (selected, guard.snapshot().startup_instructions)
     };
     let sink: Arc<dyn crate::agent::AgentSink> = Arc::new(crate::agent::EventSink(app));
     Ok(selected
@@ -554,7 +573,8 @@ fn agent_plan_restore(
             let plan_id = plan.id.clone();
             let label = plan.label.clone();
             let launched =
-                crate::agent::launch_request_from_plan(&plan, 120, 32).and_then(|request| {
+                crate::agent::launch_request_from_plan(&plan, 120, 32).and_then(|mut request| {
+                    crate::agent::apply_startup_instructions(&mut request, &startup_instructions)?;
                     crate::agent::launch(Arc::clone(&sink), Arc::clone(registry.inner()), request)
                 });
             match launched {
@@ -1600,6 +1620,7 @@ pub fn run() {
             agent_plan_save,
             agent_plan_delete,
             agent_workspace_rename,
+            agent_workspace_instructions_update,
             agent_plan_reorder,
             agent_plan_restore,
             credential_status,

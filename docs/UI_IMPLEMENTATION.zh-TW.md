@@ -182,6 +182,9 @@
 - 複製配對碼會走 `SensitiveClipboard` 原生狀態；只保存摘要並在可調整期限後比對、清除相同內容。新複製內容不會被覆蓋，設定頁亦可立即清除目前仍相符的敏感值；browser preview 以相同規則使用 Web Clipboard fallback。
 - Tauri 以 NDJSON 事件管理每次分享的 sidecar 生命週期。配對成功後立即從 UI 狀態移除配對碼；關閉對話框可選擇讓分享留在背景，但停止分享或應用程式結束時會終止 Agent。
 - 預設只傳送 JPEG 畫面（唯讀）。分享端可在 `RemoteHostDialog` 勾選「允許對方操控」（Agent 帶 `--allow-input`），Hello 的 `view_only` 隨之為 false；此時檢視端的滑鼠與鍵盤事件會以座標換算回真實螢幕後注入，斷線或停止時釋放所有按住的按鍵。UI 須依 `view_only` 標示目前是唯讀還是可操控。
+- 目前版本仍是「主機位址＋連接埠」直連；不能先把欄位換成一組假裝可用的號碼。下一階段的產品目標是免帳戶裝置 ID：每次安裝產生穩定裝置金鑰與數字 ID，ID／Signal 服務只負責把 ID 對到在線端點與 Relay 路徑，畫面內容仍維持端對端加密。
+- 連線清單預設只存在本機，以名稱、裝置 ID 與最近連線時間辨識設備，不要求註冊帳戶。帳戶只作為後續的跨裝置清單同步、裝置歸屬、2FA 與團隊授權選配層。
+- 臨時支援採一次性密碼或被控端逐次接受；無人值守必須由被控端明確啟用並設定獨立密碼，搭配嘗試限速、撤銷與裝置金鑰驗證。Relay／目錄服務不得保存可直接登入的明文密碼，也不得取得桌面解密能力。
 
 ## 13. Web RDP Canvas
 
@@ -261,6 +264,7 @@
 
 ## 14. 自動更新與發行簽章
 
+- **啟動檢查回饋**：桌面版預設啟動時檢查 GitHub Releases；有新版會開啟更新視窗，已是最新版或檢查失敗則常駐顯示於狀態列，狀態列亦可手動重查，避免靜默成功看起來像沒有更新服務。
 - **簽章金鑰**：以 `npm run tauri signer generate` 產生。公鑰放在 `tauri.conf.json` 的 `plugins.updater.pubkey`，私鑰與其密碼存在 GitHub Actions 的 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets，不會進入版本庫。
 - **為什麼不能放假的公鑰**：Tauri 的 updater plugin 缺 `pubkey` 會直接讓程式無法啟動；而填一把不對的公鑰雖然程式能開，卻會讓每一次更新的簽章驗證都失敗，問題被藏起來反而更難查。
 - **必要的三個設定**，缺一則更新不會運作：

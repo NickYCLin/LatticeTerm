@@ -1,8 +1,9 @@
 //! Non-secret launch metadata for restoring an Agent Fleet workspace.
 //!
-//! This intentionally does not persist PTY output, prompts, reporter tokens,
-//! process identifiers, or model credentials. Restoring always starts new CLI
-//! processes after an explicit user confirmation.
+//! This intentionally does not persist PTY output, per-session prompts,
+//! reporter tokens, process identifiers, or model credentials. The only prompt
+//! text stored here is the user's explicit workspace-wide startup instruction.
+//! Restoring always starts new CLI processes after an explicit confirmation.
 
 use crate::agent::{
     normalize_launch_plan, AgentLaunchPlan, AgentLaunchPlanDraft, MAX_SAVED_AGENT_PLANS,
@@ -13,15 +14,18 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const STORE_VERSION: u32 = 3;
+const STORE_VERSION: u32 = 4;
 const STORE_FILE: &str = "agent-workspaces.json";
 const TEMP_FILE: &str = "agent-workspaces.json.tmp";
+const MAX_STARTUP_INSTRUCTIONS_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct StoreFile {
     version: u32,
     #[serde(default, rename = "workspaceName")]
     workspace_name: String,
+    #[serde(default, rename = "startupInstructions")]
+    startup_instructions: String,
     plans: Vec<AgentLaunchPlan>,
 }
 
@@ -36,6 +40,7 @@ pub struct AgentPlanRecovery {
 #[serde(rename_all = "camelCase")]
 pub struct AgentPlanSnapshot {
     pub workspace_name: String,
+    pub startup_instructions: String,
     pub plans: Vec<AgentLaunchPlan>,
     pub recovery: Option<AgentPlanRecovery>,
 }
@@ -44,6 +49,7 @@ pub struct AgentPlanSnapshot {
 pub struct FileAgentPlanStore {
     path: PathBuf,
     workspace_name: String,
+    startup_instructions: String,
     plans: Vec<AgentLaunchPlan>,
     recovery: Option<AgentPlanRecovery>,
 }
@@ -55,6 +61,7 @@ impl FileAgentPlanStore {
         let mut store = Self {
             path,
             workspace_name: String::new(),
+            startup_instructions: String::new(),
             plans: Vec::new(),
             recovery: None,
         };
@@ -68,14 +75,23 @@ impl FileAgentPlanStore {
             Ok(file)
                 if file.version <= STORE_VERSION && file.plans.len() <= MAX_SAVED_AGENT_PLANS =>
             {
-                match normalize_stored_workspace_name(&file.workspace_name) {
-                    Ok(name) => {
+                match (
+                    normalize_stored_workspace_name(&file.workspace_name),
+                    normalize_startup_instructions(&file.startup_instructions),
+                ) {
+                    (Ok(name), Ok(instructions)) => {
                         store.workspace_name = name;
+                        store.startup_instructions = instructions;
                         store.plans = file.plans;
                     }
-                    Err(error) => {
+                    (Err(error), _) => {
                         store.recovery = Some(store.set_aside(format!(
                             "file contains an invalid workspace name: {error}"
+                        ))?);
+                    }
+                    (_, Err(error)) => {
+                        store.recovery = Some(store.set_aside(format!(
+                            "file contains invalid startup instructions: {error}"
                         ))?);
                     }
                 }
@@ -130,6 +146,7 @@ impl FileAgentPlanStore {
         let json = serde_json::to_string_pretty(&StoreFile {
             version: STORE_VERSION,
             workspace_name: self.workspace_name.clone(),
+            startup_instructions: self.startup_instructions.clone(),
             plans: self.plans.clone(),
         })
         .map_err(|error| error.to_string())?;
@@ -151,6 +168,7 @@ impl FileAgentPlanStore {
     pub fn snapshot(&self) -> AgentPlanSnapshot {
         AgentPlanSnapshot {
             workspace_name: self.workspace_name.clone(),
+            startup_instructions: self.startup_instructions.clone(),
             plans: self.plans.clone(),
             recovery: self.recovery.clone(),
         }
@@ -167,6 +185,19 @@ impl FileAgentPlanStore {
             return Err(error);
         }
         Ok(name)
+    }
+
+    pub fn update_startup_instructions(&mut self, value: &str) -> Result<String, String> {
+        let instructions = normalize_startup_instructions(value)?;
+        if instructions == self.startup_instructions {
+            return Ok(instructions);
+        }
+        let previous = std::mem::replace(&mut self.startup_instructions, instructions.clone());
+        if let Err(error) = self.persist() {
+            self.startup_instructions = previous;
+            return Err(error);
+        }
+        Ok(instructions)
     }
 
     pub fn reorder(&mut self, ordered_ids: &[String]) -> Result<Vec<AgentLaunchPlan>, String> {
@@ -255,6 +286,22 @@ fn normalize_stored_workspace_name(value: &str) -> Result<String, String> {
     } else {
         normalize_workspace_name(value)
     }
+}
+
+fn normalize_startup_instructions(value: &str) -> Result<String, String> {
+    let value = value.trim().replace("\r\n", "\n").replace('\r', "\n");
+    if value.len() > MAX_STARTUP_INSTRUCTIONS_BYTES {
+        return Err(format!(
+            "Startup instructions are too long (maximum {MAX_STARTUP_INSTRUCTIONS_BYTES} bytes)."
+        ));
+    }
+    if value
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
+    {
+        return Err("Startup instructions contain unsupported control characters.".to_string());
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -354,7 +401,7 @@ mod tests {
             vec!["agent-plan-second", "agent-plan-first"]
         );
         let raw = fs::read_to_string(directory.join(STORE_FILE)).unwrap();
-        assert!(raw.contains("\"version\": 3"));
+        assert!(raw.contains("\"version\": 4"));
         assert!(raw.contains("\"workspaceName\": \"Release crew\""));
     }
 
@@ -380,7 +427,7 @@ mod tests {
         assert_eq!(saved.note, "接手上週的重構");
 
         let raw = fs::read_to_string(directory.join(STORE_FILE)).unwrap();
-        assert!(raw.contains("\"version\": 3"));
+        assert!(raw.contains("\"version\": 4"));
         assert!(raw.contains("\"resumeSessionId\": \"architecture review\""));
         assert!(raw.contains("\"note\": \"接手上週的重構\""));
     }
@@ -406,6 +453,37 @@ mod tests {
         assert!(store.rename("  ").is_err());
         assert!(store.rename("bad\nname").is_err());
         assert_eq!(store.snapshot().workspace_name, "Planning team");
+    }
+
+    #[test]
+    fn startup_instructions_are_opt_in_and_survive_reopening() {
+        let directory = temp_dir("startup-instructions");
+        let mut store = FileAgentPlanStore::open(&directory).unwrap();
+        assert!(store.snapshot().startup_instructions.is_empty());
+        let saved = store
+            .update_startup_instructions("  使用自然的繁體中文提交訊息。\r\n只提交本次檔案。  ")
+            .unwrap();
+        assert_eq!(saved, "使用自然的繁體中文提交訊息。\n只提交本次檔案。");
+
+        let mut reopened = FileAgentPlanStore::open(&directory).unwrap();
+        assert_eq!(reopened.snapshot().startup_instructions, saved);
+        assert!(reopened
+            .update_startup_instructions("  ")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn startup_instructions_reject_oversized_or_control_text() {
+        let directory = temp_dir("invalid-startup-instructions");
+        let mut store = FileAgentPlanStore::open(&directory).unwrap();
+        assert!(store
+            .update_startup_instructions(&"x".repeat(MAX_STARTUP_INSTRUCTIONS_BYTES + 1))
+            .is_err());
+        assert!(store
+            .update_startup_instructions("bad\u{0000}text")
+            .is_err());
+        assert!(store.snapshot().startup_instructions.is_empty());
     }
 
     #[test]

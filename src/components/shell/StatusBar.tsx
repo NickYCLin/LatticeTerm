@@ -9,6 +9,30 @@
 import { useI18n } from "../../i18n/context";
 import { Kbd } from "../common/Callout";
 import type { StorageState } from "../../app/useStorageStatus";
+import type { AppUpdater } from "../../app/useAppUpdater";
+
+function updaterLabel(updater: AppUpdater, t: ReturnType<typeof useI18n>["t"]) {
+  switch (updater.status) {
+    case "checking":
+      return t("status.updater.checking");
+    case "up-to-date":
+      return t("status.updater.upToDate");
+    case "available":
+      return t("status.updater.available", {
+        version: updater.availableVersion ?? "",
+      });
+    case "downloading":
+      return t("status.updater.downloading");
+    case "installing":
+      return t("status.updater.installing");
+    case "downloaded":
+      return t("status.updater.downloaded");
+    case "error":
+      return t("status.updater.error");
+    default:
+      return t("status.updater.idle");
+  }
+}
 
 export function StatusBar({
   profileCount,
@@ -17,6 +41,8 @@ export function StatusBar({
   vaultReady,
   version,
   storage,
+  updater,
+  onUpdateClick,
 }: {
   profileCount: number;
   visibleCount: number;
@@ -24,6 +50,8 @@ export function StatusBar({
   vaultReady: boolean;
   version: string;
   storage: StorageState;
+  updater?: AppUpdater;
+  onUpdateClick?: () => void;
 }) {
   const { t } = useI18n();
 
@@ -54,6 +82,19 @@ export function StatusBar({
       </span>
 
       <span className="statusbar__spacer" />
+
+      {updater && (
+        <button
+          type="button"
+          className={`statusbar__item statusbar__item--quiet statusbar__action statusbar__update--${updater.status}`}
+          onClick={onUpdateClick}
+          disabled={updater.status === "checking" || updater.status === "downloading" || updater.status === "installing"}
+          title={updater.error ?? t("settings.updater.autoCheckHint")}
+          aria-live="polite"
+        >
+          {updaterLabel(updater, t)}
+        </button>
+      )}
 
       <span className="statusbar__item statusbar__item--quiet">
         {t("status.palette")} <Kbd keys={["Ctrl", "K"]} />

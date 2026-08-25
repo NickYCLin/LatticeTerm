@@ -352,15 +352,13 @@ export function SftpPane({
           </button>
           <input
             ref={uploadRef}
-            className="sr-only"
             type="file"
+            hidden
             aria-label={t("sftp.upload")}
             onChange={(event) => void upload(event.currentTarget.files?.[0])}
           />
         </div>
       </header>
-
-      <div className="sftp-limit">{t("sftp.limit")}</div>
 
       {problem && (
         <div className="sftp-problem">

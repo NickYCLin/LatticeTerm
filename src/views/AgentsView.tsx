@@ -28,6 +28,16 @@ import {
 import { useI18n } from "../i18n/context";
 import type { MessageKey } from "../i18n/messages/zh-TW";
 
+export const TRADITIONAL_CHINESE_COMMIT_TEMPLATE = `進行任何工作前，先遵守以下協作規則：
+- 只有使用者明確要求提交時才建立 Git commit。
+- Git commit message 一律使用自然的台灣繁體中文。
+- 標題使用 <type>(<scope>): <subject>；scope 可省略。
+- type 僅使用 feat、fix、docs、style、refactor、perf、test、chore、revert。
+- subject 具體描述本次變更，不超過 50 個字，結尾不加句號。
+- 需要 body 時，說清楚 why 與 what，每行不超過 72 個字；有 issue 時在 footer 標註。
+- 一個 commit 只處理一個有意義的變更；提交前檢查 diff，只納入本次任務檔案。
+- 避免「全面優化」「提升體驗」「確保穩定」等空泛、制式的 AI 語氣，改用符合實際修改內容的自然說法。`;
+
 function stateKey(session: AgentSessionSummary): MessageKey {
   switch (session.state) {
     case "needsAttention":
@@ -45,6 +55,19 @@ function stateTone(session: AgentSessionSummary): string {
   if (session.state === "needsAttention") return "tone-warn";
   if (session.state === "idle") return "tone-neutral";
   return "tone-ok";
+}
+
+function accountKey(definition: AgentDefinition): MessageKey {
+  switch (definition.account.state) {
+    case "signedIn":
+      return "agents.account.signedIn";
+    case "signedOut":
+      return "agents.account.signedOut";
+    case "unknown":
+      return "agents.account.unknown";
+    default:
+      return "agents.account.unsupported";
+  }
 }
 
 export function AgentsView({
@@ -67,6 +90,9 @@ export function AgentsView({
   const [editingWorkspaceName, setEditingWorkspaceName] = useState(false);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
   const [savingWorkspaceName, setSavingWorkspaceName] = useState(false);
+  const [startupInstructionsDraft, setStartupInstructionsDraft] = useState("");
+  const [savingStartupInstructions, setSavingStartupInstructions] = useState(false);
+  const [startupInstructionsSaved, setStartupInstructionsSaved] = useState(false);
   const [reorderingPlanId, setReorderingPlanId] = useState<string | null>(null);
   const [pendingRestore, setPendingRestore] = useState<string[] | null>(null);
   const [pendingDeletePlan, setPendingDeletePlan] =
@@ -102,6 +128,10 @@ export function AgentsView({
       setWorkspaceNameDraft(agents.workspaceName);
     }
   }, [agents.workspaceName, editingWorkspaceName]);
+
+  useEffect(() => {
+    setStartupInstructionsDraft(agents.startupInstructions);
+  }, [agents.startupInstructions]);
 
   useEffect(() => {
     const activeIds = new Set(agents.sessions.map((session) => session.sessionId));
@@ -263,6 +293,21 @@ export function AgentsView({
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setSavingWorkspaceName(false);
+    }
+  }
+
+  async function saveStartupInstructions() {
+    setSavingStartupInstructions(true);
+    setStartupInstructionsSaved(false);
+    setError(null);
+    try {
+      const saved = await agents.updateStartupInstructions(startupInstructionsDraft);
+      setStartupInstructionsDraft(saved);
+      setStartupInstructionsSaved(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSavingStartupInstructions(false);
     }
   }
 
@@ -435,6 +480,66 @@ export function AgentsView({
           <span className="agents-field-hint">{t("agents.launchNote.hint")}</span>
         </label>
 
+        <section className="agents-startup-instructions">
+          <div className="agents-startup-instructions__heading">
+            <div>
+              <span className="field__label">{t("agents.startupInstructions")}</span>
+              <p className="agents-field-hint">
+                {t("agents.startupInstructions.hint")}
+              </p>
+            </div>
+            <span
+              className={`badge ${agents.startupInstructions ? "tone-ok" : "tone-neutral"}`}
+            >
+              {t(
+                agents.startupInstructions
+                  ? "agents.startupInstructions.enabled"
+                  : "agents.startupInstructions.disabled",
+              )}
+            </span>
+          </div>
+          <textarea
+            className="input agents-startup-instructions__input"
+            value={startupInstructionsDraft}
+            onChange={(event) => {
+              setStartupInstructionsDraft(event.currentTarget.value);
+              setStartupInstructionsSaved(false);
+            }}
+            placeholder={t("agents.startupInstructions.placeholder")}
+            rows={8}
+            maxLength={2_000}
+            spellCheck={false}
+          />
+          <div className="agents-startup-instructions__actions">
+            <span className="agents-field-hint" aria-live="polite">
+              {startupInstructionsSaved
+                ? t("agents.startupInstructions.saved")
+                : t("agents.startupInstructions.localOnly")}
+            </span>
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              disabled={savingStartupInstructions || agents.mode !== "ready"}
+              onClick={() => {
+                setStartupInstructionsDraft(TRADITIONAL_CHINESE_COMMIT_TEMPLATE);
+                setStartupInstructionsSaved(false);
+              }}
+            >
+              {t("agents.startupInstructions.useCommitTemplate")}
+            </button>
+            <button
+              type="button"
+              className="button button--primary button--sm"
+              disabled={savingStartupInstructions || agents.mode !== "ready"}
+              onClick={() => void saveStartupInstructions()}
+            >
+              {savingStartupInstructions
+                ? t("agents.workspace.saving")
+                : t("agents.startupInstructions.save")}
+            </button>
+          </div>
+        </section>
+
         <div className="agent-grid">
           {agents.catalog.map((definition) => (
             <article
@@ -461,6 +566,17 @@ export function AgentsView({
                 <span className="agent-card__path">
                   {definition.installedPath ?? t("agents.path.missing")}
                 </span>
+                {definition.installed && (
+                  <div className="agent-card__account">
+                    <span>{t("agents.account.current")}</span>
+                    <strong className="truncate">
+                      {definition.account.label ?? t(accountKey(definition))}
+                    </strong>
+                    {definition.account.method && (
+                      <small>{definition.account.method}</small>
+                    )}
+                  </div>
+                )}
                 {!definition.installed && definition.install.displayCommand && (
                   <code className="agent-card__install-command">
                     {definition.install.displayCommand}
@@ -691,6 +807,15 @@ export function AgentsView({
                       ? t("agents.workspace.nativeResumeCommand", {
                           executable: plan.executable,
                         })
+                      : agents.catalog.some(
+                            (definition) =>
+                              definition.id === plan.definitionId &&
+                              definition.resumeLatestSupported,
+                          ) &&
+                          plan.arguments.length === 0
+                        ? t("agents.workspace.latestResumeCommand", {
+                            executable: plan.executable,
+                          })
                       : t("agents.workspace.command", {
                           executable: plan.executable,
                           count: plan.arguments.length,

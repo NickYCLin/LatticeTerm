@@ -640,6 +640,17 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           vaultReady={runtime.summary?.credentialStorageReady ?? false}
           version={runtime.summary?.version ?? APP_VERSION}
           storage={storage}
+          updater={runtime.host === "tauri" ? updater : undefined}
+          onUpdateClick={() => {
+            setUpdatePromptDismissed(false);
+            if (
+              updater.status === "idle" ||
+              updater.status === "up-to-date" ||
+              updater.status === "error"
+            ) {
+              void updater.checkForUpdates();
+            }
+          }}
         />
       </main>
 

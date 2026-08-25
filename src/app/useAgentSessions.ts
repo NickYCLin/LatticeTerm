@@ -15,11 +15,21 @@ export interface AgentDefinition {
   executable: string;
   adapterVersion: number;
   resumeSupported: boolean;
+  /** Saved launch items can continue the latest context without storing an id. */
+  resumeLatestSupported: boolean;
   /** Whether this CLI's conversation can be read for a handoff to another CLI. */
   transcriptSupported: boolean;
   installed: boolean;
   installedPath: string | null;
+  account: AgentAccountInfo;
   install: AgentInstallDefinition;
+}
+
+export interface AgentAccountInfo {
+  state: "signedIn" | "signedOut" | "unknown" | "unsupported";
+  /** Email/account label only. Authentication tokens never enter the WebView. */
+  label: string | null;
+  method: string | null;
 }
 
 export interface AgentInstallDefinition {
@@ -81,6 +91,7 @@ export interface AgentPlanRecovery {
 
 interface AgentPlanSnapshot {
   workspaceName: string;
+  startupInstructions: string;
   plans: AgentLaunchPlan[];
   recovery: AgentPlanRecovery | null;
 }
@@ -155,21 +166,23 @@ const FALLBACK_CATALOG_SOURCE: [string, string, string, boolean][] = [
 
 const FALLBACK_CATALOG: AgentDefinition[] = FALLBACK_CATALOG_SOURCE.map(
   ([id, label, executable, resumeSupported]) => ({
-  id,
-  label,
-  executable,
-  adapterVersion: 1,
-  resumeSupported,
-  transcriptSupported: id === "codex" || id === "claude",
-  installed: false,
-  installedPath: null,
-  install: {
-    executable: null,
-    arguments: [],
-    displayCommand: "",
-    sourceUrl: "",
-    available: false,
-  },
+    id,
+    label,
+    executable,
+    adapterVersion: 1,
+    resumeSupported,
+    resumeLatestSupported: id === "codex",
+    transcriptSupported: id === "codex" || id === "claude",
+    installed: false,
+    installedPath: null,
+    account: { state: "unsupported", label: null, method: null },
+    install: {
+      executable: null,
+      arguments: [],
+      displayCommand: "",
+      sourceUrl: "",
+      available: false,
+    },
   }),
 );
 
@@ -266,6 +279,7 @@ export interface AgentApi {
   sessions: AgentSessionSummary[];
   lastClosed: SessionClosedNotice | null;
   workspaceName: string;
+  startupInstructions: string;
   plans: AgentLaunchPlan[];
   planRecovery: AgentPlanRecovery | null;
   refreshCatalog: () => Promise<void>;
@@ -274,6 +288,7 @@ export interface AgentApi {
   rename: (sessionId: string, label: string) => Promise<AgentSessionSummary>;
   savePlan: (draft: AgentLaunchPlanDraft) => Promise<AgentLaunchPlan>;
   renameWorkspace: (name: string) => Promise<string>;
+  updateStartupInstructions: (instructions: string) => Promise<string>;
   reorderPlans: (orderedIds: string[]) => Promise<AgentLaunchPlan[]>;
   deletePlan: (id: string) => Promise<boolean>;
   restorePlans: (planIds: string[]) => Promise<AgentRestoreOutcome[]>;
@@ -307,6 +322,7 @@ export function useAgentSessions(): AgentApi {
   const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
   const [lastClosed, setLastClosed] = useState<SessionClosedNotice | null>(null);
   const [workspaceName, setWorkspaceName] = useState("");
+  const [startupInstructions, setStartupInstructions] = useState("");
   const [plans, setPlans] = useState<AgentLaunchPlan[]>([]);
   const [planRecovery, setPlanRecovery] = useState<AgentPlanRecovery | null>(
     null,
@@ -335,6 +351,7 @@ export function useAgentSessions(): AgentApi {
       setCatalog(definitions);
       setDefaultWorkingDirectory(directory);
       setWorkspaceName(planSnapshot.workspaceName);
+      setStartupInstructions(planSnapshot.startupInstructions);
       setPlans(planSnapshot.plans);
       setPlanRecovery(planSnapshot.recovery);
       setError(null);
@@ -581,6 +598,7 @@ export function useAgentSessions(): AgentApi {
         setCatalog(definitions);
         setDefaultWorkingDirectory(directory);
         setWorkspaceName(planSnapshot.workspaceName);
+        setStartupInstructions(planSnapshot.startupInstructions);
         setPlans(planSnapshot.plans);
         setPlanRecovery(planSnapshot.recovery);
         setError(null);
@@ -644,6 +662,15 @@ export function useAgentSessions(): AgentApi {
     const { invoke } = await core();
     const saved = await invoke<string>("agent_workspace_rename", { name });
     setWorkspaceName(saved);
+    return saved;
+  }, []);
+
+  const updateStartupInstructions = useCallback(async (instructions: string) => {
+    const { invoke } = await core();
+    const saved = await invoke<string>("agent_workspace_instructions_update", {
+      instructions,
+    });
+    setStartupInstructions(saved);
     return saved;
   }, []);
 
@@ -780,6 +807,7 @@ export function useAgentSessions(): AgentApi {
     sessions,
     lastClosed,
     workspaceName,
+    startupInstructions,
     plans,
     planRecovery,
     refreshCatalog,
@@ -787,6 +815,7 @@ export function useAgentSessions(): AgentApi {
     rename,
     savePlan,
     renameWorkspace,
+    updateStartupInstructions,
     reorderPlans,
     deletePlan,
     restorePlans,

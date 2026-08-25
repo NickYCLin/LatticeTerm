@@ -21,6 +21,10 @@
   flex: none;
   padding: var(--space-4) 0;
   border-radius: var(--radius-lg);
+  /* backdrop-filter creates a stacking context on every glass panel. Keep the
+     rail one local layer above its sibling sidebar so its tooltips are not
+     painted underneath that later panel; dialogs still live at z-index 50. */
+  z-index: 2;
 }
 
 .rail__brand {
@@ -331,6 +335,31 @@
 
 .statusbar__item--quiet {
   color: var(--text-faint);
+}
+
+.statusbar__action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.statusbar__action:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.statusbar__action:disabled {
+  cursor: default;
+}
+
+.statusbar__update--available,
+.statusbar__update--downloaded {
+  color: var(--accent);
+}
+
+.statusbar__update--error {
+  color: var(--danger);
 }
 
 .statusbar__spacer {

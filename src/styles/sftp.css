@@ -2,6 +2,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
   height: 100%;
   min-height: 0;
   border: 1px solid var(--line);
@@ -50,9 +51,9 @@
 .sftp-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  min-height: 3.25rem;
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+  min-height: 2.6rem;
+  padding: 0.35rem var(--space-2);
   border-bottom: 1px solid var(--line);
   background: var(--surface-solid);
 }
@@ -61,13 +62,15 @@
   display: flex;
   flex: 1 1 20rem;
   align-items: center;
-  gap: var(--space-2);
-  min-width: 12rem;
+  gap: var(--space-1);
+  min-width: 10rem;
 }
 
 .sftp-path .input {
   flex: 1;
+  height: 1.875rem;
   min-width: 8rem;
+  padding-inline: var(--space-3);
 }
 
 .sftp-actions,
@@ -78,15 +81,14 @@
 }
 
 .sftp-actions {
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 
-.sftp-limit {
-  padding: var(--space-2) var(--space-4);
-  border-bottom: 1px solid var(--line);
-  color: var(--text-faint);
-  font-size: var(--text-xs);
+.sftp-actions .button {
+  gap: var(--space-1);
+  padding-inline: var(--space-3);
 }
 
 .sftp-problem {
@@ -227,15 +229,27 @@
   text-align: center;
 }
 
-@media (max-width: 920px) {
+/* MobaXterm-style compact dock: actions form a slim icon toolbar and the
+   address field sits directly above the file table. */
+@container (max-width: 48rem) {
   .sftp-toolbar {
     align-items: stretch;
     flex-direction: column;
+    gap: 0.25rem;
   }
 
   .sftp-actions {
+    order: -1;
     justify-content: flex-start;
   }
+
+  .sftp-path {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+}
+
+@media (max-width: 920px) {
 
   .sftp-table th:nth-child(3),
   .sftp-table td:nth-child(3),

@@ -58,7 +58,9 @@ export function TerminalPane({
         'ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace',
       fontSize: 13,
       lineHeight: 1.2,
-      cursorBlink: true,
+      // Keep the caret steady across SSH and Agent terminals. Multiple mounted
+      // sessions otherwise blink independently and make the workspace flicker.
+      cursorBlink: false,
       scrollback: 5000,
       // Force a readable contrast so no CLI can paint text that blends into
       // the dark background (e.g. black-on-black input).

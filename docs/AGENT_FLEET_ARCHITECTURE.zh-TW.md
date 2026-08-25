@@ -33,14 +33,16 @@ flowchart LR
 - 分頁名稱、CLI 名稱與模型欄位分開保存。模型只接受明確的 `--model` 參數或 CLI 啟動／狀態畫面中的保守格式；沒有可靠值就顯示「模型尚未回報」，不拿產品名稱代替模型。輸入一般提示後停止啟動掃描，只有 `/model` 會重新開啟一次掃描，避免把回答內容誤判成目前模型。
 - 支援 Adapter／hook 明確回報「工作中、等待輸入、閒置、完成」。UI 會顯示狀態來源；收到 Adapter 回報後，終端輸出 heuristic 不再覆蓋該工作階段的語意狀態。
 - 支援使用者明確勾選執行中的 Agent，經二次確認後將同一段提示送進最多 32 個獨立 PTY；每個目標逐一回報成功或失敗，提示內容不會保存。
-- 支援最多 32 個安全啟動項目，也可命名工作區及調整持久化順序。應用程式重啟後，使用者可逐項或整批確認，LatticeTerm 會重新驗證磁碟資料並依保存順序建立新的 CLI 程序；每項分別回報成功或失敗。
-- 版本化內建 Adapter v1 仍可驗證並還原舊工作區中 Codex、Claude Code、Gemini CLI 與 Hermes Agent 的原生 Session 項目；介面不再要求使用者手動設定 Session ID。新的脈絡接手改由執行中分頁的「加開 CLI／帶入目前對話」處理。
+- 支援最多 32 個安全啟動項目，也可命名工作區及調整持久化順序。應用程式重啟後，使用者可逐項或整批確認，LatticeTerm 會重新驗證磁碟資料並依保存順序啟動 CLI 程序；每項分別回報成功或失敗。沒有額外參數或舊版明確 Session ID 的 Codex 項目使用 `codex resume --last`，由 Codex 依該項目的工作目錄選出最近對話。
+- 可選擇保存一份工作區共用啟動指示；之後每個非 `custom` CLI 進入互動提示後會先收到這段文字，若同時有跨 CLI handoff 則共用指示排在 handoff 前面。內建繁中 Commit 範本只是可套用的起始內容，預設留空停用，不會把個人規範強加給其他安裝者。
+- 目錄會從各 CLI 已存在的本機認證 metadata 讀取 Codex、Claude 與 Gemini 的帳號標籤及登入方式；Rust 只回傳非機密字串，access token、refresh token、API Key 與完整 JWT 都不會序列化到 WebView。
+- 版本化內建 Adapter v1 仍可驗證並還原舊工作區中 Codex、Claude Code、Gemini CLI 與 Hermes Agent 的原生 Session 項目；介面不再要求使用者手動設定 Session ID。Codex 的一般保存項目不寫入 Session ID，而是委由 Codex 自己續接同目錄最近的對話；執行中分頁的「加開 CLI／帶入目前對話」則處理跨 CLI 脈絡接手。
 
 ### 舊工作區相容層：原生 Session 續接 Adapter v1
 
 | CLI | 由 LatticeTerm 建立的參數 | 依據 |
 | --- | --- | --- |
-| Codex | `codex resume <SESSION_ID_OR_NAME>` | [OpenAI Codex CLI reference](https://developers.openai.com/codex/cli/reference/) |
+| Codex | `codex resume <SESSION_ID_OR_NAME>`；一般保存項目使用 `codex resume --last` | [OpenAI Codex CLI reference](https://developers.openai.com/codex/cli/reference/) |
 | Claude Code | `claude --resume <SESSION_ID>` | [Anthropic CLI reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage) |
 | Gemini CLI | `gemini --resume <SESSION_UUID_OR_INDEX>` | [Gemini CLI session management](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/session-management.md) |
 | Hermes Agent | `hermes --resume <SESSION_ID_OR_TITLE>` | [Hermes session guide](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/sessions.md) |
@@ -81,8 +83,8 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 - 安裝指令由內建目錄固定，參數分開傳入；執行前顯示完整指令並要求確認，下載與安裝輸出留在使用者可見的終端。LatticeTerm 不自動代填憑證，也不把遠端安裝腳本當成已簽章成品。
 - CLI 以啟動 LatticeTerm 的使用者權限執行，不是沙箱。使用者只能加入自己信任的程式。
 - 執行中的工作階段只存在記憶體，Rust registry 最多接受 32 個活躍 session；每個 PTY 保留最近 256 KiB 有界輸出與單調 byte offset，因此重播尾端總上限為 8 MiB。WebView 重新載入可重新 attach 並避免快照／即時事件重複。使用者停止或應用程式結束／重啟時仍會終止已登記的 CLI。
-- 安全啟動工作區使用獨立的版本化 JSON；v3 可無損讀取 v1／v2，並保存工作區名稱、項目順序、CLI 類型、標籤、可執行檔、明確參數、工作目錄與選填備註。原生 Session ID 或標題只在使用者明確保存續接項目時寫入；備註為選填的純文字（最多 200 bytes、去除前後空白、拒絕控制字元），供使用者一眼看出該項目在做什麼，屬 v3 內的附加欄位，舊檔缺此欄位時預設為空。密碼、Token、API Key、Passphrase、Secret 參數會被拒絕；讀不到或版本不相容的原檔會先移到復原檔，不會直接覆寫。
-- 不把終端輸出、提示內容、輸入歷史、程序 ID、Reporter 權杖或模型憑證寫入磁碟；重新 attach 用的 256 KiB 輸出尾端只存在該桌面程序記憶體。
+- 安全啟動工作區使用獨立的版本化 JSON；v4 可無損讀取 v1／v2／v3，並保存工作區名稱、共用啟動指示、項目順序、CLI 類型、標籤、可執行檔、明確參數、工作目錄與選填備註。原生 Session ID 或標題只在使用者明確保存續接項目時寫入；備註為選填的純文字（最多 200 bytes、去除前後空白、拒絕控制字元）。共用啟動指示最多 8 KiB，留空即停用。密碼、Token、API Key、Passphrase、Secret 參數會被拒絕；讀不到或版本不相容的原檔會先移到復原檔，不會直接覆寫。
+- 除使用者明確保存的共用啟動指示外，不把單次提示、終端輸出、輸入歷史、程序 ID、Reporter 權杖或模型憑證寫入磁碟；重新 attach 用的 256 KiB 輸出尾端只存在該桌面程序記憶體。
 - Reporter 只監聽 loopback，訊息限制 4 KiB 且有讀寫逾時；每個工作階段使用獨立高熵權杖。權杖會存在該 CLI 的環境中，因此相同作業系統使用者權限的程序仍屬於信任邊界，但即使權杖外洩也只能變更該工作階段的顯示狀態。
 - Windows 偵測與啟動涵蓋 `.exe`／`.com`，以及 npm／pnpm／yarn 全域安裝常見的 `.cmd`／`.bat` shim（例如 `claude.cmd`）。因為 Windows 無法直接 `CreateProcess` 批次檔，`.cmd`／`.bat` 會自動透過 `cmd /c` 啟動，並先去掉 `canonicalize` 產生的 `\\?\` 前綴以免 cmd 無法解析。
 
@@ -104,7 +106,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 | 同程序介面重新 attach | 已完成 | 先訂閱事件再 hydration；session 關閉不會被舊快照復活，最近 256 KiB PTY 輸出依 offset 去重重播 |
 | 工具專用語意 Adapter | 部分完成 | Reporter 狀態模型、舊工作區續接 recipe 與保守的 session ID 擷取仍保留；工具 hook、token／cost 擷取尚未完成 |
 | 跨程序背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段；目前只支援同一桌面程序內的 WebView 重新 attach |
-| 跨重啟還原 | 部分完成 | 已有安全工作區與批次重新啟動，舊版原生續接項目也可相容還原；應用程式程序重啟後的原 PTY、pane 與輸出還原尚未完成 |
+| 跨重啟還原 | 部分完成 | 已保存的 Codex 項目會續接同工作目錄最近的對話，舊版原生續接項目也可相容還原；應用程式程序重啟後的原 PTY、pane 與輸出還原尚未完成 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 任務編排 | 部分完成 | broadcast prompt 已完成；依賴圖、佇列與排程仍待實作 |
 | 權限隔離 | 未完成 | 尚無每 Agent 容器、沙箱或檔案範圍策略 |

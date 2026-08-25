@@ -537,6 +537,14 @@ export const en: Messages = {
   "status.vault.locked": "Not built yet",
   "status.vault.ready": "Available",
   "status.palette": "Command palette",
+  "status.updater.idle": "Updates not checked yet",
+  "status.updater.checking": "Checking for updates…",
+  "status.updater.upToDate": "Up to date",
+  "status.updater.available": "Update {version} available",
+  "status.updater.downloading": "Downloading update…",
+  "status.updater.installing": "Installing update…",
+  "status.updater.downloaded": "Restart to finish updating",
+  "status.updater.error": "Update check failed (click to retry)",
 
   "status.savedLocally": "Connections are saved on this machine",
   "status.notSaved": "In memory only, cleared when you close the app",
@@ -676,9 +684,27 @@ export const en: Messages = {
   "agents.launchNote.placeholder": "e.g. this CLI handles the payments project",
   "agents.launchNote.hint":
     "Saved with the item to the workspace, so the list shows at a glance what it is for. Just for you; up to 200 bytes.",
+  "agents.startupInstructions": "Shared instructions for every new CLI",
+  "agents.startupInstructions.hint":
+    "This text is sent after a new session reaches its interactive prompt. Save an empty value to disable it; installer commands never receive it.",
+  "agents.startupInstructions.enabled": "Enabled",
+  "agents.startupInstructions.disabled": "Disabled",
+  "agents.startupInstructions.placeholder":
+    "For example: read the project rules before editing and write natural Traditional Chinese commit messages.",
+  "agents.startupInstructions.localOnly":
+    "Stored only on this computer and never includes login tokens.",
+  "agents.startupInstructions.saved":
+    "Saved; every new CLI will receive it first.",
+  "agents.startupInstructions.useCommitTemplate": "Use zh-TW commit template",
+  "agents.startupInstructions.save": "Save startup instructions",
   "agents.installed": "Available",
   "agents.notInstalled": "Not detected",
   "agents.path.missing": "No directly executable program was found on PATH",
+  "agents.account.current": "Signed in as",
+  "agents.account.signedIn": "Signed in (CLI did not expose an account name)",
+  "agents.account.signedOut": "Not signed in",
+  "agents.account.unknown": "Account could not be determined safely",
+  "agents.account.unsupported": "Account detection is not supported for this CLI yet",
   "agents.launching": "Launching…",
   "agents.launch": "Launch",
   "agents.install": "Install",
@@ -709,7 +735,7 @@ export const en: Messages = {
   "agents.workspace.restoreAll": "Restore all {count}",
   "agents.workspace.securityTitle": "Only launch metadata you explicitly choose is saved",
   "agents.workspace.securityBody":
-    "Save up to {count} launch items. New items saved from this screen exclude native session IDs, prompts, terminal output, process IDs, reporter tokens, and model credentials.",
+    "Save up to {count} launch items. A saved Codex item continues the latest chat from the same working directory through Codex itself; LatticeTerm still does not store native session IDs, prompts, terminal output, process IDs, reporter tokens, or model credentials.",
   "agents.workspace.recoveryTitle": "The previous launch workspace could not be read",
   "agents.workspace.recoveryBody":
     "The original file was preserved at {path} instead of being overwritten. Reason: {detail}",
@@ -724,12 +750,14 @@ export const en: Messages = {
   "agents.workspace.command": "{executable} · {count} arguments",
   "agents.workspace.nativeResumeCommand":
     "{executable} · native session restore saved",
+  "agents.workspace.latestResumeCommand":
+    "{executable} · resumes the latest chat in this working directory",
   "agents.workspace.moveUp": "Move “{name}” up",
   "agents.workspace.moveDown": "Move “{name}” down",
   "agents.workspace.delete": "Delete launch item",
   "agents.workspace.confirmTitle": "Restore this launch workspace?",
   "agents.workspace.confirmBody":
-    "This immediately starts {count} new local CLI processes. Items with a saved native session identifier ask their CLI to resume existing context; previous processes and terminal screens are not restored.",
+    "This immediately starts {count} local CLI processes. Saved Codex items resume the latest chat from their working directory; legacy items with a native session identifier resume that exact context. Previous processes and terminal screens are not restored.",
   "agents.workspace.confirmAction": "Launch {count} agents",
   "agents.workspace.deleteTitle": "Delete “{name}”?",
   "agents.workspace.deleteBody":
@@ -789,8 +817,6 @@ export const en: Messages = {
   "sftp.download": "Download",
   "sftp.rename": "Rename",
   "sftp.delete": "Delete",
-  "sftp.limit":
-    "Each upload or download is limited to 32 MiB so large files never fill WebView memory.",
   "sftp.problem": "SFTP operation failed",
   "sftp.loading": "Reading the remote directory…",
   "sftp.empty": "This folder is empty.",
