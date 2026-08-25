@@ -8,7 +8,11 @@ import {
   shouldClearSessionSelection,
   type SessionClosedNotice,
 } from "../app/sessionSnapshot";
-import type { AgentApi } from "../app/useAgentSessions";
+import type {
+  AgentApi,
+  AgentDefinition,
+  AgentSessionSummary,
+} from "../app/useAgentSessions";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
@@ -19,6 +23,7 @@ import {
   CloseIcon,
   EditIcon,
   FolderIcon,
+  PlusIcon,
   ScreenShareIcon,
   TerminalIcon,
   TransferIcon,
@@ -31,7 +36,13 @@ import { SftpPane } from "../components/sftp/SftpPane";
 import { TerminalPane } from "../components/terminal/TerminalPane";
 
 type SessionRef =
-  | { kind: "agent"; sessionId: string; label: string }
+  | {
+      kind: "agent";
+      sessionId: string;
+      label: string;
+      groupId: string;
+      members: AgentSessionSummary[];
+    }
   | { kind: "ssh"; sessionId: string; label: string }
   | { kind: "sftp"; sessionId: string; label: string }
   | { kind: "remote"; sessionId: string; label: string }
@@ -117,6 +128,14 @@ export function SessionsView({
   const [editingTab, setEditingTab] = useState<string | null>(null);
   const [tabDraft, setTabDraft] = useState("");
 
+  // Which CLI is shown for each multi-CLI tab, remembered so switching tabs
+  // returns to the last CLI you used there. `addCliFor` holds the group whose
+  // "add a CLI" picker is open.
+  const [activeMemberByGroup, setActiveMemberByGroup] = useState<
+    Record<string, string>
+  >({});
+  const [addCliFor, setAddCliFor] = useState<string | null>(null);
+
   function beginRename(sessionId: string, label: string) {
     setEditingTab(sessionId);
     setTabDraft(label);
@@ -134,12 +153,80 @@ export function SessionsView({
     }
   }
 
+  function selectMember(groupId: string, sessionId: string) {
+    setActiveMemberByGroup((prev) => ({ ...prev, [groupId]: sessionId }));
+    onSelect(sessionId);
+  }
+
+  async function addCli(
+    group: { groupId: string; members: AgentSessionSummary[] },
+    definition: AgentDefinition,
+  ) {
+    setAddCliFor(null);
+    const workingDirectory = group.members[0]?.workingDirectory ?? "";
+    try {
+      const session = await agents.launch({
+        definitionId: definition.id,
+        label: "",
+        executable: "",
+        arguments: [],
+        resumeSessionId: null,
+        groupId: group.groupId,
+        workingDirectory,
+        cols: 80,
+        rows: 24,
+      });
+      selectMember(group.groupId, session.sessionId);
+    } catch {
+      // A failed launch leaves the current CLIs untouched.
+    }
+  }
+
+  // Collapse agent CLIs that share a groupId into one tab, first-seen order.
+  const agentGroups: { groupId: string; members: AgentSessionSummary[] }[] = [];
+  const groupIndex = new Map<string, number>();
+  for (const session of agents.sessions) {
+    const gid = session.groupId || session.sessionId;
+    const existing = groupIndex.get(gid);
+    if (existing === undefined) {
+      groupIndex.set(gid, agentGroups.length);
+      agentGroups.push({ groupId: gid, members: [session] });
+    } else {
+      agentGroups[existing].members.push(session);
+    }
+  }
+
+  const activeMemberId = (group: {
+    groupId: string;
+    members: AgentSessionSummary[];
+  }): string => {
+    if (
+      activeSessionId &&
+      group.members.some((member) => member.sessionId === activeSessionId)
+    ) {
+      return activeSessionId;
+    }
+    const remembered = activeMemberByGroup[group.groupId];
+    if (remembered && group.members.some((m) => m.sessionId === remembered)) {
+      return remembered;
+    }
+    return group.members[0].sessionId;
+  };
+
   const sessions: SessionRef[] = [
-    ...agents.sessions.map((session) => ({
-      kind: "agent" as const,
-      sessionId: session.sessionId,
-      label: session.label,
-    })),
+    ...agentGroups.map((group) => {
+      const memberId = activeMemberId(group);
+      const member =
+        group.members.find((entry) => entry.sessionId === memberId) ??
+        group.members[0];
+      return {
+        kind: "agent" as const,
+        sessionId: memberId,
+        label: member.label,
+        groupId: group.groupId,
+        members: group.members,
+      };
+    }),
     ...ssh.sessions.map((session) => ({
       kind: "ssh" as const,
       sessionId: session.sessionId,
@@ -233,9 +320,25 @@ export function SessionsView({
   const active =
     sessions.find((session) => session.sessionId === activeSessionId) ?? sessions[0];
 
+  async function closeAgentMember(
+    members: AgentSessionSummary[],
+    sessionId: string,
+  ) {
+    await agents.disconnect(sessionId);
+    // Closing the visible CLI hands focus to a sibling if the tab still has
+    // one, so the whole tab only disappears once its last CLI is gone.
+    if (sessionId === active.sessionId) {
+      const sibling = members.find((member) => member.sessionId !== sessionId);
+      onSelect(sibling?.sessionId ?? null);
+    }
+  }
+
   async function close(session: SessionRef) {
-    if (session.kind === "agent") await agents.disconnect(session.sessionId);
-    else if (session.kind === "ssh") await ssh.disconnect(session.sessionId);
+    if (session.kind === "agent") {
+      await closeAgentMember(session.members, session.sessionId);
+      return;
+    }
+    if (session.kind === "ssh") await ssh.disconnect(session.sessionId);
     else if (session.kind === "sftp") await sftp.disconnect(session.sessionId);
     else if (session.kind === "remote") await remote.disconnect(session.sessionId);
     else if (session.kind === "rdp") await rdp.disconnect(session.sessionId);
@@ -337,26 +440,124 @@ export function SessionsView({
       </div>
 
       <div className="terminal-stack">
-        {agents.sessions.map((session) => (
-          <div
-            className="terminal-slot"
-            key={session.sessionId}
-            hidden={session.sessionId !== active.sessionId}
-          >
-            <AgentTerminalPane
-              sessionId={session.sessionId}
-              agents={agents}
-              theme={theme}
-              onClosed={() => {
-                if (
-                  shouldClearSessionSelection(active.sessionId, session.sessionId)
-                ) {
-                  onSelect(null);
-                }
-              }}
-            />
-          </div>
-        ))}
+        {agentGroups.map((group) => {
+          const memberId = activeMemberId(group);
+          const groupActive = group.members.some(
+            (member) => member.sessionId === active.sessionId,
+          );
+          const installed = agents.catalog.filter(
+            (definition) => definition.installed,
+          );
+          return (
+            <div
+              className="terminal-slot terminal-slot--cli"
+              key={group.groupId}
+              hidden={!groupActive}
+            >
+              <div
+                className="cli-switch"
+                role="tablist"
+                aria-label={t("terminal.cliSwitch")}
+              >
+                {group.members.map((member) => {
+                  const selected = member.sessionId === memberId;
+                  return (
+                    <span
+                      key={member.sessionId}
+                      className={`cli-switch__pill${selected ? " is-active" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={selected}
+                        className="cli-switch__select"
+                        onClick={() =>
+                          selectMember(group.groupId, member.sessionId)
+                        }
+                      >
+                        <AgentIcon size={12} />
+                        <span className="truncate">{member.label}</span>
+                      </button>
+                      {group.members.length > 1 && (
+                        <button
+                          type="button"
+                          className="cli-switch__close"
+                          onClick={() =>
+                            void closeAgentMember(group.members, member.sessionId)
+                          }
+                          aria-label={t("terminal.disconnect")}
+                        >
+                          <CloseIcon size={10} />
+                        </button>
+                      )}
+                    </span>
+                  );
+                })}
+                <div className="cli-switch__add-wrap">
+                  <button
+                    type="button"
+                    className="cli-switch__add"
+                    onClick={() =>
+                      setAddCliFor((current) =>
+                        current === group.groupId ? null : group.groupId,
+                      )
+                    }
+                    aria-haspopup="menu"
+                    aria-expanded={addCliFor === group.groupId}
+                  >
+                    <PlusIcon size={12} />
+                    <span>{t("terminal.addCli")}</span>
+                  </button>
+                  {addCliFor === group.groupId && (
+                    <div className="cli-switch__menu" role="menu">
+                      {installed.map((definition) => (
+                        <button
+                          key={definition.id}
+                          type="button"
+                          role="menuitem"
+                          className="cli-switch__menu-item"
+                          onClick={() => void addCli(group, definition)}
+                        >
+                          {definition.label}
+                        </button>
+                      ))}
+                      {installed.length === 0 && (
+                        <span className="cli-switch__menu-empty">
+                          {t("terminal.addCli.none")}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="cli-panes">
+                {group.members.map((member) => (
+                  <div
+                    className="cli-pane-slot"
+                    key={member.sessionId}
+                    hidden={member.sessionId !== memberId}
+                  >
+                    <AgentTerminalPane
+                      sessionId={member.sessionId}
+                      agents={agents}
+                      theme={theme}
+                      onClosed={() => {
+                        if (
+                          shouldClearSessionSelection(
+                            active.sessionId,
+                            member.sessionId,
+                          )
+                        ) {
+                          onSelect(null);
+                        }
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
         {ssh.sessions.map((session) => {
           const isActive = session.sessionId === active.sessionId;
           const sftpId = pairedSftp[session.sessionId];

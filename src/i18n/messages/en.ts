@@ -624,6 +624,9 @@ export const en: Messages = {
   "terminal.rename": "Rename tab",
   "terminal.renameHint": "Double-click to rename this tab",
   "terminal.openFiles": "Open file browser (SFTP)",
+  "terminal.cliSwitch": "Switch the CLI in this tab",
+  "terminal.addCli": "Add CLI",
+  "terminal.addCli.none": "No installed CLI detected",
   "terminal.backToList": "Back to connections",
   "terminal.closed": "Session ended ({reason})",
   "terminal.inputFailed":

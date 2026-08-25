@@ -167,6 +167,8 @@ pub enum AgentStateSource {
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionSummary {
     pub session_id: String,
+    /// Groups CLIs that share one tab; defaults to the session's own id.
+    pub group_id: String,
     pub definition_id: String,
     pub label: String,
     pub executable: String,
@@ -208,6 +210,10 @@ pub struct AgentLaunchRequest {
     pub arguments: Vec<String>,
     #[serde(default)]
     pub resume_session_id: Option<String>,
+    /// The tab this CLI joins. Absent means it starts its own group (a new tab);
+    /// present means it docks into an existing tab's CLI switcher.
+    #[serde(default)]
+    pub group_id: Option<String>,
     pub working_directory: String,
     pub cols: u32,
     pub rows: u32,
@@ -1167,6 +1173,8 @@ pub fn launch_request_from_plan(
         executable: validated.executable,
         arguments: validated.arguments,
         resume_session_id: validated.resume_session_id,
+        // A saved plan launches its own tab; grouping is a live-tab action.
+        group_id: None,
         working_directory: validated.working_directory,
         cols,
         rows,
@@ -1405,8 +1413,14 @@ pub fn launch(
         .iter()
         .any(|agent| agent.id == definition_id && agent.resume_recipe.is_some());
 
+    let group_id = request
+        .group_id
+        .clone()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| session_id.clone());
     let summary = AgentSessionSummary {
         session_id: session_id.clone(),
+        group_id,
         definition_id,
         label,
         executable: executable.display().to_string(),
@@ -2054,6 +2068,7 @@ session id: 0199aa11-"
             executable,
             arguments,
             resume_session_id: None,
+            group_id: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -2105,6 +2120,7 @@ session id: 0199aa11-"
             executable: "/bin/cat".to_string(),
             arguments: Vec::new(),
             resume_session_id: None,
+            group_id: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -2157,6 +2173,7 @@ session id: 0199aa11-"
             executable: "/bin/sh".to_string(),
             arguments: vec!["-c".to_string(), "trap '' HUP; sleep 30 & wait".to_string()],
             resume_session_id: None,
+            group_id: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -2200,6 +2217,7 @@ session id: 0199aa11-"
                         executable: "/bin/cat".to_string(),
                         arguments: Vec::new(),
                         resume_session_id: None,
+                        group_id: None,
                         working_directory: std::env::current_dir().unwrap().display().to_string(),
                         cols: 80,
                         rows: 24,
@@ -2259,6 +2277,7 @@ session id: 0199aa11-"
             executable: "/bin/cat".to_string(),
             arguments: Vec::new(),
             resume_session_id: None,
+            group_id: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,

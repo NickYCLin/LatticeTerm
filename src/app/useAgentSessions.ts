@@ -21,6 +21,8 @@ export interface AgentDefinition {
 
 export interface AgentSessionSummary {
   sessionId: string;
+  /** CLIs sharing one tab carry the same groupId; defaults to sessionId. */
+  groupId: string;
   definitionId: string;
   label: string;
   executable: string;
@@ -38,6 +40,8 @@ export interface AgentLaunchRequest {
   executable: string;
   arguments: string[];
   resumeSessionId: string | null;
+  /** Join an existing tab's CLI group; omit to start a new tab. */
+  groupId?: string | null;
   workingDirectory: string;
   cols: number;
   rows: number;

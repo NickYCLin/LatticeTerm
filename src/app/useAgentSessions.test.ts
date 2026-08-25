@@ -84,6 +84,7 @@ describe("agent session transport", () => {
     const sessions = [
       {
         sessionId: "agent-session-1",
+        groupId: "agent-session-1",
         definitionId: "codex",
         label: "Codex",
         executable: "/usr/bin/codex",
