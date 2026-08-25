@@ -279,10 +279,11 @@ export function SftpPane({
 
   function modified(entry: SftpEntry): string {
     if (entry.modifiedAt === null) return "—";
-    return new Intl.DateTimeFormat(tag, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(new Date(entry.modifiedAt * 1000));
+    // A compact, fixed numeric shape (2026-06-17 21:45): the localized medium
+    // format wraps to three lines in a docked panel, which reads as clutter.
+    const date = new Date(entry.modifiedAt * 1000);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 
   return (

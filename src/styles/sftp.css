@@ -97,6 +97,9 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* Adapt to the pane's own width, not the viewport's, so a docked browser
+     sheds columns instead of cramming five into a narrow strip. */
+  container-type: inline-size;
 }
 
 .sftp-table {
@@ -108,10 +111,14 @@
 
 .sftp-table th,
 .sftp-table td {
-  padding: 0.65rem var(--space-3);
+  padding: 0.28rem var(--space-3);
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: middle;
+  /* One line per cell: dates and permissions must never wrap the row taller. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sftp-table th {
@@ -147,6 +154,26 @@
 
 .sftp-table tbody tr:hover {
   background: var(--surface-hover);
+}
+
+/* Narrow pane (e.g. docked beside a terminal): drop permissions first, then
+   the modified column, rather than wrapping every row to three lines. */
+@container (max-width: 34rem) {
+  .sftp-table th:nth-child(4),
+  .sftp-table td:nth-child(4) {
+    display: none;
+  }
+}
+
+@container (max-width: 26rem) {
+  .sftp-table th:nth-child(3),
+  .sftp-table td:nth-child(3) {
+    display: none;
+  }
+
+  .sftp-table th:first-child {
+    width: auto;
+  }
 }
 
 .sftp-table td:not(:first-child) {

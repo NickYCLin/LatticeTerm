@@ -894,7 +894,7 @@
 }
 
 .ssh-split__files {
-  flex: 0 0 clamp(15rem, 28%, 26rem);
+  flex: 0 0 clamp(17rem, 30%, 30rem);
   min-width: 0;
   min-height: 0;
   display: flex;
