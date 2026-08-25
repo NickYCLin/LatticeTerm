@@ -1,6 +1,6 @@
 /** Unified workspace for text terminals and graphical remote sessions. */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
 import type { VncApi } from "../app/useVncSessions";
@@ -18,6 +18,7 @@ import {
   AgentIcon,
   CloseIcon,
   EditIcon,
+  FolderIcon,
   ScreenShareIcon,
   TerminalIcon,
   TransferIcon,
@@ -51,7 +52,6 @@ export function SessionsView({
   vnc,
   activeSessionId,
   onSelect,
-  onOpenSftp,
   theme,
 }: {
   agents: AgentApi;
@@ -62,11 +62,56 @@ export function SessionsView({
   vnc: VncApi;
   activeSessionId: string | null;
   onSelect: (sessionId: string | null) => void;
-  /** Opens a graphical SFTP file browser for a running SSH session. */
-  onOpenSftp?: (sshSessionId: string) => void;
   theme: ThemeId;
 }) {
   const { t } = useI18n();
+
+  // MobaXterm-style pairing: each SSH tab can reveal a file browser docked
+  // beside its terminal, served by an SFTP channel opened on that very SSH
+  // session. `pairedSftp` maps the SSH session to its browser's SFTP id, and
+  // `filesOpen` tracks which SSH tabs currently show the panel.
+  const [pairedSftp, setPairedSftp] = useState<Record<string, string>>({});
+  const [filesOpen, setFilesOpen] = useState<Record<string, boolean>>({});
+
+  async function toggleFiles(sshSessionId: string) {
+    const opening = !filesOpen[sshSessionId];
+    setFilesOpen((prev) => ({ ...prev, [sshSessionId]: opening }));
+    if (opening && !pairedSftp[sshSessionId]) {
+      const outcome = await sftp.attachToSsh(sshSessionId);
+      if (outcome.outcome === "connected") {
+        setPairedSftp((prev) => ({
+          ...prev,
+          [sshSessionId]: outcome.session.sessionId,
+        }));
+      } else {
+        // The channel could not open; leave the panel closed rather than blank.
+        setFilesOpen((prev) => ({ ...prev, [sshSessionId]: false }));
+      }
+    }
+  }
+
+  // When an SSH tab goes away, tear down the browser channel it owned so the
+  // panel and its SFTP session do not linger.
+  useEffect(() => {
+    const liveSsh = new Set(ssh.sessions.map((session) => session.sessionId));
+    const stale = Object.entries(pairedSftp).filter(
+      ([sshId]) => !liveSsh.has(sshId),
+    );
+    if (stale.length === 0) return;
+    setPairedSftp((prev) => {
+      const next = { ...prev };
+      for (const [sshId] of stale) delete next[sshId];
+      return next;
+    });
+    setFilesOpen((prev) => {
+      const next = { ...prev };
+      for (const [sshId] of stale) delete next[sshId];
+      return next;
+    });
+    for (const [, sftpId] of stale) void sftp.disconnect(sftpId);
+  }, [ssh.sessions, pairedSftp, sftp]);
+
+  const pairedSftpIds = new Set(Object.values(pairedSftp));
   // Inline rename of a running agent tab: which session is being edited, and
   // the working text. Committing calls the persisted backend rename.
   const [editingTab, setEditingTab] = useState<string | null>(null);
@@ -100,11 +145,13 @@ export function SessionsView({
       sessionId: session.sessionId,
       label: `${session.username}@${session.host}`,
     })),
-    ...sftp.sessions.map((session) => ({
-      kind: "sftp" as const,
-      sessionId: session.sessionId,
-      label: `${session.username}@${session.host}`,
-    })),
+    ...sftp.sessions
+      .filter((session) => !pairedSftpIds.has(session.sessionId))
+      .map((session) => ({
+        kind: "sftp" as const,
+        sessionId: session.sessionId,
+        label: `${session.username}@${session.host}`,
+      })),
     ...remote.sessions.map((session) => ({
       kind: "remote" as const,
       sessionId: session.sessionId,
@@ -261,15 +308,18 @@ export function SessionsView({
                   <EditIcon size={12} />
                 </button>
               )}
-              {session.kind === "ssh" && onOpenSftp && (
+              {session.kind === "ssh" && (
                 <button
                   type="button"
-                  className="icon-button icon-button--sm session-tab__files-button"
-                  onClick={() => onOpenSftp(session.sessionId)}
+                  className={`icon-button icon-button--sm session-tab__files-button${
+                    filesOpen[session.sessionId] ? " is-active" : ""
+                  }`}
+                  onClick={() => void toggleFiles(session.sessionId)}
+                  aria-pressed={!!filesOpen[session.sessionId]}
                   aria-label={t("terminal.openFiles")}
                   data-tooltip={t("terminal.openFiles")}
                 >
-                  <TransferIcon size={12} />
+                  <FolderIcon size={12} />
                 </button>
               )}
               <button
@@ -307,39 +357,67 @@ export function SessionsView({
             />
           </div>
         ))}
-        {ssh.sessions.map((session) => (
-          <div
-            className="terminal-slot"
-            key={session.sessionId}
-            hidden={session.sessionId !== active.sessionId}
-          >
-            <TerminalPane
-              sessionId={session.sessionId}
-              ssh={ssh}
-              theme={theme}
-              onClosed={() => {
-                if (
-                  shouldClearSessionSelection(active.sessionId, session.sessionId)
-                ) {
-                  onSelect(null);
-                }
-              }}
-            />
-          </div>
-        ))}
-        {sftp.sessions.map((session) => (
-          <div
-            className="terminal-slot"
-            key={session.sessionId}
-            hidden={session.sessionId !== active.sessionId}
-          >
-            <SftpPane
-              session={session}
-              sftp={sftp}
-              active={session.sessionId === active.sessionId}
-            />
-          </div>
-        ))}
+        {ssh.sessions.map((session) => {
+          const isActive = session.sessionId === active.sessionId;
+          const sftpId = pairedSftp[session.sessionId];
+          const sftpSession = sftpId
+            ? sftp.sessions.find((entry) => entry.sessionId === sftpId)
+            : undefined;
+          const showFiles = !!filesOpen[session.sessionId] && !!sftpSession;
+          return (
+            <div
+              className="terminal-slot"
+              key={session.sessionId}
+              hidden={!isActive}
+            >
+              <div
+                className={`ssh-split${showFiles ? " ssh-split--files" : ""}`}
+              >
+                {showFiles && sftpSession && (
+                  <aside className="ssh-split__files">
+                    <SftpPane
+                      session={sftpSession}
+                      sftp={sftp}
+                      active={isActive}
+                    />
+                  </aside>
+                )}
+                <div className="ssh-split__term">
+                  <TerminalPane
+                    sessionId={session.sessionId}
+                    ssh={ssh}
+                    theme={theme}
+                    onClosed={() => {
+                      if (
+                        shouldClearSessionSelection(
+                          active.sessionId,
+                          session.sessionId,
+                        )
+                      ) {
+                        onSelect(null);
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {sftp.sessions
+          .filter((session) => !pairedSftpIds.has(session.sessionId))
+          .map((session) => (
+            <div
+              className="terminal-slot"
+              key={session.sessionId}
+              hidden={session.sessionId !== active.sessionId}
+            >
+              <SftpPane
+                session={session}
+                sftp={sftp}
+                active={session.sessionId === active.sessionId}
+              />
+            </div>
+          ))}
         {remote.sessions.map((session) => (
           <div
             className="terminal-slot"

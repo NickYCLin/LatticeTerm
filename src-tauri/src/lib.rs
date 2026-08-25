@@ -843,6 +843,20 @@ fn ssh_sessions(registry: State<'_, Arc<SshRegistry>>) -> Vec<SessionSummary> {
     registry.list()
 }
 
+/// Opens an SFTP file browser on an existing SSH terminal session — the
+/// MobaXterm-style side panel — without a second connection or login.
+#[tauri::command]
+async fn sftp_attach_ssh(
+    ssh_session_id: String,
+    ssh: State<'_, Arc<SshRegistry>>,
+    sftp: State<'_, Arc<SftpRegistry>>,
+) -> Result<SftpConnectOutcome, String> {
+    let Some((summary, transport)) = ssh.session_transport(&ssh_session_id) else {
+        return Err(format!("SSH session '{ssh_session_id}' is not connected."));
+    };
+    Ok(crate::sftp::attach_to_ssh(Arc::clone(sftp.inner()), summary, transport).await)
+}
+
 #[tauri::command]
 async fn sftp_connect(
     mut request: SftpConnectRequest,
@@ -1587,6 +1601,7 @@ pub fn run() {
             ssh_default_keys,
             host_metrics,
             sftp_connect,
+            sftp_attach_ssh,
             sftp_sessions,
             sftp_list,
             sftp_create_directory,

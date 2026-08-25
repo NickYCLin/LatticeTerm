@@ -244,6 +244,8 @@ export async function streamSftpUpload(
 export interface SftpApi {
   sessions: SftpSessionSummary[];
   connect: (request: SftpConnectRequest) => Promise<SftpConnectOutcome>;
+  /** Opens a browser on an existing SSH session — no second login. */
+  attachToSsh: (sshSessionId: string) => Promise<SftpConnectOutcome>;
   disconnect: (sessionId: string) => Promise<void>;
   list: (sessionId: string, path: string) => Promise<SftpDirectory>;
   createDirectory: (
@@ -365,6 +367,28 @@ export function useSftpSessions(): SftpApi {
         const { invoke } = await core();
         const outcome = await invoke<SftpConnectOutcome>("sftp_connect", {
           request,
+        });
+        if (outcome.outcome === "connected") {
+          setSessions((current) => [...current, outcome.session]);
+        }
+        return outcome;
+      } catch (reason) {
+        return {
+          outcome: "failed",
+          stage: "invoke",
+          detail: reason instanceof Error ? reason.message : String(reason),
+        };
+      }
+    },
+    [],
+  );
+
+  const attachToSsh = useCallback(
+    async (sshSessionId: string): Promise<SftpConnectOutcome> => {
+      try {
+        const { invoke } = await core();
+        const outcome = await invoke<SftpConnectOutcome>("sftp_attach_ssh", {
+          sshSessionId,
         });
         if (outcome.outcome === "connected") {
           setSessions((current) => [...current, outcome.session]);
@@ -566,6 +590,7 @@ export function useSftpSessions(): SftpApi {
   return {
     sessions,
     connect,
+    attachToSsh,
     disconnect,
     list,
     createDirectory,

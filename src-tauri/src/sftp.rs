@@ -5,7 +5,7 @@
 //! upload or download and each operation is capped to protect WebView memory.
 
 use crate::hostkeys::{HostKeyRecord, TrustVerdict};
-use crate::ssh::{authenticate, AuthAttempt, AuthMethod, TrustingHandler};
+use crate::ssh::{authenticate, AuthAttempt, AuthMethod, SessionSummary, TrustingHandler};
 use base64::Engine;
 use russh::client;
 use russh_sftp::client::SftpSession;
@@ -97,7 +97,8 @@ struct SftpSessionEntry {
     summary: SftpSessionSummary,
     sftp: Arc<SftpSession>,
     // Holding the transport keeps the SSH session alive with the SFTP channel.
-    _transport: client::Handle<TrustingHandler>,
+    // An Arc so a browser paired to a terminal can share that session's handle.
+    _transport: Arc<client::Handle<TrustingHandler>>,
 }
 
 #[derive(Default)]
@@ -252,6 +253,53 @@ pub async fn connect(
         host: request.hostname,
         port: request.port,
         username: request.username,
+        current_path,
+    };
+    if let Err(error) = registry.insert(SftpSessionEntry {
+        summary: summary.clone(),
+        sftp,
+        _transport: Arc::new(transport),
+    }) {
+        return failed("registry", error);
+    }
+
+    SftpConnectOutcome::Connected { session: summary }
+}
+
+/// Opens an SFTP browser on an already-connected SSH terminal session.
+///
+/// This is the MobaXterm-style pairing: rather than dialling a second
+/// connection and authenticating again, it opens another channel on the SSH
+/// session the terminal is already running, so the file browser appears
+/// instantly with the same identity and host-key trust.
+pub(crate) async fn attach_to_ssh(
+    registry: Arc<SftpRegistry>,
+    ssh: SessionSummary,
+    transport: Arc<client::Handle<TrustingHandler>>,
+) -> SftpConnectOutcome {
+    let channel = match transport.channel_open_session().await {
+        Ok(channel) => channel,
+        Err(error) => return failed("channel", error),
+    };
+    if let Err(error) = channel.request_subsystem(true, "sftp").await {
+        return failed("subsystem", error);
+    }
+    let sftp = match SftpSession::new(channel.into_stream()).await {
+        Ok(sftp) => Arc::new(sftp),
+        Err(error) => return failed("subsystem", error),
+    };
+    sftp.set_timeout(30);
+
+    let current_path = match sftp.canonicalize(".").await {
+        Ok(path) => path,
+        Err(error) => return failed("directory", error),
+    };
+    let summary = SftpSessionSummary {
+        session_id: registry.next_id(),
+        profile_id: ssh.profile_id,
+        host: ssh.host,
+        port: ssh.port,
+        username: ssh.username,
         current_path,
     };
     if let Err(error) = registry.insert(SftpSessionEntry {

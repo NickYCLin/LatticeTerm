@@ -295,6 +295,20 @@ impl SshRegistry {
             .get(session_id)
             .map(|entry| Arc::clone(&entry.handle))
     }
+
+    /// The connection details plus its live handle, so a paired SFTP browser can
+    /// open its own channel on the very session the terminal is already using —
+    /// no second connection, no second authentication.
+    pub(crate) fn session_transport(
+        &self,
+        session_id: &str,
+    ) -> Option<(SessionSummary, Arc<client::Handle<TrustingHandler>>)> {
+        self.sessions
+            .lock()
+            .ok()?
+            .get(session_id)
+            .map(|entry| (entry.summary.clone(), Arc::clone(&entry.handle)))
+    }
 }
 
 /// Answers russh's "do you accept this host key?" question from the trust
