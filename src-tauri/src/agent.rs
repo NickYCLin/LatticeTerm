@@ -2006,9 +2006,7 @@ session id: 0199aa11-"
         let registry = AgentRegistry::new();
         // Empty/blank labels are rejected before any lookup.
         assert!(registry.rename("agent-session-1", "   ").is_err());
-        assert!(registry
-            .rename("agent-session-1", &"x".repeat(81))
-            .is_err());
+        assert!(registry.rename("agent-session-1", &"x".repeat(81)).is_err());
         // A valid label still fails when the session does not exist.
         assert!(registry.rename("missing", "payments 重構").is_err());
     }
