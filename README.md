@@ -11,11 +11,11 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | --- | --- | --- |
 | 桌面連線工作區 | **可用** | Windows、Linux 與 macOS 支援 SSH、SFTP、SSH Tunnel、Web RDP、VNC、主機資源與工作階段管理。 |
 | 安全與資料保護 | **可用** | 嚴格主機信任、作業系統認證儲存、主密碼加密保管庫、敏感剪貼簿與加密備份均已接入真實後端。 |
-| 本機 AI Agent Fleet | **可用** | 多 CLI PTY、Reporter、批次提示、原生 Session 續接、安全啟動工作區與同程序重新 attach 已完成。 |
+| 本機 AI Agent Fleet | **可用** | 多 CLI PTY、Reporter、批次提示、同分頁加開 CLI 並帶入目前對話、安全啟動工作區與同程序重新 attach 已完成。 |
 | Lattice Remote | **基礎功能可用** | 已完成使用者主動啟動、一次性配對、端對端加密、主螢幕直連，以及由分享端明確授權的鍵盤／滑鼠遠端控制；Relay、NAT 穿透與無人值守尚未加入。 |
 | 發行與更新 | **可用** | Windows x64、Linux x64／arm64、macOS Apple Silicon 安裝檔、更新簽章、Release PR 與應用程式內更新已自動化。 |
 | Android | **預覽** | 共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面可建置；需要桌面 sidecar 的 RDP、VNC 與 Agent Fleet 不提供。 |
-| 進階 Agent 與行動能力 | **規劃中** | 跨程序 daemon、遠端 Fleet、任務編排、每 Agent 沙箱、Windows npm shim 與 iOS 尚未完成。 |
+| 進階 Agent 與行動能力 | **規劃中** | 跨程序 daemon、遠端 Fleet、任務編排、每 Agent 沙箱與 iOS 尚未完成。 |
 
 ## 主要特色
 
@@ -30,7 +30,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 - **六種主題**：深色、淺色、午夜藍、石墨黑、暖砂與高對比，另可跟隨系統；切換時原生標題列會一起換色。
 - **主機資源檢視**：活躍 SSH 工作階段可定期讀取 Linux 主機的 CPU、記憶體、磁碟與開機時間；未連線或不支援的平台會明確說明，不顯示假數值。
 - **本機持久化**：連線設定會存在本機的應用程式資料目錄，關閉再開仍在；檔案只含主機資訊，不含任何認證資料。
-- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、OpenCode、Hermes 等本機 LLM CLI，也可安全指定自訂可執行檔與參數；通用 Reporter 讓工具 hook 明確回報狀態，並可在二次確認後將同一段提示送給多個已選 Agent。內建 Adapter 可用各 CLI 的原生格式續接 Codex、Claude Code、Gemini CLI 與 Hermes Session；是否把識別值存入可命名、排序的啟動工作區，完全由使用者分開決定，保存時可加上選填備註（例如這個 Session 負責哪個專案），之後在清單上一眼就能認出用途。同一桌面程序內若 WebView 重新載入，活躍 PTY 會重新 attach 並重播最近 256 KiB 記憶體輸出。登入資料仍由各 CLI 自行管理。
+- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、OpenCode、Hermes 等 12 種本機 LLM CLI；未偵測到工具時可先確認固定的上游安裝指令，再開啟看得到完整輸出的安裝終端。執行中的 CLI 會分開顯示工具名稱、分頁名稱，以及工具啟動畫面或 `--model` 實際回報的模型；沒有可靠值時會明確標成尚未回報。通用 Reporter 讓工具 hook 明確回報狀態，並可在二次確認後將同一段提示送給多個已選 Agent。執行中的分頁可直接加開另一個 CLI；Codex 與 Claude 之間可選擇帶入目前對話，讓新的 CLI 接續脈絡，不必再手動設定 Session ID。啟動項目可加入選填備註並保存到可命名、排序的工作區。同一桌面程序內若 WebView 重新載入，活躍 PTY 會重新 attach 並重播最近 256 KiB 記憶體輸出。登入資料仍由各 CLI 自行管理。
 - **SSH 連線**：以純 Rust 的 russh 實作，可使用密碼或本機 OpenSSH 私鑰建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼預設只用於當次連線，使用者可在驗證成功後明確保存到系統認證儲存區，私鑰內容與密語不會保存至連線設定。執行中的 SSH 分頁可一鍵「開啟檔案總管」，以同一台主機、同一組認證開啟 SFTP 圖形化檔案瀏覽（已保存密碼免再輸入）。
 - **SSH Tunnel**：可建立本機、遠端與 SOCKS5 動態轉送，顯示即時狀態與連線數；動態代理若未設定驗證只允許綁定 loopback，遠端轉送則依 SSH 伺服器的 GatewayPorts 政策生效。
 - **SFTP 檔案工作區**：沿用 SSH 主機指紋驗證與獨立的認證項目，可瀏覽遠端路徑、上下載、新增資料夾、重新命名及確認刪除；上傳除了按鈕選檔，也可直接把檔案從檔案總管拖進面板上傳到目前資料夾。大型檔案經有界分塊與原生串流佇列傳輸，不把整個檔案塞進 WebView／IPC 記憶體。上傳先寫入同目錄的私有暫存檔，只有位元組數完整且關檔成功才替換目標，取消、失敗或中斷連線不會把既有檔案變成半成品。
@@ -119,11 +119,11 @@ Agent 顯示的八位數配對碼五分鐘後失效，連續五次失敗就會�
 
 ### 執行 AI Agent Fleet
 
-Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示後端不可用。開啟側邊導覽的「AI Agent Fleet」，選擇工作目錄後即可啟動已偵測到的 CLI，或以「每行一個參數」加入自訂工具。批次提示必須先勾選執行中的目標並再次確認，LatticeTerm 不保存提示內容。
+Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示後端不可用。開啟側邊導覽的「AI Agent Fleet」，選擇工作目錄後即可啟動已偵測到的內建 CLI。未偵測到工具時，卡片會先列出經專案固定的安裝指令；使用者確認後才會開啟安裝終端，LatticeTerm 不會在背景靜默下載或執行安裝。若該平台沒有可直接執行的安全安裝方式，則提供可複製的安裝說明網址。安裝程式若更新 PATH，可能需要重開 LatticeTerm 才會被偵測到。批次提示必須先勾選執行中的目標並再次確認，LatticeTerm 不保存提示內容。
 
-「原生 Session 續接」目前支援 Codex、Claude Code、Gemini CLI 與 Hermes Agent。選擇 CLI、貼上該工具提供的 Session ID 或標題後，可直接續接而不保存；只有另外按下「保存續接項目」，識別值才會寫入 `agent-workspaces.json`。參數由版本化內建 Adapter 直接建立，不經 shell，也不能與額外啟動參數混用。這是 CLI 自身的歷史還原，不代表舊 PTY、程序或終端畫面仍存活。
+若要讓另一個 CLI 接手，請在執行中的工作階段分頁選擇「加開 CLI」；來源為 Codex 或 Claude 時，可勾選「帶入目前對話」。新 CLI 會收到整理過的對話交接內容，但不會搬移模型內部狀態、登入資料或憑證。
 
-「保存啟動項目」會記錄 CLI 類型、標籤、可執行檔、明確參數與工作目錄，最多 32 個；工作區名稱與項目順序也會保存。原生 Session ID 或標題只會隨使用者明確保存的續接項目寫入。密碼、Token、API Key、Passphrase、Secret 參數、提示、輸出與 Reporter 權杖都不會寫入工作區或磁碟。下次開啟應用程式時，使用者可逐項或依保存順序整批確認並建立新的 CLI 程序；已保存原生識別值的項目會請 CLI 續接既有脈絡，但舊程序與終端畫面不會被假裝還原。工作階段本身仍只存於記憶體；Rust 核心會為每個活躍 PTY 保留最近 256 KiB 輸出，讓同一桌面程序內的 WebView 重新載入後安全重新 attach，不會寫入磁碟。停止工作階段或關閉應用程式仍會終止 CLI。
+「保存啟動項目」會記錄內建 CLI 類型、標籤、工作目錄與選填備註，最多 32 個；工作區名稱與項目順序也會保存。密碼、Token、API Key、Passphrase、Secret 參數、提示、輸出與 Reporter 權杖都不會寫入工作區或磁碟。下次開啟應用程式時，使用者可逐項或依保存順序整批確認並建立新的 CLI 程序。既有 `agent-workspaces.json` 若包含舊版自訂 CLI 或原生 Session 續接項目，Rust 核心仍會重新驗證後相容還原，避免升級後破壞原有資料；新介面不再提供這兩種設定。工作階段本身仍只存於記憶體；Rust 核心會為每個活躍 PTY 保留最近 256 KiB 輸出，讓同一桌面程序內的 WebView 重新載入後安全重新 attach，不會寫入磁碟。停止工作階段或關閉應用程式仍會終止 CLI。
 
 每個 CLI 都會收到本機 Reporter 環境變數。工具 hook 可執行 `"$LATTICETERM_AGENT_REPORTER" agent-report done`，並以 `working`、`needs-attention`、`idle` 或 `done` 回報狀態；Windows PowerShell 使用 `& $env:LATTICETERM_AGENT_REPORTER agent-report done`。Reporter 只接受該工作階段的隨機權杖，且只能更新狀態。完整協定與安全邊界請見架構文件。
 

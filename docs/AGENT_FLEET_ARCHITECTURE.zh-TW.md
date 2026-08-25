@@ -13,11 +13,10 @@ flowchart LR
   UI["React Agent Fleet"] -->|"Tauri commands"| REG["Rust AgentRegistry"]
   UI -->|"保存／確認還原"| PLAN["agent-workspaces.json"]
   PLAN -->|"重新驗證啟動資料"| ADAPTER["Built-in Adapter Registry v1"]
-  UI -->|"原生 Session ID／標題"| ADAPTER
   ADAPTER -->|"argument vector"| REG
   REG --> PTY["portable-pty"]
   PTY --> A["Codex / Claude / Gemini / ..."]
-  PTY --> C["Custom CLI"]
+  PTY --> C["舊版工作區中的 Custom CLI"]
   A -->|"tool hook"| REP["LatticeTerm Reporter CLI"]
   C -->|"custom hook"| REP
   REP -->|"loopback + session token"| REG
@@ -25,17 +24,19 @@ flowchart LR
 ```
 
 - Rust 核心使用 [portable-pty](https://docs.rs/portable-pty/latest/portable_pty/) 建立原生 PTY，不用一般 pipe 假裝終端機。
-- 內建 Codex、Claude Code、Gemini CLI、OpenCode、Copilot CLI、Hermes、Cursor Agent、Aider、Qwen Code、Kimi、Droid 與 Grok 目錄，也可輸入自訂可執行檔。
+- 介面提供 Codex、Claude Code、Gemini CLI、OpenCode、Copilot CLI、Hermes、Cursor Agent、Aider、Qwen Code、Kimi、Droid 與 Grok 目錄。Rust 核心仍可驗證並還原舊工作區中的自訂可執行檔。
+- 每個目錄項目都有經原始碼固定且可檢查來源的安裝方式；未偵測到 CLI 時，先顯示完整指令並要求確認，再以可見 PTY 執行。平台缺少必要安裝器或沒有合適的原生安裝路徑時，只提供可複製的上游安裝說明網址，不靜默改動系統。
 - 每個工作階段都有獨立程序、PTY、尺寸、輸入、輸出與停止控制，並與 SSH、SFTP、Lattice Remote、Web RDP 共用工作階段分頁。
 - 啟動時指定經過驗證的工作目錄；CLI 可依目前作業系統使用者權限操作該目錄。
 - PTY 位元組以 Base64 跨越 IPC，前端在終端機掛載前最多暫存 256 KiB，之後直接交給 xterm。
 - 未整合 hook 的 CLI 使用少量明確提示詞將狀態標成「可能等待輸入」；這只是提醒，不宣稱已理解完整語意。
+- 分頁名稱、CLI 名稱與模型欄位分開保存。模型只接受明確的 `--model` 參數或 CLI 啟動／狀態畫面中的保守格式；沒有可靠值就顯示「模型尚未回報」，不拿產品名稱代替模型。輸入一般提示後停止啟動掃描，只有 `/model` 會重新開啟一次掃描，避免把回答內容誤判成目前模型。
 - 支援 Adapter／hook 明確回報「工作中、等待輸入、閒置、完成」。UI 會顯示狀態來源；收到 Adapter 回報後，終端輸出 heuristic 不再覆蓋該工作階段的語意狀態。
 - 支援使用者明確勾選執行中的 Agent，經二次確認後將同一段提示送進最多 32 個獨立 PTY；每個目標逐一回報成功或失敗，提示內容不會保存。
 - 支援最多 32 個安全啟動項目，也可命名工作區及調整持久化順序。應用程式重啟後，使用者可逐項或整批確認，LatticeTerm 會重新驗證磁碟資料並依保存順序建立新的 CLI 程序；每項分別回報成功或失敗。
-- 版本化內建 Adapter v1 支援 Codex、Claude Code、Gemini CLI 與 Hermes Agent 的原生 Session 續接。使用者可只續接，或另行明確保存識別值供工作區下次還原；舊 PTY、程序與畫面不會被宣稱仍然存活。
+- 版本化內建 Adapter v1 仍可驗證並還原舊工作區中 Codex、Claude Code、Gemini CLI 與 Hermes Agent 的原生 Session 項目；介面不再要求使用者手動設定 Session ID。新的脈絡接手改由執行中分頁的「加開 CLI／帶入目前對話」處理。
 
-### 原生 Session 續接 Adapter v1
+### 舊工作區相容層：原生 Session 續接 Adapter v1
 
 | CLI | 由 LatticeTerm 建立的參數 | 依據 |
 | --- | --- | --- |
@@ -44,7 +45,7 @@ flowchart LR
 | Gemini CLI | `gemini --resume <SESSION_UUID_OR_INDEX>` | [Gemini CLI session management](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/session-management.md) |
 | Hermes Agent | `hermes --resume <SESSION_ID_OR_TITLE>` | [Hermes session guide](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/sessions.md) |
 
-Adapter 會把識別值當成單一 argument，不經 shell；長度上限 512 bytes，拒絕控制字元、前導 `-` 與額外啟動參數。OpenCode 目前只有已確認的非互動 `run --session` 介面，尚未加入互動式 PTY 續接白名單。
+Adapter 會把舊工作區的識別值當成單一 argument，不經 shell；長度上限 512 bytes，拒絕控制字元、前導 `-` 與額外啟動參數。這層保留是為了避免既有 `agent-workspaces.json` 在升級後失效，不代表目前介面仍提供手動續接設定。
 
 ## 語意 Reporter 協定
 
@@ -77,6 +78,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 - 可執行檔與參數以分離的 argument vector 交給程序，不把使用者內容串成 shell 指令。
 - 自訂名稱、路徑、參數數量、單一參數大小、終端尺寸與輸入事件大小都有上限與控制字元驗證。
 - LatticeTerm 不讀取、不複製也不保存模型 API 金鑰；登入仍由各 CLI 自行處理。
+- 安裝指令由內建目錄固定，參數分開傳入；執行前顯示完整指令並要求確認，下載與安裝輸出留在使用者可見的終端。LatticeTerm 不自動代填憑證，也不把遠端安裝腳本當成已簽章成品。
 - CLI 以啟動 LatticeTerm 的使用者權限執行，不是沙箱。使用者只能加入自己信任的程式。
 - 執行中的工作階段只存在記憶體，Rust registry 最多接受 32 個活躍 session；每個 PTY 保留最近 256 KiB 有界輸出與單調 byte offset，因此重播尾端總上限為 8 MiB。WebView 重新載入可重新 attach 並避免快照／即時事件重複。使用者停止或應用程式結束／重啟時仍會終止已登記的 CLI。
 - 安全啟動工作區使用獨立的版本化 JSON；v3 可無損讀取 v1／v2，並保存工作區名稱、項目順序、CLI 類型、標籤、可執行檔、明確參數、工作目錄與選填備註。原生 Session ID 或標題只在使用者明確保存續接項目時寫入；備註為選填的純文字（最多 200 bytes、去除前後空白、拒絕控制字元），供使用者一眼看出該項目在做什麼，屬 v3 內的附加欄位，舊檔缺此欄位時預設為空。密碼、Token、API Key、Passphrase、Secret 參數會被拒絕；讀不到或版本不相容的原檔會先移到復原檔，不會直接覆寫。
@@ -89,19 +91,20 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 | 能力 | 現況 | 說明 |
 | --- | --- | --- |
 | 多 CLI 原生 PTY | 已完成 | 可同時啟動多個獨立工作階段 |
-| 內建目錄與 PATH 偵測 | 已完成 | 12 種常見 CLI，可手動重新偵測 |
-| 自訂 CLI adapter | 已完成 | 明確 executable 與每行一個 argument |
+| 內建目錄、PATH 偵測與安裝入口 | 已完成 | 12 種常見 CLI，可手動重新偵測；有平台固定指令時確認後開啟安裝終端，否則提供上游說明網址 |
+| 自訂 CLI adapter | 相容保留 | 不再顯示新增表單；舊工作區仍會重新驗證後還原 |
 | 統一終端分頁 | 已完成 | 與其他 LatticeTerm 連線工具共用工作區 |
+| 分頁、CLI 與模型標示 | 已完成 | 分頁改名不會覆蓋 CLI 名稱；模型只顯示參數或 CLI 實際回報，無可靠值時明確標示 |
 | 主動停止與退出清理 | 已完成 | 停止按鈕有確認，應用程式退出會清理 |
 | 待輸入提醒 | 已完成 | 支援 heuristic，Adapter 可明確覆蓋 |
 | CLI 語意 Reporter | 已完成 | loopback、每 session 權杖、四種狀態與來源標示 |
 | 批次提示 | 已完成 | 明確選取、二次確認、最多 32 個目標與部分失敗回報 |
 | 啟動工作區命名／排序 | 已完成 | 名稱與順序由 Rust 驗證及原子保存，v1 資料可相容遷移 |
-| 原生 CLI Session 續接 | 已完成 | Adapter v1 支援 Codex、Claude Code、Gemini CLI、Hermes；保存由使用者明確選擇 |
+| 原生 CLI Session 續接 | 相容保留 | 不再顯示手動設定；Adapter v1 僅供舊工作區還原 |
 | 同程序介面重新 attach | 已完成 | 先訂閱事件再 hydration；session 關閉不會被舊快照復活，最近 256 KiB PTY 輸出依 offset 去重重播 |
-| 工具專用語意 Adapter | 部分完成 | 已有版本化續接 recipe 與自動 session ID 擷取（白名單 CLI、保守比對）；工具 hook、token／cost 擷取仍未完成 |
+| 工具專用語意 Adapter | 部分完成 | Reporter 狀態模型、舊工作區續接 recipe 與保守的 session ID 擷取仍保留；工具 hook、token／cost 擷取尚未完成 |
 | 跨程序背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段；目前只支援同一桌面程序內的 WebView 重新 attach |
-| 跨重啟還原 | 部分完成 | 已有安全工作區、批次重新啟動、四種 CLI 原生脈絡續接與自動 session ID 擷取；應用程式程序重啟後的原 PTY、pane 與輸出還原尚未完成 |
+| 跨重啟還原 | 部分完成 | 已有安全工作區與批次重新啟動，舊版原生續接項目也可相容還原；應用程式程序重啟後的原 PTY、pane 與輸出還原尚未完成 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 任務編排 | 部分完成 | broadcast prompt 已完成；依賴圖、佇列與排程仍待實作 |
 | 權限隔離 | 未完成 | 尚無每 Agent 容器、沙箱或檔案範圍策略 |
@@ -110,7 +113,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 
 ### 1. 語意 adapter
 
-Reporter 傳輸、狀態模型與 Adapter v1 的四種原生 restore recipe 已完成。session ID 自動擷取已完成：輸出經 ANSI 清理後，只在「session」字樣附近出現的 UUID 才被視為 session id（跨 chunk 滾動視窗、僅白名單 CLI 啟用、擷取一次即停），寫入工作階段摘要並以 agent://capture 事件通知介面，續接區塊可一鍵套用。下一步擴充 manifest 的工具 hook 安裝方式，再加入 token／cost 等可觀測事件。只有官方確認可在互動式 PTY 安全續接的 CLI 才進入白名單；其他 CLI 繼續使用保守 heuristic，也可由使用者自訂 hook 呼叫通用 Reporter。
+Reporter 傳輸與狀態模型已完成。舊工作區相容層仍保留 Adapter v1 的四種原生 restore recipe，以及白名單 CLI 的保守 session ID 擷取，但目前介面不再提供手動續接區塊。下一步擴充 manifest 的工具 hook 安裝方式，再加入 token／cost 等可觀測事件；其他 CLI 繼續使用保守 heuristic，也可由工具 hook 呼叫通用 Reporter。
 
 ### 2. Lattice Agent daemon
 

@@ -21,6 +21,7 @@ pub const EVENT_DATA: &str = "agent://data";
 pub const EVENT_CLOSED: &str = "agent://closed";
 pub const EVENT_STATE: &str = "agent://state";
 pub const EVENT_CAPTURE: &str = "agent://capture";
+pub const EVENT_MODEL: &str = "agent://model";
 
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 64;
@@ -100,7 +101,7 @@ const AGENTS: [AgentSpec; 12] = [
     AgentSpec {
         id: "cursor",
         label: "Cursor Agent",
-        executable: "cursor-agent",
+        executable: "agent",
         resume_recipe: None,
     },
     AgentSpec {
@@ -147,6 +148,19 @@ pub struct AgentDefinition {
     pub transcript_supported: bool,
     pub installed: bool,
     pub installed_path: Option<String>,
+    /// Fixed, source-reviewed installation command for this platform.
+    pub install: AgentInstallDefinition,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentInstallDefinition {
+    /// `None` means this platform needs the linked manual installation path.
+    pub executable: Option<String>,
+    pub arguments: Vec<String>,
+    pub display_command: String,
+    pub source_url: String,
+    pub available: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,8 +185,13 @@ pub struct AgentSessionSummary {
     pub session_id: String,
     /// Groups CLIs that share one tab; defaults to the session's own id.
     pub group_id: String,
+    /// User-facing tab name shared by every CLI in the same group.
+    pub group_label: String,
     pub definition_id: String,
+    /// CLI name. This stays independent from the user-facing tab name.
     pub label: String,
+    /// Model announced by the CLI or explicitly supplied through `--model`.
+    pub model: Option<String>,
     pub executable: String,
     pub working_directory: String,
     pub state: AgentLifecycle,
@@ -291,11 +310,19 @@ struct AgentStateChanged {
     source: AgentStateSource,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentModelChanged {
+    session_id: String,
+    model: String,
+}
+
 pub trait AgentSink: Send + Sync + 'static {
     fn data(&self, session_id: &str, offset: u64, bytes: &[u8]);
     fn state(&self, session_id: &str, state: AgentLifecycle, source: AgentStateSource);
     fn closed(&self, session_id: &str, reason: &str);
     fn captured(&self, session_id: &str, native_session_id: &str);
+    fn model(&self, session_id: &str, model: &str);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -349,6 +376,16 @@ impl AgentSink for EventSink {
             },
         );
     }
+
+    fn model(&self, session_id: &str, model: &str) {
+        let _ = self.0.emit(
+            EVENT_MODEL,
+            AgentModelChanged {
+                session_id: session_id.to_string(),
+                model: model.to_string(),
+            },
+        );
+    }
 }
 
 struct AgentSessionEntry {
@@ -358,6 +395,7 @@ struct AgentSessionEntry {
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     capture: Mutex<CaptureState>,
+    model_capture: Mutex<ModelCaptureState>,
     output: Mutex<OutputBuffer>,
 }
 
@@ -425,6 +463,78 @@ impl CaptureState {
         self.enabled = false;
         self.buffer.clear();
         Some(found)
+    }
+}
+
+/// Reads only the CLI's startup output (and explicit `/model` responses) so a
+/// model name printed later by generated content is never mistaken for state.
+struct ModelCaptureState {
+    definition_id: String,
+    enabled: bool,
+    buffer: String,
+    scanned_chars: usize,
+    input_buffer: String,
+    model_command_active: bool,
+}
+
+const MODEL_CAPTURE_WINDOW_CHARS: usize = 4096;
+const MODEL_CAPTURE_LIMIT_CHARS: usize = 32 * 1024;
+
+impl ModelCaptureState {
+    fn feed(&mut self, bytes: &[u8]) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
+        let stripped = strip_ansi(&String::from_utf8_lossy(bytes));
+        self.scanned_chars = self.scanned_chars.saturating_add(stripped.chars().count());
+        self.buffer.push_str(&stripped);
+        let length = self.buffer.chars().count();
+        if length > MODEL_CAPTURE_WINDOW_CHARS {
+            self.buffer = self
+                .buffer
+                .chars()
+                .skip(length - MODEL_CAPTURE_WINDOW_CHARS)
+                .collect();
+        }
+        if let Some(model) = find_model_name(&self.definition_id, &self.buffer) {
+            self.enabled = false;
+            self.model_command_active = false;
+            self.buffer.clear();
+            return Some(model);
+        }
+        if self.scanned_chars >= MODEL_CAPTURE_LIMIT_CHARS {
+            self.enabled = false;
+            self.buffer.clear();
+        }
+        None
+    }
+
+    fn input(&mut self, bytes: &[u8]) {
+        let input = strip_ansi(&String::from_utf8_lossy(bytes));
+        if !self.model_command_active {
+            self.enabled = false;
+            self.buffer.clear();
+        }
+        for character in input.chars() {
+            match character {
+                '\r' | '\n' => {
+                    if self.input_buffer.trim().starts_with("/model") {
+                        self.enabled = true;
+                        self.model_command_active = true;
+                        self.buffer.clear();
+                        self.scanned_chars = 0;
+                    }
+                    self.input_buffer.clear();
+                }
+                '\u{8}' | '\u{7f}' => {
+                    self.input_buffer.pop();
+                }
+                value if !value.is_control() && self.input_buffer.len() < 256 => {
+                    self.input_buffer.push(value);
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -558,6 +668,27 @@ impl AgentRegistry {
         Some(found)
     }
 
+    fn scan_for_model(&self, session_id: &str, bytes: &[u8]) -> Option<String> {
+        let entry = self.get(session_id).ok()?;
+        let found = entry.model_capture.lock().ok()?.feed(bytes)?;
+
+        let mut summary = entry.summary.lock().ok()?;
+        if summary.model.as_deref() == Some(found.as_str()) {
+            return None;
+        }
+        summary.model = Some(found.clone());
+        Some(found)
+    }
+
+    fn mark_model_input(&self, session_id: &str, bytes: &[u8]) {
+        let Ok(entry) = self.get(session_id) else {
+            return;
+        };
+        if let Ok(mut capture) = entry.model_capture.lock() {
+            capture.input(bytes);
+        };
+    }
+
     fn record_output(&self, session_id: &str, bytes: &[u8]) -> Result<u64, String> {
         let entry = self.get(session_id)?;
         let offset = entry
@@ -606,14 +737,40 @@ impl AgentRegistry {
         summaries
     }
 
-    /// Renames a running session's tab label. The new label also flows into the
-    /// next hydration snapshot from `list`, so it survives a WebView reload.
+    /// Renames a CLI group's tab without changing any CLI's own name. The new
+    /// label flows into the next hydration snapshot so it survives a reload.
     pub fn rename(&self, session_id: &str, label: &str) -> Result<AgentSessionSummary, String> {
         let label = validate_text(label, "Session name", 80)?;
         let entry = self.get(session_id)?;
-        let mut summary = entry.summary.lock().map_err(|error| error.to_string())?;
-        summary.label = label;
-        Ok(summary.clone())
+        let group_id = entry
+            .summary
+            .lock()
+            .map_err(|error| error.to_string())?
+            .group_id
+            .clone();
+        let sessions = self.sessions.lock().map_err(|error| error.to_string())?;
+        for candidate in sessions.values() {
+            let mut summary = candidate
+                .summary
+                .lock()
+                .map_err(|error| error.to_string())?;
+            if summary.group_id == group_id {
+                summary.group_label = label.clone();
+            }
+        }
+        entry
+            .summary
+            .lock()
+            .map_err(|error| error.to_string())
+            .map(|summary| summary.clone())
+    }
+
+    fn group_label(&self, group_id: &str) -> Option<String> {
+        let sessions = self.sessions.lock().ok()?;
+        sessions.values().find_map(|entry| {
+            let summary = entry.summary.lock().ok()?;
+            (summary.group_id == group_id).then(|| summary.group_label.clone())
+        })
     }
 
     pub fn output_snapshots(&self) -> Vec<AgentOutputSnapshot> {
@@ -676,12 +833,21 @@ fn terminate_agent_entry(entry: &AgentSessionEntry) -> Result<(), String> {
         }
     }
 
-    entry
+    let result = entry
         .killer
         .lock()
         .map_err(|error| error.to_string())?
-        .kill()
-        .map_err(|error| format!("Cannot stop the agent process: {error}"))
+        .kill();
+    #[cfg(windows)]
+    if result
+        .as_ref()
+        .is_err_and(|error| error.raw_os_error() == Some(0))
+    {
+        // ConPTY can report a false failure after TerminateProcess succeeded:
+        // GetLastError is ERROR_SUCCESS, so there is no actionable failure.
+        return Ok(());
+    }
+    result.map_err(|error| format!("Cannot stop the agent process: {error}"))
 }
 
 fn random_report_token() -> Result<String, String> {
@@ -849,22 +1015,188 @@ pub fn catalog() -> Vec<AgentDefinition> {
     AGENTS
         .iter()
         .map(|agent| {
-            let path = find_executable(agent.executable);
+            let path = find_agent_executable(agent);
             AgentDefinition {
                 id: agent.id.to_string(),
                 label: agent.label.to_string(),
                 executable: agent.executable.to_string(),
                 adapter_version: AGENT_ADAPTER_VERSION,
                 resume_supported: agent.resume_recipe.is_some(),
-                transcript_supported: crate::transcript::TranscriptKind::from_definition(
-                    agent.id,
-                )
-                .is_some(),
+                transcript_supported: crate::transcript::TranscriptKind::from_definition(agent.id)
+                    .is_some(),
                 installed: path.is_some(),
                 installed_path: path.map(|path| path.display().to_string()),
+                install: install_definition(agent.id),
             }
         })
         .collect()
+}
+
+fn find_agent_executable(agent: &AgentSpec) -> Option<PathBuf> {
+    find_executable(agent.executable).or_else(|| {
+        (agent.id == "cursor")
+            .then(|| find_executable("cursor-agent"))
+            .flatten()
+    })
+}
+
+fn direct_install(
+    executable: &str,
+    arguments: &[&str],
+    display_command: &str,
+    source_url: &str,
+) -> AgentInstallDefinition {
+    AgentInstallDefinition {
+        executable: Some(executable.to_string()),
+        arguments: arguments.iter().map(|value| value.to_string()).collect(),
+        display_command: display_command.to_string(),
+        source_url: source_url.to_string(),
+        available: find_executable(executable).is_some(),
+    }
+}
+
+fn manual_install(display_command: &str, source_url: &str) -> AgentInstallDefinition {
+    AgentInstallDefinition {
+        executable: None,
+        arguments: Vec::new(),
+        display_command: display_command.to_string(),
+        source_url: source_url.to_string(),
+        available: false,
+    }
+}
+
+fn npm_install(package: &str, source_url: &str) -> AgentInstallDefinition {
+    direct_install(
+        "npm",
+        &["install", "-g", package],
+        &format!("npm install -g {package}"),
+        source_url,
+    )
+}
+
+#[cfg(windows)]
+fn official_script_install(
+    script_url: &str,
+    display_command: &str,
+    source_url: &str,
+) -> AgentInstallDefinition {
+    let command = format!("Invoke-RestMethod '{script_url}' | Invoke-Expression");
+    direct_install(
+        "powershell.exe",
+        &[
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &command,
+        ],
+        display_command,
+        source_url,
+    )
+}
+
+#[cfg(not(windows))]
+fn official_script_install(
+    _script_url: &str,
+    display_command: &str,
+    source_url: &str,
+) -> AgentInstallDefinition {
+    direct_install("sh", &["-c", display_command], display_command, source_url)
+}
+
+fn install_definition(definition_id: &str) -> AgentInstallDefinition {
+    match definition_id {
+        "codex" => npm_install(
+            "@openai/codex",
+            "https://developers.openai.com/codex/cli/",
+        ),
+        "claude" => npm_install(
+            "@anthropic-ai/claude-code",
+            "https://docs.anthropic.com/en/docs/claude-code/getting-started",
+        ),
+        "gemini" => npm_install(
+            "@google/gemini-cli",
+            "https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/installation.md",
+        ),
+        "opencode" => npm_install("opencode-ai", "https://opencode.ai/docs/"),
+        "copilot" => npm_install("@github/copilot", "https://github.com/features/copilot/cli/"),
+        "hermes" => official_script_install(
+            if cfg!(windows) {
+                "https://hermes-agent.nousresearch.com/install.ps1"
+            } else {
+                "https://hermes-agent.nousresearch.com/install.sh"
+            },
+            if cfg!(windows) {
+                "irm https://hermes-agent.nousresearch.com/install.ps1 | iex"
+            } else {
+                "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+            },
+            "https://github.com/NousResearch/hermes-agent#quick-install",
+        ),
+        "cursor" => official_script_install(
+            if cfg!(windows) {
+                "https://cursor.com/install?win32=true"
+            } else {
+                "https://cursor.com/install"
+            },
+            if cfg!(windows) {
+                "irm 'https://cursor.com/install?win32=true' | iex"
+            } else {
+                "curl https://cursor.com/install -fsS | bash"
+            },
+            "https://cursor.com/docs/cli/installation",
+        ),
+        "aider" => official_script_install(
+            if cfg!(windows) {
+                "https://aider.chat/install.ps1"
+            } else {
+                "https://aider.chat/install.sh"
+            },
+            if cfg!(windows) {
+                "powershell -ExecutionPolicy ByPass -c \"irm https://aider.chat/install.ps1 | iex\""
+            } else {
+                "curl -LsSf https://aider.chat/install.sh | sh"
+            },
+            "https://aider.chat/docs/install.html",
+        ),
+        "qwen" => npm_install(
+            "@qwen-code/qwen-code@latest",
+            "https://github.com/QwenLM/qwen-code/blob/main/scripts/installation/INSTALLATION_GUIDE.md",
+        ),
+        "kimi" => official_script_install(
+            if cfg!(windows) {
+                "https://code.kimi.com/kimi-code/install.ps1"
+            } else {
+                "https://code.kimi.com/kimi-code/install.sh"
+            },
+            if cfg!(windows) {
+                "irm https://code.kimi.com/kimi-code/install.ps1 | iex"
+            } else {
+                "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash"
+            },
+            "https://github.com/MoonshotAI/kimi-code#install",
+        ),
+        "droid" => npm_install("droid", "https://github.com/Factory-AI/factory#installation"),
+        "grok" => {
+            #[cfg(windows)]
+            {
+                manual_install(
+                    "curl -fsSL https://raw.githubusercontent.com/superagent-ai/grok-cli/main/install.sh | bash",
+                    "https://github.com/superagent-ai/grok-cli#install",
+                )
+            }
+            #[cfg(not(windows))]
+            {
+                official_script_install(
+                    "https://raw.githubusercontent.com/superagent-ai/grok-cli/main/install.sh",
+                    "curl -fsSL https://raw.githubusercontent.com/superagent-ai/grok-cli/main/install.sh | bash",
+                    "https://github.com/superagent-ai/grok-cli#install",
+                )
+            }
+        }
+        _ => manual_install("", ""),
+    }
 }
 
 pub fn default_working_directory() -> Result<String, String> {
@@ -1223,7 +1555,13 @@ fn resolve_launch(
             .arguments(resume_session_id);
     }
 
-    let executable = find_executable(&command)
+    let executable = spec
+        .and_then(find_agent_executable)
+        .or_else(|| {
+            (definition_id == "custom")
+                .then(|| find_executable(&command))
+                .flatten()
+        })
         .ok_or_else(|| format!("{default_label} is not installed or is not available on PATH."))?;
     let working_directory = PathBuf::from(validate_text(
         &request.working_directory,
@@ -1347,6 +1685,130 @@ fn find_native_session_id(text: &str) -> Option<String> {
     None
 }
 
+fn clean_model_token(value: &str) -> Option<String> {
+    let value = value.trim().trim_matches(|character: char| {
+        matches!(
+            character,
+            '`' | '"' | '\'' | '[' | ']' | '(' | ')' | '│' | '┃'
+        )
+    });
+    let token = value
+        .split_whitespace()
+        .next()?
+        .trim_matches(|character: char| !character.is_ascii_alphanumeric() && character != '.')
+        .trim_end_matches([',', ';', ':']);
+    if token.is_empty()
+        || token.len() > 80
+        || !token.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_' | '/' | ':')
+        })
+    {
+        return None;
+    }
+    let lowered = token.to_ascii_lowercase();
+    let named_alias = matches!(
+        lowered.as_str(),
+        "auto" | "default" | "opus" | "sonnet" | "haiku" | "flash" | "pro"
+    );
+    (token.chars().any(|character| character.is_ascii_digit()) || named_alias)
+        .then(|| token.to_string())
+}
+
+fn model_from_arguments(arguments: &[String]) -> Option<String> {
+    for (index, argument) in arguments.iter().enumerate() {
+        if matches!(argument.as_str(), "--model" | "-m") {
+            return arguments
+                .get(index + 1)
+                .and_then(|value| clean_model_token(value));
+        }
+        if let Some(value) = argument.strip_prefix("--model=") {
+            return clean_model_token(value);
+        }
+    }
+    None
+}
+
+fn claude_family_model(line: &str) -> Option<String> {
+    let lowered = line.to_ascii_lowercase();
+    for family in ["opus", "sonnet", "haiku"] {
+        let Some(index) = lowered.find(family) else {
+            continue;
+        };
+        let suffix = &line[index + family.len()..];
+        let version = suffix.split_whitespace().next().and_then(clean_model_token);
+        let title = format!("{}{}", family[..1].to_ascii_uppercase(), &family[1..]);
+        return Some(match version {
+            Some(version) if version.chars().any(|character| character.is_ascii_digit()) => {
+                format!("Claude {title} {version}")
+            }
+            _ => format!("Claude {title}"),
+        });
+    }
+    None
+}
+
+fn status_model_token(definition_id: &str, line: &str) -> Option<String> {
+    let prefixes: &[&str] = match definition_id {
+        "codex" => &["gpt-", "o1-", "o3-", "o4-", "codex-"],
+        "claude" => &["claude-"],
+        "gemini" => &["gemini-"],
+        "qwen" => &["qwen"],
+        "kimi" => &["kimi-", "moonshot-"],
+        "grok" => &["grok-"],
+        _ => &[],
+    };
+    line.split_whitespace().find_map(|value| {
+        let token = clean_model_token(value)?;
+        let lowered = token.to_ascii_lowercase();
+        prefixes
+            .iter()
+            .any(|prefix| lowered.starts_with(prefix))
+            .then_some(token)
+    })
+}
+
+/// Conservatively reads model fields from CLI startup/status output. Generic
+/// matching requires an explicit `model:`/`model=` label; Claude's TUI is the
+/// one verified exception because it prints family names as a status badge.
+fn find_model_name(definition_id: &str, text: &str) -> Option<String> {
+    for line in text.lines().rev() {
+        if definition_id == "claude" {
+            if let Some(model) = claude_family_model(line) {
+                return Some(model);
+            }
+        }
+        if let Some(model) = status_model_token(definition_id, line) {
+            return Some(model);
+        }
+        let lowered = line.to_ascii_lowercase();
+        let marker = lowered
+            .find("model:")
+            .map(|index| (index, "model:".len()))
+            .or_else(|| {
+                lowered
+                    .find("model =")
+                    .map(|index| (index, "model =".len()))
+            })
+            .or_else(|| lowered.find("model=").map(|index| (index, "model=".len())));
+        if let Some((index, marker_length)) = marker {
+            if let Some(model) = clean_model_token(&line[index + marker_length..]) {
+                if definition_id == "claude" {
+                    let lowered = model.to_ascii_lowercase();
+                    if matches!(lowered.as_str(), "opus" | "sonnet" | "haiku") {
+                        return Some(format!(
+                            "Claude {}{}",
+                            lowered[..1].to_ascii_uppercase(),
+                            &lowered[1..]
+                        ));
+                    }
+                }
+                return Some(model);
+            }
+        }
+    }
+    None
+}
+
 fn lifecycle_from_output(bytes: &[u8]) -> AgentLifecycle {
     let text = String::from_utf8_lossy(bytes).to_lowercase();
     const ATTENTION_MARKERS: [&str; 12] = [
@@ -1378,6 +1840,7 @@ pub fn launch(
     let size = validated_size(request.cols, request.rows)?;
     let (definition_id, label, executable, arguments, working_directory) =
         resolve_launch(&request)?;
+    let launch_model = model_from_arguments(&arguments);
     let session_id = registry.next_id();
     let reporter = registry.reporter.clone();
     let report_token = reporter
@@ -1435,11 +1898,16 @@ pub fn launch(
         .clone()
         .filter(|id| !id.trim().is_empty())
         .unwrap_or_else(|| session_id.clone());
+    let group_label = registry
+        .group_label(&group_id)
+        .unwrap_or_else(|| label.clone());
     let summary = AgentSessionSummary {
         session_id: session_id.clone(),
         group_id,
+        group_label,
         definition_id,
         label,
+        model: launch_model,
         executable: executable.display().to_string(),
         working_directory: working_directory.display().to_string(),
         state: AgentLifecycle::Working,
@@ -1458,6 +1926,14 @@ pub fn launch(
         capture: Mutex::new(CaptureState {
             enabled: capture_enabled,
             buffer: String::new(),
+        }),
+        model_capture: Mutex::new(ModelCaptureState {
+            definition_id: summary.definition_id.clone(),
+            enabled: true,
+            buffer: String::new(),
+            scanned_chars: 0,
+            input_buffer: String::new(),
+            model_command_active: false,
         }),
         output: Mutex::new(OutputBuffer::default()),
     });
@@ -1489,6 +1965,9 @@ pub fn launch(
                     {
                         reader_sink.captured(&reader_id, &native_id);
                     }
+                    if let Some(model) = reader_registry.scan_for_model(&reader_id, bytes) {
+                        reader_sink.model(&reader_id, &model);
+                    }
                 }
                 Err(_) => break,
             }
@@ -1509,6 +1988,9 @@ pub fn launch(
             std::thread::sleep(Duration::from_millis(1800));
             let payload = format!("\u{1b}[200~{seed}\u{1b}[201~\r");
             if let Ok(entry) = seed_registry.get(&seed_id) {
+                if let Ok(mut capture) = entry.model_capture.lock() {
+                    capture.input(payload.as_bytes());
+                }
                 if let Ok(mut writer) = entry.writer.lock() {
                     let _ = writer.write_all(payload.as_bytes());
                     let _ = writer.flush();
@@ -1549,6 +2031,7 @@ fn send_bytes(
     bytes: &[u8],
 ) -> Result<(), String> {
     let entry = registry.get(session_id)?;
+    registry.mark_model_input(session_id, bytes);
     let mut writer = entry.writer.lock().map_err(|error| error.to_string())?;
     writer
         .write_all(bytes)
@@ -1663,6 +2146,7 @@ mod tests {
         states: Mutex<Vec<(String, AgentLifecycle, AgentStateSource)>>,
         closed: Mutex<Vec<String>>,
         captured: Mutex<Vec<(String, String)>>,
+        models: Mutex<Vec<(String, String)>>,
     }
 
     impl AgentSink for TestSink {
@@ -1692,6 +2176,13 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((session_id.to_string(), native_session_id.to_string()));
+        }
+
+        fn model(&self, session_id: &str, model: &str) {
+            self.models
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), model.to_string()));
         }
     }
 
@@ -1768,11 +2259,87 @@ session id: 0199aa11-"
     }
 
     #[test]
+    fn model_capture_requires_cli_status_shaped_output() {
+        assert_eq!(
+            find_model_name("codex", "│ model: gpt-5.3-codex xhigh │").as_deref(),
+            Some("gpt-5.3-codex")
+        );
+        assert_eq!(
+            find_model_name("codex", "gpt-5.6-sol xhigh · ~/project").as_deref(),
+            Some("gpt-5.6-sol")
+        );
+        assert_eq!(
+            find_model_name("claude", "Claude Sonnet 4.6 · API Usage Billing").as_deref(),
+            Some("Claude Sonnet 4.6")
+        );
+        assert!(find_model_name("codex", "please review the model layer").is_none());
+    }
+
+    #[test]
+    fn explicit_model_arguments_are_available_before_startup_output() {
+        assert_eq!(
+            model_from_arguments(&["--model".to_string(), "gemini-2.5-pro".to_string()]).as_deref(),
+            Some("gemini-2.5-pro")
+        );
+        assert_eq!(
+            model_from_arguments(&["--model=sonnet".to_string()]).as_deref(),
+            Some("sonnet")
+        );
+    }
+
+    #[test]
+    fn model_command_rearms_capture_when_typed_in_separate_events() {
+        let mut capture = ModelCaptureState {
+            definition_id: "codex".to_string(),
+            enabled: true,
+            buffer: String::new(),
+            scanned_chars: 0,
+            input_buffer: String::new(),
+            model_command_active: false,
+        };
+        capture.input(b"hello");
+        assert!(!capture.enabled);
+        capture.input(b"\r");
+        for byte in b"/model\r" {
+            capture.input(&[*byte]);
+        }
+        assert!(capture.enabled);
+        assert_eq!(
+            capture.feed(b"gpt-5.6-sol xhigh").as_deref(),
+            Some("gpt-5.6-sol")
+        );
+        assert!(!capture.model_command_active);
+    }
+
+    #[test]
     fn catalog_ids_are_unique() {
         let ids: HashSet<_> = AGENTS.iter().map(|agent| agent.id).collect();
         assert_eq!(ids.len(), AGENTS.len());
         assert!(ids.contains("codex"));
         assert!(ids.contains("hermes"));
+    }
+
+    #[test]
+    fn every_missing_cli_has_a_reviewable_install_path() {
+        for definition in catalog() {
+            assert!(
+                definition.install.source_url.starts_with("https://"),
+                "{} needs an HTTPS installation source",
+                definition.id
+            );
+            assert!(
+                !definition.install.display_command.is_empty(),
+                "{} needs a visible installation command",
+                definition.id
+            );
+            if definition.install.executable.is_some() {
+                assert!(
+                    !definition.install.arguments.is_empty(),
+                    "{} direct installer needs an argument vector",
+                    definition.id
+                );
+            }
+        }
     }
 
     #[test]

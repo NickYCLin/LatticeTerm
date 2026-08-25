@@ -631,6 +631,7 @@ export const en: Messages = {
   "terminal.renameHint": "Double-click to rename this tab",
   "terminal.openFiles": "Open file browser (SFTP)",
   "terminal.cliSwitch": "Switch the CLI in this tab",
+  "terminal.model.pending": "Model not reported",
   "terminal.addCli": "Add CLI",
   "terminal.addCli.none": "No installed CLI detected",
   "terminal.handoff.carry": "Carry the current conversation (let the new CLI continue)",
@@ -680,43 +681,14 @@ export const en: Messages = {
   "agents.path.missing": "No directly executable program was found on PATH",
   "agents.launching": "Launching…",
   "agents.launch": "Launch",
-  "agents.resume.eyebrow": "Native session restore",
-  "agents.resume.title": "Return to the CLI's existing context",
-  "agents.resume.body":
-    "Codex, Claude Code, Gemini CLI, and Hermes Agent are supported. LatticeTerm passes the session ID or title using each tool's documented syntax and opens the CLI in a new local terminal.",
-  "agents.resume.securityTitle": "You choose whether restore metadata is saved",
-  "agents.resume.securityBody":
-    "Resume alone does not write the identifier into LatticeTerm. It is stored with the working directory only when you choose Save restore item. LatticeTerm does not read CLI conversations, sign-in data, or model credentials.",
-  "agents.resume.cli": "CLI with restore support",
-  "agents.resume.adapterVersion":
-    "Built-in adapter v{version}; LatticeTerm creates the argument vector without a shell.",
-  "agents.resume.captured": "Detected session IDs:",
-  "agents.resume.sessionId": "Session ID or title",
-  "agents.resume.sessionId.placeholder": "Paste the session ID or existing title shown by the CLI",
-  "agents.resume.sessionId.hint":
-    "Up to 512 bytes, with no control characters or leading hyphen. Additional launch arguments cannot be mixed in.",
-  "agents.resume.note": "Note (optional)",
-  "agents.resume.note.placeholder": "e.g. refactor work on the payments project",
-  "agents.resume.note.hint":
-    "A memo just for you, shown in the list so you can tell at a glance what this CLI was for. Up to 200 bytes.",
-  "agents.resume.save": "Save restore item",
-  "agents.resume.launch": "Resume session",
-  "agents.resume.resuming": "Resuming…",
-  "agents.resume.savedTitle": "Restore item saved",
-  "agents.resume.savedBody":
-    "“{name}” can resume from this workspace next time. The identifier stays hidden in the list.",
-  "agents.custom.eyebrow": "Custom adapter",
-  "agents.custom.title": "Connect another LLM CLI",
-  "agents.custom.body":
-    "Provide an executable and explicit argument vector; the system never joins them into a shell command.",
-  "agents.custom.label": "Display name",
-  "agents.custom.label.placeholder": "For example My Team Agent",
-  "agents.custom.executable": "Executable",
-  "agents.custom.executable.placeholder": "For example my-agent or an absolute path",
-  "agents.custom.arguments": "Launch arguments",
-  "agents.custom.arguments.placeholder": "--model\nteam-model\n--resume",
-  "agents.custom.arguments.hint": "One argument per line; blank lines are ignored, up to 64.",
-  "agents.custom.launch": "Launch custom CLI",
+  "agents.install": "Install",
+  "agents.installing": "Opening installer…",
+  "agents.install.sessionLabel": "Install {name}",
+  "agents.install.copySource": "Copy installation guide URL",
+  "agents.install.sourceCopied": "URL copied",
+  "agents.install.confirm.title": "Install {name}?",
+  "agents.install.confirm.body": "LatticeTerm will open a visible terminal and run this fixed installation command: {command}. It downloads software and writes to your user environment. If the installer changes PATH, restart LatticeTerm before refreshing detection.",
+  "agents.install.confirm.action": "Open installer terminal",
   "agents.workspace.eyebrow": "Restart recovery",
   "agents.workspace.title": "Save a launch workspace",
   "agents.workspace.defaultName": "My agent workspace",
@@ -729,7 +701,7 @@ export const en: Messages = {
   "agents.workspace.renamedBody":
     "This safe launch workspace is now named “{name}”.",
   "agents.workspace.body":
-    "Save the CLI type, arguments, and working directory for multiple agents. Native session identifiers you explicitly save can be restored too, and startup still requires your confirmation.",
+    "Save the CLIs selected above with their working directories and notes. You still confirm before anything launches next time.",
   "agents.workspace.save": "Save launch item",
   "agents.workspace.saving": "Saving…",
   "agents.workspace.restore": "Launch again",
@@ -737,7 +709,7 @@ export const en: Messages = {
   "agents.workspace.restoreAll": "Restore all {count}",
   "agents.workspace.securityTitle": "Only launch metadata you explicitly choose is saved",
   "agents.workspace.securityBody":
-    "Up to {count} launch items may be saved. A native session ID or title is written only when you choose Save. Prompts, terminal output, process IDs, reporter tokens, and model credentials are never stored, and secret arguments are rejected.",
+    "Save up to {count} launch items. New items saved from this screen exclude native session IDs, prompts, terminal output, process IDs, reporter tokens, and model credentials.",
   "agents.workspace.recoveryTitle": "The previous launch workspace could not be read",
   "agents.workspace.recoveryBody":
     "The original file was preserved at {path} instead of being overwritten. Reason: {detail}",
@@ -748,7 +720,7 @@ export const en: Messages = {
   "agents.workspace.partialTitle": "Some launch items could not be restored",
   "agents.workspace.restoreResult": "Launched {restored}; failed {failed}.",
   "agents.workspace.empty":
-    "No launch items are saved yet. Add a built-in or custom CLI above.",
+    "No launch items are saved yet. Add one from a built-in CLI above.",
   "agents.workspace.command": "{executable} · {count} arguments",
   "agents.workspace.nativeResumeCommand":
     "{executable} · native session restore saved",

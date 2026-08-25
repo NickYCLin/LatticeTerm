@@ -85,8 +85,10 @@ describe("agent session transport", () => {
       {
         sessionId: "agent-session-1",
         groupId: "agent-session-1",
+        groupLabel: "Payments",
         definitionId: "codex",
         label: "Codex",
+        model: "gpt-5",
         executable: "/usr/bin/codex",
         workingDirectory: "/work",
         state: "working" as const,

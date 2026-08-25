@@ -9,7 +9,6 @@ import {
   MAX_AGENT_BROADCAST_TARGETS,
   MAX_SAVED_AGENT_PLANS,
   moveAgentLaunchPlan,
-  splitAgentArguments,
 } from "../app/useAgentSessions";
 import { Callout } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
@@ -59,14 +58,10 @@ export function AgentsView({
   const [workingDirectory, setWorkingDirectory] = useState("");
   const [launchNote, setLaunchNote] = useState("");
   const [launching, setLaunching] = useState<string | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [pendingInstall, setPendingInstall] = useState<AgentDefinition | null>(null);
+  const [copiedInstallSource, setCopiedInstallSource] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [customLabel, setCustomLabel] = useState("");
-  const [customExecutable, setCustomExecutable] = useState("");
-  const [customArguments, setCustomArguments] = useState("");
-  const [resumeDefinitionId, setResumeDefinitionId] = useState("");
-  const [resumeSessionId, setResumeSessionId] = useState("");
-  const [resumeNote, setResumeNote] = useState("");
-  const [resumeNotice, setResumeNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [editingWorkspaceName, setEditingWorkspaceName] = useState(false);
@@ -128,88 +123,25 @@ export function AgentsView({
         .length,
     [agents.sessions],
   );
-  const resumeDefinitions = useMemo(
-    () => agents.catalog.filter((definition) => definition.resumeSupported),
-    [agents.catalog],
-  );
-  const resumeDefinition = useMemo(
-    () =>
-      resumeDefinitions.find(
-        (definition) => definition.id === resumeDefinitionId,
-      ) ?? null,
-    [resumeDefinitionId, resumeDefinitions],
-  );
-  // Session ids the running CLIs announced themselves — one click to reuse
-  // instead of hunting through another tool's history.
-  const resumeDefaultLabel = resumeDefinition?.label ?? "";
-  const capturedResumeIds = useMemo(() => {
-    const seen = new Set<string>();
-    return agents.sessions
-      .filter(
-        (session) =>
-          session.definitionId === resumeDefinitionId &&
-          session.capturedSessionId,
-      )
-      .map((session) => ({
-        id: session.capturedSessionId as string,
-        // A renamed tab becomes the note default; the plain CLI name is not
-        // worth carrying (it says nothing the row does not already show).
-        note: session.label === resumeDefaultLabel ? "" : session.label,
-      }))
-      .filter((entry) => (seen.has(entry.id) ? false : (seen.add(entry.id), true)));
-  }, [agents.sessions, resumeDefinitionId, resumeDefaultLabel]);
-
-  useEffect(() => {
-    if (
-      resumeDefinitions.length > 0 &&
-      !resumeDefinitions.some(
-        (definition) => definition.id === resumeDefinitionId,
-      )
-    ) {
-      setResumeDefinitionId(
-        resumeDefinitions.find((definition) => definition.installed)?.id ??
-          resumeDefinitions[0].id,
-      );
-    }
-  }, [resumeDefinitionId, resumeDefinitions]);
-
-  function launchDraft(
-    definition: AgentDefinition | null,
-    custom = false,
-  ) {
+  function launchDraft(definition: AgentDefinition) {
     return {
-      definitionId: custom ? "custom" : (definition?.id ?? ""),
-      label: custom ? customLabel : "",
-      executable: custom ? customExecutable : "",
-      arguments: custom ? splitAgentArguments(customArguments) : [],
+      definitionId: definition.id,
+      label: "",
+      executable: "",
+      arguments: [],
       resumeSessionId: null,
       note: launchNote.trim(),
       workingDirectory,
     };
   }
 
-  function nativeResumeDraft(definition: AgentDefinition) {
-    return {
-      definitionId: definition.id,
-      label: "",
-      executable: "",
-      arguments: [],
-      resumeSessionId: resumeSessionId.trim(),
-      note: resumeNote.trim(),
-      workingDirectory,
-    };
-  }
-
-  async function launch(
-    definition: AgentDefinition | null,
-    custom = false,
-  ) {
-    const id = custom ? "custom" : (definition?.id ?? "");
+  async function launch(definition: AgentDefinition) {
+    const id = definition.id;
     setLaunching(id);
     setError(null);
     try {
       const session = await agents.launch({
-        ...launchDraft(definition, custom),
+        ...launchDraft(definition),
         cols: 120,
         rows: 32,
       });
@@ -221,55 +153,56 @@ export function AgentsView({
     }
   }
 
-  async function savePlan(
-    definition: AgentDefinition | null,
-    custom = false,
-  ) {
-    const id = custom ? "custom" : (definition?.id ?? "");
+  async function confirmInstall() {
+    const definition = pendingInstall;
+    const recipe = definition?.install;
+    if (!definition || !recipe || !recipe.executable || !recipe.available) return;
+    setPendingInstall(null);
+    setInstalling(definition.id);
+    setError(null);
+    try {
+      const session = await agents.launch({
+        definitionId: "custom",
+        label: t("agents.install.sessionLabel", { name: definition.label }),
+        executable: recipe.executable,
+        arguments: recipe.arguments,
+        resumeSessionId: null,
+        workingDirectory,
+        cols: 120,
+        rows: 32,
+      });
+      let stopWatching = () => {};
+      stopWatching = agents.onClosed(session.sessionId, () => {
+        stopWatching();
+        void agents.refreshCatalog();
+      });
+      onOpen(session.sessionId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setInstalling(null);
+    }
+  }
+
+  async function copyInstallSource(definition: AgentDefinition) {
+    try {
+      await navigator.clipboard.writeText(definition.install.sourceUrl);
+      setCopiedInstallSource(definition.id);
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
+  async function savePlan(definition: AgentDefinition) {
+    const id = definition.id;
     setSaving(id);
     setError(null);
     setWorkspaceNotice(null);
     try {
-      const plan = await agents.savePlan(launchDraft(definition, custom));
+      const plan = await agents.savePlan(launchDraft(definition));
       setWorkspaceNotice({ saved: plan.label });
       setLaunchNote("");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setSaving(null);
-    }
-  }
-
-  async function launchNativeResume() {
-    if (!resumeDefinition) return;
-    const actionId = `resume:${resumeDefinition.id}`;
-    setLaunching(actionId);
-    setError(null);
-    setResumeNotice(null);
-    try {
-      const session = await agents.launch({
-        ...nativeResumeDraft(resumeDefinition),
-        cols: 120,
-        rows: 32,
-      });
-      onOpen(session.sessionId);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setLaunching(null);
-    }
-  }
-
-  async function saveNativeResumePlan() {
-    if (!resumeDefinition) return;
-    const actionId = `resume:${resumeDefinition.id}`;
-    setSaving(actionId);
-    setError(null);
-    setResumeNotice(null);
-    try {
-      const plan = await agents.savePlan(nativeResumeDraft(resumeDefinition));
-      setResumeNotice(plan.label);
-      setResumeNote("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -350,6 +283,8 @@ export function AgentsView({
 
   const launchDisabled =
     agents.mode !== "ready" || !workingDirectory.trim() || launching !== null;
+  const installDisabled =
+    agents.mode !== "ready" || !workingDirectory.trim() || installing !== null;
   const planLimitReached = agents.plans.length >= MAX_SAVED_AGENT_PLANS;
   const saveDisabled =
     agents.mode !== "ready" ||
@@ -526,6 +461,11 @@ export function AgentsView({
                 <span className="agent-card__path">
                   {definition.installedPath ?? t("agents.path.missing")}
                 </span>
+                {!definition.installed && definition.install.displayCommand && (
+                  <code className="agent-card__install-command">
+                    {definition.install.displayCommand}
+                  </code>
+                )}
               </div>
               <div className="agent-card__actions">
                 <button
@@ -539,6 +479,32 @@ export function AgentsView({
                     ? t("agents.workspace.saving")
                     : t("agents.workspace.save")}
                 </button>
+                {!definition.installed &&
+                  (definition.install.executable && definition.install.available ? (
+                    <button
+                      type="button"
+                      className="button button--primary button--sm"
+                      disabled={installDisabled}
+                      onClick={() => setPendingInstall(definition)}
+                    >
+                      <TerminalIcon size={12} />
+                      {installing === definition.id
+                        ? t("agents.installing")
+                        : t("agents.install")}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="button button--ghost button--sm"
+                      disabled={!definition.install.sourceUrl}
+                      onClick={() => void copyInstallSource(definition)}
+                    >
+                      <TransferIcon size={12} />
+                      {copiedInstallSource === definition.id
+                        ? t("agents.install.sourceCopied")
+                        : t("agents.install.copySource")}
+                    </button>
+                  ))}
                 <button
                   type="button"
                   className="button button--secondary button--sm"
@@ -553,230 +519,6 @@ export function AgentsView({
               </div>
             </article>
           ))}
-        </div>
-      </section>
-
-      <section className="agents-resume">
-        <div className="agents-section-heading">
-          <div>
-            <span className="eyebrow">{t("agents.resume.eyebrow")}</span>
-            <h3>{t("agents.resume.title")}</h3>
-            <p>{t("agents.resume.body")}</p>
-          </div>
-        </div>
-
-        <Callout tone="security" title={t("agents.resume.securityTitle")}>
-          {t("agents.resume.securityBody")}
-        </Callout>
-
-        {resumeNotice && (
-          <Callout tone="info" title={t("agents.resume.savedTitle")}>
-            {t("agents.resume.savedBody", { name: resumeNotice })}
-          </Callout>
-        )}
-
-        <div className="agents-resume__fields">
-          <label className="field">
-            <span className="field__label">{t("agents.resume.cli")}</span>
-            <select
-              className="select"
-              value={resumeDefinitionId}
-              onChange={(event) => {
-                setResumeDefinitionId(event.currentTarget.value);
-                setResumeNotice(null);
-              }}
-              disabled={resumeDefinitions.length === 0}
-            >
-              {resumeDefinitions.map((definition) => (
-                <option value={definition.id} key={definition.id}>
-                  {definition.label} · {t(
-                    definition.installed
-                      ? "agents.installed"
-                      : "agents.notInstalled",
-                  )}
-                </option>
-              ))}
-            </select>
-            <span className="agents-field-hint">
-              {t("agents.resume.adapterVersion", {
-                version: resumeDefinition?.adapterVersion ?? 1,
-              })}
-            </span>
-          </label>
-          <label className="field agents-resume__session">
-            <span className="field__label">
-              {t("agents.resume.sessionId")}
-            </span>
-            <input
-              className="input mono"
-              value={resumeSessionId}
-              onChange={(event) => {
-                setResumeSessionId(event.currentTarget.value);
-                setResumeNotice(null);
-              }}
-              placeholder={t("agents.resume.sessionId.placeholder")}
-              maxLength={512}
-              spellCheck={false}
-            />
-            <span className="agents-field-hint">
-              {t("agents.resume.sessionId.hint")}
-            </span>
-            {capturedResumeIds.length > 0 && (
-              <span
-                className="agents-field-hint"
-                style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", alignItems: "center" }}
-              >
-                {t("agents.resume.captured")}
-                {capturedResumeIds.map((entry) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    className="button button--ghost"
-                    style={{ padding: "0.1rem 0.5rem", height: "auto", fontSize: "var(--text-2xs)" }}
-                    onClick={() => {
-                      setResumeSessionId(entry.id);
-                      // Carry a renamed tab's name into the note, unless the
-                      // user already typed one.
-                      if (entry.note && !resumeNote.trim()) setResumeNote(entry.note);
-                      setResumeNotice(null);
-                    }}
-                    title={entry.note || undefined}
-                  >
-                    <code className="mono">{entry.id.slice(0, 8)}…</code>
-                    {entry.note && <span> · {entry.note}</span>}
-                  </button>
-                ))}
-              </span>
-            )}
-          </label>
-          <label className="field agents-resume__note">
-            <span className="field__label">{t("agents.resume.note")}</span>
-            <input
-              className="input"
-              value={resumeNote}
-              onChange={(event) => {
-                setResumeNote(event.currentTarget.value);
-                setResumeNotice(null);
-              }}
-              placeholder={t("agents.resume.note.placeholder")}
-              maxLength={200}
-            />
-            <span className="agents-field-hint">
-              {t("agents.resume.note.hint")}
-            </span>
-          </label>
-          <div className="agents-resume__actions">
-            <button
-              type="button"
-              className="button button--ghost"
-              disabled={
-                saveDisabled ||
-                !resumeDefinition ||
-                !resumeSessionId.trim()
-              }
-              onClick={() => void saveNativeResumePlan()}
-            >
-              <MemoryIcon size={13} />
-              {saving === `resume:${resumeDefinition?.id}`
-                ? t("agents.workspace.saving")
-                : t("agents.resume.save")}
-            </button>
-            <button
-              type="button"
-              className="button button--primary"
-              disabled={
-                launchDisabled ||
-                !resumeDefinition?.installed ||
-                !resumeSessionId.trim()
-              }
-              onClick={() => void launchNativeResume()}
-            >
-              <PlayIcon size={13} />
-              {launching === `resume:${resumeDefinition?.id}`
-                ? t("agents.resume.resuming")
-                : t("agents.resume.launch")}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="agents-custom">
-        <div className="agents-section-heading">
-          <div>
-            <span className="eyebrow">{t("agents.custom.eyebrow")}</span>
-            <h3>{t("agents.custom.title")}</h3>
-            <p>{t("agents.custom.body")}</p>
-          </div>
-        </div>
-        <div className="agents-custom__fields">
-          <label className="field">
-            <span className="field__label">{t("agents.custom.label")}</span>
-            <input
-              className="input"
-              value={customLabel}
-              onChange={(event) => setCustomLabel(event.currentTarget.value)}
-              placeholder={t("agents.custom.label.placeholder")}
-            />
-          </label>
-          <label className="field">
-            <span className="field__label">{t("agents.custom.executable")}</span>
-            <input
-              className="input mono"
-              value={customExecutable}
-              onChange={(event) =>
-                setCustomExecutable(event.currentTarget.value)
-              }
-              placeholder={t("agents.custom.executable.placeholder")}
-              spellCheck={false}
-            />
-          </label>
-          <label className="field agents-custom__arguments">
-            <span className="field__label">{t("agents.custom.arguments")}</span>
-            <textarea
-              className="input mono"
-              value={customArguments}
-              onChange={(event) =>
-                setCustomArguments(event.currentTarget.value)
-              }
-              placeholder={t("agents.custom.arguments.placeholder")}
-              spellCheck={false}
-            />
-            <span className="agents-field-hint">
-              {t("agents.custom.arguments.hint")}
-            </span>
-          </label>
-          <div className="agents-custom__actions">
-            <button
-              type="button"
-              className="button button--ghost"
-              disabled={
-                saveDisabled ||
-                !customLabel.trim() ||
-                !customExecutable.trim()
-              }
-              onClick={() => void savePlan(null, true)}
-            >
-              <MemoryIcon size={13} />
-              {saving === "custom"
-                ? t("agents.workspace.saving")
-                : t("agents.workspace.save")}
-            </button>
-            <button
-              type="button"
-              className="button button--primary"
-              disabled={
-                launchDisabled ||
-                !customLabel.trim() ||
-                !customExecutable.trim()
-              }
-              onClick={() => void launch(null, true)}
-            >
-              <PlayIcon size={13} />
-              {launching === "custom"
-                ? t("agents.launching")
-                : t("agents.custom.launch")}
-            </button>
-          </div>
         </div>
       </section>
 
@@ -1211,6 +953,22 @@ export function AgentsView({
               .finally(() => setPendingStop(null));
           }}
           onCancel={() => setPendingStop(null)}
+        />
+      )}
+
+      {pendingInstall && (
+        <ConfirmDialog
+          title={t("agents.install.confirm.title", {
+            name: pendingInstall.label,
+          })}
+          body={t("agents.install.confirm.body", {
+            command: pendingInstall.install.displayCommand,
+          })}
+          confirmLabel={t("agents.install.confirm.action")}
+          cancelLabel={t("common.cancel")}
+          tone="default"
+          onConfirm={() => void confirmInstall()}
+          onCancel={() => setPendingInstall(null)}
         />
       )}
 

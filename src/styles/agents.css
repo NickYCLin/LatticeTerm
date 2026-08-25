@@ -81,8 +81,6 @@
 }
 
 .agents-directory,
-.agents-resume,
-.agents-custom,
 .agents-workspace,
 .agents-orchestration,
 .agents-running {
@@ -217,49 +215,20 @@
   color: var(--text-faint);
 }
 
+.agent-card .agent-card__install-command {
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  color: var(--text-subtle);
+}
+
 .agent-card__actions {
   grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-2);
-}
-
-.agents-custom__fields {
-  display: grid;
-  grid-template-columns: minmax(11rem, 0.7fr) minmax(15rem, 1fr) minmax(18rem, 1.3fr) auto;
-  align-items: end;
-  gap: var(--space-4);
-}
-
-.agents-resume__fields {
-  display: grid;
-  grid-template-columns: minmax(13rem, 0.7fr) minmax(20rem, 1.4fr) auto;
-  align-items: end;
-  gap: var(--space-4);
-}
-
-.agents-resume__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-bottom: 1.55rem;
-}
-
-.agents-custom__arguments textarea {
-  height: 5.5rem;
-  min-height: 5.5rem;
-  padding-top: var(--space-3);
-  padding-bottom: var(--space-3);
-  resize: vertical;
-  line-height: 1.5;
-}
-
-.agents-custom__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-bottom: 1.55rem;
 }
 
 .agent-plan-list {
@@ -477,28 +446,6 @@
     text-align: left;
   }
 
-  .agents-custom__fields {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .agents-resume__fields {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .agents-resume__actions {
-    grid-column: 1 / -1;
-    justify-self: start;
-    margin-bottom: 0;
-  }
-
-  .agents-custom__arguments {
-    grid-column: 1 / -1;
-  }
-
-  .agents-custom__actions {
-    justify-self: start;
-    margin-bottom: 0;
-  }
 }
 
 @media (max-width: 50rem) {
@@ -508,8 +455,6 @@
 
   .agents-hero,
   .agents-directory,
-  .agents-resume,
-  .agents-custom,
   .agents-workspace,
   .agents-orchestration,
   .agents-running {
@@ -523,14 +468,6 @@
   .agents-stats > div + div {
     border-top: 1px solid var(--line);
     border-left: 0;
-  }
-
-  .agents-custom__fields {
-    grid-template-columns: 1fr;
-  }
-
-  .agents-resume__fields {
-    grid-template-columns: 1fr;
   }
 
   .agent-grid {

@@ -19,14 +19,28 @@ export interface AgentDefinition {
   transcriptSupported: boolean;
   installed: boolean;
   installedPath: string | null;
+  install: AgentInstallDefinition;
+}
+
+export interface AgentInstallDefinition {
+  executable: string | null;
+  arguments: string[];
+  displayCommand: string;
+  sourceUrl: string;
+  available: boolean;
 }
 
 export interface AgentSessionSummary {
   sessionId: string;
   /** CLIs sharing one tab carry the same groupId; defaults to sessionId. */
   groupId: string;
+  /** User-facing tab name shared by every CLI in this group. */
+  groupLabel: string;
   definitionId: string;
+  /** CLI name; independent from the user-facing tab name. */
   label: string;
+  /** Model announced by the CLI or explicitly supplied through --model. */
+  model: string | null;
   executable: string;
   workingDirectory: string;
   state: AgentLifecycle;
@@ -75,6 +89,11 @@ export interface AgentStateEvent {
   sessionId: string;
   state: AgentLifecycle;
   source: AgentStateSource;
+}
+
+export interface AgentModelEvent {
+  sessionId: string;
+  model: string;
 }
 
 export interface AgentOutputEvent {
@@ -126,7 +145,7 @@ const FALLBACK_CATALOG_SOURCE: [string, string, string, boolean][] = [
   ["opencode", "OpenCode", "opencode", false],
   ["copilot", "GitHub Copilot CLI", "copilot", false],
   ["hermes", "Hermes Agent", "hermes", true],
-  ["cursor", "Cursor Agent", "cursor-agent", false],
+  ["cursor", "Cursor Agent", "agent", false],
   ["aider", "Aider", "aider", false],
   ["qwen", "Qwen Code", "qwen", false],
   ["kimi", "Kimi Code CLI", "kimi", false],
@@ -144,6 +163,13 @@ const FALLBACK_CATALOG: AgentDefinition[] = FALLBACK_CATALOG_SOURCE.map(
   transcriptSupported: id === "codex" || id === "claude",
   installed: false,
   installedPath: null,
+  install: {
+    executable: null,
+    arguments: [],
+    displayCommand: "",
+    sourceUrl: "",
+    available: false,
+  },
   }),
 );
 
@@ -244,7 +270,7 @@ export interface AgentApi {
   planRecovery: AgentPlanRecovery | null;
   refreshCatalog: () => Promise<void>;
   launch: (request: AgentLaunchRequest) => Promise<AgentSessionSummary>;
-  /** Renames a running session's tab label; persists so a reload keeps it. */
+  /** Renames a CLI group's tab label; persists so a reload keeps it. */
   rename: (sessionId: string, label: string) => Promise<AgentSessionSummary>;
   savePlan: (draft: AgentLaunchPlanDraft) => Promise<AgentLaunchPlan>;
   renameWorkspace: (name: string) => Promise<string>;
@@ -328,6 +354,7 @@ export function useAgentSessions(): AgentApi {
     const outputDuringHydration = new Map<string, AgentOutputEvent[]>();
     const stateDuringHydration = new Map<string, AgentStateEvent>();
     const captureDuringHydration = new Map<string, string>();
+    const modelDuringHydration = new Map<string, string>();
 
     function keep(cleanup: () => void): boolean {
       if (disposed) {
@@ -466,6 +493,24 @@ export function useAgentSessions(): AgentApi {
         });
         if (!keep(stopCapture)) return;
 
+        const stopModel = await listen<AgentModelEvent>(
+          "agent://model",
+          (event) => {
+            if (hydrating) {
+              modelDuringHydration.set(event.payload.sessionId, event.payload.model);
+              return;
+            }
+            setSessions((current) =>
+              current.map((session) =>
+                session.sessionId === event.payload.sessionId
+                  ? { ...session, model: event.payload.model }
+                  : session,
+              ),
+            );
+          },
+        );
+        if (!keep(stopModel)) return;
+
         const [
           definitions,
           directory,
@@ -494,9 +539,12 @@ export function useAgentSessions(): AgentApi {
             const capturedSessionId = captureDuringHydration.get(
               session.sessionId,
             );
-            return capturedSessionId
-              ? { ...session, capturedSessionId }
-              : session;
+            const model = modelDuringHydration.get(session.sessionId);
+            return {
+              ...session,
+              ...(capturedSessionId ? { capturedSessionId } : {}),
+              ...(model ? { model } : {}),
+            };
           });
         });
 
@@ -529,6 +577,7 @@ export function useAgentSessions(): AgentApi {
         outputDuringHydration.clear();
         stateDuringHydration.clear();
         captureDuringHydration.clear();
+        modelDuringHydration.clear();
         setCatalog(definitions);
         setDefaultWorkingDirectory(directory);
         setWorkspaceName(planSnapshot.workspaceName);
@@ -542,6 +591,7 @@ export function useAgentSessions(): AgentApi {
         outputDuringHydration.clear();
         stateDuringHydration.clear();
         captureDuringHydration.clear();
+        modelDuringHydration.clear();
         setCatalog(FALLBACK_CATALOG);
         setError(reason instanceof Error ? reason.message : String(reason));
         setMode("unavailable");
@@ -575,8 +625,8 @@ export function useAgentSessions(): AgentApi {
     });
     setSessions((current) =>
       current.map((session) =>
-        session.sessionId === updated.sessionId
-          ? { ...session, label: updated.label }
+        session.groupId === updated.groupId
+          ? { ...session, groupLabel: updated.groupLabel }
           : session,
       ),
     );

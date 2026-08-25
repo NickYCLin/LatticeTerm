@@ -238,7 +238,7 @@ export function SessionsView({
       return {
         kind: "agent" as const,
         sessionId: memberId,
-        label: member.label,
+        label: member.groupLabel,
         groupId: group.groupId,
         members: group.members,
       };
@@ -492,7 +492,12 @@ export function SessionsView({
                         }
                       >
                         <AgentIcon size={12} />
-                        <span className="truncate">{member.label}</span>
+                        <span className="cli-switch__identity">
+                          <span className="truncate">{member.label}</span>
+                          <span className="cli-switch__model truncate">
+                            {member.model ?? t("terminal.model.pending")}
+                          </span>
+                        </span>
                       </button>
                       {group.members.length > 1 && (
                         <button
