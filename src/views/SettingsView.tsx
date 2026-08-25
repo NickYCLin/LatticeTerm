@@ -20,7 +20,7 @@ import type { MessageKey } from "../i18n/context";
 import { Chip } from "../components/common/Badge";
 import { Callout } from "../components/common/Callout";
 import { CheckIcon } from "../components/icons";
-import { useAppUpdater } from "../app/useAppUpdater";
+import { useAppUpdater, type AppUpdater } from "../app/useAppUpdater";
 import { APP_VERSION } from "../app/version";
 import type { EncryptedBackupRestore } from "../app/encryptedBackup";
 import { EncryptedBackupPanel } from "../components/settings/EncryptedBackupPanel";
@@ -122,6 +122,7 @@ export function SettingsView({
   storage,
   vaultUnlocked,
   onBackupRestored,
+  updater: injectedUpdater,
 }: {
   preferences: Preferences;
   onChange: (patch: Partial<Preferences>) => void;
@@ -132,11 +133,16 @@ export function SettingsView({
     result: EncryptedBackupRestore,
     restoredPreferences: Preferences,
   ) => Promise<void>;
+  /** Shared with the app-level startup prompt so both reflect one check. */
+  updater?: AppUpdater;
 }) {
   const { t } = useI18n();
   const { summary, host } = runtime;
   const desktopBackendAvailable = host === "tauri";
-  const updater = useAppUpdater(summary?.version);
+  // A local instance keeps the panel working when rendered standalone; the
+  // app passes its own so the panel and the startup prompt stay in sync.
+  const localUpdater = useAppUpdater(summary?.version);
+  const updater = injectedUpdater ?? localUpdater;
   const [clipboardBusy, setClipboardBusy] = useState(false);
   const [clipboardNotice, setClipboardNotice] =
     useState<MessageKey | null>(null);
@@ -483,6 +489,19 @@ export function SettingsView({
             </dd>
           </div>
         </dl>
+
+        <SegmentedSetting
+          title={t("settings.updater.autoCheck")}
+          description={t("settings.updater.autoCheckHint")}
+          choices={[
+            { value: "enabled", label: t("settings.updater.autoCheck.on") },
+            { value: "disabled", label: t("settings.updater.autoCheck.off") },
+          ]}
+          value={preferences.checkUpdatesOnLaunch ? "enabled" : "disabled"}
+          onChange={(choice) =>
+            onChange({ checkUpdatesOnLaunch: choice === "enabled" })
+          }
+        />
 
         {desktopBackendAvailable && updater.status === "available" && (
           <div className="stack" style={{ gap: "var(--space-3)", marginTop: "var(--space-4)" }}>

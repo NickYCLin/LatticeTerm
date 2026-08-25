@@ -30,6 +30,7 @@ export interface Preferences {
   sensitiveClipboardClear: SensitiveClipboardClearChoice;
   sidebarCollapsed: boolean;
   inspectorOpen: boolean;
+  checkUpdatesOnLaunch: boolean;
 }
 
 export const defaultPreferences: Preferences = {
@@ -42,6 +43,7 @@ export const defaultPreferences: Preferences = {
   sensitiveClipboardClear: "30",
   sidebarCollapsed: false,
   inspectorOpen: true,
+  checkUpdatesOnLaunch: true,
 };
 
 const STORAGE_KEY = "latticeterm.preferences.v2";
@@ -91,6 +93,7 @@ export function sanitizePreferences(stored: Partial<Preferences>): Preferences {
       : defaultPreferences.sensitiveClipboardClear,
     sidebarCollapsed: Boolean(stored.sidebarCollapsed),
     inspectorOpen: stored.inspectorOpen !== false,
+    checkUpdatesOnLaunch: stored.checkUpdatesOnLaunch !== false,
   };
 }
 

@@ -472,6 +472,15 @@ export const en: Messages = {
   "settings.updater.relaunchError": "Automatic restart failed: {error}",
   "settings.updater.error": "Update failed: {error}",
   "settings.updater.releaseNotes": "Release notes",
+  "settings.updater.autoCheck": "Check for updates on launch",
+  "settings.updater.autoCheckHint": "Detect new versions when the app opens and show a prompt when one is available.",
+  "settings.updater.autoCheck.on": "On",
+  "settings.updater.autoCheck.off": "Off",
+  "update.prompt.title": "A new version is available",
+  "update.prompt.versions": "Current version {current}, latest version {version}",
+  "update.prompt.later": "Later",
+  "update.prompt.updateNow": "Update now and restart",
+  "update.prompt.retry": "Retry",
 
   // Themes ----------------------------------------------------------------
   "theme.system": "Follow system",

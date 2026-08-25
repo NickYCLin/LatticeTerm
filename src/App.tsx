@@ -56,6 +56,8 @@ import { useHostMetrics } from "./app/useHostMetrics";
 import type { Command } from "./components/overlays/CommandPalette";
 import { ConfirmDialog } from "./components/overlays/ConfirmDialog";
 import { DesktopBackendRequiredDialog } from "./components/overlays/DesktopBackendRequiredDialog";
+import { UpdatePrompt } from "./components/overlays/UpdatePrompt";
+import { useAppUpdater } from "./app/useAppUpdater";
 import { PlusIcon, ScreenShareIcon } from "./components/icons";
 import "./styles/index.css";
 
@@ -175,6 +177,34 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   useVaultAutoLock(preferences, vault);
 
   useWindowTheme(findTheme(activeTheme).isDark);
+
+  // Auto-check for a newer release on launch (desktop only) and, when one is
+  // found, surface it up front instead of leaving it buried in Settings.
+  const updater = useAppUpdater(runtime.summary?.version);
+  const [updatePromptDismissed, setUpdatePromptDismissed] = useState(false);
+  const launchCheckedRef = useRef(false);
+  const { checkForUpdates } = updater;
+  useEffect(() => {
+    if (launchCheckedRef.current) return;
+    if (runtime.host !== "tauri") return;
+    if (!runtime.summary) return;
+    if (!preferences.checkUpdatesOnLaunch) return;
+    launchCheckedRef.current = true;
+    void checkForUpdates();
+  }, [
+    runtime.host,
+    runtime.summary,
+    preferences.checkUpdatesOnLaunch,
+    checkForUpdates,
+  ]);
+  const showUpdatePrompt =
+    !updatePromptDismissed &&
+    runtime.host === "tauri" &&
+    (updater.status === "available" ||
+      updater.status === "downloading" ||
+      updater.status === "installing" ||
+      updater.status === "downloaded" ||
+      (updater.status === "error" && updater.availableVersion !== null));
 
   const [view, setView] = useState<ViewId>("connections");
   // A desktop-only view reached on mobile (stale state) snaps back home.
@@ -629,6 +659,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 storage={storage}
                 vaultUnlocked={vault.status?.state === "unlocked"}
                 onBackupRestored={applyRestoredBackup}
+                updater={updater}
               />
             )}
             </Suspense>
@@ -855,6 +886,13 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           host={remoteHost}
           sensitiveClipboardClear={preferences.sensitiveClipboardClear}
           onClose={() => setRemoteHostOpen(false)}
+        />
+      )}
+
+      {showUpdatePrompt && (
+        <UpdatePrompt
+          updater={updater}
+          onDismiss={() => setUpdatePromptDismissed(true)}
         />
       )}
       </Suspense>

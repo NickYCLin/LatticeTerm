@@ -454,6 +454,15 @@ export const zhTW = {
   "settings.updater.relaunchError": "自動重新啟動失敗：{error}",
   "settings.updater.error": "更新失敗：{error}",
   "settings.updater.releaseNotes": "更新內容說明",
+  "settings.updater.autoCheck": "啟動時檢查更新",
+  "settings.updater.autoCheckHint": "打開應用程式時自動偵測新版本，有更新就跳出提示。",
+  "settings.updater.autoCheck.on": "開啟",
+  "settings.updater.autoCheck.off": "關閉",
+  "update.prompt.title": "有新版本可以更新",
+  "update.prompt.versions": "目前版本 {current}，最新版本 {version}",
+  "update.prompt.later": "稍後再說",
+  "update.prompt.updateNow": "立即更新並重啟",
+  "update.prompt.retry": "重試",
 
   // 主題名稱 --------------------------------------------------------------
   "theme.system": "跟隨系統",
