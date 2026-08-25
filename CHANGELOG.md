@@ -4,6 +4,13 @@
 
 ---
 
+## [0.19.0](https://github.com/NickYCLin/lattice-term/compare/v0.18.0...v0.19.0) (2026-08-25)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** 加開 CLI 可帶入目前對話，讓新 CLI 接續脈絡 ([810d2a0](https://github.com/NickYCLin/lattice-term/commit/810d2a03ba68847ad6b0c4df3990b7622a5cb756))
+
 ## [0.18.0](https://github.com/NickYCLin/lattice-term/compare/v0.17.0...v0.18.0) (2026-08-25)
 
 
