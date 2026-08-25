@@ -4,6 +4,27 @@
 
 ---
 
+## [0.17.0](https://github.com/NickYCLin/lattice-term/compare/v0.16.0...v0.17.0) (2026-08-25)
+
+
+### 🚀 新增功能
+
+* **SSH:** SSH 分頁旁邊直接開檔案總管，可拖曳上傳／下載 ([00dacd8](https://github.com/NickYCLin/lattice-term/commit/00dacd828bf0d53b3b61e8bbadc9e2a151c188e3))
+* **更新:** 開啟程式時自動偵測新版本並跳出更新提示 ([83d6515](https://github.com/NickYCLin/lattice-term/commit/83d651523bc7a4a55a2ca69d2d62355905a2dad3))
+* **終端機:** 支援 Ctrl+C 複製 / Ctrl+V 貼上，本機 CLI 可貼圖 ([672cba4](https://github.com/NickYCLin/lattice-term/commit/672cba4aad9feadee97a801a3bdb79c205b3180b))
+
+
+### 🛠️ 問題修正
+
+* **終端機:** 修好 CLI 黑字黑底看不清楚的問題 ([72a4837](https://github.com/NickYCLin/lattice-term/commit/72a4837aa05df50cdd4e51399be1df8a3b40ac9d))
+* **終端機:** 修好 Windows 上打字偶爾重複送出的問題 ([b829577](https://github.com/NickYCLin/lattice-term/commit/b8295776c2581c92e0c9d0c853c8618bd41b884e))
+* **終端機:** 終端機一律用深色底，不再跟著淺色主題走 ([75a7cb2](https://github.com/NickYCLin/lattice-term/commit/75a7cb2425bee5d41418072bdca773246af89258))
+
+
+### 🎨 介面與視覺調整
+
+* **Agent Fleet:** 把 rename 測試那行照 rustfmt 壓回單行 ([0b51eaa](https://github.com/NickYCLin/lattice-term/commit/0b51eaad46169ea901bbe3c246b66103a0e6df6b))
+
 ## [0.16.0](https://github.com/NickYCLin/lattice-term/compare/v0.15.0...v0.16.0) (2026-08-24)
 
 
