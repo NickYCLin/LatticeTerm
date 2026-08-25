@@ -12,8 +12,9 @@
     "Segoe UI Variable Text", "Segoe UI", "Noto Sans TC", "PingFang TC",
     "Microsoft JhengHei UI", sans-serif;
   --font-mono:
-    ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Mono", Consolas,
-    "Liberation Mono", monospace;
+    "JetBrains Mono", "Cascadia Mono", "SF Mono", "SFMono-Regular",
+    "Noto Sans Mono", "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono",
+    Consolas, monospace;
 
   --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;

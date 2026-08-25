@@ -15,7 +15,7 @@ import type { SshApi } from "../../app/useSshSessions";
 import { useI18n } from "../../i18n/context";
 import type { ThemeId } from "../../app/themes";
 import { TerminalImeFallback } from "./terminalImeFallback";
-import { terminalTheme } from "./terminalTheme";
+import { TERMINAL_FONT_FAMILY, terminalTheme } from "./terminalTheme";
 import { attachTerminalClipboard } from "./terminalClipboard";
 
 export function TerminalPane({
@@ -54,8 +54,7 @@ export function TerminalPane({
     if (!host) return;
 
     const terminal = new Terminal({
-      fontFamily:
-        'ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace',
+      fontFamily: TERMINAL_FONT_FAMILY,
       fontSize: 13,
       lineHeight: 1.2,
       // Keep the caret steady across SSH and Agent terminals. Multiple mounted

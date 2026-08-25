@@ -12,6 +12,27 @@
  * Only the cursor tracks the app accent, so the terminal keeps a hint of the
  * active theme without risking a low-contrast surface.
  */
+export const TERMINAL_FONT_FAMILIES = [
+  '"JetBrains Mono"',
+  '"Cascadia Mono"',
+  '"SF Mono"',
+  '"SFMono-Regular"',
+  '"Noto Sans Mono"',
+  '"DejaVu Sans Mono"',
+  '"Liberation Mono"',
+  '"Ubuntu Mono"',
+  "Consolas",
+  "monospace",
+] as const;
+
+/**
+ * WebKitGTK can resolve the CSS `ui-monospace` generic to proportional Noto
+ * Sans. xterm still allocates fixed cells in that case, which makes every
+ * glyph look as though a space was inserted after it. Concrete cross-platform
+ * monospace families keep the measured cell width and rendered glyph aligned.
+ */
+export const TERMINAL_FONT_FAMILY = TERMINAL_FONT_FAMILIES.join(", ");
+
 export function terminalTheme(): Record<string, string> {
   const style = getComputedStyle(document.documentElement);
   const accent = style.getPropertyValue("--accent").trim() || "#58a6ff";
