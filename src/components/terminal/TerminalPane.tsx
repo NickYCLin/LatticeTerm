@@ -123,8 +123,7 @@ export function TerminalPane({
     };
     const imeFallback = new TerminalImeFallback(sendInput);
     const typed = terminal.onData((rawData) => {
-      imeFallback.recordTerminalData(rawData);
-      sendInput(rawData);
+      if (imeFallback.recordTerminalData(rawData)) sendInput(rawData);
     });
     const textarea = terminal.textarea;
     const handleInput = (event: Event) => {

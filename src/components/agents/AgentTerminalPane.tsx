@@ -104,8 +104,7 @@ export function AgentTerminalPane({
     };
     const imeFallback = new TerminalImeFallback(sendInput);
     const typed = terminal.onData((data) => {
-      imeFallback.recordTerminalData(data);
-      sendInput(data);
+      if (imeFallback.recordTerminalData(data)) sendInput(data);
     });
     const textarea = terminal.textarea;
     const handleInput = (event: Event) => {

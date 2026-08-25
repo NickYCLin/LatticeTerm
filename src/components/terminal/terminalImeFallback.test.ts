@@ -40,7 +40,7 @@ describe("TerminalImeFallback", () => {
       true,
     );
 
-    fallback.recordTerminalData("中");
+    expect(fallback.recordTerminalData("中")).toBe(true);
     fallback.recordInput("中", "insertText");
     vi.runAllTimers();
 
@@ -61,10 +61,68 @@ describe("TerminalImeFallback", () => {
     );
 
     fallback.recordInput("中文", "insertFromComposition");
-    fallback.recordTerminalData("中文");
+    expect(fallback.recordTerminalData("中文")).toBe(true);
     vi.runAllTimers();
 
     expect(delivered).toEqual([]);
+  });
+
+  it("suppresses xterm data that arrives after the WebKit fallback", () => {
+    vi.useFakeTimers();
+    const delivered: string[] = [];
+    const fallback = new TerminalImeFallback(
+      (data) => delivered.push(data),
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    fallback.recordInput("中文", "insertFromComposition");
+    vi.advanceTimersByTime(32);
+
+    expect(delivered).toEqual(["中文"]);
+    expect(fallback.recordTerminalData("中文")).toBe(false);
+    expect(delivered).toEqual(["中文"]);
+  });
+
+  it("keeps repeated identical WebKit input one-for-one", () => {
+    vi.useFakeTimers();
+    const delivered: string[] = [];
+    const fallback = new TerminalImeFallback(
+      (data) => delivered.push(data),
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    fallback.recordInput("a", "insertText");
+    fallback.recordInput("a", "insertText");
+    vi.advanceTimersByTime(32);
+
+    expect(delivered).toEqual(["a", "a"]);
+    expect(fallback.recordTerminalData("a")).toBe(false);
+    expect(fallback.recordTerminalData("a")).toBe(false);
+    expect(delivered).toEqual(["a", "a"]);
+  });
+
+  it("stops suppressing unmatched data after the late-event window", () => {
+    vi.useFakeTimers();
+    const delivered: string[] = [];
+    const fallback = new TerminalImeFallback(
+      (data) => delivered.push(data),
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    fallback.recordInput("a", "insertText");
+    vi.advanceTimersByTime(32);
+    vi.advanceTimersByTime(250);
+
+    expect(fallback.recordTerminalData("a")).toBe(true);
   });
 
   it("ignores unfinished composition updates", () => {
@@ -102,6 +160,7 @@ describe("TerminalImeFallback", () => {
     // but a Chromium/Gecko onData is authoritative so the fallback must not
     // schedule a second send.
     fallback.recordInput("中文", "insertText");
+    expect(fallback.recordTerminalData("中文")).toBe(true);
     vi.runAllTimers();
 
     expect(delivered).toEqual([]);
