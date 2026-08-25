@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   TERMINAL_FONT_FAMILIES,
   TERMINAL_FONT_FAMILY,
+  TERMINAL_LETTER_SPACING,
 } from "./terminalTheme";
 
 describe("terminal font family", () => {
@@ -12,5 +13,9 @@ describe("terminal font family", () => {
       "monospace",
     );
     expect(TERMINAL_FONT_FAMILY).not.toContain("ui-monospace");
+  });
+
+  it("tightens xterm cells so normal text does not resemble spaced input", () => {
+    expect(TERMINAL_LETTER_SPACING).toBe(-1);
   });
 });

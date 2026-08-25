@@ -15,7 +15,11 @@ import type { SshApi } from "../../app/useSshSessions";
 import { useI18n } from "../../i18n/context";
 import type { ThemeId } from "../../app/themes";
 import { TerminalImeFallback } from "./terminalImeFallback";
-import { TERMINAL_FONT_FAMILY, terminalTheme } from "./terminalTheme";
+import {
+  TERMINAL_FONT_FAMILY,
+  TERMINAL_LETTER_SPACING,
+  terminalTheme,
+} from "./terminalTheme";
 import { attachTerminalClipboard } from "./terminalClipboard";
 
 export function TerminalPane({
@@ -56,6 +60,7 @@ export function TerminalPane({
     const terminal = new Terminal({
       fontFamily: TERMINAL_FONT_FAMILY,
       fontSize: 13,
+      letterSpacing: TERMINAL_LETTER_SPACING,
       lineHeight: 1.2,
       // Keep the caret steady across SSH and Agent terminals. Multiple mounted
       // sessions otherwise blink independently and make the workspace flicker.
