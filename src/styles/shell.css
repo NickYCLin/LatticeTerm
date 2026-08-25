@@ -256,6 +256,7 @@
   flex-direction: column;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   gap: var(--space-3);
 }
 
@@ -271,6 +272,7 @@
   flex-direction: column;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   border-radius: var(--radius-lg);
 }

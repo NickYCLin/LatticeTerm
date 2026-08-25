@@ -69,10 +69,35 @@ export function TerminalPane({
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host);
-    fit.fit();
 
     termRef.current = terminal;
     fitRef.current = fit;
+
+    let resizeFrame: number | null = null;
+    let reportedSize = "";
+    const fitAndReport = () => {
+      resizeFrame = null;
+      // Sessions stay mounted across view switches. Never resize a hidden PTY
+      // to xterm's 2x1 minimum; doing so makes full-screen programs flash and
+      // jump when the terminal becomes visible again.
+      if (host.clientWidth <= 0 || host.clientHeight <= 0) return;
+      try {
+        fit.fit();
+        const size = `${terminal.cols}x${terminal.rows}`;
+        if (size === reportedSize) return;
+        reportedSize = size;
+        void sshRef.current
+          .resize(sessionId, terminal.cols, terminal.rows)
+          .catch(() => {});
+      } catch {
+        // A pane with no layout yet is measured once it becomes visible.
+      }
+    };
+    const scheduleFit = () => {
+      if (resizeFrame !== null) return;
+      resizeFrame = requestAnimationFrame(fitAndReport);
+    };
+    fitAndReport();
 
     attachTerminalClipboard(terminal);
 
@@ -119,27 +144,16 @@ export function TerminalPane({
       closedRef.current(reason);
     });
 
-    // Tell the remote side the real size, both now and on every later change.
-    void sshRef.current
-      .resize(sessionId, terminal.cols, terminal.rows)
-      .catch(() => {});
-
-    const observer = new ResizeObserver(() => {
-      try {
-        fit.fit();
-        void sshRef.current
-          .resize(sessionId, terminal.cols, terminal.rows)
-          .catch(() => {});
-      } catch {
-        // A pane with no layout yet cannot be measured; the next change will.
-      }
-    });
+    // Tell the remote side the real size, coalescing layout changes into one
+    // frame and reporting only when rows or columns actually changed.
+    const observer = new ResizeObserver(scheduleFit);
     observer.observe(host);
 
     terminal.focus();
 
     return () => {
       observer.disconnect();
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
       stopData();
       stopClosed();
       textarea?.removeEventListener("input", handleInput);

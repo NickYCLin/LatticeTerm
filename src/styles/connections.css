@@ -994,7 +994,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  max-width: 14rem;
+  max-width: 18rem;
   padding: 0 var(--space-1) 0 var(--space-3);
   border-radius: var(--radius-pill);
   border: 1px solid var(--line);
@@ -1023,6 +1023,23 @@
 
 .cli-switch__select svg {
   flex: 0 0 auto;
+}
+
+.cli-switch__identity {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.cli-switch__model {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+
+.cli-switch__pill.is-active .cli-switch__model {
+  color: inherit;
+  opacity: 0.72;
 }
 
 .cli-switch__close {
@@ -1146,15 +1163,16 @@
  */
 .terminal-pane {
   height: 100%;
-  padding: var(--space-3);
-  border: 1px solid var(--line);
+  padding: 0;
   border-radius: 0 var(--radius-md) var(--radius-md) var(--radius-md);
   background: var(--surface-solid);
+  box-shadow: inset 0 0 0 1px var(--line);
   overflow: hidden;
 }
 
 .terminal-pane .xterm {
   height: 100%;
+  padding: var(--space-3);
 }
 
 .connection-card__go {

@@ -48,8 +48,33 @@ export function AgentTerminalPane({
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host);
-    fit.fit();
     terminalRef.current = terminal;
+
+    let resizeFrame: number | null = null;
+    let reportedSize = "";
+    const fitAndReport = () => {
+      resizeFrame = null;
+      // This pane stays mounted while another app view or sibling CLI is
+      // visible. Fitting a display:none host would collapse the PTY to 2x1 and
+      // make full-screen CLIs redraw twice when the pane returns.
+      if (host.clientWidth <= 0 || host.clientHeight <= 0) return;
+      try {
+        fit.fit();
+        const size = `${terminal.cols}x${terminal.rows}`;
+        if (size === reportedSize) return;
+        reportedSize = size;
+        void agentsRef.current
+          .resize(sessionId, terminal.cols, terminal.rows)
+          .catch(() => {});
+      } catch {
+        // A pane with no layout yet is measured once it becomes visible.
+      }
+    };
+    const scheduleFit = () => {
+      if (resizeFrame !== null) return;
+      resizeFrame = requestAnimationFrame(fitAndReport);
+    };
+    fitAndReport();
 
     attachTerminalClipboard(terminal, {
       // The agent runs locally, so an image on the clipboard can be written to
@@ -98,24 +123,13 @@ export function AgentTerminalPane({
       closedRef.current(reason);
     });
 
-    void agentsRef.current
-      .resize(sessionId, terminal.cols, terminal.rows)
-      .catch(() => {});
-    const observer = new ResizeObserver(() => {
-      try {
-        fit.fit();
-        void agentsRef.current
-          .resize(sessionId, terminal.cols, terminal.rows)
-          .catch(() => {});
-      } catch {
-        // Hidden panes cannot be measured; the next visible resize catches up.
-      }
-    });
+    const observer = new ResizeObserver(scheduleFit);
     observer.observe(host);
     terminal.focus();
 
     return () => {
       observer.disconnect();
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
       stopData();
       stopClosed();
       textarea?.removeEventListener("input", handleInput);
