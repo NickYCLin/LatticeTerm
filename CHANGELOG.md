@@ -4,6 +4,20 @@
 
 ---
 
+## [0.23.0](https://github.com/NickYCLin/lattice-term/compare/v0.22.0...v0.23.0) (2026-08-26)
+
+
+### 🚀 新增功能
+
+* **agent:** 完善 CLI 安裝與模型偵測 ([36deedb](https://github.com/NickYCLin/lattice-term/commit/36deedb99c5063098ee0cc5966c363891b22f099))
+* **workspace:** 支援選擇資料夾啟動 CLI ([9af2bb5](https://github.com/NickYCLin/lattice-term/commit/9af2bb55a189561b0e4a4963b70691672a304730))
+
+
+### 🛠️ 問題修正
+
+* **終端機:** 修正 Linux 注音重複輸入與字距 ([#73](https://github.com/NickYCLin/lattice-term/issues/73)) ([75691c2](https://github.com/NickYCLin/lattice-term/commit/75691c29c2438afee150a1cc79886b2d98817dc1))
+* **終端機:** 避免輸入法組字重繪閃爍 ([fa44c14](https://github.com/NickYCLin/lattice-term/commit/fa44c14c4c37d39617caf0dec9f629b292046805))
+
 ## [0.22.0](https://github.com/NickYCLin/lattice-term/compare/v0.21.1...v0.22.0) (2026-08-26)
 
 
