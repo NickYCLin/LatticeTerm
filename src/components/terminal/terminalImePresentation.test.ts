@@ -1,5 +1,5 @@
 import type { ITheme } from "@xterm/xterm";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalImePresentation } from "./terminalImePresentation";
 
 function harness() {
@@ -18,16 +18,25 @@ function harness() {
       theme: {} as ITheme,
     },
   };
-  const presentation = new TerminalImePresentation(terminal, textarea, {
-    background: "#101820",
-    foreground: "#f0f6fc",
-    cursor: "#58a6ff",
-    cursorAccent: "#101820",
-  });
+  const presentation = new TerminalImePresentation(
+    terminal,
+    textarea,
+    {
+      background: "#101820",
+      foreground: "#f0f6fc",
+      cursor: "#58a6ff",
+      cursorAccent: "#101820",
+    },
+    true,
+  );
   return { textarea, element, terminal, presentation };
 }
 
 describe("TerminalImePresentation", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("hides the terminal cursor while IME text is being composed", () => {
     const { textarea, element, terminal } = harness();
 
@@ -46,6 +55,74 @@ describe("TerminalImePresentation", () => {
 
     expect(terminal.options.theme.cursor).toBe("#58a6ff");
     expect(element.classList.contains("is-ime-composing")).toBe(false);
+  });
+
+  it("keeps terminal key handling paused until composition finishes", () => {
+    const { textarea, presentation } = harness();
+    expect(presentation.shouldProcessTerminalKeyEvent()).toBe(true);
+
+    textarea.dispatchEvent(new Event("compositionstart"));
+    expect(presentation.shouldProcessTerminalKeyEvent()).toBe(false);
+
+    textarea.dispatchEvent(new Event("compositionend"));
+    expect(presentation.shouldProcessTerminalKeyEvent()).toBe(true);
+  });
+
+  it("clears committed WebKit textarea text before the next composition", () => {
+    vi.useFakeTimers();
+    const { textarea } = harness();
+    textarea.value = "測試 ";
+    textarea.dispatchEvent(new Event("compositionstart"));
+    textarea.dispatchEvent(new Event("compositionend"));
+
+    expect(textarea.value).toBe("測試 ");
+    vi.runAllTimers();
+
+    expect(textarea.value).toBe("");
+  });
+
+  it("does not clear a new composition started before cleanup", () => {
+    vi.useFakeTimers();
+    const { textarea } = harness();
+    textarea.value = "第一段";
+    textarea.dispatchEvent(new Event("compositionstart"));
+    textarea.dispatchEvent(new Event("compositionend"));
+    textarea.value = "第二段";
+    textarea.dispatchEvent(new Event("compositionstart"));
+
+    vi.runAllTimers();
+
+    expect(textarea.value).toBe("第二段");
+  });
+
+  it("removes WebKitGTK's trailing Chewing selection space", () => {
+    const { textarea } = harness();
+    textarea.value = "測試 ";
+    const input = new Event("input");
+    Object.defineProperties(input, {
+      data: { value: "測試 " },
+      inputType: { value: "insertFromComposition" },
+      isComposing: { value: true },
+    });
+
+    textarea.dispatchEvent(input);
+
+    expect(textarea.value).toBe("測試");
+  });
+
+  it("preserves ordinary and internal spaces", () => {
+    const { textarea } = harness();
+    textarea.value = "測 試";
+    const input = new Event("input");
+    Object.defineProperties(input, {
+      data: { value: "測 試" },
+      inputType: { value: "insertFromComposition" },
+      isComposing: { value: true },
+    });
+
+    textarea.dispatchEvent(input);
+
+    expect(textarea.value).toBe("測 試");
   });
 
   it("keeps a theme change made during composition and restores its cursor", () => {

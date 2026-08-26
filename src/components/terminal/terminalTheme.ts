@@ -25,6 +25,14 @@ export const TERMINAL_FONT_FAMILIES = [
   "monospace",
 ] as const;
 
+export const LINUX_TERMINAL_FONT_FAMILIES = [
+  '"Noto Sans Mono"',
+  '"DejaVu Sans Mono"',
+  '"Liberation Mono"',
+  '"Ubuntu Mono"',
+  "monospace",
+] as const;
+
 /**
  * WebKitGTK can resolve the CSS `ui-monospace` generic to proportional Noto
  * Sans. xterm still allocates fixed cells in that case, which makes every
@@ -32,6 +40,21 @@ export const TERMINAL_FONT_FAMILIES = [
  * monospace families keep the measured cell width and rendered glyph aligned.
  */
 export const TERMINAL_FONT_FAMILY = TERMINAL_FONT_FAMILIES.join(", ");
+
+/**
+ * Fontconfig may substitute the first unavailable family instead of trying the
+ * rest of a CSS list. The bundled Linux desktop therefore needs an installed
+ * monospace family first; otherwise xterm measures fixed cells around a
+ * proportional Noto Sans fallback and every character looks space-separated.
+ */
+export function terminalFontFamily(
+  userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent,
+): string {
+  if (/\bLinux\b/i.test(userAgent) && !/\bAndroid\b/i.test(userAgent)) {
+    return LINUX_TERMINAL_FONT_FAMILIES.join(", ");
+  }
+  return TERMINAL_FONT_FAMILY;
+}
 
 /**
  * xterm must keep a fixed grid, but WebKitGTK leaves enough side bearing at

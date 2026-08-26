@@ -17,8 +17,8 @@ import type { ThemeId } from "../../app/themes";
 import { TerminalImeFallback } from "./terminalImeFallback";
 import { TerminalImePresentation } from "./terminalImePresentation";
 import {
-  TERMINAL_FONT_FAMILY,
   TERMINAL_LETTER_SPACING,
+  terminalFontFamily,
   terminalTheme,
 } from "./terminalTheme";
 import { attachTerminalClipboard } from "./terminalClipboard";
@@ -60,7 +60,7 @@ export function TerminalPane({
     if (!host) return;
 
     const terminal = new Terminal({
-      fontFamily: TERMINAL_FONT_FAMILY,
+      fontFamily: terminalFontFamily(),
       fontSize: 13,
       letterSpacing: TERMINAL_LETTER_SPACING,
       lineHeight: 1.2,
@@ -80,6 +80,13 @@ export function TerminalPane({
 
     termRef.current = terminal;
     fitRef.current = fit;
+    const textarea = terminal.textarea;
+    const imePresentation = new TerminalImePresentation(
+      terminal,
+      textarea,
+      terminalTheme(),
+    );
+    imePresentationRef.current = imePresentation;
 
     let resizeFrame: number | null = null;
     let reportedSize = "";
@@ -107,7 +114,10 @@ export function TerminalPane({
     };
     fitAndReport();
 
-    attachTerminalClipboard(terminal);
+    attachTerminalClipboard(terminal, {
+      shouldProcessKeyEvent: () =>
+        imePresentation.shouldProcessTerminalKeyEvent(),
+    });
 
     // Silence here is what made a broken session look like a dead keyboard:
     // say so once, in the terminal itself, rather than dropping keystrokes.
@@ -129,15 +139,9 @@ export function TerminalPane({
     };
     const imeFallback = new TerminalImeFallback(sendInput);
     const typed = terminal.onData((rawData) => {
-      if (imeFallback.recordTerminalData(rawData)) sendInput(rawData);
+      const data = imeFallback.recordTerminalData(rawData);
+      if (data) sendInput(data);
     });
-    const textarea = terminal.textarea;
-    const imePresentation = new TerminalImePresentation(
-      terminal,
-      textarea,
-      terminalTheme(),
-    );
-    imePresentationRef.current = imePresentation;
     const handleInput = (event: Event) => {
       const inputEvent = event as InputEvent;
       imeFallback.recordInput(

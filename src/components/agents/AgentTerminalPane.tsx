@@ -8,8 +8,8 @@ import { useI18n } from "../../i18n/context";
 import { TerminalImeFallback } from "../terminal/terminalImeFallback";
 import { TerminalImePresentation } from "../terminal/terminalImePresentation";
 import {
-  TERMINAL_FONT_FAMILY,
   TERMINAL_LETTER_SPACING,
+  terminalFontFamily,
   terminalTheme,
 } from "../terminal/terminalTheme";
 import { attachTerminalClipboard } from "../terminal/terminalClipboard";
@@ -40,7 +40,7 @@ export function AgentTerminalPane({
     const host = hostRef.current;
     if (!host) return;
     const terminal = new Terminal({
-      fontFamily: TERMINAL_FONT_FAMILY,
+      fontFamily: terminalFontFamily(),
       fontSize: 13,
       letterSpacing: TERMINAL_LETTER_SPACING,
       lineHeight: 1.2,
@@ -57,6 +57,13 @@ export function AgentTerminalPane({
     terminal.loadAddon(fit);
     terminal.open(host);
     terminalRef.current = terminal;
+    const textarea = terminal.textarea;
+    const imePresentation = new TerminalImePresentation(
+      terminal,
+      textarea,
+      terminalTheme(),
+    );
+    imePresentationRef.current = imePresentation;
 
     let resizeFrame: number | null = null;
     let reportedSize = "";
@@ -85,6 +92,8 @@ export function AgentTerminalPane({
     fitAndReport();
 
     attachTerminalClipboard(terminal, {
+      shouldProcessKeyEvent: () =>
+        imePresentation.shouldProcessTerminalKeyEvent(),
       // The agent runs locally, so an image on the clipboard can be written to
       // a temp file and its path pasted in — the shape CLIs like Claude Code
       // and Gemini accept for attaching an image.
@@ -110,15 +119,9 @@ export function AgentTerminalPane({
     };
     const imeFallback = new TerminalImeFallback(sendInput);
     const typed = terminal.onData((data) => {
-      if (imeFallback.recordTerminalData(data)) sendInput(data);
+      const input = imeFallback.recordTerminalData(data);
+      if (input) sendInput(input);
     });
-    const textarea = terminal.textarea;
-    const imePresentation = new TerminalImePresentation(
-      terminal,
-      textarea,
-      terminalTheme(),
-    );
-    imePresentationRef.current = imePresentation;
     const handleInput = (event: Event) => {
       const inputEvent = event as InputEvent;
       imeFallback.recordInput(
