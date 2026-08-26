@@ -1630,7 +1630,9 @@ pub fn run() {
     ));
     #[cfg(mobile)]
     let builder = tauri::Builder::default();
-    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+    let builder = builder
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init());
     // Auto-update and relaunch are desktop concerns; mobile installs come
     // from a package manager and restart through the OS.
     #[cfg(desktop)]

@@ -1,6 +1,7 @@
 /** Unified workspace for text terminals and graphical remote sessions. */
 
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
 import type { VncApi } from "../app/useVncSessions";
@@ -166,6 +167,54 @@ export function SessionsView({
   const [newSessionForProject, setNewSessionForProject] = useState<string | null>(
     null,
   );
+  const [newProjectDirectory, setNewProjectDirectory] = useState<string | null>(
+    null,
+  );
+  const [choosingProject, setChoosingProject] = useState(false);
+  const [launchingProjectCli, setLaunchingProjectCli] = useState<string | null>(
+    null,
+  );
+  const [newProjectError, setNewProjectError] = useState<string | null>(null);
+
+  const installedAgents = agents.catalog.filter(
+    (definition) => definition.installed,
+  );
+
+  async function chooseProjectDirectory() {
+    setChoosingProject(true);
+    setNewProjectError(null);
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: t("terminal.projects.choose"),
+      });
+      if (typeof selected === "string") setNewProjectDirectory(selected);
+    } catch (reason) {
+      setNewProjectError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setChoosingProject(false);
+    }
+  }
+
+  function closeNewProjectDialog() {
+    if (launchingProjectCli) return;
+    setNewProjectDirectory(null);
+    setNewProjectError(null);
+  }
+
+  useEffect(() => {
+    if (!newProjectDirectory) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !launchingProjectCli) {
+        event.stopPropagation();
+        setNewProjectDirectory(null);
+        setNewProjectError(null);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [newProjectDirectory, launchingProjectCli]);
 
   function beginRename(sessionId: string, label: string) {
     setEditingTab(sessionId);
@@ -350,15 +399,137 @@ export function SessionsView({
     </div>
   ) : null;
 
+  async function launchNewProject(definition: AgentDefinition) {
+    if (!newProjectDirectory) return;
+    setLaunchingProjectCli(definition.id);
+    setNewProjectError(null);
+    try {
+      const launched = await agents.launch({
+        definitionId: definition.id,
+        label: "",
+        executable: "",
+        arguments: [],
+        resumeSessionId: null,
+        groupId: null,
+        seedInput: null,
+        workingDirectory: newProjectDirectory,
+        cols: 120,
+        rows: 32,
+      });
+      setNewProjectDirectory(null);
+      onSelect(launched.sessionId);
+    } catch (reason) {
+      setNewProjectError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setLaunchingProjectCli(null);
+    }
+  }
+
+  const newProjectDialog = newProjectDirectory ? (
+    <div
+      className="scrim scrim--center"
+      role="presentation"
+      onMouseDown={closeNewProjectDialog}
+    >
+      <div
+        className="dialog dialog--wide"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-project-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="dialog__head">
+          <span className="dialog__icon dialog__icon--inline" aria-hidden="true">
+            <FolderIcon size={18} />
+          </span>
+          <h2 className="dialog__title" id="new-project-title">
+            {t("terminal.projects.launchTitle")}
+          </h2>
+        </header>
+        <div className="dialog__stack">
+          <div>
+            <span className="field__label">{t("terminal.projects.directory")}</span>
+            <p className="dialog__body mono project-launcher__path">
+              {newProjectDirectory}
+            </p>
+          </div>
+          <div>
+            <span className="field__label">{t("terminal.projects.cli")}</span>
+            <div className="project-launcher__cli-list">
+              {installedAgents.map((definition) => (
+                <button
+                  key={definition.id}
+                  type="button"
+                  className="button button--ghost project-launcher__cli"
+                  disabled={launchingProjectCli !== null}
+                  onClick={() => void launchNewProject(definition)}
+                >
+                  <AgentIcon size={15} />
+                  <span>{definition.label}</span>
+                  {launchingProjectCli === definition.id && (
+                    <span className="project-launcher__status">
+                      {t("terminal.projects.launching")}
+                    </span>
+                  )}
+                </button>
+              ))}
+              {installedAgents.length === 0 && (
+                <p className="dialog__body">{t("terminal.addCli.none")}</p>
+              )}
+            </div>
+          </div>
+          {newProjectError && (
+            <Callout tone="danger" title={t("terminal.projects.launchFailed")}>
+              <span className="mono">{newProjectError}</span>
+            </Callout>
+          )}
+          <div className="dialog__actions">
+            <button
+              type="button"
+              className="button button--ghost"
+              disabled={launchingProjectCli !== null}
+              onClick={closeNewProjectDialog}
+            >
+              {t("common.cancel")}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   if (sessions.length === 0) {
     return (
       <div className="terminal-workspace">
         {closedCallout}
+        {newProjectError && !newProjectDialog && (
+          <div className="session-notice">
+            <Callout tone="danger" title={t("terminal.projects.chooseFailed")}>
+              <span className="mono">{newProjectError}</span>
+            </Callout>
+          </div>
+        )}
         <EmptyState
           icon={<TerminalIcon size={26} />}
           title={t("terminal.empty.title")}
           description={t("terminal.empty.body")}
+          actions={
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={choosingProject}
+              onClick={() => void chooseProjectDirectory()}
+            >
+              <FolderIcon size={14} />
+              {t(
+                choosingProject
+                  ? "terminal.projects.choosing"
+                  : "terminal.projects.add",
+              )}
+            </button>
+          }
         />
+        {newProjectDialog}
       </div>
     );
   }
@@ -465,7 +636,22 @@ export function SessionsView({
           <div className="session-projects__title">
             <FolderIcon size={14} />
             <span>{t("terminal.projects")}</span>
+            <button
+              type="button"
+              className="icon-button icon-button--sm session-projects__add"
+              disabled={choosingProject}
+              onClick={() => void chooseProjectDirectory()}
+              aria-label={t("terminal.projects.add")}
+              data-tooltip={t("terminal.projects.add")}
+            >
+              <PlusIcon size={12} />
+            </button>
           </div>
+          {newProjectError && !newProjectDialog && (
+            <div className="session-projects__error" role="alert">
+              {t("terminal.projects.chooseFailed")}
+            </div>
+          )}
           {projects.map((project) => {
             const collapsed = collapsedProjects.has(project.id);
             const selected = project.id === activeProject.id;
@@ -909,6 +1095,7 @@ export function SessionsView({
           </div>
         </section>
       </div>
+      {newProjectDialog}
     </div>
   );
 }

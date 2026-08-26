@@ -820,6 +820,21 @@
   text-transform: uppercase;
 }
 
+.session-projects__title > span {
+  min-width: 0;
+}
+
+.session-projects__add {
+  margin-left: auto;
+}
+
+.session-projects__error {
+  margin: 0 var(--space-2) var(--space-2);
+  color: var(--danger);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+
 .session-project {
   margin-bottom: var(--space-1);
   border-radius: var(--radius-md);
@@ -921,6 +936,33 @@
 .session-project__menu button:hover {
   color: var(--text);
   background: var(--surface-hover);
+}
+
+.project-launcher__path {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.project-launcher__cli-list {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.project-launcher__cli {
+  justify-content: flex-start;
+  width: 100%;
+}
+
+.project-launcher__status {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--text-2xs);
 }
 
 .terminal-project-workspace {
@@ -1330,9 +1372,9 @@
   z-index: 10;
   padding-inline: 1px;
   border-radius: 2px;
-  background: #0d1117;
-  color: #f0f6fc;
-  box-shadow: inset 0 -2px #58a6ff;
+  background: var(--surface-solid);
+  color: var(--text);
+  box-shadow: inset 0 -2px var(--accent);
 }
 
 .connection-card__go {
