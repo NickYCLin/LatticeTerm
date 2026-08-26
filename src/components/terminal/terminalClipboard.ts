@@ -17,6 +17,11 @@ export interface TerminalClipboardOptions {
    * Return value is ignored; the handler decides how to deliver the image.
    */
   onImagePaste?: () => void;
+  /**
+   * Gives an active IME first refusal over keyboard events. Returning false
+   * keeps xterm from finalizing and forwarding unfinished composition text.
+   */
+  shouldProcessKeyEvent?: (event: KeyboardEvent) => boolean;
 }
 
 export function attachTerminalClipboard(
@@ -24,6 +29,7 @@ export function attachTerminalClipboard(
   options: TerminalClipboardOptions = {},
 ): void {
   terminal.attachCustomKeyEventHandler((event) => {
+    if (options.shouldProcessKeyEvent?.(event) === false) return false;
     if (event.type !== "keydown") return true;
     // Leave anything with Alt/Meta, or plain keys, to xterm and the shell.
     if (!event.ctrlKey || event.altKey || event.metaKey) return true;

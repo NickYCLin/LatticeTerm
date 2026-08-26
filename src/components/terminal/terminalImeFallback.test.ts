@@ -40,7 +40,7 @@ describe("TerminalImeFallback", () => {
       true,
     );
 
-    expect(fallback.recordTerminalData("中")).toBe(true);
+    expect(fallback.recordTerminalData("中")).toBe("中");
     fallback.recordInput("中", "insertText");
     vi.runAllTimers();
 
@@ -61,7 +61,7 @@ describe("TerminalImeFallback", () => {
     );
 
     fallback.recordInput("中文", "insertFromComposition");
-    expect(fallback.recordTerminalData("中文")).toBe(true);
+    expect(fallback.recordTerminalData("中文")).toBe("中文");
     vi.runAllTimers();
 
     expect(delivered).toEqual([]);
@@ -82,7 +82,7 @@ describe("TerminalImeFallback", () => {
     vi.advanceTimersByTime(32);
 
     expect(delivered).toEqual(["中文"]);
-    expect(fallback.recordTerminalData("中文")).toBe(false);
+    expect(fallback.recordTerminalData("中文")).toBeNull();
     expect(delivered).toEqual(["中文"]);
   });
 
@@ -102,8 +102,8 @@ describe("TerminalImeFallback", () => {
     vi.advanceTimersByTime(32);
 
     expect(delivered).toEqual(["a", "a"]);
-    expect(fallback.recordTerminalData("a")).toBe(false);
-    expect(fallback.recordTerminalData("a")).toBe(false);
+    expect(fallback.recordTerminalData("a")).toBeNull();
+    expect(fallback.recordTerminalData("a")).toBeNull();
     expect(delivered).toEqual(["a", "a"]);
   });
 
@@ -122,7 +122,7 @@ describe("TerminalImeFallback", () => {
     vi.advanceTimersByTime(32);
     vi.advanceTimersByTime(250);
 
-    expect(fallback.recordTerminalData("a")).toBe(true);
+    expect(fallback.recordTerminalData("a")).toBe("a");
   });
 
   it("ignores unfinished composition updates", () => {
@@ -160,7 +160,7 @@ describe("TerminalImeFallback", () => {
     // but a Chromium/Gecko onData is authoritative so the fallback must not
     // schedule a second send.
     fallback.recordInput("中文", "insertText");
-    expect(fallback.recordTerminalData("中文")).toBe(true);
+    expect(fallback.recordTerminalData("中文")).toBe("中文");
     vi.runAllTimers();
 
     expect(delivered).toEqual([]);
@@ -184,5 +184,81 @@ describe("TerminalImeFallback", () => {
     vi.runAllTimers();
 
     expect(delivered).toEqual([]);
+  });
+
+  it("recognizes a split composition followed by its selection space", () => {
+    vi.useFakeTimers();
+    const delivered: string[] = [];
+    const fallback = new TerminalImeFallback(
+      (data) => delivered.push(data),
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    expect(fallback.recordTerminalData("看起來")).toBe("看起來");
+    expect(fallback.recordTerminalData(" ")).toBe(" ");
+    fallback.recordInput("看起來", "insertFromComposition");
+    vi.runAllTimers();
+
+    expect(delivered).toEqual([]);
+  });
+
+  it("suppresses a late composition even when xterm splits it", () => {
+    vi.useFakeTimers();
+    const delivered: string[] = [];
+    const fallback = new TerminalImeFallback(
+      (data) => delivered.push(data),
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    fallback.recordInput("中文", "insertFromComposition");
+    vi.advanceTimersByTime(32);
+
+    expect(delivered).toEqual(["中文"]);
+    expect(fallback.recordTerminalData("中")).toBeNull();
+    expect(fallback.recordTerminalData("文")).toBeNull();
+    expect(fallback.recordTerminalData(" ")).toBe(" ");
+  });
+
+  it("keeps a selection space bundled after a late composition", () => {
+    vi.useFakeTimers();
+    const delivered: string[] = [];
+    const fallback = new TerminalImeFallback(
+      (data) => delivered.push(data),
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    fallback.recordInput("中文", "insertFromComposition");
+    vi.advanceTimersByTime(32);
+
+    expect(fallback.recordTerminalData("中文 ")).toBe(" ");
+    expect(delivered).toEqual(["中文"]);
+  });
+
+  it("only repairs the missing suffix after partial xterm data", () => {
+    vi.useFakeTimers();
+    const delivered: string[] = [];
+    const fallback = new TerminalImeFallback(
+      (data) => delivered.push(data),
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    fallback.recordInput("中文", "insertFromComposition");
+    expect(fallback.recordTerminalData("中")).toBe("中");
+    vi.advanceTimersByTime(32);
+
+    expect(delivered).toEqual(["文"]);
+    expect(fallback.recordTerminalData("中文")).toBeNull();
   });
 });
