@@ -4,6 +4,13 @@
 
 ---
 
+## [0.22.0](https://github.com/NickYCLin/lattice-term/compare/v0.21.1...v0.22.0) (2026-08-26)
+
+
+### 🚀 新增功能
+
+* **workspace:** 還原並分組工作階段 ([fd57961](https://github.com/NickYCLin/lattice-term/commit/fd579610671dde6a5a161a8da3e818b36f7b03c9))
+
 ## [0.21.1](https://github.com/NickYCLin/lattice-term/compare/v0.21.0...v0.21.1) (2026-08-26)
 
 
