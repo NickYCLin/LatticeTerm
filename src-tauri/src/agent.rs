@@ -1224,11 +1224,36 @@ fn detect_agent_account(definition_id: &str) -> AgentAccountInfo {
 }
 
 fn find_agent_executable(agent: &AgentSpec) -> Option<PathBuf> {
-    find_executable(agent.executable).or_else(|| {
-        (agent.id == "cursor")
-            .then(|| find_executable("cursor-agent"))
-            .flatten()
-    })
+    find_executable(agent.executable)
+        .or_else(|| find_well_known_agent_executable(agent))
+        .or_else(|| {
+            (agent.id == "cursor")
+                .then(|| find_executable("cursor-agent"))
+                .flatten()
+        })
+}
+
+#[cfg(windows)]
+fn well_known_agent_path(agent_id: &str, local_app_data: &Path) -> Option<PathBuf> {
+    match agent_id {
+        // The official Windows installer adds this new directory to the user
+        // PATH. The running desktop process keeps its old environment block,
+        // so catalog refresh also checks the documented install location.
+        "antigravity" => Some(local_app_data.join("agy").join("bin").join("agy.exe")),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn find_well_known_agent_executable(agent: &AgentSpec) -> Option<PathBuf> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
+    let candidate = well_known_agent_path(agent.id, &local_app_data)?;
+    is_executable(&candidate).then(|| candidate.canonicalize().ok().unwrap_or(candidate))
+}
+
+#[cfg(not(windows))]
+fn find_well_known_agent_executable(_agent: &AgentSpec) -> Option<PathBuf> {
+    None
 }
 
 fn direct_install(
@@ -1502,28 +1527,41 @@ fn find_executable(command: &str) -> Option<PathBuf> {
 
 /// Resolves how to actually launch a detected executable.
 ///
+/// Converts the verbatim path returned by `canonicalize` into a Win32 path.
+/// Some executables accept `\\?\` while others do not; notably Windows
+/// PowerShell 5.1 fails during .NET initialization when launched that way.
+#[cfg(windows)]
+fn plain_windows_path(path: &Path) -> OsString {
+    let raw = path.as_os_str().to_string_lossy();
+    const VERBATIM_UNC: &str = r"\\?\UNC\";
+    if raw
+        .get(..VERBATIM_UNC.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(VERBATIM_UNC))
+    {
+        return OsString::from(format!(r"\\{}", &raw[VERBATIM_UNC.len()..]));
+    }
+    raw.strip_prefix(r"\\?\")
+        .map(OsString::from)
+        .unwrap_or_else(|| path.as_os_str().to_os_string())
+}
+
 /// Windows cannot `CreateProcess` a `.cmd`/`.bat` shim directly, so those are
-/// routed through the command processor (`cmd.exe /c <script>`). The verbatim
-/// `\\?\` prefix that `canonicalize` adds is stripped first because cmd.exe
-/// does not understand extended-length paths. Everything else launches as-is.
+/// routed through the command processor (`cmd.exe /c <script>`). All launch
+/// paths are first converted out of verbatim form for child compatibility.
 #[cfg(windows)]
 fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
-    let is_script = executable
+    let executable = plain_windows_path(executable);
+    let is_script = Path::new(&executable)
         .extension()
         .and_then(OsStr::to_str)
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
         });
     if !is_script {
-        return (executable.as_os_str().to_os_string(), Vec::new());
+        return (executable, Vec::new());
     }
-    let raw = executable.to_string_lossy();
-    let plain = raw.strip_prefix(r"\\?\").unwrap_or(&raw);
     let comspec = std::env::var_os("ComSpec").unwrap_or_else(|| OsString::from("cmd.exe"));
-    (
-        comspec,
-        vec![OsString::from("/c"), OsString::from(plain.to_string())],
-    )
+    (comspec, vec![OsString::from("/c"), executable])
 }
 
 #[cfg(not(windows))]
@@ -1974,6 +2012,32 @@ fn model_from_arguments(arguments: &[String]) -> Option<String> {
     None
 }
 
+fn codex_model_from_config(raw: &str) -> Option<String> {
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            // Codex profiles and other sections may contain their own model.
+            // Only the top-level value describes the model used by default.
+            break;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() == "model" {
+            return clean_model_token(value);
+        }
+    }
+    None
+}
+
+fn configured_agent_model(definition_id: &str) -> Option<String> {
+    match definition_id {
+        "codex" => read_account_file(&[".codex", "config.toml"])
+            .and_then(|raw| codex_model_from_config(&raw)),
+        _ => None,
+    }
+}
+
 fn claude_family_model(line: &str) -> Option<String> {
     let lowered = line.to_ascii_lowercase();
     for family in ["opus", "sonnet", "haiku"] {
@@ -2086,7 +2150,8 @@ pub fn launch(
     let size = validated_size(request.cols, request.rows)?;
     let (definition_id, label, executable, arguments, working_directory) =
         resolve_launch(&request)?;
-    let launch_model = model_from_arguments(&arguments);
+    let launch_model =
+        model_from_arguments(&arguments).or_else(|| configured_agent_model(&definition_id));
     let session_id = registry.next_id();
     let reporter = registry.reporter.clone();
     let report_token = reporter
@@ -2382,7 +2447,6 @@ pub fn disconnect(
 mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
-    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
     #[derive(Default)]
@@ -2588,6 +2652,34 @@ session id: 0199aa11-"
             model_from_arguments(&["--model=sonnet".to_string()]).as_deref(),
             Some("sonnet")
         );
+    }
+
+    #[test]
+    fn codex_default_model_is_read_from_the_top_level_config() {
+        assert_eq!(
+            codex_model_from_config(
+                r#"
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+
+[profiles.review]
+model = "gpt-5.3-codex"
+"#,
+            )
+            .as_deref(),
+            Some("gpt-5.6-sol")
+        );
+    }
+
+    #[test]
+    fn codex_profile_model_is_not_reported_as_the_default() {
+        assert!(codex_model_from_config(
+            r#"
+[profiles.review]
+model = "gpt-5.3-codex"
+"#,
+        )
+        .is_none());
     }
 
     #[test]
@@ -2821,6 +2913,22 @@ session id: 0199aa11-"
         let (exe_program, exe_prefix) = launch_parts(&exe);
         assert_eq!(exe_program, exe.as_os_str());
         assert!(exe_prefix.is_empty());
+
+        let canonical_exe = exe.canonicalize().unwrap();
+        let (canonical_program, canonical_prefix) = launch_parts(&canonical_exe);
+        assert_eq!(canonical_program, exe.as_os_str());
+        assert!(canonical_prefix.is_empty());
+
+        assert_eq!(
+            plain_windows_path(Path::new(r"\\?\UNC\server\share\agent.exe")),
+            OsString::from(r"\\server\share\agent.exe")
+        );
+
+        assert_eq!(
+            well_known_agent_path("antigravity", Path::new(r"C:\Users\dev\AppData\Local")),
+            Some(PathBuf::from(r"C:\Users\dev\AppData\Local\agy\bin\agy.exe"))
+        );
+        assert!(well_known_agent_path("custom", Path::new(r"C:\Temp")).is_none());
     }
 
     #[test]
@@ -3119,6 +3227,64 @@ session id: 0199aa11-"
                 && *source == AgentStateSource::Integration));
 
         disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pty_runs_powershell_install_pipeline_shape() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        let request = AgentLaunchRequest {
+            definition_id: "custom".to_string(),
+            label: "PowerShell installer smoke test".to_string(),
+            executable: "powershell.exe".to_string(),
+            arguments: vec![
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-Command".to_string(),
+                "Write-Output \"Write-Output 'lattice-install-pipeline-ok'\" | Invoke-Expression"
+                    .to_string(),
+            ],
+            resume_session_id: None,
+            group_id: None,
+            seed_input: None,
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 80,
+            rows: 24,
+        };
+        let session = launch(sink.clone(), registry.clone(), request).unwrap();
+
+        let query_deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < query_deadline
+            && !collector
+                .data
+                .lock()
+                .unwrap()
+                .windows(4)
+                .any(|bytes| bytes == b"\x1b[6n")
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        send_bytes(sink.as_ref(), &registry, &session.session_id, b"\x1b[1;1R").unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && collector.closed.lock().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let output = String::from_utf8_lossy(&collector.data.lock().unwrap()).into_owned();
+        let closed = collector.closed.lock().unwrap();
+        assert!(
+            output.contains("lattice-install-pipeline-ok"),
+            "unexpected PTY output {output:?}; closed reasons: {closed:?}"
+        );
+        assert_eq!(
+            closed.as_slice(),
+            ["Process exited: ExitStatus { code: 0, signal: None }"]
+        );
     }
 
     #[cfg(unix)]
