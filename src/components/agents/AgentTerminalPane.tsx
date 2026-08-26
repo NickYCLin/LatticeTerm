@@ -8,6 +8,7 @@ import { useI18n } from "../../i18n/context";
 import { TerminalImeFallback } from "../terminal/terminalImeFallback";
 import {
   TERMINAL_FONT_FAMILY,
+  TERMINAL_LETTER_SPACING,
   terminalTheme,
 } from "../terminal/terminalTheme";
 import { attachTerminalClipboard } from "../terminal/terminalClipboard";
@@ -39,6 +40,7 @@ export function AgentTerminalPane({
     const terminal = new Terminal({
       fontFamily: TERMINAL_FONT_FAMILY,
       fontSize: 13,
+      letterSpacing: TERMINAL_LETTER_SPACING,
       lineHeight: 1.2,
       // A steady cursor avoids the distracting full-pane repaint/flicker that
       // becomes especially noticeable with several mounted Agent sessions.

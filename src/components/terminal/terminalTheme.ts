@@ -33,6 +33,14 @@ export const TERMINAL_FONT_FAMILIES = [
  */
 export const TERMINAL_FONT_FAMILY = TERMINAL_FONT_FAMILIES.join(", ");
 
+/**
+ * xterm must keep a fixed grid, but WebKitGTK leaves enough side bearing at
+ * the default spacing for ordinary text to look as though spaces were typed
+ * between characters. Tighten each cell by one pixel without changing the
+ * PTY text or sacrificing terminal alignment.
+ */
+export const TERMINAL_LETTER_SPACING = -1;
+
 export function terminalTheme(): Record<string, string> {
   const style = getComputedStyle(document.documentElement);
   const accent = style.getPropertyValue("--accent").trim() || "#58a6ff";
