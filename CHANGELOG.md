@@ -4,6 +4,18 @@
 
 ---
 
+## [0.24.0](https://github.com/NickYCLin/lattice-term/compare/v0.23.0...v0.24.0) (2026-08-26)
+
+
+### 🚀 新增功能
+
+* **workspace:** 完善工作階段整理與操作體驗 ([d42da3e](https://github.com/NickYCLin/lattice-term/commit/d42da3ef443dbd75ba3dfb2aee21a270bf8e0073))
+
+
+### 🛠️ 問題修正
+
+* **ci:** 在測試前建置桌面 sidecar ([ed88c41](https://github.com/NickYCLin/lattice-term/commit/ed88c415f1fe1ba5465338148b063fcbfc24249a))
+
 ## [0.23.0](https://github.com/NickYCLin/lattice-term/compare/v0.22.0...v0.23.0) (2026-08-26)
 
 
