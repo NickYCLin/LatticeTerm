@@ -20,6 +20,7 @@ import { useI18n } from "../i18n/context";
 import { Callout, EmptyState } from "../components/common/Callout";
 import {
   AgentIcon,
+  ChevronDownIcon,
   CloseIcon,
   EditIcon,
   FolderIcon,
@@ -52,6 +53,29 @@ type SessionRef =
 interface ClosedNoticeSource {
   notice: SessionClosedNotice;
   clear: () => void;
+}
+
+interface SessionProject {
+  id: string;
+  label: string;
+  workingDirectory: string | null;
+  sessions: SessionRef[];
+}
+
+function localProjectId(workingDirectory: string): string {
+  return `local:${workingDirectory.replace(/^\\\\\?\\/, "").toLocaleLowerCase()}`;
+}
+
+function localProjectLabel(workingDirectory: string): string {
+  const plain = workingDirectory.replace(/^\\\\\?\\/, "").replace(/[\\/]+$/, "");
+  const segments = plain.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? plain;
+}
+
+function projectIdForSession(session: SessionRef): string {
+  return session.kind === "agent"
+    ? localProjectId(session.members[0]?.workingDirectory ?? session.groupId)
+    : "remote-connections";
 }
 
 export function SessionsView({
@@ -136,6 +160,12 @@ export function SessionsView({
   >({});
   const [addCliFor, setAddCliFor] = useState<string | null>(null);
   const [carryContext, setCarryContext] = useState(true);
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [newSessionForProject, setNewSessionForProject] = useState<string | null>(
+    null,
+  );
 
   function beginRename(sessionId: string, label: string) {
     setEditingTab(sessionId);
@@ -336,6 +366,68 @@ export function SessionsView({
   const active =
     sessions.find((session) => session.sessionId === activeSessionId) ?? sessions[0];
 
+  const projectMap = new Map<string, SessionProject>();
+  for (const session of sessions) {
+    const id = projectIdForSession(session);
+    const existing = projectMap.get(id);
+    if (existing) {
+      existing.sessions.push(session);
+      continue;
+    }
+    const workingDirectory =
+      session.kind === "agent"
+        ? session.members[0]?.workingDirectory ?? null
+        : null;
+    projectMap.set(id, {
+      id,
+      label: workingDirectory
+        ? localProjectLabel(workingDirectory)
+        : t("terminal.projects.remote"),
+      workingDirectory,
+      sessions: [session],
+    });
+  }
+  const projects = [...projectMap.values()];
+  const activeProjectId = projectIdForSession(active);
+  const activeProject =
+    projects.find((project) => project.id === activeProjectId) ?? projects[0];
+  const visibleSessions = activeProject.sessions;
+
+  function toggleProject(projectId: string) {
+    setCollapsedProjects((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  }
+
+  async function launchInProject(
+    project: SessionProject,
+    definition: AgentDefinition,
+  ) {
+    if (!project.workingDirectory) return;
+    setNewSessionForProject(null);
+    try {
+      const launched = await agents.launch({
+        definitionId: definition.id,
+        label: "",
+        executable: "",
+        arguments: [],
+        resumeSessionId: null,
+        groupId: null,
+        seedInput: null,
+        workingDirectory: project.workingDirectory,
+        cols: 120,
+        rows: 32,
+      });
+      onSelect(launched.sessionId);
+    } catch {
+      // Full diagnostics remain available in the Agent Fleet view. A failed
+      // quick launch leaves the current project/session untouched.
+    }
+  }
+
   async function closeAgentMember(
     members: AgentSessionSummary[],
     sessionId: string,
@@ -365,8 +457,126 @@ export function SessionsView({
   return (
     <div className="terminal-workspace">
       {closedCallout}
-      <div className="session-tabs" role="tablist">
-        {sessions.map((session) => {
+      <div className="terminal-workspace__body">
+        <aside
+          className="session-projects"
+          aria-label={t("terminal.projects")}
+        >
+          <div className="session-projects__title">
+            <FolderIcon size={14} />
+            <span>{t("terminal.projects")}</span>
+          </div>
+          {projects.map((project) => {
+            const collapsed = collapsedProjects.has(project.id);
+            const selected = project.id === activeProject.id;
+            const installed = agents.catalog.filter(
+              (definition) => definition.installed,
+            );
+            return (
+              <section
+                className={`session-project${selected ? " is-active" : ""}`}
+                key={project.id}
+              >
+                <div className="session-project__header">
+                  <button
+                    type="button"
+                    className="session-project__select"
+                    onClick={() => {
+                      if (collapsed) toggleProject(project.id);
+                      onSelect(project.sessions[0]?.sessionId ?? null);
+                    }}
+                    title={project.workingDirectory ?? project.label}
+                  >
+                    <FolderIcon size={13} />
+                    <span className="truncate">{project.label}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button icon-button--sm"
+                    onClick={() => toggleProject(project.id)}
+                    aria-label={t("terminal.projects.toggle")}
+                    aria-expanded={!collapsed}
+                  >
+                    <ChevronDownIcon
+                      size={12}
+                      className={collapsed ? "is-collapsed" : undefined}
+                    />
+                  </button>
+                  {project.workingDirectory && (
+                    <div className="session-project__add-wrap">
+                      <button
+                        type="button"
+                        className="icon-button icon-button--sm"
+                        onClick={() =>
+                          setNewSessionForProject((current) =>
+                            current === project.id ? null : project.id,
+                          )
+                        }
+                        aria-label={t("terminal.projects.newSession")}
+                        data-tooltip={t("terminal.projects.newSession")}
+                      >
+                        <PlusIcon size={12} />
+                      </button>
+                      {newSessionForProject === project.id && (
+                        <div className="session-project__menu" role="menu">
+                          {installed.map((definition) => (
+                            <button
+                              key={definition.id}
+                              type="button"
+                              role="menuitem"
+                              onClick={() =>
+                                void launchInProject(project, definition)
+                              }
+                            >
+                              {definition.label}
+                            </button>
+                          ))}
+                          {installed.length === 0 && (
+                            <span>{t("terminal.addCli.none")}</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {!collapsed && (
+                  <div className="session-project__sessions">
+                    {project.sessions.map((session) => {
+                      const Glyph =
+                        session.kind === "agent"
+                          ? AgentIcon
+                          : session.kind === "sftp"
+                            ? TransferIcon
+                            : session.kind === "ssh"
+                              ? TerminalIcon
+                              : ScreenShareIcon;
+                      return (
+                        <button
+                          type="button"
+                          className={`session-project__session${
+                            session.sessionId === active.sessionId
+                              ? " is-active"
+                              : ""
+                          }`}
+                          key={session.sessionId}
+                          onClick={() => onSelect(session.sessionId)}
+                          title={session.label}
+                        >
+                          <Glyph size={12} />
+                          <span className="truncate">{session.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </aside>
+
+        <section className="terminal-project-workspace">
+          <div className="session-tabs" role="tablist">
+        {visibleSessions.map((session) => {
           const selected = session.sessionId === active.sessionId;
           const Glyph =
             session.kind === "agent"
@@ -453,9 +663,9 @@ export function SessionsView({
             </div>
           );
         })}
-      </div>
+          </div>
 
-      <div className="terminal-stack">
+          <div className="terminal-stack">
         {agentGroups.map((group) => {
           const memberId = activeMemberId(group);
           const groupActive = group.members.some(
@@ -696,6 +906,8 @@ export function SessionsView({
             <VncPane session={session} vnc={vnc} />
           </div>
         ))}
+          </div>
+        </section>
       </div>
     </div>
   );

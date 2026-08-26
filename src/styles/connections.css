@@ -791,6 +791,146 @@
   padding: var(--space-3) var(--space-4) 0;
 }
 
+.terminal-workspace__body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.session-projects {
+  flex: 0 0 15rem;
+  min-width: 0;
+  padding: var(--space-3) var(--space-2);
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-solid) 84%, transparent);
+}
+
+.session-projects__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) var(--space-2);
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-project {
+  margin-bottom: var(--space-1);
+  border-radius: var(--radius-md);
+}
+
+.session-project.is-active {
+  background: var(--surface-hover);
+}
+
+.session-project__header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.session-project__select,
+.session-project__session {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.session-project__select {
+  flex: 1;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+
+.session-project.is-active .session-project__select {
+  color: var(--text);
+}
+
+.session-project__header .is-collapsed {
+  transform: rotate(-90deg);
+}
+
+.session-project__sessions {
+  display: grid;
+  gap: 0.125rem;
+  padding: 0 var(--space-1) var(--space-1) var(--space-4);
+}
+
+.session-project__session {
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0.4rem var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+
+.session-project__session:hover,
+.session-project__session.is-active {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+
+.session-project__session.is-active {
+  color: var(--accent-strong);
+  font-weight: 650;
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.session-project__add-wrap {
+  position: relative;
+}
+
+.session-project__menu {
+  position: absolute;
+  z-index: 15;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  display: grid;
+  width: 12rem;
+  max-height: 15rem;
+  padding: var(--space-1);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-lg);
+}
+
+.session-project__menu button,
+.session-project__menu span {
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: left;
+}
+
+.session-project__menu button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.terminal-project-workspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 .session-tabs {
   display: flex;
   gap: var(--space-2);
@@ -799,6 +939,7 @@
 }
 
 .session-tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -811,8 +952,11 @@
 }
 
 .session-tab.is-active {
-  background: var(--surface-solid);
-  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface-solid));
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 3px 0 var(--accent),
+    0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .session-tab__label {
@@ -826,8 +970,8 @@
 }
 
 .session-tab.is-active .session-tab__label {
-  color: var(--text);
-  font-weight: 600;
+  color: var(--accent-strong);
+  font-weight: 700;
 }
 
 .session-tab__label--editing {
@@ -897,6 +1041,10 @@
 
 .app--mobile .terminal-keybar {
   display: flex;
+}
+
+.app--mobile .session-projects {
+  display: none;
 }
 
 @media (pointer: coarse) {
@@ -1173,6 +1321,18 @@
 .terminal-pane .xterm {
   height: 100%;
   padding: var(--space-3);
+}
+
+/* The operating-system IME renders unfinished text in this xterm overlay.
+   Keep it opaque and clearly underlined so the hidden terminal cursor cannot
+   flash through the glyphs while Zhuyin/Cangjie composition is in progress. */
+.terminal-pane .xterm.is-ime-composing .composition-view.active {
+  z-index: 10;
+  padding-inline: 1px;
+  border-radius: 2px;
+  background: #0d1117;
+  color: #f0f6fc;
+  box-shadow: inset 0 -2px #58a6ff;
 }
 
 .connection-card__go {

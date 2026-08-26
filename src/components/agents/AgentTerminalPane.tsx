@@ -6,6 +6,7 @@ import type { AgentApi } from "../../app/useAgentSessions";
 import type { ThemeId } from "../../app/themes";
 import { useI18n } from "../../i18n/context";
 import { TerminalImeFallback } from "../terminal/terminalImeFallback";
+import { TerminalImePresentation } from "../terminal/terminalImePresentation";
 import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_LETTER_SPACING,
@@ -27,6 +28,7 @@ export function AgentTerminalPane({
   const { t } = useI18n();
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const imePresentationRef = useRef<TerminalImePresentation | null>(null);
   const agentsRef = useRef(agents);
   const closedRef = useRef(onClosed);
   const errorRef = useRef(t("agents.terminal.inputFailed"));
@@ -111,6 +113,12 @@ export function AgentTerminalPane({
       if (imeFallback.recordTerminalData(data)) sendInput(data);
     });
     const textarea = terminal.textarea;
+    const imePresentation = new TerminalImePresentation(
+      terminal,
+      textarea,
+      terminalTheme(),
+    );
+    imePresentationRef.current = imePresentation;
     const handleInput = (event: Event) => {
       const inputEvent = event as InputEvent;
       imeFallback.recordInput(
@@ -138,16 +146,18 @@ export function AgentTerminalPane({
       stopData();
       stopClosed();
       textarea?.removeEventListener("input", handleInput);
+      imePresentation.dispose();
       imeFallback.dispose();
       typed.dispose();
       terminal.dispose();
       terminalRef.current = null;
+      imePresentationRef.current = null;
     };
   }, [sessionId]);
 
   useEffect(() => {
     if (terminalRef.current) {
-      terminalRef.current.options.theme = terminalTheme();
+      imePresentationRef.current?.setTheme(terminalTheme());
     }
   }, [theme]);
 

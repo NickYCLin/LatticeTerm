@@ -14,6 +14,7 @@ import { Callout } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import {
   AgentIcon,
+  AlertIcon,
   ChevronDownIcon,
   EditIcon,
   FolderIcon,
@@ -543,7 +544,9 @@ export function AgentsView({
         <div className="agent-grid">
           {agents.catalog.map((definition) => (
             <article
-              className={`agent-card${definition.installed ? "" : " is-missing"}`}
+              className={`agent-card${definition.installed ? "" : " is-missing"}${
+                definition.consumerOauthDeprecated ? " has-notice" : ""
+              }`}
               key={definition.id}
             >
               <div className="agent-card__icon">
@@ -576,6 +579,22 @@ export function AgentsView({
                       <small>{definition.account.method}</small>
                     )}
                   </div>
+                )}
+                {definition.consumerOauthDeprecated && (
+                  <details className="agent-card__migration">
+                    <summary
+                      aria-label={t("agents.geminiMigration.toggle")}
+                      data-tooltip={t("agents.geminiMigration.toggle")}
+                    >
+                      <AlertIcon size={14} />
+                    </summary>
+                    <Callout
+                      tone="warn"
+                      title={t("agents.geminiMigration.title")}
+                    >
+                      {t("agents.geminiMigration.body")}
+                    </Callout>
+                  </details>
                 )}
                 {!definition.installed && definition.install.displayCommand && (
                   <code className="agent-card__install-command">

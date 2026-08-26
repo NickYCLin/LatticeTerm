@@ -186,6 +186,7 @@
 }
 
 .agent-card {
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: var(--space-4);
@@ -236,6 +237,47 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-card.has-notice .agent-card__title {
+  padding-right: 1.75rem;
+}
+
+.agent-card__migration {
+  margin-top: var(--space-1);
+}
+
+.agent-card__migration > summary {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: grid;
+  place-items: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 48%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 13%, var(--surface-raised));
+  color: var(--warn);
+  cursor: pointer;
+  list-style: none;
+}
+
+.agent-card__migration > summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-card__migration > summary:hover,
+.agent-card__migration > summary:focus-visible,
+.agent-card__migration[open] > summary {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 22%, var(--surface-raised));
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 18%, transparent);
+}
+
+.agent-card__migration > .callout {
+  margin-top: var(--space-2);
 }
 
 .agent-card code,

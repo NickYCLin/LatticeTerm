@@ -15,6 +15,7 @@ import type { SshApi } from "../../app/useSshSessions";
 import { useI18n } from "../../i18n/context";
 import type { ThemeId } from "../../app/themes";
 import { TerminalImeFallback } from "./terminalImeFallback";
+import { TerminalImePresentation } from "./terminalImePresentation";
 import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_LETTER_SPACING,
@@ -38,6 +39,7 @@ export function TerminalPane({
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const imePresentationRef = useRef<TerminalImePresentation | null>(null);
 
   // Kept in refs so the terminal is created once per session, not on every
   // render that happens to change a callback identity.
@@ -130,6 +132,12 @@ export function TerminalPane({
       if (imeFallback.recordTerminalData(rawData)) sendInput(rawData);
     });
     const textarea = terminal.textarea;
+    const imePresentation = new TerminalImePresentation(
+      terminal,
+      textarea,
+      terminalTheme(),
+    );
+    imePresentationRef.current = imePresentation;
     const handleInput = (event: Event) => {
       const inputEvent = event as InputEvent;
       imeFallback.recordInput(
@@ -162,11 +170,13 @@ export function TerminalPane({
       stopData();
       stopClosed();
       textarea?.removeEventListener("input", handleInput);
+      imePresentation.dispose();
       imeFallback.dispose();
       typed.dispose();
       terminal.dispose();
       termRef.current = null;
       fitRef.current = null;
+      imePresentationRef.current = null;
     };
   }, [sessionId]);
 
@@ -174,7 +184,7 @@ export function TerminalPane({
   // change mid-session.
   useEffect(() => {
     if (termRef.current) {
-      termRef.current.options.theme = terminalTheme();
+      imePresentationRef.current?.setTheme(terminalTheme());
     }
   }, [theme]);
 

@@ -21,6 +21,8 @@ export interface AgentDefinition {
   transcriptSupported: boolean;
   installed: boolean;
   installedPath: string | null;
+  /** Google consumer OAuth moved from Gemini CLI to Antigravity CLI. */
+  consumerOauthDeprecated: boolean;
   account: AgentAccountInfo;
   install: AgentInstallDefinition;
 }
@@ -153,6 +155,7 @@ const FALLBACK_CATALOG_SOURCE: [string, string, string, boolean][] = [
   ["codex", "OpenAI Codex", "codex", true],
   ["claude", "Claude Code", "claude", true],
   ["gemini", "Gemini CLI", "gemini", true],
+  ["antigravity", "Google Antigravity CLI", "agy", false],
   ["opencode", "OpenCode", "opencode", false],
   ["copilot", "GitHub Copilot CLI", "copilot", false],
   ["hermes", "Hermes Agent", "hermes", true],
@@ -171,10 +174,11 @@ const FALLBACK_CATALOG: AgentDefinition[] = FALLBACK_CATALOG_SOURCE.map(
     executable,
     adapterVersion: 1,
     resumeSupported,
-    resumeLatestSupported: id === "codex",
+    resumeLatestSupported: id === "codex" || id === "antigravity",
     transcriptSupported: id === "codex" || id === "claude",
     installed: false,
     installedPath: null,
+    consumerOauthDeprecated: id === "gemini",
     account: { state: "unsupported", label: null, method: null },
     install: {
       executable: null,

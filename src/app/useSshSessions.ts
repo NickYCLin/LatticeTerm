@@ -87,6 +87,7 @@ const MAX_PENDING_OUTPUT_BYTES = 256 * 1024;
 
 export interface SshApi {
   sessions: SessionSummary[];
+  hydrated: boolean;
   lastClosed: SessionClosedNotice | null;
   connect: (request: ConnectRequest) => Promise<ConnectOutcome>;
   send: (sessionId: string, data: string) => Promise<void>;
@@ -111,6 +112,7 @@ export interface SshApi {
 
 export function useSshSessions(): SshApi {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [hydrated, setHydrated] = useState(false);
   const [lastClosed, setLastClosed] = useState<SessionClosedNotice | null>(null);
   const dataHandlers = useRef(new Map<string, Set<(bytes: Uint8Array) => void>>());
   const closeHandlers = useRef(new Map<string, Set<(reason: string) => void>>());
@@ -217,10 +219,12 @@ export function useSshSessions(): SshApi {
           );
           hydrating = false;
           closedDuringHydration.clear();
+          setHydrated(true);
         }
       } catch {
         hydrating = false;
         closedDuringHydration.clear();
+        if (!cancelled) setHydrated(true);
         // Browser preview: there is no backend to listen to.
       }
     }
@@ -355,6 +359,7 @@ export function useSshSessions(): SshApi {
 
   return {
     sessions,
+    hydrated,
     lastClosed,
     connect,
     send,

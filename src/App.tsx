@@ -58,6 +58,13 @@ import { ConfirmDialog } from "./components/overlays/ConfirmDialog";
 import { DesktopBackendRequiredDialog } from "./components/overlays/DesktopBackendRequiredDialog";
 import { UpdatePrompt } from "./components/overlays/UpdatePrompt";
 import { useAppUpdater } from "./app/useAppUpdater";
+import {
+  agentRestoreArguments,
+  loadWorkspaceSessionSnapshot,
+  saveWorkspaceSessionSnapshot,
+  snapshotLiveWorkspaceSessions,
+} from "./app/workspaceSessionPersistence";
+import { loadAuthPref } from "./app/authPreferences";
 import { PlusIcon, ScreenShareIcon } from "./components/icons";
 import "./styles/index.css";
 
@@ -228,6 +235,148 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   );
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [terminalMounted, setTerminalMounted] = useState(false);
+  const storedSessionSnapshotRef = useRef(
+    loadWorkspaceSessionSnapshot(window.localStorage),
+  );
+  const restoreStartedRef = useRef(false);
+  const [sessionRestoreComplete, setSessionRestoreComplete] = useState(false);
+
+  // A process cannot survive an application or machine restart. Recreate the
+  // safe launch intent instead: agent type/directory/group label, and opaque
+  // SSH profile IDs whose actual credentials remain in the OS credential
+  // store. A WebView reload sees the backend's existing sessions and skips
+  // relaunching them, preventing duplicates during development or recovery.
+  useEffect(() => {
+    if (restoreStartedRef.current) return;
+    if (agents.mode === "loading" || !workspace.hydrated || !ssh.hydrated) return;
+    restoreStartedRef.current = true;
+
+    void (async () => {
+      try {
+        const snapshot = storedSessionSnapshotRef.current;
+        const restoredAgents = [...agents.sessions];
+        const restoredSsh = [...ssh.sessions];
+
+        if (snapshot && agents.sessions.length === 0) {
+          const renamedGroups = new Set<string>();
+          for (const saved of snapshot.sessions) {
+            if (saved.kind !== "agent") continue;
+            try {
+              const launched = await agents.launch({
+                definitionId: saved.definitionId,
+                label: saved.label,
+                executable: saved.executable,
+                arguments: agentRestoreArguments(saved),
+                resumeSessionId: saved.resumeSessionId,
+                groupId: saved.groupKey,
+                seedInput: null,
+                workingDirectory: saved.workingDirectory,
+                cols: 120,
+                rows: 32,
+              });
+              restoredAgents.push(launched);
+              if (!renamedGroups.has(saved.groupKey)) {
+                renamedGroups.add(saved.groupKey);
+                await agents.rename(launched.sessionId, saved.groupLabel);
+              }
+            } catch {
+              // A removed directory/CLI or an expired provider entitlement must
+              // not block the remaining workspace from coming back.
+            }
+          }
+        }
+
+        if (snapshot && ssh.sessions.length === 0) {
+          for (const saved of snapshot.sessions) {
+            if (saved.kind !== "ssh") continue;
+            const profile = workspace.profiles.find(
+              (candidate) =>
+                candidate.id === saved.profileId && candidate.protocol === "ssh",
+            );
+            if (!profile) continue;
+            try {
+              const authPref = loadAuthPref(profile.id);
+              const usingKey = authPref?.method === "privateKey";
+              const outcome = await ssh.connect({
+                profileId: profile.id,
+                hostname: profile.hostname,
+                port: profile.port,
+                username: profile.username,
+                auth: usingKey
+                  ? {
+                      kind: "privateKey",
+                      path: authPref.keyPath,
+                    }
+                  : { kind: "password", password: "" },
+                useSavedPassword: !usingKey,
+                rememberPassword: false,
+                cols: 120,
+                rows: 32,
+              });
+              if (outcome.outcome === "connected") {
+                restoredSsh.push({
+                  sessionId: outcome.sessionId,
+                  profileId: profile.id,
+                  host: profile.hostname,
+                  port: profile.port,
+                  username: profile.username,
+                });
+              }
+            } catch {
+              // A missing OS credential or an unavailable host should not
+              // prevent the rest of the saved workspace from restoring.
+            }
+          }
+        }
+
+        const savedActive = snapshot?.active;
+        if (savedActive?.kind === "agent") {
+          const match = restoredAgents.find(
+            (session) =>
+              session.groupId === savedActive.groupKey &&
+              session.definitionId === savedActive.definitionId,
+          );
+          if (match) setActiveSessionId(match.sessionId);
+        } else if (savedActive?.kind === "ssh") {
+          const match = restoredSsh.find(
+            (session) => session.profileId === savedActive.profileId,
+          );
+          if (match) setActiveSessionId(match.sessionId);
+        }
+
+        if (restoredAgents.length > 0 || restoredSsh.length > 0) {
+          setView("terminal");
+          setTerminalMounted(true);
+        }
+      } finally {
+        // Even a provider-specific failure must release persistence so new
+        // sessions opened during this run become the next restore snapshot.
+        setSessionRestoreComplete(true);
+      }
+    })();
+  }, [agents, ssh, workspace]);
+
+  useEffect(() => {
+    if (!sessionRestoreComplete) return;
+    try {
+      saveWorkspaceSessionSnapshot(
+        window.localStorage,
+        snapshotLiveWorkspaceSessions(
+          agents.sessions,
+          ssh.sessions,
+          activeSessionId,
+        ),
+      );
+    } catch {
+      // Session restoration is a convenience. A full WebView storage area
+      // must never prevent a live terminal from continuing to work.
+    }
+  }, [
+    activeSessionId,
+    agents.sessions,
+    sessionRestoreComplete,
+    ssh.sessions,
+  ]);
   const hasLiveSessions =
     agents.sessions.length > 0 ||
     ssh.sessions.length > 0 ||

@@ -56,12 +56,14 @@ impl AgentResumeRecipe {
 #[derive(Debug, Clone, Copy)]
 enum AgentResumeLatestRecipe {
     Codex,
+    Antigravity,
 }
 
 impl AgentResumeLatestRecipe {
     fn arguments(self) -> Vec<String> {
         match self {
             Self::Codex => vec!["resume".to_string(), "--last".to_string()],
+            Self::Antigravity => vec!["--continue".to_string()],
         }
     }
 }
@@ -75,7 +77,7 @@ struct AgentSpec {
     resume_latest_recipe: Option<AgentResumeLatestRecipe>,
 }
 
-const AGENTS: [AgentSpec; 12] = [
+const AGENTS: [AgentSpec; 13] = [
     AgentSpec {
         id: "codex",
         label: "OpenAI Codex",
@@ -96,6 +98,13 @@ const AGENTS: [AgentSpec; 12] = [
         executable: "gemini",
         resume_recipe: Some(AgentResumeRecipe::Flag),
         resume_latest_recipe: None,
+    },
+    AgentSpec {
+        id: "antigravity",
+        label: "Google Antigravity CLI",
+        executable: "agy",
+        resume_recipe: None,
+        resume_latest_recipe: Some(AgentResumeLatestRecipe::Antigravity),
     },
     AgentSpec {
         id: "opencode",
@@ -177,6 +186,10 @@ pub struct AgentDefinition {
     pub transcript_supported: bool,
     pub installed: bool,
     pub installed_path: Option<String>,
+    /// Consumer Google OAuth stopped serving Gemini CLI on 2026-06-18.
+    /// Enterprise, API-key and Vertex authentication remain valid, so the CLI
+    /// is not disabled; the UI instead explains the migration boundary.
+    pub consumer_oauth_deprecated: bool,
     /// Non-secret identity metadata read from each CLI's own local account
     /// file. Tokens and credential values never cross the Tauri boundary.
     pub account: AgentAccountInfo,
@@ -1083,6 +1096,7 @@ pub fn catalog() -> Vec<AgentDefinition> {
                     .is_some(),
                 installed: path.is_some(),
                 installed_path: path.map(|path| path.display().to_string()),
+                consumer_oauth_deprecated: agent.id == "gemini",
                 account: detect_agent_account(agent.id),
                 install: install_definition(agent.id),
             }
@@ -1295,6 +1309,19 @@ fn install_definition(definition_id: &str) -> AgentInstallDefinition {
         "gemini" => npm_install(
             "@google/gemini-cli",
             "https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/installation.md",
+        ),
+        "antigravity" => official_script_install(
+            if cfg!(windows) {
+                "https://antigravity.google/cli/install.ps1"
+            } else {
+                "https://antigravity.google/cli/install.sh"
+            },
+            if cfg!(windows) {
+                "irm https://antigravity.google/cli/install.ps1 | iex"
+            } else {
+                "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+            },
+            "https://codelabs.developers.google.com/antigravity-cli-hands-on",
         ),
         "opencode" => npm_install("opencode-ai", "https://opencode.ai/docs/"),
         "copilot" => npm_install("@github/copilot", "https://github.com/features/copilot/cli/"),
@@ -2675,10 +2702,18 @@ session id: 0199aa11-"
             .filter(|definition| definition.resume_latest_supported)
             .map(|definition| definition.id.as_str())
             .collect();
-        assert_eq!(latest_supported, HashSet::from(["codex"]));
+        assert_eq!(latest_supported, HashSet::from(["codex", "antigravity"]));
         assert_eq!(
             AGENTS[0].resume_latest_recipe.unwrap().arguments(),
             vec!["resume", "--last"]
+        );
+        let antigravity = AGENTS
+            .iter()
+            .find(|agent| agent.id == "antigravity")
+            .unwrap();
+        assert_eq!(
+            antigravity.resume_latest_recipe.unwrap().arguments(),
+            vec!["--continue"]
         );
         assert!(definitions
             .iter()
@@ -2933,7 +2968,7 @@ session id: 0199aa11-"
     }
 
     #[test]
-    fn saved_codex_launches_resume_the_latest_context_for_the_directory() {
+    fn saved_sessions_resume_latest_only_for_verified_cli_adapters() {
         let directory = std::env::current_dir().unwrap();
         let plan = normalize_launch_plan(
             "agent-plan-latest-codex".to_string(),
@@ -2952,6 +2987,26 @@ session id: 0199aa11-"
         let request = launch_request_from_plan(&plan, 80, 24).unwrap();
         assert_eq!(request.arguments, vec!["resume", "--last"]);
         assert!(request.resume_session_id.is_none());
+
+        let antigravity = normalize_launch_plan(
+            "agent-plan-latest-antigravity".to_string(),
+            AgentLaunchPlanDraft {
+                definition_id: "antigravity".to_string(),
+                label: String::new(),
+                executable: String::new(),
+                arguments: Vec::new(),
+                resume_session_id: None,
+                note: String::new(),
+                working_directory: directory.display().to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            launch_request_from_plan(&antigravity, 80, 24)
+                .unwrap()
+                .arguments,
+            vec!["--continue"]
+        );
 
         let hermes = normalize_launch_plan(
             "agent-plan-fresh-hermes".to_string(),

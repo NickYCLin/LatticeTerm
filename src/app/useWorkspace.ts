@@ -82,6 +82,7 @@ export function useWorkspace() {
   const [filter, setFilter] = useState<ConnectionFilter>(emptyFilter);
   const [sortOrder, setSortOrder] = useState<SortOrder>("name");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
 
   const refreshProfiles = useCallback(async (): Promise<void> => {
@@ -116,6 +117,8 @@ export function useWorkspace() {
         }
       } catch {
         // In-memory fallback for browser
+      } finally {
+        if (!cancelled) setHydrated(true);
       }
     }
 
@@ -323,6 +326,7 @@ export function useWorkspace() {
 
   return {
     profiles,
+    hydrated,
     visibleProfiles,
     visibleGroups,
     groups,

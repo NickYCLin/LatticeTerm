@@ -27,6 +27,11 @@ import { HostKeyChangedDialog } from "../overlays/HostKeyChangedDialog";
 import { CheckIcon, CloseIcon, ShieldIcon, TerminalIcon, TrashIcon } from "../icons";
 import type { HostFingerprint } from "../../domain/security";
 import { useSavedCredential } from "../../app/useSavedCredential";
+import {
+  loadAuthPref,
+  saveAuthPref,
+  type AuthMethodChoice,
+} from "../../app/authPreferences";
 
 /**
  * The dialogs describe a stored vault entry, while a live connection only has
@@ -49,41 +54,6 @@ function presented(
     firstSeenAt: seen?.firstSeenAt ?? 0,
     lastSeenAt: seen?.lastSeenAt ?? 0,
   };
-}
-
-type AuthMethodChoice = "password" | "privateKey";
-
-const AUTH_PREFS_KEY = "latticeterm.authPrefs.v1";
-
-interface AuthPref {
-  method: AuthMethodChoice;
-  keyPath: string;
-}
-
-/** The method and key path that last worked for this profile, if any. */
-function loadAuthPref(profileId: string): AuthPref | null {
-  try {
-    const raw = localStorage.getItem(AUTH_PREFS_KEY);
-    if (!raw) return null;
-    const prefs = JSON.parse(raw) as Record<string, AuthPref>;
-    const pref = prefs[profileId];
-    return pref && (pref.method === "password" || pref.method === "privateKey")
-      ? pref
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveAuthPref(profileId: string, pref: AuthPref): void {
-  try {
-    const raw = localStorage.getItem(AUTH_PREFS_KEY);
-    const prefs = raw ? (JSON.parse(raw) as Record<string, AuthPref>) : {};
-    prefs[profileId] = pref;
-    localStorage.setItem(AUTH_PREFS_KEY, JSON.stringify(prefs));
-  } catch {
-    // Remembering a preference is a convenience, never a requirement.
-  }
 }
 
 type Phase =
