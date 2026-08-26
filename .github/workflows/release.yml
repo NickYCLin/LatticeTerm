@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write
   contents: write
   issues: write
   pull-requests: write
@@ -70,23 +69,9 @@ jobs:
           git commit -m "chore(版本): 正規化版本檔案"
           git push origin "HEAD:${{ steps.release-pr.outputs.result }}"
 
-      # Events created with GITHUB_TOKEN normally do not start another
-      # workflow. workflow_dispatch is the documented exception, so explicitly
-      # dispatch CI after the Cargo-generated commit reaches the PR branch.
-      - name: Verify the generated Release PR
-        if: steps.release.outputs.prs_created == 'true'
-        uses: actions/github-script@v9
-        env:
-          RELEASE_BRANCH: ${{ steps.release-pr.outputs.result }}
-        with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "ci.yml",
-              ref: process.env.RELEASE_BRANCH,
-            });
-            core.info(`Dispatched CI for ${process.env.RELEASE_BRANCH}`);
+      # Each source commit has already passed the single-runner CI. The steps
+      # above validate generated version files, so the Release PR does not
+      # dispatch another copy of the source CI.
 
   build-release:
     name: Build & upload (${{ matrix.name }})

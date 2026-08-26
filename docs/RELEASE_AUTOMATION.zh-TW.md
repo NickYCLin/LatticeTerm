@@ -46,14 +46,13 @@ PR 的 CI 會驗證每一筆非合併提交的格式。若需明確指定下一�
 
 ## 自動發布流程
 
-1. 功能 PR 通過 CI 並合併到 `main`。
+1. 一般 push 與功能 PR 只在 Linux amd64 執行前端檢查、Rust 格式、測試與 lint；PR 另外檢查 Conventional Commits。
 2. `Release` workflow 讀取自 `v0.2.0` 或上一個 Release 起的提交。
-3. 若有可發布變更，自動建立或更新一個 draft Release PR，內容包含新版本、`CHANGELOG.md` 與所有版本檔差異；workflow 會自動合併同一版本內由 merge commit 與原提交造成的重複 changelog 項目。
-4. workflow 另外以 `workflow_dispatch` 對 Release PR 分支觸發 Windows、Linux x64／arm64、macOS 與 Android 五個 CI 工作，避免 `GITHUB_TOKEN` 建立的 PR 無法自動連鎖觸發檢查。
-5. 達到累積門檻、維護者明確要求發布，或需緊急處理重大漏洞時，檢視版本與 changelog，再將 Release PR 標示為 ready 並合併。
-6. 下一次 `Release` workflow 建立 `vX.Y.Z` tag 與 GitHub Release。
-7. Linux amd64、Linux arm64、Windows amd64、macOS arm64 原生 runner 建置安裝檔，上傳更新簽章與 `latest.json`。
-8. 發布 job 將同一份繁中版本說明同步到 GitHub Release 與 `latest.json`，確認所有平台完成後才公開 Release。
+3. 若有可發布變更，自動建立或更新一個 draft Release PR，內容包含新版本、`CHANGELOG.md` 與所有版本檔差異；workflow 會自動合併同一版本內由 merge commit 與原提交造成的重複 changelog 項目，並檢查版本檔是否同步。
+4. Release PR 不再重複派送原始碼 CI；達到累積門檻、維護者明確要求發布，或需緊急處理重大漏洞時，檢視版本與 changelog，再將 PR 標示為 ready 並合併。
+5. 下一次 `Release` workflow 建立 `vX.Y.Z` tag 與 GitHub Release；發布提交會跳過一般 push CI。
+6. Linux amd64、Linux arm64、Windows amd64、macOS arm64 原生 runner 建置安裝檔，上傳更新簽章與 `latest.json`；Android 只在簽章金鑰齊全時建置並附加 APK。
+7. 發布 job 將同一份繁中版本說明同步到 GitHub Release 與 `latest.json`，確認所有桌面平台完成後才公開 Release。
 
 Release PR 是唯一正式發布閘門。一般功能 PR 不應手動修改版本、建立 tag，或直接建立同版本 Release。
 
@@ -84,6 +83,6 @@ Release PR 會一起更新：
 - 小項目也要在相稱驗證後提交並推送。
 - 所有提交使用繁體中文 Conventional Commit。
 - PR 通過必要檢查並完成審查後合併到 `main`。
-- 未達累積發布門檻的 Release PR 必須維持 draft；CI 全綠只代表候選版本可合併，不代表應立即發布。
+- 未達累積發布門檻的 Release PR 必須維持 draft；版本同步檢查完成只代表候選版本格式正確，不代表應立即發布。
 - Release PR 的 `CHANGELOG.md` 不可包含語意相同但 commit 連結不同的重複項目。
 - 合併後刪除已整合的功能分支；不可讓長期分支成為另一條發布來源。
