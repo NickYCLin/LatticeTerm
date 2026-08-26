@@ -28,6 +28,10 @@ export class TerminalImePresentation {
       this.textareaCleanupTimer = undefined;
     }
     this.composing = true;
+    // Full-screen CLIs can enable DEC private cursor blinking after the
+    // terminal was created. Freeze it again while the user is reviewing and
+    // selecting IME candidates so the caret does not flash through preedit.
+    this.terminal.options.cursorBlink = false;
     this.terminal.element?.classList.add("is-ime-composing");
   };
   private readonly onCompositionEnd = () => {
@@ -62,7 +66,7 @@ export class TerminalImePresentation {
   };
 
   constructor(
-    private readonly terminal: Pick<Terminal, "element">,
+    private readonly terminal: Pick<Terminal, "element" | "options">,
     private readonly textarea: HTMLTextAreaElement | undefined,
     trimTrailingCompositionSpace = linuxWebKitCompositionQuirks(),
   ) {

@@ -8,6 +8,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { defaultLocale, localeCatalog, type Locale } from "../i18n/catalog";
+import {
+  notificationSoundChoices,
+  type NotificationSoundChoice,
+} from "./notificationSounds";
 import { resolveTheme, themeIds, type ThemeChoice, type ThemeId } from "./themes";
 
 export type DensityChoice = "comfortable" | "compact";
@@ -31,6 +35,7 @@ export interface Preferences {
   sidebarCollapsed: boolean;
   inspectorOpen: boolean;
   checkUpdatesOnLaunch: boolean;
+  agentCompletionSound: NotificationSoundChoice;
 }
 
 export const defaultPreferences: Preferences = {
@@ -44,6 +49,7 @@ export const defaultPreferences: Preferences = {
   sidebarCollapsed: false,
   inspectorOpen: true,
   checkUpdatesOnLaunch: true,
+  agentCompletionSound: "clear",
 };
 
 const STORAGE_KEY = "latticeterm.preferences.v2";
@@ -64,6 +70,7 @@ const knownSensitiveClipboardClearChoices = new Set<string>([
   "60",
   "120",
 ]);
+const knownNotificationSounds = new Set<string>(notificationSoundChoices);
 
 /**
  * Ignores anything unrecognised, so an older file or a hand-edited one cannot
@@ -94,6 +101,11 @@ export function sanitizePreferences(stored: Partial<Preferences>): Preferences {
     sidebarCollapsed: Boolean(stored.sidebarCollapsed),
     inspectorOpen: stored.inspectorOpen !== false,
     checkUpdatesOnLaunch: stored.checkUpdatesOnLaunch !== false,
+    agentCompletionSound: knownNotificationSounds.has(
+      String(stored.agentCompletionSound),
+    )
+      ? (stored.agentCompletionSound as NotificationSoundChoice)
+      : defaultPreferences.agentCompletionSound,
   };
 }
 

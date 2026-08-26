@@ -37,5 +37,8 @@ describe("sanitizePreferences", () => {
     expect(preferences.sensitiveClipboardClear).toBe(
       defaultPreferences.sensitiveClipboardClear,
     );
+    expect(preferences.agentCompletionSound).toBe(
+      defaultPreferences.agentCompletionSound,
+    );
   });
 });

@@ -113,8 +113,7 @@
 
 .sftp-table th,
 .sftp-table td {
-  padding: 0.28rem var(--space-3);
-  border-bottom: 1px solid var(--line);
+  padding: 0.14rem var(--space-3);
   text-align: left;
   vertical-align: middle;
   /* One line per cell: dates and permissions must never wrap the row taller. */
@@ -132,6 +131,7 @@
   font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--line);
 }
 
 .sftp-table th:first-child {
@@ -218,6 +218,12 @@
 
 .sftp-row-actions {
   justify-content: flex-end;
+  gap: 0;
+}
+
+.sftp-row-actions .icon-button--sm {
+  width: 1.5rem;
+  height: 1.5rem;
 }
 
 .sftp-state {

@@ -1,6 +1,6 @@
 /** Unified workspace for text terminals and graphical remote sessions. */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
@@ -17,11 +17,32 @@ import type {
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
+import {
+  playNotificationSound,
+  type NotificationSoundChoice,
+} from "../app/notificationSounds";
+import { agentGroupSidebarStatus } from "../app/sessionStatus";
+import {
+  createSessionSidebarFolder,
+  loadSessionSidebarLayout,
+  moveSessionSidebarNode,
+  reconcileSessionSidebarLayout,
+  removeSessionSidebarFolder,
+  renameSessionSidebarFolder,
+  saveSessionSidebarLayout,
+  toggleSessionSidebarFolder,
+  type LiveSessionSidebarNode,
+  type SessionSidebarFolder,
+} from "../app/sessionSidebarLayout";
 import { useI18n } from "../i18n/context";
 import { Callout, EmptyState } from "../components/common/Callout";
+import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
+import {
+  SessionProjectSidebar,
+  type SessionSidebarProjectItem,
+} from "../components/sessions/SessionProjectSidebar";
 import {
   AgentIcon,
-  ChevronDownIcon,
   CloseIcon,
   EditIcon,
   FolderIcon,
@@ -79,6 +100,16 @@ function projectIdForSession(session: SessionRef): string {
     : "remote-connections";
 }
 
+function sidebarProjectNodeId(projectId: string): string {
+  return `project:${projectId}`;
+}
+
+function sidebarSessionNodeId(session: SessionRef): string {
+  return session.kind === "agent"
+    ? `session:agent:${session.groupId}`
+    : `session:${session.kind}:${session.sessionId}`;
+}
+
 export function SessionsView({
   agents,
   ssh,
@@ -89,6 +120,7 @@ export function SessionsView({
   activeSessionId,
   onSelect,
   theme,
+  completionSound,
 }: {
   agents: AgentApi;
   ssh: SshApi;
@@ -99,6 +131,7 @@ export function SessionsView({
   activeSessionId: string | null;
   onSelect: (sessionId: string | null) => void;
   theme: ThemeId;
+  completionSound: NotificationSoundChoice;
 }) {
   const { t } = useI18n();
 
@@ -161,12 +194,16 @@ export function SessionsView({
   >({});
   const [addCliFor, setAddCliFor] = useState<string | null>(null);
   const [carryContext, setCarryContext] = useState(true);
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(
-    () => new Set(),
+  const [sidebarLayout, setSidebarLayout] = useState(() =>
+    loadSessionSidebarLayout(window.localStorage),
   );
-  const [newSessionForProject, setNewSessionForProject] = useState<string | null>(
-    null,
-  );
+  const [folderEditor, setFolderEditor] = useState<{
+    parentId: string | null;
+    folder: SessionSidebarFolder | null;
+  } | null>(null);
+  const [folderDraft, setFolderDraft] = useState("");
+  const [pendingDeleteFolder, setPendingDeleteFolder] =
+    useState<SessionSidebarFolder | null>(null);
   const [newProjectDirectory, setNewProjectDirectory] = useState<string | null>(
     null,
   );
@@ -175,6 +212,15 @@ export function SessionsView({
     null,
   );
   const [newProjectError, setNewProjectError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!folderEditor) return;
+    function close(event: KeyboardEvent) {
+      if (event.key === "Escape") setFolderEditor(null);
+    }
+    document.addEventListener("keydown", close, true);
+    return () => document.removeEventListener("keydown", close, true);
+  }, [folderEditor]);
 
   const installedAgents = agents.catalog.filter(
     (definition) => definition.installed,
@@ -351,6 +397,28 @@ export function SessionsView({
     })),
   ];
 
+  const completionStates = agentGroups
+    .map((group) => `${group.groupId}:${agentGroupSidebarStatus(group.members)}`)
+    .join("|");
+  const previousCompletionStatesRef = useRef<Map<string, string> | null>(null);
+  useEffect(() => {
+    const current = new Map(
+      agentGroups.map((group) => [
+        group.groupId,
+        agentGroupSidebarStatus(group.members),
+      ]),
+    );
+    const previous = previousCompletionStatesRef.current;
+    if (previous) {
+      const newlyCompleted = [...current].some(
+        ([groupId, status]) =>
+          status === "done" && previous.get(groupId) !== "done",
+      );
+      if (newlyCompleted) void playNotificationSound(completionSound);
+    }
+    previousCompletionStatesRef.current = current;
+  }, [completionStates, completionSound]);
+
   const closedNotices: ClosedNoticeSource[] = [];
   if (agents.lastClosed) {
     closedNotices.push({
@@ -498,7 +566,185 @@ export function SessionsView({
     </div>
   ) : null;
 
-  if (sessions.length === 0) {
+  const active =
+    sessions.find((session) => session.sessionId === activeSessionId) ??
+    sessions[0] ??
+    null;
+  const projectMap = new Map<string, SessionProject>();
+  for (const session of sessions) {
+    const id = projectIdForSession(session);
+    const existing = projectMap.get(id);
+    if (existing) {
+      existing.sessions.push(session);
+      continue;
+    }
+    const workingDirectory =
+      session.kind === "agent"
+        ? session.members[0]?.workingDirectory ?? null
+        : null;
+    projectMap.set(id, {
+      id,
+      label: workingDirectory
+        ? localProjectLabel(workingDirectory)
+        : t("terminal.projects.remote"),
+      workingDirectory,
+      sessions: [session],
+    });
+  }
+  const projects = [...projectMap.values()];
+  const activeProjectId = active ? projectIdForSession(active) : null;
+  const activeProject =
+    projects.find((project) => project.id === activeProjectId) ?? projects[0] ?? null;
+  const visibleSessions = activeProject?.sessions ?? [];
+  const sidebarProjects: SessionSidebarProjectItem[] = projects.map((project) => ({
+    nodeId: sidebarProjectNodeId(project.id),
+    projectId: project.id,
+    label: project.label,
+    workingDirectory: project.workingDirectory,
+    sessions: project.sessions.map((session) => ({
+      nodeId: sidebarSessionNodeId(session),
+      sessionId: session.sessionId,
+      label: session.label,
+      kind: session.kind,
+      status:
+        session.kind === "agent"
+          ? agentGroupSidebarStatus(session.members)
+          : "connected",
+    })),
+  }));
+  const liveSidebarNodes: LiveSessionSidebarNode[] = sidebarProjects.flatMap(
+    (project) => [
+      { id: project.nodeId, defaultParentId: null },
+      ...project.sessions.map((session) => ({
+        id: session.nodeId,
+        defaultParentId: project.nodeId,
+      })),
+    ],
+  );
+  const reconciledSidebarLayout = reconcileSessionSidebarLayout(
+    sidebarLayout,
+    liveSidebarNodes,
+  );
+  const liveSidebarKey = liveSidebarNodes
+    .map((node) => `${node.id}>${node.defaultParentId ?? "root"}`)
+    .join("|");
+  useEffect(() => {
+    setSidebarLayout((current) => {
+      const next = reconcileSessionSidebarLayout(current, liveSidebarNodes);
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
+  }, [liveSidebarKey]);
+  useEffect(() => {
+    try {
+      saveSessionSidebarLayout(window.localStorage, sidebarLayout);
+    } catch {
+      // Sidebar organization is a convenience and must not interrupt sessions.
+    }
+  }, [sidebarLayout]);
+
+  function openFolderEditor(
+    parentId: string | null,
+    folder: SessionSidebarFolder | null = null,
+  ) {
+    setFolderDraft(folder?.name ?? "");
+    setFolderEditor({ parentId, folder });
+  }
+
+  function saveFolder() {
+    if (!folderEditor || !folderDraft.trim()) return;
+    if (folderEditor.folder) {
+      setSidebarLayout(
+        renameSessionSidebarFolder(
+          reconciledSidebarLayout,
+          folderEditor.folder.id,
+          folderDraft,
+        ),
+      );
+    } else {
+      const suffix =
+        typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      setSidebarLayout(
+        createSessionSidebarFolder(
+          reconciledSidebarLayout,
+          { id: `folder:${suffix}`, name: folderDraft },
+          folderEditor.parentId,
+        ),
+      );
+    }
+    setFolderEditor(null);
+  }
+
+  const folderDialog = folderEditor ? (
+    <div
+      className="scrim scrim--center"
+      role="presentation"
+      onMouseDown={() => setFolderEditor(null)}
+    >
+      <div
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="session-folder-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="dialog__head">
+          <span className="dialog__icon dialog__icon--inline" aria-hidden="true">
+            <FolderIcon size={17} />
+          </span>
+          <h2 className="dialog__title" id="session-folder-title">
+            {t(
+              folderEditor.folder
+                ? "terminal.projects.folderRename"
+                : "terminal.projects.folderTitle",
+            )}
+          </h2>
+        </header>
+        <form
+          className="dialog__stack"
+          onSubmit={(event) => {
+            event.preventDefault();
+            saveFolder();
+          }}
+        >
+          <label className="field">
+            <span className="field__label">{t("terminal.projects.folderName")}</span>
+            <input
+              className="input"
+              autoFocus
+              maxLength={80}
+              value={folderDraft}
+              onChange={(event) => setFolderDraft(event.currentTarget.value)}
+              placeholder={t("terminal.projects.folderNamePlaceholder")}
+            />
+          </label>
+          <div className="dialog__actions">
+            <button
+              type="button"
+              className="button button--ghost"
+              onClick={() => setFolderEditor(null)}
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              type="submit"
+              className="button button--primary"
+              disabled={!folderDraft.trim()}
+            >
+              {t(
+                folderEditor.folder
+                  ? "terminal.projects.folderSave"
+                  : "terminal.projects.folderCreate",
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  ) : null;
+
+  if (!active || !activeProject) {
     return (
       <div className="terminal-workspace">
         {closedCallout}
@@ -530,47 +776,9 @@ export function SessionsView({
           }
         />
         {newProjectDialog}
+        {folderDialog}
       </div>
     );
-  }
-
-  const active =
-    sessions.find((session) => session.sessionId === activeSessionId) ?? sessions[0];
-
-  const projectMap = new Map<string, SessionProject>();
-  for (const session of sessions) {
-    const id = projectIdForSession(session);
-    const existing = projectMap.get(id);
-    if (existing) {
-      existing.sessions.push(session);
-      continue;
-    }
-    const workingDirectory =
-      session.kind === "agent"
-        ? session.members[0]?.workingDirectory ?? null
-        : null;
-    projectMap.set(id, {
-      id,
-      label: workingDirectory
-        ? localProjectLabel(workingDirectory)
-        : t("terminal.projects.remote"),
-      workingDirectory,
-      sessions: [session],
-    });
-  }
-  const projects = [...projectMap.values()];
-  const activeProjectId = projectIdForSession(active);
-  const activeProject =
-    projects.find((project) => project.id === activeProjectId) ?? projects[0];
-  const visibleSessions = activeProject.sessions;
-
-  function toggleProject(projectId: string) {
-    setCollapsedProjects((current) => {
-      const next = new Set(current);
-      if (next.has(projectId)) next.delete(projectId);
-      else next.add(projectId);
-      return next;
-    });
   }
 
   async function launchInProject(
@@ -578,7 +786,6 @@ export function SessionsView({
     definition: AgentDefinition,
   ) {
     if (!project.workingDirectory) return;
-    setNewSessionForProject(null);
     try {
       const launched = await agents.launch({
         definitionId: definition.id,
@@ -629,136 +836,43 @@ export function SessionsView({
     <div className="terminal-workspace">
       {closedCallout}
       <div className="terminal-workspace__body">
-        <aside
-          className="session-projects"
-          aria-label={t("terminal.projects")}
-        >
-          <div className="session-projects__title">
-            <FolderIcon size={14} />
-            <span>{t("terminal.projects")}</span>
-            <button
-              type="button"
-              className="icon-button icon-button--sm session-projects__add"
-              disabled={choosingProject}
-              onClick={() => void chooseProjectDirectory()}
-              aria-label={t("terminal.projects.add")}
-              data-tooltip={t("terminal.projects.add")}
-            >
-              <PlusIcon size={12} />
-            </button>
-          </div>
-          {newProjectError && !newProjectDialog && (
-            <div className="session-projects__error" role="alert">
-              {t("terminal.projects.chooseFailed")}
-            </div>
-          )}
-          {projects.map((project) => {
-            const collapsed = collapsedProjects.has(project.id);
-            const selected = project.id === activeProject.id;
-            const installed = agents.catalog.filter(
-              (definition) => definition.installed,
-            );
-            return (
-              <section
-                className={`session-project${selected ? " is-active" : ""}`}
-                key={project.id}
-              >
-                <div className="session-project__header">
-                  <button
-                    type="button"
-                    className="session-project__select"
-                    onClick={() => {
-                      if (collapsed) toggleProject(project.id);
-                      onSelect(project.sessions[0]?.sessionId ?? null);
-                    }}
-                    title={project.workingDirectory ?? project.label}
-                  >
-                    <FolderIcon size={13} />
-                    <span className="truncate">{project.label}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button icon-button--sm"
-                    onClick={() => toggleProject(project.id)}
-                    aria-label={t("terminal.projects.toggle")}
-                    aria-expanded={!collapsed}
-                  >
-                    <ChevronDownIcon
-                      size={12}
-                      className={collapsed ? "is-collapsed" : undefined}
-                    />
-                  </button>
-                  {project.workingDirectory && (
-                    <div className="session-project__add-wrap">
-                      <button
-                        type="button"
-                        className="icon-button icon-button--sm"
-                        onClick={() =>
-                          setNewSessionForProject((current) =>
-                            current === project.id ? null : project.id,
-                          )
-                        }
-                        aria-label={t("terminal.projects.newSession")}
-                        data-tooltip={t("terminal.projects.newSession")}
-                      >
-                        <PlusIcon size={12} />
-                      </button>
-                      {newSessionForProject === project.id && (
-                        <div className="session-project__menu" role="menu">
-                          {installed.map((definition) => (
-                            <button
-                              key={definition.id}
-                              type="button"
-                              role="menuitem"
-                              onClick={() =>
-                                void launchInProject(project, definition)
-                              }
-                            >
-                              {definition.label}
-                            </button>
-                          ))}
-                          {installed.length === 0 && (
-                            <span>{t("terminal.addCli.none")}</span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-                {!collapsed && (
-                  <div className="session-project__sessions">
-                    {project.sessions.map((session) => {
-                      const Glyph =
-                        session.kind === "agent"
-                          ? AgentIcon
-                          : session.kind === "sftp"
-                            ? TransferIcon
-                            : session.kind === "ssh"
-                              ? TerminalIcon
-                              : ScreenShareIcon;
-                      return (
-                        <button
-                          type="button"
-                          className={`session-project__session${
-                            session.sessionId === active.sessionId
-                              ? " is-active"
-                              : ""
-                          }`}
-                          key={session.sessionId}
-                          onClick={() => onSelect(session.sessionId)}
-                          title={session.label}
-                        >
-                          <Glyph size={12} />
-                          <span className="truncate">{session.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-            );
-          })}
-        </aside>
+        <SessionProjectSidebar
+          projects={sidebarProjects}
+          layout={reconciledSidebarLayout}
+          activeSessionId={active.sessionId}
+          choosingProject={choosingProject}
+          chooseError={Boolean(newProjectError && !newProjectDialog)}
+          installedAgents={installedAgents}
+          onChooseProject={() => void chooseProjectDirectory()}
+          onSelect={onSelect}
+          onLaunch={(sidebarProject, definition) => {
+            const project = projectMap.get(sidebarProject.projectId);
+            if (project) void launchInProject(project, definition);
+          }}
+          onCreateFolder={(parentId) => openFolderEditor(parentId)}
+          onRenameFolder={(folder) =>
+            openFolderEditor(
+              reconciledSidebarLayout.placements[folder.id]?.parentId ?? null,
+              folder,
+            )
+          }
+          onDeleteFolder={setPendingDeleteFolder}
+          onToggleFolder={(folderId) =>
+            setSidebarLayout(
+              toggleSessionSidebarFolder(reconciledSidebarLayout, folderId),
+            )
+          }
+          onMove={(nodeId, parentId, beforeNodeId) =>
+            setSidebarLayout(
+              moveSessionSidebarNode(
+                reconciledSidebarLayout,
+                nodeId,
+                parentId,
+                beforeNodeId,
+              ),
+            )
+          }
+        />
 
         <section className="terminal-project-workspace">
           <div className="session-tabs" role="tablist">
@@ -1096,6 +1210,27 @@ export function SessionsView({
         </section>
       </div>
       {newProjectDialog}
+      {folderDialog}
+      {pendingDeleteFolder && (
+        <ConfirmDialog
+          title={t("terminal.projects.folderDeleteTitle", {
+            name: pendingDeleteFolder.name,
+          })}
+          body={t("terminal.projects.folderDeleteBody")}
+          confirmLabel={t("terminal.projects.folderDeleteAction")}
+          cancelLabel={t("common.cancel")}
+          onCancel={() => setPendingDeleteFolder(null)}
+          onConfirm={() => {
+            setSidebarLayout(
+              removeSessionSidebarFolder(
+                reconciledSidebarLayout,
+                pendingDeleteFolder.id,
+              ),
+            );
+            setPendingDeleteFolder(null);
+          }}
+        />
+      )}
     </div>
   );
 }

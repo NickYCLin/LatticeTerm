@@ -13,8 +13,8 @@ use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 pub const EVENT_DATA: &str = "agent://data";
@@ -35,6 +35,11 @@ const MAX_OUTPUT_SNAPSHOT_BYTES: usize = 256 * 1024;
 const MAX_REPORT_BYTES: u64 = 4096;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REPORT_RETRIES: usize = 5;
+const STARTUP_SEED_PROMPT_SETTLE: Duration = Duration::from_millis(120);
+const STARTUP_SEED_MIN_WAIT: Duration = Duration::from_millis(1800);
+const STARTUP_SEED_OUTPUT_QUIET: Duration = Duration::from_millis(550);
+const STARTUP_SEED_TIMEOUT: Duration = Duration::from_secs(20);
+const STARTUP_CONTROL_WINDOW_BYTES: usize = 64;
 
 const AGENT_ADAPTER_VERSION: u32 = 1;
 
@@ -459,6 +464,113 @@ struct AgentSessionEntry {
     capture: Mutex<CaptureState>,
     model_capture: Mutex<ModelCaptureState>,
     output: Mutex<OutputBuffer>,
+    startup_gate: StartupGate,
+}
+
+#[derive(Debug, Default)]
+struct StartupReadiness {
+    saw_output: bool,
+    prompt_ready: bool,
+    last_output_at: Option<Instant>,
+    control_window: Vec<u8>,
+}
+
+impl StartupReadiness {
+    fn observe(&mut self, bytes: &[u8], now: Instant) {
+        self.saw_output = true;
+        self.last_output_at = Some(now);
+        self.control_window.extend_from_slice(bytes);
+        if self
+            .control_window
+            .windows(b"\x1b[?2004h".len())
+            .any(|window| window == b"\x1b[?2004h")
+        {
+            self.prompt_ready = true;
+        }
+        if self.control_window.len() > STARTUP_CONTROL_WINDOW_BYTES {
+            let overflow = self.control_window.len() - STARTUP_CONTROL_WINDOW_BYTES;
+            self.control_window.drain(..overflow);
+        }
+    }
+
+    fn should_deliver(&self, started_at: Instant, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(started_at);
+        if elapsed >= STARTUP_SEED_TIMEOUT {
+            return true;
+        }
+        let Some(last_output_at) = self.last_output_at else {
+            return false;
+        };
+        let quiet_for = now.saturating_duration_since(last_output_at);
+        if self.prompt_ready {
+            quiet_for >= STARTUP_SEED_PROMPT_SETTLE
+        } else {
+            self.saw_output
+                && elapsed >= STARTUP_SEED_MIN_WAIT
+                && quiet_for >= STARTUP_SEED_OUTPUT_QUIET
+        }
+    }
+
+    fn wait_duration(&self, started_at: Instant, now: Instant) -> Duration {
+        let until_timeout =
+            STARTUP_SEED_TIMEOUT.saturating_sub(now.saturating_duration_since(started_at));
+        if let Some(last_output_at) = self.last_output_at {
+            let quiet_target = if self.prompt_ready {
+                STARTUP_SEED_PROMPT_SETTLE
+            } else {
+                STARTUP_SEED_OUTPUT_QUIET
+            };
+            let until_quiet =
+                quiet_target.saturating_sub(now.saturating_duration_since(last_output_at));
+            let until_min_wait = if self.prompt_ready {
+                Duration::ZERO
+            } else {
+                STARTUP_SEED_MIN_WAIT.saturating_sub(now.saturating_duration_since(started_at))
+            };
+            return until_timeout
+                .min(until_quiet.max(until_min_wait))
+                .max(Duration::from_millis(1));
+        }
+        until_timeout
+            .min(Duration::from_millis(250))
+            .max(Duration::from_millis(1))
+    }
+}
+
+#[derive(Debug, Default)]
+struct StartupGate {
+    readiness: Mutex<StartupReadiness>,
+    changed: Condvar,
+}
+
+impl StartupGate {
+    fn observe(&self, bytes: &[u8]) {
+        if let Ok(mut readiness) = self.readiness.lock() {
+            readiness.observe(bytes, Instant::now());
+            self.changed.notify_all();
+        }
+    }
+
+    fn wait_until_ready(&self, started_at: Instant) {
+        let Ok(mut readiness) = self.readiness.lock() else {
+            return;
+        };
+        loop {
+            let now = Instant::now();
+            if readiness.should_deliver(started_at, now) {
+                return;
+            }
+            let duration = readiness.wait_duration(started_at, now);
+            let Ok((next, _)) = self.changed.wait_timeout(readiness, duration) else {
+                return;
+            };
+            readiness = next;
+        }
+    }
+}
+
+fn startup_seed_payload(seed: &str) -> Vec<u8> {
+    format!("\u{1b}[200~{seed}\u{1b}[201~\r").into_bytes()
 }
 
 #[derive(Default)]
@@ -2147,6 +2259,7 @@ pub fn launch(
     registry: Arc<AgentRegistry>,
     request: AgentLaunchRequest,
 ) -> Result<AgentSessionSummary, String> {
+    let launched_at = Instant::now();
     let size = validated_size(request.cols, request.rows)?;
     let (definition_id, label, executable, arguments, working_directory) =
         resolve_launch(&request)?;
@@ -2247,6 +2360,7 @@ pub fn launch(
             model_command_active: false,
         }),
         output: Mutex::new(OutputBuffer::default()),
+        startup_gate: StartupGate::default(),
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
         let _ = terminate_agent_entry(entry.as_ref());
@@ -2256,6 +2370,7 @@ pub fn launch(
     let reader_id = session_id.clone();
     let reader_sink = Arc::clone(&sink);
     let reader_registry = Arc::clone(&registry);
+    let reader_entry = Arc::clone(&entry);
     std::thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
         loop {
@@ -2263,6 +2378,7 @@ pub fn launch(
                 Ok(0) => break,
                 Ok(count) => {
                     let bytes = &buffer[..count];
+                    reader_entry.startup_gate.observe(bytes);
                     let Ok(offset) = reader_registry.record_output(&reader_id, bytes) else {
                         break;
                     };
@@ -2292,18 +2408,19 @@ pub fn launch(
     {
         let seed_id = session_id.clone();
         let seed_registry = Arc::clone(&registry);
+        let seed_entry = Arc::clone(&entry);
         std::thread::spawn(move || {
-            // Give the CLI a moment to reach its interactive prompt and turn on
-            // bracketed paste, then deliver the handoff as one pasted block and
-            // submit it — so multi-line, arbitrary text never trips the shell.
-            std::thread::sleep(Duration::from_millis(1800));
-            let payload = format!("\u{1b}[200~{seed}\u{1b}[201~\r");
+            // Each terminal starts at a different speed, especially when the
+            // user launches several CLIs together. Wait for this PTY to enable
+            // bracketed paste or for its own startup output to settle.
+            seed_entry.startup_gate.wait_until_ready(launched_at);
+            let payload = startup_seed_payload(&seed);
             if let Ok(entry) = seed_registry.get(&seed_id) {
                 if let Ok(mut capture) = entry.model_capture.lock() {
-                    capture.input(payload.as_bytes());
+                    capture.input(&payload);
                 }
                 if let Ok(mut writer) = entry.writer.lock() {
-                    let _ = writer.write_all(payload.as_bytes());
+                    let _ = writer.write_all(&payload);
                     let _ = writer.flush();
                 }
             }
@@ -2640,6 +2757,53 @@ session id: 0199aa11-"
         request.seed_input = None;
         apply_startup_instructions(&mut request, "Never send this to installers.").unwrap();
         assert!(request.seed_input.is_none());
+    }
+
+    #[test]
+    fn startup_seed_waits_for_each_terminal_instead_of_a_shared_delay() {
+        let started_at = Instant::now();
+        let mut fast = StartupReadiness::default();
+        let slow = StartupReadiness::default();
+        fast.observe(b"loading\x1b[?20", started_at + Duration::from_millis(80));
+        let prompt_at = started_at + Duration::from_millis(100);
+        fast.observe(b"04h", prompt_at);
+
+        assert!(!fast.should_deliver(
+            started_at,
+            prompt_at + STARTUP_SEED_PROMPT_SETTLE - Duration::from_millis(1)
+        ));
+        assert!(fast.should_deliver(started_at, prompt_at + STARTUP_SEED_PROMPT_SETTLE));
+        assert!(!slow.should_deliver(started_at, started_at + STARTUP_SEED_MIN_WAIT));
+
+        let mut noisy = StartupReadiness::default();
+        let mut prompt_then_screen = b"\x1b[?2004h".to_vec();
+        prompt_then_screen.extend(vec![b'x'; STARTUP_CONTROL_WINDOW_BYTES * 2]);
+        noisy.observe(&prompt_then_screen, prompt_at);
+        assert!(noisy.should_deliver(started_at, prompt_at + STARTUP_SEED_PROMPT_SETTLE));
+    }
+
+    #[test]
+    fn startup_seed_fallback_requires_output_to_settle() {
+        let started_at = Instant::now();
+        let mut readiness = StartupReadiness::default();
+        let last_output_at = started_at + STARTUP_SEED_MIN_WAIT;
+        readiness.observe(b"CLI startup without bracketed paste", last_output_at);
+
+        assert!(!readiness.should_deliver(
+            started_at,
+            last_output_at + STARTUP_SEED_OUTPUT_QUIET - Duration::from_millis(1)
+        ));
+        assert!(readiness.should_deliver(started_at, last_output_at + STARTUP_SEED_OUTPUT_QUIET));
+    }
+
+    #[test]
+    fn startup_seed_payload_preserves_the_full_unicode_prompt() {
+        let seed = "請使用繁體中文。\n第二行不可截斷。";
+        let payload = startup_seed_payload(seed);
+        assert_eq!(
+            String::from_utf8(payload).unwrap(),
+            format!("\u{1b}[200~{seed}\u{1b}[201~\r")
+        );
     }
 
     #[test]

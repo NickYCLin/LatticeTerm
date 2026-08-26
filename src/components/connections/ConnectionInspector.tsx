@@ -109,23 +109,29 @@ export function ConnectionInspector({
               <h3 className="eyebrow">{t("inspector.section.target")}</h3>
               <dl className="field-list">
                 <Field
-                  label={t("inspector.host")}
+                  label={t(
+                    profile.protocol === "lattice"
+                      ? "inspector.remoteAddress"
+                      : "inspector.host",
+                  )}
                   value={<span className="mono">{profile.hostname}</span>}
                 />
                 <Field
                   label={t("inspector.port")}
                   value={<span className="mono">{profile.port}</span>}
                 />
-                <Field
-                  label={t("inspector.username")}
-                  value={
-                    profile.username ? (
-                      <span className="mono">{profile.username}</span>
-                    ) : (
-                      <span className="text-faint">{t("common.notSet")}</span>
-                    )
-                  }
-                />
+                {profile.protocol !== "lattice" && (
+                  <Field
+                    label={t("inspector.username")}
+                    value={
+                      profile.username ? (
+                        <span className="mono">{profile.username}</span>
+                      ) : (
+                        <span className="text-faint">{t("common.notSet")}</span>
+                      )
+                    }
+                  />
+                )}
                 <Field
                   label={t("inspector.environment")}
                   value={t(environmentLabelKey(profile.environment))}

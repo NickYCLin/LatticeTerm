@@ -243,11 +243,7 @@
   padding-right: 1.75rem;
 }
 
-.agent-card__migration {
-  margin-top: var(--space-1);
-}
-
-.agent-card__migration > summary {
+.agent-card__migration-button {
   position: absolute;
   top: var(--space-2);
   right: var(--space-2);
@@ -260,24 +256,24 @@
   background: color-mix(in srgb, var(--warn) 13%, var(--surface-raised));
   color: var(--warn);
   cursor: pointer;
-  list-style: none;
 }
 
-.agent-card__migration > summary::-webkit-details-marker {
-  display: none;
-}
-
-.agent-card__migration > summary:hover,
-.agent-card__migration > summary:focus-visible,
-.agent-card__migration[open] > summary {
+.agent-card__migration-button:hover,
+.agent-card__migration-button:focus-visible,
+.agent-card__migration-button[aria-expanded="true"] {
   border-color: var(--warn);
   background: color-mix(in srgb, var(--warn) 22%, var(--surface-raised));
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 18%, transparent);
 }
 
-.agent-card__migration > .callout {
-  margin-top: var(--space-2);
+.agent-migration-card {
+  position: fixed;
+  z-index: 120;
+  width: min(20rem, calc(100vw - 1.5rem));
+  border-radius: var(--radius-lg);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-lg);
 }
 
 .agent-card code,

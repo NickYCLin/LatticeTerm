@@ -280,7 +280,9 @@ export function createConnectionProfile(
     name: draft.name.trim(),
     protocol: draft.protocol,
     hostname: draft.hostname.trim(),
-    username: draft.username.trim(),
+    // Lattice Remote authenticates with its one-time pairing code. Usernames
+    // belong to host-login protocols and must not leak into Remote profiles.
+    username: draft.protocol === "lattice" ? "" : draft.username.trim(),
     port: draft.port,
     environment: draft.environment ?? "unassigned",
     group: group || UNGROUPED,

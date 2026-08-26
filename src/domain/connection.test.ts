@@ -66,6 +66,22 @@ describe("connection profiles", () => {
     expect(emptyDraft().protocol).toBe("ssh");
   });
 
+  it("does not retain a username on Lattice Remote profiles", () => {
+    const profile = createConnectionProfile(
+      {
+        name: "Remote screen",
+        protocol: "lattice",
+        hostname: "192.0.2.42",
+        username: "operator-from-an-older-draft",
+        port: 44900,
+      },
+      "profile-remote",
+    );
+
+    expect(profile.username).toBe("");
+    expect(connectionTarget(profile)).toBe("192.0.2.42:44900");
+  });
+
   it("reports only protocols with working session engines as available", () => {
     expect(isProtocolAvailable("ssh")).toBe(true);
     expect(isProtocolAvailable("rdp")).toBe(true);

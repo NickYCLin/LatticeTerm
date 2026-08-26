@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   AgentApi,
   AgentDefinition,
@@ -95,6 +96,9 @@ export function AgentsView({
   const [savingStartupInstructions, setSavingStartupInstructions] = useState(false);
   const [startupInstructionsSaved, setStartupInstructionsSaved] = useState(false);
   const [reorderingPlanId, setReorderingPlanId] = useState<string | null>(null);
+  const [migrationNotice, setMigrationNotice] = useState<DOMRect | null>(null);
+  const migrationNoticeRef = useRef<HTMLDivElement>(null);
+  const migrationButtonRef = useRef<HTMLButtonElement | null>(null);
   const [pendingRestore, setPendingRestore] = useState<string[] | null>(null);
   const [pendingDeletePlan, setPendingDeletePlan] =
     useState<AgentLaunchPlan | null>(null);
@@ -105,6 +109,38 @@ export function AgentsView({
     failed?: number;
     detail?: string;
   } | null>(null);
+
+  useEffect(() => {
+    if (!migrationNotice) return;
+    function close(event: PointerEvent) {
+      const target = event.target as Node | null;
+      if (
+        target &&
+        (migrationNoticeRef.current?.contains(target) ||
+          migrationButtonRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setMigrationNotice(null);
+    }
+    function keydown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMigrationNotice(null);
+    }
+    function reposition() {
+      const button = migrationButtonRef.current;
+      setMigrationNotice(button ? button.getBoundingClientRect() : null);
+    }
+    document.addEventListener("pointerdown", close, true);
+    document.addEventListener("keydown", keydown, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", close, true);
+      document.removeEventListener("keydown", keydown, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [migrationNotice]);
   const [pendingStop, setPendingStop] = useState<AgentSessionSummary | null>(null);
   const [selectedBroadcastIds, setSelectedBroadcastIds] = useState<Set<string>>(
     () => new Set(),
@@ -581,20 +617,23 @@ export function AgentsView({
                   </div>
                 )}
                 {definition.consumerOauthDeprecated && (
-                  <details className="agent-card__migration">
-                    <summary
-                      aria-label={t("agents.geminiMigration.toggle")}
-                      data-tooltip={t("agents.geminiMigration.toggle")}
-                    >
-                      <AlertIcon size={14} />
-                    </summary>
-                    <Callout
-                      tone="warn"
-                      title={t("agents.geminiMigration.title")}
-                    >
-                      {t("agents.geminiMigration.body")}
-                    </Callout>
-                  </details>
+                  <button
+                    type="button"
+                    className="agent-card__migration-button"
+                    aria-label={t("agents.geminiMigration.toggle")}
+                    title={t("agents.geminiMigration.toggle")}
+                    aria-expanded={Boolean(migrationNotice)}
+                    onClick={(event) => {
+                      const button = event.currentTarget;
+                      const rect = button.getBoundingClientRect();
+                      migrationButtonRef.current = button;
+                      setMigrationNotice((current) =>
+                        current ? null : rect,
+                      );
+                    }}
+                  >
+                    <AlertIcon size={14} />
+                  </button>
                 )}
                 {!definition.installed && definition.install.displayCommand && (
                   <code className="agent-card__install-command">
@@ -1161,6 +1200,29 @@ export function AgentsView({
           onCancel={() => setPendingDeletePlan(null)}
         />
       )}
+      {migrationNotice &&
+        createPortal(
+          <div
+            ref={migrationNoticeRef}
+            className="agent-migration-card"
+            style={{
+              left:
+                migrationNotice.right + 328 <= window.innerWidth
+                  ? migrationNotice.right + 8
+                  : Math.max(12, migrationNotice.left - 328),
+              top: Math.max(
+                12,
+                Math.min(migrationNotice.top, window.innerHeight - 260),
+              ),
+            }}
+            role="status"
+          >
+            <Callout tone="warn" title={t("agents.geminiMigration.title")}>
+              {t("agents.geminiMigration.body")}
+            </Callout>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

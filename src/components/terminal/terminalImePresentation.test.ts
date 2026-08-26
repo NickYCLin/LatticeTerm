@@ -11,9 +11,15 @@ function harness() {
       contains: (name: string) => classes.has(name),
     },
   } as unknown as HTMLElement;
-  const terminal = { element };
+  const terminal = {
+    element,
+    options: { cursorBlink: true },
+  } as unknown as Pick<
+    import("@xterm/xterm").Terminal,
+    "element" | "options"
+  >;
   const presentation = new TerminalImePresentation(terminal, textarea, true);
-  return { textarea, element, presentation };
+  return { textarea, element, presentation, terminal };
 }
 
 describe("TerminalImePresentation", () => {
@@ -27,6 +33,15 @@ describe("TerminalImePresentation", () => {
     textarea.dispatchEvent(new Event("compositionstart"));
 
     expect(element.classList.contains("is-ime-composing")).toBe(true);
+  });
+
+  it("stops a CLI-enabled cursor blink while candidates are being reviewed", () => {
+    const { textarea, terminal } = harness();
+    expect(terminal.options.cursorBlink).toBe(true);
+
+    textarea.dispatchEvent(new Event("compositionstart"));
+
+    expect(terminal.options.cursorBlink).toBe(false);
   });
 
   it("restores the cursor when composition finishes", () => {

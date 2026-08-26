@@ -1,0 +1,31 @@
+# LatticeTerm
+
+> Open-source, cross-platform Tauri desktop workspace for local AI coding CLIs and remote access. It combines native-PTY agent sessions with SSH, SFTP, tunnels, RDP, VNC and end-to-end encrypted remote desktop connections.
+
+## Start here
+
+- [Project overview, features, installation and development](README.md)
+- [Source and documentation map](docs/README.md)
+- [AI Agent Fleet architecture](docs/AGENT_FLEET_ARCHITECTURE.zh-TW.md)
+- [Storage and security decisions](docs/STORAGE_SECURITY_DECISION.zh-TW.md)
+- [Current UI implementation boundaries](docs/UI_IMPLEMENTATION.zh-TW.md)
+- [Release automation](docs/RELEASE_AUTOMATION.zh-TW.md)
+- [Version history](CHANGELOG.md)
+- [Security policy](SECURITY.md)
+- [Contribution guide](CONTRIBUTING.md)
+
+## Source map
+
+- React application shell and views: `src/App.tsx`, `src/views/`
+- Local AI CLI PTY backend: `src-tauri/src/agent.rs`
+- Agent UI and terminal: `src/views/AgentsView.tsx`, `src/components/agents/`
+- SSH, SFTP and tunnels: `src-tauri/src/ssh.rs`, `sftp.rs`, `tunnel.rs`
+- Lattice Remote: `src/components/remote/`, `src-tauri/src/remote.rs`, `crates/lattice-remote/`
+- RDP and VNC engines: `crates/lattice-rdp/`, `crates/lattice-vnc/`
+- Vault, backup and storage: `src-tauri/src/vault.rs`, `backup.rs`, `storage.rs`
+
+## Important boundaries
+
+- AI CLI credentials remain owned by each CLI and are not stored by LatticeTerm.
+- Remote connections use real backends; planned capabilities are labelled rather than simulated.
+- Lattice Remote currently supports direct endpoint pairing. Stable numeric device IDs, signaling, relay and NAT traversal are planned, not implemented.

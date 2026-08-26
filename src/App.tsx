@@ -35,7 +35,6 @@ import { useAgentSessions } from "./app/useAgentSessions";
 import { useSshSessions } from "./app/useSshSessions";
 import { useSftpSessions } from "./app/useSftpSessions";
 import { useRemoteSessions } from "./app/useRemoteSessions";
-import { useRemoteHost } from "./app/useRemoteHost";
 import { useRdpSessions } from "./app/useRdpSessions";
 import { useVncSessions } from "./app/useVncSessions";
 import { useVault } from "./app/useVault";
@@ -65,7 +64,7 @@ import {
   snapshotLiveWorkspaceSessions,
 } from "./app/workspaceSessionPersistence";
 import { loadAuthPref } from "./app/authPreferences";
-import { PlusIcon, ScreenShareIcon } from "./components/icons";
+import { PlusIcon } from "./components/icons";
 import "./styles/index.css";
 
 const ConnectionsView = lazy(() =>
@@ -123,11 +122,6 @@ const RemoteConnectFlow = lazy(() =>
     default: module.RemoteConnectFlow,
   })),
 );
-const RemoteHostDialog = lazy(() =>
-  import("./components/remote/RemoteHostDialog").then((module) => ({
-    default: module.RemoteHostDialog,
-  })),
-);
 const RdpConnectFlow = lazy(() =>
   import("./components/rdp/RdpConnectFlow").then((module) => ({
     default: module.RdpConnectFlow,
@@ -176,7 +170,6 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const ssh = useSshSessions();
   const sftp = useSftpSessions();
   const remote = useRemoteSessions();
-  const remoteHost = useRemoteHost();
   const rdp = useRdpSessions();
   const vnc = useVncSessions();
   const vault = useVault();
@@ -221,7 +214,6 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     }
   }, [onMobile, view, visibleNavigation]);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [remoteHostOpen, setRemoteHostOpen] = useState(false);
   const [drawer, setDrawer] = useState<{
     open: boolean;
     profileId: string | null;
@@ -659,24 +651,6 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           }
           actions={
             <>
-              {!onMobile && (
-                <button
-                  type="button"
-                  className={
-                    remoteHost.status
-                      ? "button button--secondary"
-                      : "button button--ghost"
-                  }
-                  onClick={() => setRemoteHostOpen(true)}
-                >
-                  <ScreenShareIcon size={15} />
-                  {t(
-                    remoteHost.status
-                      ? "remote.host.activeAction"
-                      : "remote.host.action",
-                  )}
-                </button>
-              )}
               {view === "connections" && profiles.length > 0 && (
                 <button
                   type="button"
@@ -729,6 +703,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                     activeSessionId={activeSessionId}
                     onSelect={setActiveSessionId}
                     theme={activeTheme}
+                    completionSound={preferences.agentCompletionSound}
                   />
                 </div>
               </Suspense>
@@ -990,18 +965,6 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
             setSelectedId(profile.id);
           }}
           onClose={() => setPaletteOpen(false)}
-        />
-      )}
-
-      {remoteHostOpen && runtime.host === "browser" && (
-        <DesktopBackendRequiredDialog onClose={() => setRemoteHostOpen(false)} />
-      )}
-
-      {remoteHostOpen && runtime.host === "tauri" && (
-        <RemoteHostDialog
-          host={remoteHost}
-          sensitiveClipboardClear={preferences.sensitiveClipboardClear}
-          onClose={() => setRemoteHostOpen(false)}
         />
       )}
 

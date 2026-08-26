@@ -54,6 +54,10 @@ function sameDraft(a: ConnectionDraft, b: ConnectionDraft): boolean {
   );
 }
 
+function protocolDraft(draft: ConnectionDraft): ConnectionDraft {
+  return draft.protocol === "lattice" ? { ...draft, username: "" } : draft;
+}
+
 function Section({
   step,
   title,
@@ -179,13 +183,14 @@ export function ConnectionDrawer({
     patch({
       protocol,
       port: draft.port === previousDefault ? nextDefault : draft.port,
+      ...(protocol === "lattice" ? { username: "" } : {}),
     });
   }
 
   const candidate = useMemo(
     () =>
       createConnectionProfile(
-        { ...draft, tags: parseTags(tagInput) },
+        protocolDraft({ ...draft, tags: parseTags(tagInput) }),
         profile?.id ?? "draft",
       ),
     [draft, tagInput, profile],
@@ -198,7 +203,7 @@ export function ConnectionDrawer({
 
   /** Shared by submit and the settings check: validate, then focus the first problem. */
   function validateNow(): ValidationErrors {
-    const next = { ...draft, tags: parseTags(tagInput) };
+    const next = protocolDraft({ ...draft, tags: parseTags(tagInput) });
     const found = validateConnectionDraft(next);
     setErrors(found);
 
@@ -215,7 +220,7 @@ export function ConnectionDrawer({
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (Object.keys(validateNow()).length > 0) return;
-    onSave({ ...draft, tags: parseTags(tagInput) });
+    onSave(protocolDraft({ ...draft, tags: parseTags(tagInput) }));
   }
 
   const title = profile ? t("form.editTitle") : t("form.addTitle");
@@ -318,7 +323,11 @@ export function ConnectionDrawer({
 
             <div className="field">
               <label className="field__label" htmlFor={`${formId}-host`}>
-                {t("form.hostname")}
+                {t(
+                  draft.protocol === "lattice"
+                    ? "form.remoteAddress"
+                    : "form.hostname",
+                )}
               </label>
               <input
                 id={`${formId}-host`}
@@ -340,35 +349,48 @@ export function ConnectionDrawer({
                   {error("hostname")}
                 </p>
               )}
+              {draft.protocol === "lattice" && (
+                <Callout tone="info" title={t("form.remoteDirect.title")}>
+                  {t("form.remoteDirect.body")}
+                </Callout>
+              )}
             </div>
 
-            <div className="field-grid">
-              <div className="field">
-                <label className="field__label" htmlFor={`${formId}-user`}>
-                  {t("form.username")}
-                  <span className="field__optional">{t("common.optional")}</span>
-                </label>
-                <input
-                  id={`${formId}-user`}
-                  data-field="username"
-                  className={`input mono${errors.username ? " is-invalid" : ""}`}
-                  value={draft.username}
-                  onChange={(event) =>
-                    patch({ username: event.currentTarget.value }, "username")
-                  }
-                  placeholder={t("form.usernamePlaceholder")}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  aria-invalid={Boolean(errors.username)}
-                />
-                {error("username") && (
-                  <p className="field__error">
-                    <AlertIcon size={12} />
-                    {error("username")}
-                  </p>
-                )}
-              </div>
+            <div
+              className={`field-grid${
+                draft.protocol === "lattice" ? " field-grid--port-only" : ""
+              }`}
+            >
+              {draft.protocol !== "lattice" && (
+                <div className="field">
+                  <label className="field__label" htmlFor={`${formId}-user`}>
+                    {t("form.username")}
+                    <span className="field__optional">
+                      {t("common.optional")}
+                    </span>
+                  </label>
+                  <input
+                    id={`${formId}-user`}
+                    data-field="username"
+                    className={`input mono${errors.username ? " is-invalid" : ""}`}
+                    value={draft.username}
+                    onChange={(event) =>
+                      patch({ username: event.currentTarget.value }, "username")
+                    }
+                    placeholder={t("form.usernamePlaceholder")}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-invalid={Boolean(errors.username)}
+                  />
+                  {error("username") && (
+                    <p className="field__error">
+                      <AlertIcon size={12} />
+                      {error("username")}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="field field--port">
                 <label className="field__label" htmlFor={`${formId}-port`}>

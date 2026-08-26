@@ -2,6 +2,10 @@
 
 LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作空間，用來統一管理本機 AI CLI、SSH、SFTP、RDP 與 VNC 連線，以 Tauri 2、Rust、React 與 TypeScript 建構。
 
+**English summary:** LatticeTerm is an open-source, cross-platform desktop workspace for local AI coding agents and remote access. Run OpenAI Codex, Claude Code, Gemini CLI and other AI CLIs in native PTYs alongside SSH, SFTP, tunnels, RDP, VNC and end-to-end encrypted remote desktop sessions.
+
+[下載安裝](#-下載與安裝-downloads) · [功能現況](#完成度總覽) · [程式碼與文件導覽](docs/README.md) · [安全性](SECURITY.md) · [參與貢獻](CONTRIBUTING.md) · [English project map](llms.txt)
+
 > [!NOTE]
 > LatticeTerm 目前處於 **公開測試與功能成熟化階段**。桌面端的連線管理、SSH／SFTP／Tunnel、Web RDP、VNC、本機 AI Agent Fleet、安全保管庫、備份、跨平台安裝檔與自動更新已可實際使用；背景 Agent daemon、遠端 Fleet、Relay／NAT 穿透與 iOS 等進階能力仍依後續藍圖開發。
 

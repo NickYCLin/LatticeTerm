@@ -25,10 +25,16 @@ import { useAppUpdater, type AppUpdater } from "../app/useAppUpdater";
 import { APP_VERSION } from "../app/version";
 import type { EncryptedBackupRestore } from "../app/encryptedBackup";
 import { EncryptedBackupPanel } from "../components/settings/EncryptedBackupPanel";
+import { ChangelogPanel } from "../components/settings/ChangelogPanel";
 import {
   clearSensitiveClipboard,
   type SensitiveClipboardClearOutcome,
 } from "../app/sensitiveClipboard";
+import {
+  notificationSoundChoices,
+  playNotificationSound,
+  type NotificationSoundChoice,
+} from "../app/notificationSounds";
 
 interface Choice<T> {
   value: T;
@@ -44,6 +50,14 @@ const motionChoices: Choice<MotionChoice>[] = [
   { value: "system", labelKey: "settings.motion.system" },
   { value: "reduced", labelKey: "settings.motion.reduced" },
 ];
+
+const notificationSoundKeys: Record<NotificationSoundChoice, MessageKey> = {
+  off: "settings.notifications.sound.off",
+  clear: "settings.notifications.sound.clear",
+  gentle: "settings.notifications.sound.gentle",
+  double: "settings.notifications.sound.double",
+  wood: "settings.notifications.sound.wood",
+};
 
 const vaultAutoLockChoices: Choice<VaultAutoLockChoice>[] = [
   { value: "off", labelKey: "settings.security.autoLock.off" },
@@ -226,6 +240,30 @@ export function SettingsView({
             }))}
             value={preferences.motion}
             onChange={(motion) => onChange({ motion })}
+          />
+        </div>
+      </section>
+
+      <section className="panel glass glass--sheen">
+        <header className="panel__head">
+          <div>
+            <h2 className="panel__title">{t("settings.notifications")}</h2>
+            <p className="panel__hint">{t("settings.notificationsHint")}</p>
+          </div>
+        </header>
+        <div className="setting-list">
+          <SegmentedSetting
+            title={t("settings.notifications.agentSound")}
+            description={t("settings.notifications.agentSoundHint")}
+            choices={notificationSoundChoices.map((sound) => ({
+              value: sound,
+              label: t(notificationSoundKeys[sound]),
+            }))}
+            value={preferences.agentCompletionSound}
+            onChange={(agentCompletionSound) => {
+              onChange({ agentCompletionSound });
+              void playNotificationSound(agentCompletionSound);
+            }}
           />
         </div>
       </section>
@@ -580,6 +618,8 @@ export function SettingsView({
             </button>
           </div>
         )}
+
+        <ChangelogPanel currentVersion={summary?.version ?? APP_VERSION} />
       </section>
 
       <section className="panel glass glass--sheen">

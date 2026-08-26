@@ -207,6 +207,10 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.field-grid--port-only {
+  grid-template-columns: minmax(8rem, 12rem);
+}
+
 .field--port input {
   text-align: right;
 }
