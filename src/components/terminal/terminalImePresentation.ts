@@ -1,4 +1,4 @@
-import type { ITheme, Terminal } from "@xterm/xterm";
+import type { Terminal } from "@xterm/xterm";
 
 function linuxWebKitCompositionQuirks(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -13,22 +13,21 @@ function linuxWebKitCompositionQuirks(): boolean {
 
 /**
  * Keeps xterm's block cursor from flashing through the operating system's IME
- * composition text. The terminal stays focused; only its cursor colour is
- * temporarily matched to the terminal background until the composition is
- * committed or cancelled.
+ * composition text. The terminal stays focused and the opaque composition
+ * overlay covers the cursor without changing xterm's theme. Changing the
+ * theme here forces a full terminal repaint at the start and end of every IME
+ * composition, which is itself visible as a flash while typing.
  */
 export class TerminalImePresentation {
   private composing = false;
   private textareaCleanupTimer?: ReturnType<typeof globalThis.setTimeout>;
   private readonly trimTrailingCompositionSpace: boolean;
-  private baseTheme: ITheme;
   private readonly onCompositionStart = () => {
     if (this.textareaCleanupTimer !== undefined) {
       globalThis.clearTimeout(this.textareaCleanupTimer);
       this.textareaCleanupTimer = undefined;
     }
     this.composing = true;
-    this.apply();
     this.terminal.element?.classList.add("is-ime-composing");
   };
   private readonly onCompositionEnd = () => {
@@ -63,22 +62,15 @@ export class TerminalImePresentation {
   };
 
   constructor(
-    private readonly terminal: Pick<Terminal, "element" | "options">,
+    private readonly terminal: Pick<Terminal, "element">,
     private readonly textarea: HTMLTextAreaElement | undefined,
-    theme: ITheme,
     trimTrailingCompositionSpace = linuxWebKitCompositionQuirks(),
   ) {
-    this.baseTheme = theme;
     this.trimTrailingCompositionSpace = trimTrailingCompositionSpace;
     textarea?.addEventListener("compositionstart", this.onCompositionStart);
     textarea?.addEventListener("compositionend", this.onCompositionEnd);
     textarea?.addEventListener("blur", this.onBlur);
     textarea?.addEventListener("input", this.onInput);
-  }
-
-  setTheme(theme: ITheme) {
-    this.baseTheme = theme;
-    this.apply();
   }
 
   /**
@@ -106,23 +98,7 @@ export class TerminalImePresentation {
   }
 
   private finish() {
-    if (!this.composing) return;
     this.composing = false;
     this.terminal.element?.classList.remove("is-ime-composing");
-    this.apply();
-  }
-
-  private apply() {
-    if (!this.composing) {
-      this.terminal.options.theme = this.baseTheme;
-      return;
-    }
-
-    const background = this.baseTheme.background ?? "#0d1117";
-    this.terminal.options.theme = {
-      ...this.baseTheme,
-      cursor: background,
-      cursorAccent: background,
-    };
   }
 }

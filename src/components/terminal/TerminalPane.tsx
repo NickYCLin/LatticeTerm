@@ -39,7 +39,6 @@ export function TerminalPane({
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const imePresentationRef = useRef<TerminalImePresentation | null>(null);
 
   // Kept in refs so the terminal is created once per session, not on every
   // render that happens to change a callback identity.
@@ -84,9 +83,7 @@ export function TerminalPane({
     const imePresentation = new TerminalImePresentation(
       terminal,
       textarea,
-      terminalTheme(),
     );
-    imePresentationRef.current = imePresentation;
 
     let resizeFrame: number | null = null;
     let reportedSize = "";
@@ -180,7 +177,6 @@ export function TerminalPane({
       terminal.dispose();
       termRef.current = null;
       fitRef.current = null;
-      imePresentationRef.current = null;
     };
   }, [sessionId]);
 
@@ -188,7 +184,7 @@ export function TerminalPane({
   // change mid-session.
   useEffect(() => {
     if (termRef.current) {
-      imePresentationRef.current?.setTheme(terminalTheme());
+      termRef.current.options.theme = terminalTheme();
     }
   }, [theme]);
 

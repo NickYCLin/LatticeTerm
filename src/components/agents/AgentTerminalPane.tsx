@@ -28,7 +28,6 @@ export function AgentTerminalPane({
   const { t } = useI18n();
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const imePresentationRef = useRef<TerminalImePresentation | null>(null);
   const agentsRef = useRef(agents);
   const closedRef = useRef(onClosed);
   const errorRef = useRef(t("agents.terminal.inputFailed"));
@@ -61,9 +60,7 @@ export function AgentTerminalPane({
     const imePresentation = new TerminalImePresentation(
       terminal,
       textarea,
-      terminalTheme(),
     );
-    imePresentationRef.current = imePresentation;
 
     let resizeFrame: number | null = null;
     let reportedSize = "";
@@ -154,13 +151,12 @@ export function AgentTerminalPane({
       typed.dispose();
       terminal.dispose();
       terminalRef.current = null;
-      imePresentationRef.current = null;
     };
   }, [sessionId]);
 
   useEffect(() => {
     if (terminalRef.current) {
-      imePresentationRef.current?.setTheme(terminalTheme());
+      terminalRef.current.options.theme = terminalTheme();
     }
   }, [theme]);
 
