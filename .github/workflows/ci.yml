@@ -67,6 +67,11 @@ jobs:
       - name: Verify frontend
         run: npm run check
 
+      # Tauri's Rust build script validates configured external binaries even
+      # during cargo test, so the debug sidecars must exist first.
+      - name: Build desktop sidecars
+        run: npm run build:sidecars
+
       - name: Check Rust formatting
         run: |
           cargo fmt --manifest-path src-tauri/Cargo.toml --check
