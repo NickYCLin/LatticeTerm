@@ -4,6 +4,13 @@
 
 ---
 
+## [0.21.1](https://github.com/NickYCLin/lattice-term/compare/v0.21.0...v0.21.1) (2026-08-26)
+
+
+### 🛠️ 問題修正
+
+* **終端機:** 縮緊 Linux 字元欄距 ([b837bf9](https://github.com/NickYCLin/lattice-term/commit/b837bf995454bf216d1d377dd215dbc109a87564))
+
 ## [0.21.0](https://github.com/NickYCLin/lattice-term/compare/v0.20.0...v0.21.0) (2026-08-25)
 
 
