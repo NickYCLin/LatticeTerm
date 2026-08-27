@@ -738,8 +738,16 @@ impl ModelCaptureState {
                 .collect();
         }
         if let Some(model) = find_model_name(&self.definition_id, &self.buffer) {
+            if self.model_command_active {
+                // A /model picker lists several names before the choice
+                // lands, so the first sighting is usually the menu itself.
+                // Stay armed and let the last sighting win; the watch ends
+                // when the next ordinary command line is submitted.
+                self.scanned_chars = 0;
+                self.buffer.clear();
+                return Some(model);
+            }
             self.enabled = false;
-            self.model_command_active = false;
             self.buffer.clear();
             return Some(model);
         }
@@ -766,11 +774,19 @@ impl ModelCaptureState {
         for character in input.chars() {
             match character {
                 '\r' | '\n' => {
-                    if self.input_buffer.trim().starts_with("/model") {
+                    let submitted = self.input_buffer.trim();
+                    if submitted.starts_with("/model") {
                         self.enabled = true;
                         self.model_command_active = true;
                         self.buffer.clear();
                         self.scanned_chars = 0;
+                    } else if self.model_command_active && !submitted.is_empty() {
+                        // Picking with arrows submits an empty line and keeps
+                        // the watch; the next real command ends it so later
+                        // generated content is never read as a model change.
+                        self.model_command_active = false;
+                        self.enabled = false;
+                        self.buffer.clear();
                     }
                     self.input_buffer.clear();
                 }
@@ -1748,6 +1764,20 @@ fn plain_windows_path(path: &Path) -> OsString {
         .unwrap_or_else(|| path.as_os_str().to_os_string())
 }
 
+/// `canonicalize` returns verbatim (`\\?\`) paths on Windows. The child CLI
+/// records its cwd exactly as given, so the prefix would surface in prompts
+/// and native resume flows; working directories are stripped back to plain
+/// Win32 form before use.
+#[cfg(windows)]
+fn plain_directory(path: PathBuf) -> PathBuf {
+    PathBuf::from(plain_windows_path(&path))
+}
+
+#[cfg(not(windows))]
+fn plain_directory(path: PathBuf) -> PathBuf {
+    path
+}
+
 /// Windows cannot `CreateProcess` a `.cmd`/`.bat` shim directly, so those are
 /// routed through the command processor (`cmd.exe /c <script>`). All launch
 /// paths are first converted out of verbatim form for child compatibility.
@@ -1918,13 +1948,15 @@ pub fn normalize_launch_plan(
                 .to_string(),
         );
     }
-    let working_directory = PathBuf::from(validate_text(
-        &draft.working_directory,
-        "Working directory",
-        4096,
-    )?)
-    .canonicalize()
-    .map_err(|error| format!("Cannot open the working directory: {error}"))?;
+    let working_directory = plain_directory(
+        PathBuf::from(validate_text(
+            &draft.working_directory,
+            "Working directory",
+            4096,
+        )?)
+        .canonicalize()
+        .map_err(|error| format!("Cannot open the working directory: {error}"))?,
+    );
     if !working_directory.is_dir() {
         return Err("Working directory is not a directory.".to_string());
     }
@@ -2056,13 +2088,15 @@ fn resolve_launch(
                 .flatten()
         })
         .ok_or_else(|| format!("{default_label} is not installed or is not available on PATH."))?;
-    let working_directory = PathBuf::from(validate_text(
-        &request.working_directory,
-        "Working directory",
-        4096,
-    )?)
-    .canonicalize()
-    .map_err(|error| format!("Cannot open the working directory: {error}"))?;
+    let working_directory = plain_directory(
+        PathBuf::from(validate_text(
+            &request.working_directory,
+            "Working directory",
+            4096,
+        )?)
+        .canonicalize()
+        .map_err(|error| format!("Cannot open the working directory: {error}"))?,
+    );
     if !working_directory.is_dir() {
         return Err("Working directory is not a directory.".to_string());
     }
@@ -3038,7 +3072,58 @@ model = "gpt-5.3-codex"
             capture.feed(b"gpt-5.6-sol xhigh").as_deref(),
             Some("gpt-5.6-sol")
         );
+        // The picker may still be open; the watch survives the first match.
+        assert!(capture.model_command_active);
+        assert!(capture.enabled);
+    }
+
+    #[test]
+    fn model_picker_keeps_watching_until_the_next_real_command() {
+        let mut capture = ModelCaptureState {
+            definition_id: "codex".to_string(),
+            enabled: false,
+            buffer: String::new(),
+            scanned_chars: 0,
+            input_buffer: String::new(),
+            model_command_active: false,
+        };
+        for byte in b"/model\r" {
+            capture.input(&[*byte]);
+        }
+        // The menu redraw shows the current model first...
+        assert_eq!(
+            capture.feed(b"model: gpt-5.6-sol").as_deref(),
+            Some("gpt-5.6-sol")
+        );
+        // ...arrow keys and a bare Enter pick another entry...
+        capture.input(b"\x1b[B");
+        capture.input(b"\r");
+        assert!(capture.enabled);
+        // ...and the confirmation redraw carries the real choice.
+        assert_eq!(
+            capture.feed(b"model: gpt-5.6-max").as_deref(),
+            Some("gpt-5.6-max")
+        );
+        // The next ordinary command ends the watch for good.
+        for byte in b"run the tests\r" {
+            capture.input(&[*byte]);
+        }
+        assert!(!capture.enabled);
         assert!(!capture.model_command_active);
+        assert_eq!(capture.feed(b"model: gpt-9.9-fake"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn working_directories_lose_the_verbatim_prefix() {
+        assert_eq!(
+            plain_directory(PathBuf::from(r"\\?\D:\project\demo")),
+            PathBuf::from(r"D:\project\demo")
+        );
+        assert_eq!(
+            plain_directory(PathBuf::from(r"\\?\UNC\nas\share")),
+            PathBuf::from(r"\\nas\share")
+        );
     }
 
     #[test]
@@ -3340,7 +3425,7 @@ model = "gpt-5.3-codex"
         assert_eq!(plan.note, "審查 payments 專案");
         assert_eq!(
             PathBuf::from(&plan.working_directory),
-            directory.canonicalize().unwrap()
+            plain_directory(directory.canonicalize().unwrap())
         );
         let mut tampered = plan.clone();
         tampered.arguments = vec!["--token=manually-injected".to_string()];
