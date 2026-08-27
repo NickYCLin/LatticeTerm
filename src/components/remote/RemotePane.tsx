@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent, WheelEvent } from "react";
 import type { RemoteApi, RemoteInput, RemoteSessionSummary } from "../../app/useRemoteSessions";
+import type { ThemeId } from "../../app/themes";
 import { useI18n } from "../../i18n/context";
-import { FolderIcon, ScreenShareIcon, ShieldIcon } from "../icons";
+import { FolderIcon, ScreenShareIcon, ShieldIcon, TerminalIcon } from "../icons";
 import { CanvasCaptureControls } from "./CanvasCaptureControls";
 import { keysymFor } from "./keysym";
 import { RemoteFilesPane } from "./RemoteFilesPane";
+import { RemoteTerminalView } from "./RemoteTerminalView";
 
 export function RemotePane({
   session,
   remote,
+  theme,
 }: {
   session: RemoteSessionSummary;
   remote: RemoteApi;
+  /** Only used by the terminal view to follow palette changes. */
+  theme: ThemeId;
 }) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -118,21 +123,29 @@ export function RemotePane({
     <div className="remote-pane">
       <div className="remote-toolbar">
         <span className="remote-toolbar__identity truncate">
-          <ScreenShareIcon size={14} />
+          {session.terminal ? (
+            <TerminalIcon size={14} />
+          ) : (
+            <ScreenShareIcon size={14} />
+          )}
           {session.agentName}
         </span>
         <span className="remote-toolbar__status">
           <ShieldIcon size={13} />
           {t("remote.session.encrypted")}
         </span>
-        <span className="remote-toolbar__resolution mono">
-          {session.width} × {session.height}
-        </span>
-        <CanvasCaptureControls
-          canvasRef={canvasRef}
-          ready={session.frame !== null}
-          label={session.agentName}
-        />
+        {!session.terminal && (
+          <>
+            <span className="remote-toolbar__resolution mono">
+              {session.width} × {session.height}
+            </span>
+            <CanvasCaptureControls
+              canvasRef={canvasRef}
+              ready={session.frame !== null}
+              label={session.agentName}
+            />
+          </>
+        )}
         {session.fileTransfer && (
           <button
             type="button"
@@ -157,6 +170,9 @@ export function RemotePane({
             <RemoteFilesPane session={session} remote={remote} />
           </aside>
         )}
+        {session.terminal ? (
+          <RemoteTerminalView session={session} remote={remote} theme={theme} />
+        ) : (
         <div className="remote-canvas" aria-live="polite">
           <canvas
             ref={canvasRef}
@@ -188,6 +204,7 @@ export function RemotePane({
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );

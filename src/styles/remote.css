@@ -29,6 +29,13 @@
   align-items: center;
 }
 
+/* Terminal-mode session: the shell fills the space the canvas would take. */
+.remote-workspace > .remote-terminal {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .remote-code-field > svg {
   position: absolute;
   left: var(--space-4);

@@ -557,6 +557,7 @@ mod tests {
                     view_only: true,
                     file_transfer: false,
                     file_root_label: String::new(),
+                    terminal: false,
                 }))
                 .await
                 .unwrap();

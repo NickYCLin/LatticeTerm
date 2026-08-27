@@ -26,6 +26,8 @@ export interface RemoteSessionSummary {
   viewOnly: boolean;
   fileTransfer: boolean;
   fileRootLabel: string;
+  /** True when the agent shares a shell (headless host) instead of a display. */
+  terminal: boolean;
   frame: RemoteFrame | null;
 }
 
@@ -94,6 +96,12 @@ export interface RemoteApi {
   connect: (request: RemoteConnectRequest) => Promise<RemoteConnectOutcome>;
   disconnect: (sessionId: string) => Promise<void>;
   input: (sessionId: string, request: RemoteInput) => Promise<void>;
+  terminalInput: (sessionId: string, data: string) => Promise<void>;
+  terminalResize: (
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ) => Promise<void>;
   listFiles: (sessionId: string, path: string) => Promise<RemoteDirectory>;
   downloadFile: (sessionId: string, path: string) => Promise<RemoteFileTransfer>;
   uploadFile: (
@@ -381,6 +389,19 @@ export function useRemoteSessions(): RemoteApi {
     [],
   );
 
+  const terminalInput = useCallback(async (sessionId: string, data: string) => {
+    const { invoke } = await core();
+    await invoke("remote_terminal_input", { sessionId, data });
+  }, []);
+
+  const terminalResize = useCallback(
+    async (sessionId: string, cols: number, rows: number) => {
+      const { invoke } = await core();
+      await invoke("remote_terminal_resize", { sessionId, cols, rows });
+    },
+    [],
+  );
+
   const listFiles = useCallback(async (sessionId: string, path: string) => {
     const { invoke } = await core();
     return invoke<RemoteDirectory>("remote_file_list", { sessionId, path });
@@ -467,6 +488,8 @@ export function useRemoteSessions(): RemoteApi {
     connect,
     disconnect,
     input,
+    terminalInput,
+    terminalResize,
     listFiles,
     downloadFile,
     uploadFile,

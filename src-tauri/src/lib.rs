@@ -1254,6 +1254,25 @@ async fn remote_input(
 }
 
 #[tauri::command]
+async fn remote_terminal_input(
+    session_id: String,
+    data: String,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<(), String> {
+    crate::remote::terminal_input(registry.inner(), &session_id, data).await
+}
+
+#[tauri::command]
+async fn remote_terminal_resize(
+    session_id: String,
+    cols: u16,
+    rows: u16,
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<(), String> {
+    crate::remote::terminal_resize(registry.inner(), &session_id, cols, rows).await
+}
+
+#[tauri::command]
 async fn remote_file_list(
     session_id: String,
     path: String,
@@ -1770,6 +1789,8 @@ pub fn run() {
             remote_disconnect,
             remote_sessions,
             remote_input,
+            remote_terminal_input,
+            remote_terminal_resize,
             remote_file_list,
             remote_file_download_start,
             remote_file_upload_begin,

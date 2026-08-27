@@ -22,6 +22,14 @@ const MESSAGE_CLOSE: u8 = 5;
 const MESSAGE_INPUT: u8 = 6;
 const MESSAGE_FILE_REQUEST: u8 = 7;
 const MESSAGE_FILE_RESPONSE: u8 = 8;
+const MESSAGE_TERMINAL_DATA: u8 = 9;
+const MESSAGE_TERMINAL_INPUT: u8 = 10;
+const MESSAGE_TERMINAL_RESIZE: u8 = 11;
+
+/// One terminal payload may carry at most this many raw PTY bytes.
+pub const TERMINAL_CHUNK_SIZE: usize = 48 * 1024;
+/// Terminal grids larger than this are treated as protocol abuse.
+pub const MAX_TERMINAL_DIMENSION: u16 = 1024;
 
 const INPUT_MOUSE_MOVE: u8 = 1;
 const INPUT_MOUSE_BUTTON: u8 = 2;
@@ -52,13 +60,19 @@ pub const MAX_WHEEL_UNITS: i8 = 8;
 pub struct RemoteHello {
     pub protocol_version: u16,
     pub agent_name: String,
+    /// Stream width in pixels, or the column count for a terminal session.
     pub width: u32,
+    /// Stream height in pixels, or the row count for a terminal session.
     pub height: u32,
     pub view_only: bool,
     pub file_transfer: bool,
     /// Human-readable name for the explicitly shared root. Remote paths remain
     /// virtual and never reveal the host's absolute filesystem location.
     pub file_root_label: String,
+    /// A headless host shares a shell instead of a display. Encoded as an
+    /// optional trailing byte so screen-mode hellos stay wire-identical for
+    /// older viewers.
+    pub terminal: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,6 +279,20 @@ pub enum RemoteMessage {
     Input(RemoteInput),
     FileRequest(RemoteFileRequest),
     FileResponse(RemoteFileResponse),
+    /// Raw PTY output from a terminal-mode agent.
+    TerminalData {
+        bytes: Vec<u8>,
+    },
+    /// Raw viewer keystrokes for the agent's PTY. Only valid after a Hello
+    /// that advertised `terminal: true` and `view_only: false`.
+    TerminalInput {
+        bytes: Vec<u8>,
+    },
+    /// The viewer's terminal grid changed size.
+    TerminalResize {
+        cols: u16,
+        rows: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,8 +344,26 @@ fn validate_hello(hello: &RemoteHello) -> Result<(), ProtocolError> {
         // Enabled sharing requires a label; disabled sharing requires none.
         || hello.file_transfer == hello.file_root_label.is_empty()
         || !valid_frame_dimensions(hello.width, hello.height)
+        // Terminal sessions carry a character grid, not pixels.
+        || (hello.terminal
+            && (hello.width > u32::from(MAX_TERMINAL_DIMENSION)
+                || hello.height > u32::from(MAX_TERMINAL_DIMENSION)))
     {
         return Err(ProtocolError::InvalidHello);
+    }
+    Ok(())
+}
+
+fn validate_terminal_bytes(bytes: &[u8]) -> Result<(), ProtocolError> {
+    if bytes.is_empty() || bytes.len() > TERMINAL_CHUNK_SIZE {
+        return Err(ProtocolError::InvalidMessage("invalid terminal payload"));
+    }
+    Ok(())
+}
+
+fn validate_terminal_size(cols: u16, rows: u16) -> Result<(), ProtocolError> {
+    if cols == 0 || rows == 0 || cols > MAX_TERMINAL_DIMENSION || rows > MAX_TERMINAL_DIMENSION {
+        return Err(ProtocolError::InvalidMessage("invalid terminal size"));
     }
     Ok(())
 }
@@ -368,6 +414,12 @@ impl RemoteMessage {
                 output.extend_from_slice(&(root.len() as u16).to_be_bytes());
                 output.extend_from_slice(name);
                 output.extend_from_slice(root);
+                // Screen-mode hellos stay byte-identical to protocol v2, so
+                // older viewers keep working; only terminal agents append the
+                // flag they could not talk to anyway.
+                if hello.terminal {
+                    output.push(1);
+                }
                 Ok(output)
             }
             Self::FrameStart(frame) => {
@@ -429,6 +481,28 @@ impl RemoteMessage {
             }
             Self::FileRequest(request) => encode_file_request(request),
             Self::FileResponse(response) => encode_file_response(response),
+            Self::TerminalData { bytes } => {
+                validate_terminal_bytes(bytes)?;
+                let mut output = Vec::with_capacity(1 + bytes.len());
+                output.push(MESSAGE_TERMINAL_DATA);
+                output.extend_from_slice(bytes);
+                Ok(output)
+            }
+            Self::TerminalInput { bytes } => {
+                validate_terminal_bytes(bytes)?;
+                let mut output = Vec::with_capacity(1 + bytes.len());
+                output.push(MESSAGE_TERMINAL_INPUT);
+                output.extend_from_slice(bytes);
+                Ok(output)
+            }
+            Self::TerminalResize { cols, rows } => {
+                validate_terminal_size(*cols, *rows)?;
+                let mut output = Vec::with_capacity(5);
+                output.push(MESSAGE_TERMINAL_RESIZE);
+                output.extend_from_slice(&cols.to_be_bytes());
+                output.extend_from_slice(&rows.to_be_bytes());
+                Ok(output)
+            }
             Self::Close(reason) => {
                 let bytes = reason.as_bytes();
                 if bytes.len() > MAX_CLOSE_REASON_BYTES {
@@ -464,13 +538,19 @@ impl RemoteMessage {
                 let file_transfer = decode_bool(body[11])?;
                 let name_len = read_u16(body, 12)? as usize;
                 let root_len = read_u16(body, 14)? as usize;
-                if name_len == 0 || body.len() != 16 + name_len + root_len {
+                let base_len = 16 + name_len + root_len;
+                let terminal = match body.len() {
+                    length if length == base_len => false,
+                    length if length == base_len + 1 => decode_bool(body[base_len])?,
+                    _ => return Err(ProtocolError::InvalidHello),
+                };
+                if name_len == 0 {
                     return Err(ProtocolError::InvalidHello);
                 }
                 let agent_name = std::str::from_utf8(&body[16..16 + name_len])
                     .map_err(|_| ProtocolError::InvalidText)?
                     .to_string();
-                let file_root_label = std::str::from_utf8(&body[16 + name_len..])
+                let file_root_label = std::str::from_utf8(&body[16 + name_len..base_len])
                     .map_err(|_| ProtocolError::InvalidText)?
                     .to_string();
                 let hello = RemoteHello {
@@ -481,6 +561,7 @@ impl RemoteMessage {
                     view_only,
                     file_transfer,
                     file_root_label,
+                    terminal,
                 };
                 validate_hello(&hello)?;
                 Ok(Self::Hello(hello))
@@ -545,6 +626,27 @@ impl RemoteMessage {
             }
             MESSAGE_FILE_REQUEST => decode_file_request(body).map(Self::FileRequest),
             MESSAGE_FILE_RESPONSE => decode_file_response(body).map(Self::FileResponse),
+            MESSAGE_TERMINAL_DATA => {
+                validate_terminal_bytes(body)?;
+                Ok(Self::TerminalData {
+                    bytes: body.to_vec(),
+                })
+            }
+            MESSAGE_TERMINAL_INPUT => {
+                validate_terminal_bytes(body)?;
+                Ok(Self::TerminalInput {
+                    bytes: body.to_vec(),
+                })
+            }
+            MESSAGE_TERMINAL_RESIZE => {
+                if body.len() != 4 {
+                    return Err(ProtocolError::InvalidMessage("invalid terminal size"));
+                }
+                let cols = read_u16(body, 0)?;
+                let rows = read_u16(body, 2)?;
+                validate_terminal_size(cols, rows)?;
+                Ok(Self::TerminalResize { cols, rows })
+            }
             MESSAGE_CLOSE => {
                 if body.len() > MAX_CLOSE_REASON_BYTES {
                     return Err(ProtocolError::InvalidMessage("close reason is too long"));
@@ -1081,11 +1183,111 @@ mod tests {
             view_only: true,
             file_transfer: false,
             file_root_label: String::new(),
+            terminal: false,
         });
         assert_eq!(
             RemoteMessage::decode(&message.encode().unwrap()).unwrap(),
             message
         );
+    }
+
+    #[test]
+    fn terminal_messages_round_trip() {
+        let messages = vec![
+            RemoteMessage::Hello(RemoteHello {
+                protocol_version: PROTOCOL_VERSION,
+                agent_name: "Headless box".into(),
+                width: 120,
+                height: 32,
+                view_only: false,
+                file_transfer: false,
+                file_root_label: String::new(),
+                terminal: true,
+            }),
+            RemoteMessage::TerminalData {
+                bytes: b"login: ".to_vec(),
+            },
+            RemoteMessage::TerminalInput {
+                bytes: b"ls -la\r".to_vec(),
+            },
+            RemoteMessage::TerminalResize {
+                cols: 132,
+                rows: 43,
+            },
+        ];
+        for message in messages {
+            assert_eq!(
+                RemoteMessage::decode(&message.encode().unwrap()).unwrap(),
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_hello_flag_is_a_trailing_byte_only_when_set() {
+        // A screen-mode hello must stay byte-identical to protocol v2, so a
+        // viewer without terminal support keeps decoding it.
+        let screen = RemoteMessage::Hello(RemoteHello {
+            protocol_version: PROTOCOL_VERSION,
+            agent_name: "Studio Mac".into(),
+            width: 1280,
+            height: 720,
+            view_only: true,
+            file_transfer: false,
+            file_root_label: String::new(),
+            terminal: false,
+        })
+        .encode()
+        .unwrap();
+        assert_eq!(screen.len(), 1 + 16 + "Studio Mac".len());
+
+        let terminal = RemoteMessage::Hello(RemoteHello {
+            protocol_version: PROTOCOL_VERSION,
+            agent_name: "Studio Mac".into(),
+            width: 120,
+            height: 32,
+            view_only: false,
+            file_transfer: false,
+            file_root_label: String::new(),
+            terminal: true,
+        })
+        .encode()
+        .unwrap();
+        assert_eq!(terminal.len(), screen.len() + 1);
+    }
+
+    #[test]
+    fn rejects_malformed_terminal_messages() {
+        assert!(RemoteMessage::TerminalData { bytes: Vec::new() }
+            .encode()
+            .is_err());
+        assert!(RemoteMessage::TerminalInput {
+            bytes: vec![0; TERMINAL_CHUNK_SIZE + 1],
+        }
+        .encode()
+        .is_err());
+        assert!(RemoteMessage::TerminalResize { cols: 0, rows: 24 }
+            .encode()
+            .is_err());
+        assert!(RemoteMessage::TerminalResize {
+            cols: MAX_TERMINAL_DIMENSION + 1,
+            rows: 24,
+        }
+        .encode()
+        .is_err());
+        // A terminal hello carries a character grid, not pixel dimensions.
+        assert!(RemoteMessage::Hello(RemoteHello {
+            protocol_version: PROTOCOL_VERSION,
+            agent_name: "Headless box".into(),
+            width: u32::from(MAX_TERMINAL_DIMENSION) + 1,
+            height: 32,
+            view_only: false,
+            file_transfer: false,
+            file_root_label: String::new(),
+            terminal: true,
+        })
+        .encode()
+        .is_err());
     }
 
     #[test]
@@ -1169,6 +1371,7 @@ mod tests {
             view_only: true,
             file_transfer: false,
             file_root_label: String::new(),
+            terminal: false,
         });
         assert_eq!(oversized_name.encode(), Err(ProtocolError::InvalidHello));
 
@@ -1180,6 +1383,7 @@ mod tests {
             view_only: true,
             file_transfer: false,
             file_root_label: String::new(),
+            terminal: false,
         });
         assert_eq!(control_name.encode(), Err(ProtocolError::InvalidHello));
 
@@ -1191,6 +1395,7 @@ mod tests {
             view_only: true,
             file_transfer: false,
             file_root_label: String::new(),
+            terminal: false,
         })
         .encode()
         .unwrap();

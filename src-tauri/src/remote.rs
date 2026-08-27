@@ -60,6 +60,8 @@ pub struct RemoteSessionSummary {
     pub view_only: bool,
     pub file_transfer: bool,
     pub file_root_label: String,
+    /// True when the agent shares a shell (headless host) instead of a display.
+    pub terminal: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,6 +122,15 @@ struct RemoteFrameEvent {
 struct RemoteClosedEvent {
     session_id: String,
     reason: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteTerminalEvent {
+    session_id: String,
+    /// Raw PTY bytes; base64 keeps multi-byte characters split across reads
+    /// intact until the frontend decodes them.
+    base64: String,
 }
 
 struct RemoteSessionRecord {
@@ -339,6 +350,7 @@ pub async fn connect(
         view_only: hello.view_only,
         file_transfer: hello.file_transfer,
         file_root_label: hello.file_root_label,
+        terminal: hello.terminal,
     };
 
     // Input and file requests share one bounded encrypted writer queue. File
@@ -390,7 +402,18 @@ pub async fn connect(
                     Ok(None) => {}
                     Err(error) => break format!("Invalid frame stream: {error}"),
                 },
-                Ok(RemoteMessage::Input(_)) => {
+                Ok(RemoteMessage::TerminalData { bytes }) => {
+                    let payload = RemoteTerminalEvent {
+                        session_id: task_session_id.clone(),
+                        base64: BASE64.encode(bytes),
+                    };
+                    if task_app.emit("remote://terminal-data", payload).is_err() {
+                        break "The application window is no longer available.".to_string();
+                    }
+                }
+                Ok(RemoteMessage::Input(_))
+                | Ok(RemoteMessage::TerminalInput { .. })
+                | Ok(RemoteMessage::TerminalResize { .. }) => {
                     break "The Agent echoed an input message.".to_string()
                 }
                 Ok(RemoteMessage::FileResponse(response)) => {
@@ -452,6 +475,47 @@ pub async fn input(
             .map_err(|_| "The remote session is no longer connected.".to_string())?;
     }
     Ok(())
+}
+
+/// Sends viewer keystrokes to a terminal-mode session. Mirrors `input`'s
+/// quiet handling of view-only sessions.
+pub async fn terminal_input(
+    registry: &RemoteRegistry,
+    session_id: &str,
+    data: String,
+) -> Result<(), String> {
+    let access = registry.access(session_id)?;
+    if access.summary.view_only || !access.summary.terminal || data.is_empty() {
+        return Ok(());
+    }
+    // A large paste must not exceed the protocol's per-message payload limit.
+    for chunk in data.into_bytes().chunks(32 * 1024) {
+        access
+            .outbound
+            .send(RemoteMessage::TerminalInput {
+                bytes: chunk.to_vec(),
+            })
+            .await
+            .map_err(|_| "The remote session is no longer connected.".to_string())?;
+    }
+    Ok(())
+}
+
+pub async fn terminal_resize(
+    registry: &RemoteRegistry,
+    session_id: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let access = registry.access(session_id)?;
+    if access.summary.view_only || !access.summary.terminal {
+        return Ok(());
+    }
+    access
+        .outbound
+        .send(RemoteMessage::TerminalResize { cols, rows })
+        .await
+        .map_err(|_| "The remote session is no longer connected.".to_string())
 }
 
 fn file_access(registry: &RemoteRegistry, session_id: &str) -> Result<RemoteSessionAccess, String> {
