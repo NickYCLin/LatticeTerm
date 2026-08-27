@@ -66,6 +66,22 @@ function audioContext(): AudioContext | null {
   return sharedContext;
 }
 
+/**
+ * Unlocks Web Audio from a real user gesture. WebView2 can otherwise keep a
+ * context suspended until long after the user submits work, causing the first
+ * background completion cue to be silently rejected.
+ */
+export async function prepareNotificationAudio(): Promise<boolean> {
+  const context = audioContext();
+  if (!context) return false;
+  try {
+    if (context.state === "suspended") await context.resume();
+    return context.state === "running";
+  } catch {
+    return false;
+  }
+}
+
 /** Plays one short cue. Browser autoplay rejection is intentionally silent. */
 export async function playNotificationSound(sound: NotificationSoundChoice) {
   const tones = notificationToneSequence(sound);
@@ -74,7 +90,7 @@ export async function playNotificationSound(sound: NotificationSoundChoice) {
   if (!context) return;
 
   try {
-    if (context.state === "suspended") await context.resume();
+    if (!(await prepareNotificationAudio())) return;
     const start = context.currentTime + 0.015;
     for (const tone of tones) {
       const oscillator = context.createOscillator();

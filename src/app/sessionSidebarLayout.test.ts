@@ -8,6 +8,7 @@ import {
   sanitizeSessionSidebarLayout,
   sessionSidebarChildren,
   sessionSidebarDropPlacement,
+  sessionSidebarSessionNodeId,
 } from "./sessionSidebarLayout";
 
 const project = { id: "project:local:latticeterm", defaultParentId: null };
@@ -25,6 +26,33 @@ describe("session sidebar layout", () => {
 
     expect(sessionSidebarChildren(layout, null)).toEqual([project.id]);
     expect(sessionSidebarChildren(layout, project.id)).toEqual([session.id]);
+  });
+
+  it("keeps an explicit top-level move instead of restoring the default parent", () => {
+    let layout = reconcileSessionSidebarLayout(emptySessionSidebarLayout, [
+      project,
+      session,
+    ]);
+    layout = moveSessionSidebarNode(layout, session.id, null);
+
+    layout = reconcileSessionSidebarLayout(layout, [project, session]);
+
+    expect(sessionSidebarChildren(layout, null)).toEqual([
+      project.id,
+      session.id,
+    ]);
+    expect(sessionSidebarChildren(layout, project.id)).toEqual([]);
+  });
+
+  it("uses saved profile identity across remote-session reconnects", () => {
+    expect(
+      sessionSidebarSessionNodeId("ssh", "runtime-before", "profile:server"),
+    ).toBe(
+      sessionSidebarSessionNodeId("ssh", "runtime-after", "profile:server"),
+    );
+    expect(sessionSidebarSessionNodeId("ssh", "runtime-only", null)).toBe(
+      "session:ssh:runtime-only",
+    );
   });
 
   it("supports nested custom folders and moving live nodes", () => {

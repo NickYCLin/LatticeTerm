@@ -199,7 +199,10 @@ export function reconcileSessionSidebarLayout(
   for (const id of knownIds) {
     const saved = layout.placements[id];
     const fallback = liveNodes.find((node) => node.id === id)?.defaultParentId ?? null;
-    const parentId = saved?.parentId ?? fallback;
+    // `null` is a deliberate top-level placement. Nullish coalescing would
+    // mistake it for a missing value and put the node back under its default
+    // project every time the layout is reconciled.
+    const parentId = saved ? saved.parentId : fallback;
     placements[id] = {
       parentId: parentId && knownIds.has(parentId) && parentId !== id ? parentId : null,
       order: saved?.order ?? MAX_NODES,
@@ -242,6 +245,18 @@ export function reconcileSessionSidebarLayout(
     placements: reindexPlacements(placements),
     collapsedFolderIds: layout.collapsedFolderIds.filter((id) => folderIds.has(id)),
   };
+}
+
+/**
+ * Gives a restored session the same sidebar identity even when the backend
+ * necessarily creates a new process/session id after an application restart.
+ */
+export function sessionSidebarSessionNodeId(
+  kind: string,
+  runtimeSessionId: string,
+  persistentSessionId: string | null,
+): string {
+  return `session:${kind}:${persistentSessionId || runtimeSessionId}`;
 }
 
 export function sessionSidebarChildren(

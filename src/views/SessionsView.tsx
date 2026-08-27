@@ -21,7 +21,10 @@ import {
   playNotificationSound,
   type NotificationSoundChoice,
 } from "../app/notificationSounds";
-import { agentGroupSidebarStatus } from "../app/sessionStatus";
+import {
+  agentGroupSidebarStatus,
+  anyAgentSessionJustCompleted,
+} from "../app/sessionStatus";
 import {
   createSessionSidebarFolder,
   loadSessionSidebarLayout,
@@ -30,6 +33,7 @@ import {
   removeSessionSidebarFolder,
   renameSessionSidebarFolder,
   saveSessionSidebarLayout,
+  sessionSidebarSessionNodeId,
   toggleSessionSidebarFolder,
   type LiveSessionSidebarNode,
   type SessionSidebarFolder,
@@ -66,11 +70,11 @@ type SessionRef =
       groupId: string;
       members: AgentSessionSummary[];
     }
-  | { kind: "ssh"; sessionId: string; label: string }
-  | { kind: "sftp"; sessionId: string; label: string }
-  | { kind: "remote"; sessionId: string; label: string }
-  | { kind: "rdp"; sessionId: string; label: string }
-  | { kind: "vnc"; sessionId: string; label: string };
+  | { kind: "ssh"; sessionId: string; profileId: string; label: string }
+  | { kind: "sftp"; sessionId: string; profileId: string; label: string }
+  | { kind: "remote"; sessionId: string; profileId: string; label: string }
+  | { kind: "rdp"; sessionId: string; profileId: string; label: string }
+  | { kind: "vnc"; sessionId: string; profileId: string; label: string };
 
 interface ClosedNoticeSource {
   notice: SessionClosedNotice;
@@ -105,9 +109,11 @@ function sidebarProjectNodeId(projectId: string): string {
 }
 
 function sidebarSessionNodeId(session: SessionRef): string {
-  return session.kind === "agent"
-    ? `session:agent:${session.groupId}`
-    : `session:${session.kind}:${session.sessionId}`;
+  return sessionSidebarSessionNodeId(
+    session.kind,
+    session.sessionId,
+    session.kind === "agent" ? session.groupId : session.profileId,
+  );
 }
 
 export function SessionsView({
@@ -121,6 +127,7 @@ export function SessionsView({
   onSelect,
   theme,
   completionSound,
+  sessionRestoreComplete,
 }: {
   agents: AgentApi;
   ssh: SshApi;
@@ -132,6 +139,7 @@ export function SessionsView({
   onSelect: (sessionId: string | null) => void;
   theme: ThemeId;
   completionSound: NotificationSoundChoice;
+  sessionRestoreComplete: boolean;
 }) {
   const { t } = useI18n();
 
@@ -377,6 +385,7 @@ export function SessionsView({
     ...ssh.sessions.map((session) => ({
       kind: "ssh" as const,
       sessionId: session.sessionId,
+      profileId: session.profileId,
       label: `${session.username}@${session.host}`,
     })),
     ...sftp.sessions
@@ -384,43 +393,42 @@ export function SessionsView({
       .map((session) => ({
         kind: "sftp" as const,
         sessionId: session.sessionId,
+        profileId: session.profileId,
         label: `${session.username}@${session.host}`,
       })),
     ...remote.sessions.map((session) => ({
       kind: "remote" as const,
       sessionId: session.sessionId,
+      profileId: session.profileId,
       label: session.agentName,
     })),
     ...rdp.sessions.map((session) => ({
       kind: "rdp" as const,
       sessionId: session.sessionId,
+      profileId: session.profileId,
       label: `${session.username}@${session.host}`,
     })),
     ...vnc.sessions.map((session) => ({
       kind: "vnc" as const,
       sessionId: session.sessionId,
+      profileId: session.profileId,
       label: `${session.host}:${session.port}`,
     })),
   ];
 
-  const completionStates = agentGroups
-    .map((group) => `${group.groupId}:${agentGroupSidebarStatus(group.members)}`)
+  const completionStates = agents.sessions
+    .map((session) => `${session.sessionId}:${session.state}`)
     .join("|");
-  const previousCompletionStatesRef = useRef<Map<string, string> | null>(null);
+  const previousCompletionStatesRef = useRef<
+    Map<string, AgentSessionSummary["state"]> | null
+  >(null);
   useEffect(() => {
     const current = new Map(
-      agentGroups.map((group) => [
-        group.groupId,
-        agentGroupSidebarStatus(group.members),
-      ]),
+      agents.sessions.map((session) => [session.sessionId, session.state]),
     );
     const previous = previousCompletionStatesRef.current;
-    if (previous) {
-      const newlyCompleted = [...current].some(
-        ([groupId, status]) =>
-          status === "done" && previous.get(groupId) !== "done",
-      );
-      if (newlyCompleted) void playNotificationSound(completionSound);
+    if (anyAgentSessionJustCompleted(previous, agents.sessions)) {
+      void playNotificationSound(completionSound);
     }
     previousCompletionStatesRef.current = current;
   }, [completionStates, completionSound]);
@@ -635,18 +643,20 @@ export function SessionsView({
     .map((node) => `${node.id}>${node.defaultParentId ?? "root"}`)
     .join("|");
   useEffect(() => {
+    if (!sessionRestoreComplete) return;
     setSidebarLayout((current) => {
       const next = reconcileSessionSidebarLayout(current, liveSidebarNodes);
       return JSON.stringify(next) === JSON.stringify(current) ? current : next;
     });
-  }, [liveSidebarKey]);
+  }, [liveSidebarKey, sessionRestoreComplete]);
   useEffect(() => {
+    if (!sessionRestoreComplete) return;
     try {
       saveSessionSidebarLayout(window.localStorage, sidebarLayout);
     } catch {
       // Sidebar organization is a convenience and must not interrupt sessions.
     }
-  }, [sidebarLayout]);
+  }, [sessionRestoreComplete, sidebarLayout]);
 
   function openFolderEditor(
     parentId: string | null,

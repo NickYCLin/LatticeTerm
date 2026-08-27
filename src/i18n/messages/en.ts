@@ -687,6 +687,15 @@ export const en: Messages = {
   "terminal.projects.moveToRoot": "Drop here to move to the top level",
   "terminal.projects.dragHint": "Drag to reorder or move into a custom folder",
   "terminal.projects.sessionCard": "Sessions in “{name}”",
+  "terminal.projects.sessionMove": "Move to folder",
+  "terminal.projects.sessionMoveFor": "Move “{name}” to a folder",
+  "terminal.projects.sessionMoveTitle": "Move “{name}”",
+  "terminal.projects.sessionMoveBody":
+    "Choose where to organize this session. Its CLI working directory will not change.",
+  "terminal.projects.sessionMoveRoot": "Top level",
+  "terminal.projects.sessionMoveCurrent": "Current location",
+  "terminal.projects.sessionMoveNoFolders":
+    "There are no custom folders yet. Create one beside the sidebar heading first.",
   "terminal.projects.sessionRemove": "Remove session",
   "terminal.projects.sessionRemoveFor": "Remove session “{name}”",
   "terminal.projects.sessionRemoveTitle": "Remove “{name}”?",

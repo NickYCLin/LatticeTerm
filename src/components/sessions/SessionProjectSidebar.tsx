@@ -138,6 +138,8 @@ export function SessionProjectSidebar({
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [projectCard, setProjectCard] = useState<FloatingProjectCard | null>(null);
+  const [movingSession, setMovingSession] =
+    useState<SessionSidebarSessionItem | null>(null);
   const projectCardRef = useRef<HTMLElement>(null);
   const cardAnchorRef = useRef<HTMLButtonElement | null>(null);
 
@@ -178,6 +180,35 @@ export function SessionProjectSidebar({
       window.removeEventListener("scroll", reposition, true);
     };
   }, [projectCard]);
+
+  useEffect(() => {
+    if (!movingSession) return;
+    function keydown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMovingSession(null);
+    }
+    document.addEventListener("keydown", keydown, true);
+    return () => document.removeEventListener("keydown", keydown, true);
+  }, [movingSession]);
+
+  const folderDestinations = useMemo(
+    () =>
+      layout.folders
+        .map((folder) => {
+          const path = [folder.name];
+          const visited = new Set([folder.id]);
+          let parentId = layout.placements[folder.id]?.parentId ?? null;
+          while (parentId) {
+            const parent = folders.get(parentId);
+            if (!parent || visited.has(parent.id)) break;
+            visited.add(parent.id);
+            path.unshift(parent.name);
+            parentId = layout.placements[parent.id]?.parentId ?? null;
+          }
+          return { id: folder.id, label: path.join(" / ") };
+        })
+        .sort((left, right) => left.label.localeCompare(right.label)),
+    [folders, layout.folders, layout.placements],
+  );
 
   function nodeKind(nodeId: string): "folder" | "project" | "session" | null {
     if (folders.has(nodeId)) return "folder";
@@ -314,22 +345,41 @@ export function SessionProjectSidebar({
           <span className="truncate">{session.label}</span>
           {statusMark(session)}
         </button>
-        <button
-          type="button"
-          className="icon-button icon-button--sm icon-button--danger session-tree__session-remove"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onRemove(session);
-          }}
-          aria-label={t("terminal.projects.sessionRemoveFor", {
-            name: session.label,
-          })}
-          title={t("terminal.projects.sessionRemove")}
-          draggable={false}
-        >
-          <TrashIcon size={11} />
-        </button>
+        <span className="session-tree__session-actions">
+          <button
+            type="button"
+            className="icon-button icon-button--sm session-tree__session-move"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setProjectCard(null);
+              setMovingSession(session);
+            }}
+            aria-label={t("terminal.projects.sessionMoveFor", {
+              name: session.label,
+            })}
+            title={t("terminal.projects.sessionMove")}
+            draggable={false}
+          >
+            <FolderIcon size={11} />
+          </button>
+          <button
+            type="button"
+            className="icon-button icon-button--sm icon-button--danger session-tree__session-remove"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRemove(session);
+            }}
+            aria-label={t("terminal.projects.sessionRemoveFor", {
+              name: session.label,
+            })}
+            title={t("terminal.projects.sessionRemove")}
+            draggable={false}
+          >
+            <TrashIcon size={11} />
+          </button>
+        </span>
       </div>
     );
   }
@@ -602,6 +652,87 @@ export function SessionProjectSidebar({
               </div>
             )}
           </section>,
+          document.body,
+        )}
+      {movingSession &&
+        createPortal(
+          <div
+            className="scrim scrim--center"
+            role="presentation"
+            onMouseDown={() => setMovingSession(null)}
+          >
+            <div
+              className="dialog session-move-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="session-move-title"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <header className="dialog__head">
+                <span
+                  className="dialog__icon dialog__icon--inline"
+                  aria-hidden="true"
+                >
+                  <FolderIcon size={17} />
+                </span>
+                <h2 className="dialog__title" id="session-move-title">
+                  {t("terminal.projects.sessionMoveTitle", {
+                    name: movingSession.label,
+                  })}
+                </h2>
+              </header>
+              <div className="dialog__stack">
+                <p className="dialog__body">
+                  {t("terminal.projects.sessionMoveBody")}
+                </p>
+                <div className="session-move-dialog__destinations">
+                  {[
+                    {
+                      id: null,
+                      label: t("terminal.projects.sessionMoveRoot"),
+                    },
+                    ...folderDestinations,
+                  ].map((destination) => {
+                    const currentParentId =
+                      layout.placements[movingSession.nodeId]?.parentId ?? null;
+                    const current = currentParentId === destination.id;
+                    return (
+                      <button
+                        type="button"
+                        className="session-move-dialog__destination"
+                        key={destination.id ?? "root"}
+                        disabled={current}
+                        onClick={() => {
+                          onMove(movingSession.nodeId, destination.id);
+                          setMovingSession(null);
+                        }}
+                      >
+                        <FolderIcon size={13} />
+                        <span className="truncate">{destination.label}</span>
+                        {current && (
+                          <small>{t("terminal.projects.sessionMoveCurrent")}</small>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {folderDestinations.length === 0 && (
+                  <p className="dialog__body dialog__body--muted">
+                    {t("terminal.projects.sessionMoveNoFolders")}
+                  </p>
+                )}
+                <div className="dialog__actions">
+                  <button
+                    type="button"
+                    className="button button--ghost"
+                    onClick={() => setMovingSession(null)}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>,
           document.body,
         )}
     </aside>

@@ -1123,16 +1123,23 @@
   text-align: left;
 }
 
-.session-tree__session-remove {
+.session-tree__session-actions {
+  display: flex;
   flex: 0 0 auto;
+  align-items: center;
   margin-right: 0.2rem;
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--duration-fast) var(--ease);
 }
 
-.session-tree__session:hover .session-tree__session-remove,
-.session-tree__session:focus-within .session-tree__session-remove {
+.session-tree__session-remove,
+.session-tree__session-move {
+  flex: 0 0 auto;
+}
+
+.session-tree__session:hover .session-tree__session-actions,
+.session-tree__session:focus-within .session-tree__session-actions {
   opacity: 1;
   pointer-events: auto;
 }
@@ -1267,6 +1274,54 @@
 
 .session-project-card__launch > div {
   grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+}
+
+.session-move-dialog {
+  width: min(28rem, calc(100vw - 2rem));
+}
+
+.session-move-dialog__destinations {
+  display: grid;
+  gap: var(--space-1);
+  max-height: min(20rem, 45vh);
+  padding: var(--space-1);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.session-move-dialog__destination {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.session-move-dialog__destination:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.session-move-dialog__destination:disabled {
+  color: var(--accent-strong);
+  opacity: 1;
+  background: var(--accent-soft);
+}
+
+.session-move-dialog__destination small {
+  margin-left: auto;
+  color: inherit;
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+
+.dialog__body--muted {
+  color: var(--text-faint);
 }
 
 .session-project {
@@ -1524,6 +1579,11 @@
 }
 
 @media (pointer: coarse) {
+  .session-tree__session-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   .terminal-keybar {
     display: flex;
   }

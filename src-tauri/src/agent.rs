@@ -469,6 +469,7 @@ struct AgentSessionEntry {
     model_capture: Mutex<ModelCaptureState>,
     output: Mutex<OutputBuffer>,
     startup_gate: StartupGate,
+    completion_gate: Mutex<CompletionReadiness>,
 }
 
 #[derive(Debug, Default)]
@@ -538,6 +539,47 @@ impl StartupReadiness {
         until_timeout
             .min(Duration::from_millis(250))
             .max(Duration::from_millis(1))
+    }
+}
+
+#[derive(Debug, Default)]
+struct CompletionReadiness {
+    submitted: bool,
+    control_window: Vec<u8>,
+}
+
+impl CompletionReadiness {
+    fn observe_input(&mut self, bytes: &[u8]) {
+        if bytes.iter().any(|byte| matches!(byte, b'\r' | b'\n')) {
+            self.submitted = true;
+            self.control_window.clear();
+        }
+    }
+
+    fn observe_output(&mut self, bytes: &[u8]) -> bool {
+        if !self.submitted {
+            return false;
+        }
+        self.control_window.extend_from_slice(bytes);
+        let prompt_ready = self
+            .control_window
+            .windows(b"\x1b[?2004h".len())
+            .any(|window| window == b"\x1b[?2004h");
+        if prompt_ready {
+            self.submitted = false;
+            self.control_window.clear();
+            return true;
+        }
+        if self.control_window.len() > STARTUP_CONTROL_WINDOW_BYTES {
+            let overflow = self.control_window.len() - STARTUP_CONTROL_WINDOW_BYTES;
+            self.control_window.drain(..overflow);
+        }
+        false
+    }
+
+    fn cancel(&mut self) {
+        self.submitted = false;
+        self.control_window.clear();
     }
 }
 
@@ -2427,6 +2469,7 @@ pub fn launch_with_replay(
             restored_output.as_deref().unwrap_or_default(),
         )),
         startup_gate: StartupGate::default(),
+        completion_gate: Mutex::new(CompletionReadiness::default()),
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
         let _ = terminate_agent_entry(entry.as_ref());
@@ -2454,10 +2497,27 @@ pub fn launch_with_replay(
                         break;
                     };
                     reader_sink.data(&reader_id, offset, bytes);
-                    let state = lifecycle_from_output(bytes);
-                    if reader_registry.update_state(&reader_id, state, AgentStateSource::Heuristic)
-                    {
-                        reader_sink.state(&reader_id, state, AgentStateSource::Heuristic);
+                    let output_state = lifecycle_from_output(bytes);
+                    let state = if let Ok(mut completion) = reader_entry.completion_gate.lock() {
+                        if output_state == AgentLifecycle::NeedsAttention {
+                            completion.cancel();
+                            Some(AgentLifecycle::NeedsAttention)
+                        } else if completion.observe_output(bytes) {
+                            Some(AgentLifecycle::Done)
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(output_state)
+                    };
+                    if let Some(state) = state {
+                        if reader_registry.update_state(
+                            &reader_id,
+                            state,
+                            AgentStateSource::Heuristic,
+                        ) {
+                            reader_sink.state(&reader_id, state, AgentStateSource::Heuristic);
+                        }
                     }
                     if let Some(native_id) = reader_registry.scan_for_session_id(&reader_id, bytes)
                     {
@@ -2487,6 +2547,9 @@ pub fn launch_with_replay(
             seed_entry.startup_gate.wait_until_ready(launched_at);
             let payload = startup_seed_payload(&seed);
             if let Ok(entry) = seed_registry.get(&seed_id) {
+                if let Ok(mut completion) = entry.completion_gate.lock() {
+                    completion.observe_input(&payload);
+                }
                 if let Ok(mut capture) = entry.model_capture.lock() {
                     capture.input(&payload);
                 }
@@ -2536,6 +2599,9 @@ fn send_bytes(
         .write_all(bytes)
         .and_then(|_| writer.flush())
         .map_err(|error| format!("Cannot write to the agent terminal: {error}"))?;
+    if let Ok(mut completion) = entry.completion_gate.lock() {
+        completion.observe_input(bytes);
+    }
     if registry.update_state(
         session_id,
         AgentLifecycle::Working,
@@ -2886,6 +2952,29 @@ session id: 0199aa11-"
             String::from_utf8(payload).unwrap(),
             format!("\u{1b}[200~{seed}\u{1b}[201~\r")
         );
+    }
+
+    #[test]
+    fn completion_waits_for_a_submitted_prompt_to_return() {
+        let mut readiness = CompletionReadiness::default();
+
+        assert!(!readiness.observe_output(b"\x1b[?2004h"));
+        readiness.observe_input(b"draft text");
+        assert!(!readiness.observe_output(b"\x1b[?2004h"));
+
+        readiness.observe_input(b"\r");
+        assert!(!readiness.observe_output(b"answer\x1b[?20"));
+        assert!(readiness.observe_output(b"04h"));
+        assert!(!readiness.observe_output(b"\x1b[?2004h"));
+    }
+
+    #[test]
+    fn attention_prompt_cancels_the_pending_completion() {
+        let mut readiness = CompletionReadiness::default();
+        readiness.observe_input(b"\r");
+        readiness.cancel();
+
+        assert!(!readiness.observe_output(b"\x1b[?2004h"));
     }
 
     #[test]

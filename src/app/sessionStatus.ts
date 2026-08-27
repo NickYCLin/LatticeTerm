@@ -18,3 +18,14 @@ export function agentGroupSidebarStatus(
   if (members.some((member) => member.state === "idle")) return "idle";
   return "connected";
 }
+
+export function anyAgentSessionJustCompleted(
+  previous: ReadonlyMap<string, AgentSessionSummary["state"]> | null,
+  current: readonly Pick<AgentSessionSummary, "sessionId" | "state">[],
+): boolean {
+  if (!previous) return false;
+  return current.some(
+    (session) =>
+      session.state === "done" && previous.get(session.sessionId) !== "done",
+  );
+}

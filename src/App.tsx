@@ -64,6 +64,7 @@ import {
   snapshotLiveWorkspaceSessions,
 } from "./app/workspaceSessionPersistence";
 import { loadAuthPref } from "./app/authPreferences";
+import { prepareNotificationAudio } from "./app/notificationSounds";
 import { PlusIcon } from "./components/icons";
 import "./styles/index.css";
 
@@ -173,6 +174,25 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const rdp = useRdpSessions();
   const vnc = useVncSessions();
   const vault = useVault();
+
+  useEffect(() => {
+    let unlocked = false;
+    const prepare = () => {
+      if (unlocked) return;
+      void prepareNotificationAudio().then((ready) => {
+        if (!ready) return;
+        unlocked = true;
+        window.removeEventListener("pointerdown", prepare, true);
+        window.removeEventListener("keydown", prepare, true);
+      });
+    };
+    window.addEventListener("pointerdown", prepare, true);
+    window.addEventListener("keydown", prepare, true);
+    return () => {
+      window.removeEventListener("pointerdown", prepare, true);
+      window.removeEventListener("keydown", prepare, true);
+    };
+  }, []);
 
   useVaultAutoLock(preferences, vault);
 
@@ -705,6 +725,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                     onSelect={setActiveSessionId}
                     theme={activeTheme}
                     completionSound={preferences.agentCompletionSound}
+                    sessionRestoreComplete={sessionRestoreComplete}
                   />
                 </div>
               </Suspense>
