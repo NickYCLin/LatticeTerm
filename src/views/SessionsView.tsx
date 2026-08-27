@@ -973,6 +973,18 @@ export function SessionsView({
                   : active.kind === "sftp"
                     ? TransferIcon
                     : ScreenShareIcon;
+            // The tab keeps its own name; a multi-CLI tab also shows which
+            // CLI is on screen right now so the crumb never misleads.
+            const activeMember =
+              active.kind === "agent"
+                ? active.members.find(
+                    (member) => member.sessionId === active.sessionId,
+                  )
+                : undefined;
+            const memberLabel =
+              activeMember && activeMember.label !== active.label
+                ? activeMember.label
+                : null;
             return (
               <header className="session-header">
                 <button
@@ -1023,6 +1035,11 @@ export function SessionsView({
                     >
                       <ActiveGlyph size={13} />
                       <span className="truncate">{active.label}</span>
+                      {memberLabel && (
+                        <span className="session-header__member truncate">
+                          · {memberLabel}
+                        </span>
+                      )}
                     </span>
                   )}
                 </div>

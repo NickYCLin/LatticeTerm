@@ -1505,6 +1505,12 @@
   font-weight: 700;
 }
 
+/* The CLI currently on screen inside a multi-CLI tab. */
+.session-header__member {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 .session-header__rename {
   width: 10rem;
   min-width: 0;
