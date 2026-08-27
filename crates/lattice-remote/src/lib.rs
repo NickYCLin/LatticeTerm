@@ -15,6 +15,7 @@ pub mod relay;
 #[cfg(feature = "relay-server")]
 pub mod relay_server;
 mod secure;
+pub mod transport;
 mod wire;
 
 pub use protocol::{
@@ -29,3 +30,4 @@ pub use secure::{
     generate_pairing_code, normalize_pairing_code, RemoteError, SecureConnection, SecureReader,
     SecureWriter,
 };
+pub use transport::Transport;

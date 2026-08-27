@@ -1,12 +1,12 @@
 use image::{imageops::FilterType, DynamicImage};
 use lattice_remote::relay::{
-    format_device_id, parse_relay_address, read_server_message, write_client_message,
+    format_device_id, normalize_relay_endpoint, read_server_message, write_client_message,
     DeviceIdentity, RelayClientMessage, RelayServerMessage,
 };
 use lattice_remote::{
     frame_messages, generate_pairing_code, host_files::HostUpload, host_files::SharedFiles,
     host_input::InputInjector, normalize_pairing_code, FrameFormat, RemoteFileRequest,
-    RemoteFileResponse, RemoteHello, RemoteMessage, SecureConnection, DEFAULT_PORT,
+    RemoteFileResponse, RemoteHello, RemoteMessage, SecureConnection, Transport, DEFAULT_PORT,
     FILE_CHUNK_SIZE, MAX_FILE_ERROR_BYTES, PROTOCOL_VERSION,
 };
 use serde::Serialize;
@@ -18,7 +18,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout};
 use xcap::Monitor;
@@ -103,7 +104,7 @@ fn emit_event(json: bool, event: &AgentEvent<'_>) {
 
 fn help() -> &'static str {
     "Lattice Remote agent\n\n\
-Usage: lattice-agent [--bind ADDRESS:PORT] [--relay HOST[:PORT]] [--identity FILE]\n\
+Usage: lattice-agent [--bind ADDRESS:PORT] [--relay HOST[:PORT]|WSS_URL] [--identity FILE]\n\
                      [--pair-code 1234-5678] [--fps 1-10] [--allow-input]\n\
                      [--file-root PATH] [--json]\n\n\
 Direct mode (default): the safe default listens on 127.0.0.1 only. To receive\n\
@@ -114,7 +115,9 @@ Relay mode: --relay connects outward to a lattice-relay server and registers\n\
 this machine's permanent nine-digit device ID (kept in --identity, default\n\
 under the user data folder). A viewer then reaches this machine by ID alone;\n\
 the pairing code still authenticates every session end to end, the relay only\n\
-forwards ciphertext, and the agent keeps serving sessions until stopped.\n\n\
+forwards ciphertext, and the agent keeps serving sessions until stopped. Use\n\
+wss:// through HTTPS ingress on the public Internet; raw HOST:PORT is for a\n\
+trusted private network or VPN only.\n\n\
 By default the session is view-only. Pass --allow-input to let the paired\n\
 viewer control this machine's mouse and keyboard; without it, input messages\n\
 are ignored. File access stays disabled unless --file-root explicitly shares\n\
@@ -137,10 +140,10 @@ fn parse_options() -> Result<Options, String> {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--relay" => {
-                let address = arguments
-                    .next()
-                    .ok_or_else(|| "--relay needs HOST or HOST:PORT".to_string())?;
-                parse_relay_address(&address).map_err(|error| error.to_string())?;
+                let address = arguments.next().ok_or_else(|| {
+                    "--relay needs HOST[:PORT], ws://URL, or wss://URL".to_string()
+                })?;
+                normalize_relay_endpoint(&address).map_err(|error| error.to_string())?;
                 relay = Some(address);
             }
             "--identity" => {
@@ -449,12 +452,15 @@ fn spawn_download(
     });
 }
 
-async fn serve(
-    connection: SecureConnection,
+async fn serve<S>(
+    connection: SecureConnection<S>,
     fps: u32,
     allow_input: bool,
     file_root: Option<PathBuf>,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let monitors = Monitor::all().map_err(|error| error.to_string())?;
     let monitor = monitors
         .into_iter()
@@ -709,17 +715,15 @@ enum SessionOutcome {
 /// Serves one invited session over a fresh relay connection. The pairing code
 /// still authenticates the viewer end to end; the relay only linked sockets.
 async fn run_relay_session(
-    relay_host: String,
-    relay_port: u16,
+    relay_endpoint: String,
     channel_id: String,
     identity: DeviceIdentity,
     options: Options,
 ) -> SessionOutcome {
-    let mut stream = match TcpStream::connect((relay_host.as_str(), relay_port)).await {
+    let mut stream = match Transport::connect(&relay_endpoint).await {
         Ok(stream) => stream,
         Err(error) => return SessionOutcome::Ended(format!("Could not reach the relay: {error}")),
     };
-    let _ = stream.set_nodelay(true);
     if write_client_message(
         &mut stream,
         &RelayClientMessage::Join {
@@ -775,8 +779,8 @@ async fn run_relay_session(
 /// flight rides its own connection and survives a control drop.
 async fn run_relay(options: &Options) -> String {
     let relay_raw = options.relay.clone().expect("relay mode requires --relay");
-    let (relay_host, relay_port) = match parse_relay_address(&relay_raw) {
-        Ok(address) => address,
+    let relay_endpoint = match normalize_relay_endpoint(&relay_raw) {
+        Ok(endpoint) => endpoint,
         Err(error) => {
             emit_event(
                 options.json,
@@ -828,11 +832,10 @@ async fn run_relay(options: &Options) -> String {
 
     loop {
         let connected = async {
-            let stream = TcpStream::connect((relay_host.as_str(), relay_port))
+            let stream = Transport::connect(&relay_endpoint)
                 .await
                 .map_err(|error| error.to_string())?;
-            let _ = stream.set_nodelay(true);
-            let (mut read_half, mut write_half) = stream.into_split();
+            let (mut read_half, mut write_half) = tokio::io::split(stream);
             write_client_message(
                 &mut write_half,
                 &RelayClientMessage::Register {
@@ -950,8 +953,7 @@ async fn run_relay(options: &Options) -> String {
             match read_server_message(&mut read_half).await {
                 Ok(RelayServerMessage::Invite { channel_id }) => {
                     let outcome = run_relay_session(
-                        relay_host.clone(),
-                        relay_port,
+                        relay_endpoint.clone(),
                         channel_id,
                         identity.clone(),
                         options.clone(),

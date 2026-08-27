@@ -9,11 +9,11 @@ use crate::remote_files::{RemoteDirectory, RemoteFileTransfer, RemoteFilesClient
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use lattice_remote::relay::{
-    dial, format_device_id, normalize_device_id, parse_relay_address, RelayError,
+    dial, format_device_id, normalize_device_id, normalize_relay_endpoint, RelayError,
 };
 use lattice_remote::{
     normalize_pairing_code, FrameAssembler, PointerButton, RemoteInput, RemoteMessage,
-    SecureConnection, MAX_WHEEL_UNITS, PROTOCOL_VERSION,
+    SecureConnection, Transport, MAX_WHEEL_UNITS, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 use tokio::time::timeout;
@@ -254,15 +255,11 @@ pub async fn connect(
     };
 
     let mut connection = if let Some(device_id) = &device_id {
-        let (relay_host, relay_port) = match parse_relay_address(&request.relay_address) {
-            Ok(address) => address,
+        let relay_endpoint = match normalize_relay_endpoint(&request.relay_address) {
+            Ok(endpoint) => endpoint,
             Err(error) => return failed("connect", error.to_string()),
         };
-        let stream = match timeout(
-            Duration::from_secs(15),
-            dial(&relay_host, relay_port, device_id),
-        )
-        .await
+        let stream = match timeout(Duration::from_secs(15), dial(&relay_endpoint, device_id)).await
         {
             Ok(Ok((stream, _agent_name))) => stream,
             Ok(Err(RelayError::Rejected { detail, .. })) => return failed("connect", detail),
@@ -280,10 +277,11 @@ pub async fn connect(
             Err(_) => return failed("connect", "The Agent did not answer within 12 seconds."),
         }
     } else {
-        match timeout(
-            Duration::from_secs(12),
-            SecureConnection::connect(&request.hostname, request.port, &pairing_code),
-        )
+        match timeout(Duration::from_secs(12), async {
+            let stream = TcpStream::connect((request.hostname.as_str(), request.port)).await?;
+            stream.set_nodelay(true)?;
+            SecureConnection::initiate(Transport::from(stream), &pairing_code).await
+        })
         .await
         {
             Ok(Ok(connection)) => connection,

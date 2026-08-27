@@ -9,13 +9,14 @@
 //! encrypted transport, which keeps the server a single simple protocol.
 
 use crate::wire::{read_wire, write_wire};
+use crate::Transport;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use snow::{params::NoiseParams, Builder};
 use std::path::Path;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpStream;
+use url::Url;
 
 pub const DEFAULT_RELAY_PORT: u16 = 44_910;
 const DEVICE_ID_DIGITS: usize = 9;
@@ -24,7 +25,7 @@ const DEVICE_ID_DIGITS: usize = 9;
 pub enum RelayError {
     #[error("device ID must contain exactly nine digits")]
     InvalidDeviceId,
-    #[error("relay address must look like HOST or HOST:PORT")]
+    #[error("relay address must be HOST[:PORT], ws://URL, or wss://URL")]
     InvalidRelayAddress,
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -131,24 +132,54 @@ pub async fn read_server_message<R: AsyncRead + Unpin>(
     serde_json::from_slice(&bytes).map_err(|_| RelayError::Protocol)
 }
 
-/// Splits "HOST" or "HOST:PORT" into a connectable pair, defaulting the port.
-pub fn parse_relay_address(input: &str) -> Result<(String, u16), RelayError> {
+/// Validates and normalizes a relay endpoint. Raw TCP addresses default to
+/// port 44910; WebSocket URLs retain their path so multiple services can share
+/// one HTTPS hostname.
+pub fn normalize_relay_endpoint(input: &str) -> Result<String, RelayError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(RelayError::InvalidRelayAddress);
     }
-    // A lone trailing ":PORT" is only split when the head is not part of an
-    // un-bracketed IPv6 literal (which contains more than one colon).
-    if let Some((host, port)) = trimmed.rsplit_once(':') {
-        if !host.contains(':') {
-            if host.is_empty() {
-                return Err(RelayError::InvalidRelayAddress);
-            }
-            let port: u16 = port.parse().map_err(|_| RelayError::InvalidRelayAddress)?;
-            return Ok((host.to_string(), port));
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("ws://") || lower.starts_with("wss://") {
+        let parsed = Url::parse(trimmed).map_err(|_| RelayError::InvalidRelayAddress)?;
+        if parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.fragment().is_some()
+            || parsed.port() == Some(0)
+        {
+            return Err(RelayError::InvalidRelayAddress);
         }
+        return Ok(parsed.to_string());
     }
-    Ok((trimmed.to_string(), DEFAULT_RELAY_PORT))
+    if trimmed.contains("://") {
+        return Err(RelayError::InvalidRelayAddress);
+    }
+
+    let parsed =
+        Url::parse(&format!("tcp://{trimmed}")).map_err(|_| RelayError::InvalidRelayAddress)?;
+    if parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !matches!(parsed.path(), "" | "/")
+    {
+        return Err(RelayError::InvalidRelayAddress);
+    }
+    let port = parsed.port().unwrap_or(DEFAULT_RELAY_PORT);
+    if port == 0 {
+        return Err(RelayError::InvalidRelayAddress);
+    }
+    let host = parsed.host_str().ok_or(RelayError::InvalidRelayAddress)?;
+    let authority = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    Ok(authority)
 }
 
 pub fn normalize_device_id(input: &str) -> Result<String, RelayError> {
@@ -309,14 +340,10 @@ impl DeviceIdentity {
 /// Viewer-side rendezvous: connects to the relay, dials a device ID, and
 /// returns the linked stream plus the agent's advertised name. The caller
 /// then runs the ordinary Noise handshake over the returned stream.
-pub async fn dial(
-    relay_host: &str,
-    relay_port: u16,
-    device_id: &str,
-) -> Result<(TcpStream, String), RelayError> {
+pub async fn dial(endpoint: &str, device_id: &str) -> Result<(Transport, String), RelayError> {
     let device_id = normalize_device_id(device_id)?;
-    let mut stream = TcpStream::connect((relay_host, relay_port)).await?;
-    stream.set_nodelay(true)?;
+    let endpoint = normalize_relay_endpoint(endpoint)?;
+    let mut stream = Transport::connect(&endpoint).await?;
     write_client_message(&mut stream, &RelayClientMessage::Dial { device_id }).await?;
     match read_server_message(&mut stream).await? {
         RelayServerMessage::Linked { agent_name } => Ok((stream, agent_name)),
@@ -381,22 +408,32 @@ mod tests {
     }
 
     #[test]
-    fn relay_addresses_default_the_port() {
+    fn relay_endpoints_are_normalized_and_default_the_tcp_port() {
         assert_eq!(
-            parse_relay_address("relay.example.com").unwrap(),
-            ("relay.example.com".to_string(), DEFAULT_RELAY_PORT)
+            normalize_relay_endpoint("relay.example.com").unwrap(),
+            "relay.example.com:44910"
         );
         assert_eq!(
-            parse_relay_address("relay.example.com:5000").unwrap(),
-            ("relay.example.com".to_string(), 5000)
+            normalize_relay_endpoint("relay.example.com:5000").unwrap(),
+            "relay.example.com:5000"
         );
         assert_eq!(
-            parse_relay_address("203.0.113.7:44910").unwrap(),
-            ("203.0.113.7".to_string(), 44910)
+            normalize_relay_endpoint("203.0.113.7:44910").unwrap(),
+            "203.0.113.7:44910"
         );
-        assert!(parse_relay_address("").is_err());
-        assert!(parse_relay_address(":5000").is_err());
-        assert!(parse_relay_address("host:notaport").is_err());
+        assert_eq!(
+            normalize_relay_endpoint("wss://relay.example.com/lattice").unwrap(),
+            "wss://relay.example.com/lattice"
+        );
+        assert_eq!(
+            normalize_relay_endpoint("[2001:db8::1]:44910").unwrap(),
+            "[2001:db8::1]:44910"
+        );
+        assert!(normalize_relay_endpoint("").is_err());
+        assert!(normalize_relay_endpoint(":5000").is_err());
+        assert!(normalize_relay_endpoint("host:notaport").is_err());
+        assert!(normalize_relay_endpoint("https://relay.example.com").is_err());
+        assert!(normalize_relay_endpoint("wss://user@relay.example.com").is_err());
     }
 
     #[test]

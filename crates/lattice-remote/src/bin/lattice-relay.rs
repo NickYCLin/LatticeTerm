@@ -19,7 +19,9 @@ Usage: lattice-relay [--bind ADDRESS:PORT] [--state FILE]\n\n\
 Agents register their device ID over an outbound connection; viewers dial an\n\
 ID and the relay pipes the two sockets together. All session traffic stays\n\
 end-to-end encrypted between the peers. --state persists which token owns\n\
-each device ID across restarts (only salted hashes are written).\n"
+each device ID across restarts (only salted hashes are written). One listener\n\
+accepts native TCP and WebSocket upgrades. Bind to loopback behind HTTPS/WSS\n\
+ingress for public use; raw TCP is intended for trusted private networks.\n"
 }
 
 fn parse_options() -> Result<Options, String> {
