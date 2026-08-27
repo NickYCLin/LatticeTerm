@@ -26,6 +26,7 @@ import {
   agentGroupSidebarStatus,
   anyAgentSessionJustCompleted,
 } from "../app/sessionStatus";
+import { disconnectAgentSessionMembers } from "../app/agentSessionRemoval";
 import {
   createSessionSidebarFolder,
   loadSessionSidebarLayout,
@@ -939,9 +940,10 @@ export function SessionsView({
     const wasActive = session.members.some(
       (member) => member.sessionId === active.sessionId,
     );
-    for (const member of session.members) {
-      await agents.disconnect(member.sessionId);
-    }
+    await disconnectAgentSessionMembers(
+      session.members.map((member) => member.sessionId),
+      agents.disconnect,
+    );
     if (wasActive) onSelect(null);
   }
 

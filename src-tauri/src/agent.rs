@@ -2726,7 +2726,12 @@ pub fn disconnect(
     registry: &AgentRegistry,
     session_id: &str,
 ) -> Result<(), String> {
-    let entry = registry.get(session_id)?;
+    // Removing a session the registry no longer holds is a success, not a
+    // failure: a CLI that already exited has nothing left to stop, and the
+    // caller only wants it gone.
+    let Ok(entry) = registry.get(session_id) else {
+        return Ok(());
+    };
     terminate_agent_entry(entry.as_ref())?;
     if registry.remove(session_id).is_some() {
         sink.closed(session_id, "Stopped by user");
@@ -3877,6 +3882,16 @@ model = "gpt-5.3-codex"
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::ESRCH),
         );
+    }
+
+    #[test]
+    fn disconnect_is_idempotent_after_a_session_is_gone() {
+        let sink = TestSink::default();
+        let registry = AgentRegistry::new();
+
+        disconnect(&sink, &registry, "agent-missing").unwrap();
+
+        assert!(sink.closed.lock().unwrap().is_empty());
     }
 
     #[cfg(unix)]

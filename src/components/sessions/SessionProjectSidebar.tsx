@@ -458,27 +458,36 @@ export function SessionProjectSidebar({
     const selected = project.sessions.some(
       (session) => session.sessionId === activeSessionId,
     );
+    // A project owns its sessions in the layout, so its rows are nested here
+    // the same way a folder nests its children. Without this the sessions of a
+    // project have nowhere to render, which also hides their remove button.
+    const children = sessionSidebarChildren(layout, project.nodeId);
     return (
-      <div
-        role="treeitem"
-        className={`session-tree__project${selected ? " is-active" : ""}${
-          dropTargetNodeId === project.nodeId ? " is-drop-target" : ""
-        }${draggedNodeId === project.nodeId ? " is-dragging" : ""}`}
-        style={treeStyle(depth)}
-        key={project.nodeId}
-        data-tree-node={project.nodeId}
-        aria-grabbed={draggedNodeId === project.nodeId}
-        onPointerDown={(event) => pressNode(event, project.nodeId)}
-      >
-        <button
-          type="button"
-          className="session-tree__project-select"
-          onClick={() => project.sessions[0] && onSelect(project.sessions[0].sessionId)}
-          title={project.workingDirectory ?? project.label}
+      <div className="session-tree__project-branch" key={project.nodeId} role="treeitem">
+        <div
+          className={`session-tree__project${selected ? " is-active" : ""}${
+            dropTargetNodeId === project.nodeId ? " is-drop-target" : ""
+          }${draggedNodeId === project.nodeId ? " is-dragging" : ""}`}
+          style={treeStyle(depth)}
+          data-tree-node={project.nodeId}
+          aria-grabbed={draggedNodeId === project.nodeId}
+          onPointerDown={(event) => pressNode(event, project.nodeId)}
         >
-          <FolderIcon size={13} />
-          <span className="truncate">{project.label}</span>
-        </button>
+          <button
+            type="button"
+            className="session-tree__project-select"
+            onClick={() => project.sessions[0] && onSelect(project.sessions[0].sessionId)}
+            title={project.workingDirectory ?? project.label}
+          >
+            <FolderIcon size={13} />
+            <span className="truncate">{project.label}</span>
+          </button>
+        </div>
+        {children.length > 0 && (
+          <div role="group">
+            {children.map((id) => renderNode(id, depth + 1))}
+          </div>
+        )}
       </div>
     );
   }

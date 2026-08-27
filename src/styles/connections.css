@@ -1025,8 +1025,18 @@
 }
 
 .session-tree__folder,
-.session-tree__project {
+.session-tree__project,
+.session-tree__project-branch {
   min-width: 0;
+}
+
+/* Nested rows sit in their own group; keep them on the tree's own rhythm. */
+.session-tree__folder > [role="group"],
+.session-tree__project-branch > [role="group"] {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  margin-top: 0.125rem;
 }
 
 .session-tree__folder-row,
