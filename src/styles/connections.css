@@ -1077,10 +1077,6 @@
   transform: rotate(-90deg);
 }
 
-.session-tree__project .is-open {
-  transform: rotate(180deg);
-}
-
 .session-tree__folder-actions {
   position: absolute;
   z-index: 2;
@@ -1225,13 +1221,15 @@
   display: block;
 }
 
-.session-project-card {
+/* Compact popover for launching a CLI in a project, anchored to the
+   project row's plus button. */
+.session-launch-menu {
   position: fixed;
   z-index: 120;
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
   max-height: calc(100vh - 1.5rem);
-  padding: var(--space-4);
+  padding: var(--space-3);
   overflow-y: auto;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
@@ -1239,41 +1237,25 @@
   box-shadow: var(--shadow-lg);
 }
 
-.session-project-card > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  color: var(--text);
-}
-
-.session-project-card > header > div {
+.session-launch-menu > header {
   display: grid;
   gap: 0.15rem;
   min-width: 0;
+  color: var(--text);
 }
 
-.session-project-card__sessions,
-.session-project-card__launch,
-.session-project-card__launch > div {
+.session-launch-menu__list {
   display: grid;
   gap: var(--space-1);
 }
 
-.session-project-card__sessions {
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--line);
+.session-launch-menu__list > .button {
+  justify-content: flex-start;
 }
 
-.session-project-card__empty,
-.session-project-card__launch > span,
-.session-project-card__launch small {
+.session-launch-menu__list small {
   color: var(--text-faint);
   font-size: var(--text-2xs);
-}
-
-.session-project-card__launch > div {
-  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
 }
 
 .session-move-dialog {
@@ -1462,55 +1444,51 @@
   min-height: 0;
 }
 
-.session-tabs {
-  display: flex;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4) 0;
-  overflow-x: auto;
-}
-
-.session-tab {
-  position: relative;
+/* Names the active session (project › session) and carries its actions.
+   Switching sessions is the sidebar tree's job; on mobile the tree opens
+   as a drawer from the toggle at the left edge of this header. */
+.session-header {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: 0 var(--space-2) 0 var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  border-bottom: none;
-  background: var(--surface-hover);
-  max-width: 16rem;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-2);
 }
 
-.session-tab.is-active {
-  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface-solid));
-  border-color: var(--accent);
-  box-shadow:
-    inset 0 3px 0 var(--accent),
-    0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+.session-header__tree-toggle {
+  display: none;
 }
 
-.session-tab__label {
+.session-header__crumbs {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  height: 2.125rem;
-  font-size: var(--text-xs);
-  color: var(--text-muted);
 }
 
-.session-tab.is-active .session-tab__label {
+.session-header__project {
+  flex: none;
+  max-width: 12rem;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.session-header__sep {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.session-header__label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
   color: var(--accent-strong);
+  font-size: var(--text-sm);
   font-weight: 700;
 }
 
-.session-tab__label--editing {
-  height: 2.125rem;
-}
-
-.session-tab__rename {
-  width: 8rem;
+.session-header__rename {
+  width: 10rem;
   min-width: 0;
   padding: 0.15rem 0.35rem;
   border: 1px solid var(--accent-line);
@@ -1520,21 +1498,16 @@
   font-size: var(--text-xs);
 }
 
-/* The rename pencil stays out of the way until the tab is hovered, so the
-   tab strip is not cluttered with two buttons per agent tab. */
-.session-tab__rename-button {
-  opacity: 0;
+.session-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
 }
 
-.session-tab:hover .session-tab__rename-button,
-.session-tab.is-active .session-tab__rename-button,
-.session-tab:hover .session-tab__files-button,
-.session-tab.is-active .session-tab__files-button {
-  opacity: 1;
-}
-
-.session-tab__files-button {
-  opacity: 0;
+.session-header__files-button.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .terminal-stack {
@@ -1576,6 +1549,37 @@
 
 .app--mobile .session-projects {
   display: none;
+}
+
+/* On mobile the tree becomes a drawer over the terminal; the header's
+   toggle is the only way in, and picking a session closes it. */
+.app--mobile .session-projects.is-mobile-open {
+  display: block;
+  position: fixed;
+  z-index: 130;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(20rem, 85vw);
+  border-right: 1px solid var(--line-strong);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-lg);
+}
+
+.session-projects-scrim {
+  display: none;
+}
+
+.app--mobile .session-projects-scrim {
+  display: block;
+  position: fixed;
+  z-index: 125;
+  inset: 0;
+  background: color-mix(in srgb, black 40%, transparent);
+}
+
+.app--mobile .session-header__tree-toggle {
+  display: inline-flex;
 }
 
 @media (pointer: coarse) {
@@ -1651,12 +1655,6 @@
 .ssh-split__term > .terminal-pane-wrap {
   flex: 1;
   min-height: 0;
-}
-
-.session-tab__files-button.is-active {
-  opacity: 1;
-  color: var(--accent);
-  background: var(--accent-soft);
 }
 
 /* One tab, several CLIs kept alive: a switcher docks above the terminal. */

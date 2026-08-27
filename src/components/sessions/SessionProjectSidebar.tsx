@@ -55,7 +55,7 @@ export interface SessionSidebarProjectItem {
   sessions: SessionSidebarSessionItem[];
 }
 
-interface FloatingProjectCard {
+interface FloatingLaunchMenu {
   projectNodeId: string;
   anchor: DOMRect;
 }
@@ -85,6 +85,7 @@ export function SessionProjectSidebar({
   choosingProject,
   chooseError,
   installedAgents,
+  mobileOpen = false,
   onChooseProject,
   onSelect,
   onRemove,
@@ -101,6 +102,7 @@ export function SessionProjectSidebar({
   choosingProject: boolean;
   chooseError: boolean;
   installedAgents: AgentDefinition[];
+  mobileOpen?: boolean;
   onChooseProject: () => void;
   onSelect: (sessionId: string) => void;
   onRemove: (session: SessionSidebarSessionItem) => void;
@@ -137,35 +139,35 @@ export function SessionProjectSidebar({
   );
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
-  const [projectCard, setProjectCard] = useState<FloatingProjectCard | null>(null);
+  const [launchMenu, setLaunchMenu] = useState<FloatingLaunchMenu | null>(null);
   const [movingSession, setMovingSession] =
     useState<SessionSidebarSessionItem | null>(null);
-  const projectCardRef = useRef<HTMLElement>(null);
-  const cardAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const launchMenuRef = useRef<HTMLElement>(null);
+  const menuAnchorRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
-    if (!projectCard) return;
+    if (!launchMenu) return;
     function close(event: PointerEvent) {
       const target = event.target as Node | null;
       if (
         target &&
-        (projectCardRef.current?.contains(target) || cardAnchorRef.current?.contains(target))
+        (launchMenuRef.current?.contains(target) || menuAnchorRef.current?.contains(target))
       ) {
         return;
       }
-      setProjectCard(null);
+      setLaunchMenu(null);
     }
     function keydown(event: KeyboardEvent) {
-      if (event.key === "Escape") setProjectCard(null);
+      if (event.key === "Escape") setLaunchMenu(null);
     }
     function reposition() {
-      const anchor = cardAnchorRef.current;
+      const anchor = menuAnchorRef.current;
       if (!anchor) {
-        setProjectCard(null);
+        setLaunchMenu(null);
         return;
       }
       const bounds = anchor.getBoundingClientRect();
-      setProjectCard((current) =>
+      setLaunchMenu((current) =>
         current ? { ...current, anchor: bounds } : null,
       );
     }
@@ -179,7 +181,7 @@ export function SessionProjectSidebar({
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
     };
-  }, [projectCard]);
+  }, [launchMenu]);
 
   useEffect(() => {
     if (!movingSession) return;
@@ -284,14 +286,14 @@ export function SessionProjectSidebar({
     setDraggedNodeId(null);
   }
 
-  function openProjectCard(
+  function openLaunchMenu(
     event: MouseEvent<HTMLButtonElement>,
     projectNodeId: string,
   ) {
     const button = event.currentTarget;
     const anchor = button.getBoundingClientRect();
-    cardAnchorRef.current = button;
-    setProjectCard((current) =>
+    menuAnchorRef.current = button;
+    setLaunchMenu((current) =>
       current?.projectNodeId === projectNodeId
         ? null
         : { projectNodeId, anchor },
@@ -352,7 +354,7 @@ export function SessionProjectSidebar({
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
-              setProjectCard(null);
+              setLaunchMenu(null);
               setMovingSession(session);
             }}
             aria-label={t("terminal.projects.sessionMoveFor", {
@@ -388,11 +390,10 @@ export function SessionProjectSidebar({
     const selected = project.sessions.some(
       (session) => session.sessionId === activeSessionId,
     );
-    const cardOpen = projectCard?.projectNodeId === project.nodeId;
+    const menuOpen = launchMenu?.projectNodeId === project.nodeId;
     return (
       <div
         role="treeitem"
-        aria-expanded={cardOpen}
         className={`session-tree__project${selected ? " is-active" : ""}${
           dropTargetNodeId === project.nodeId ? " is-drop-target" : ""
         }`}
@@ -418,23 +419,14 @@ export function SessionProjectSidebar({
           <FolderIcon size={13} />
           <span className="truncate">{project.label}</span>
         </button>
-        <button
-          type="button"
-          className="icon-button icon-button--sm"
-          onClick={(event) => openProjectCard(event, project.nodeId)}
-          aria-label={t("terminal.projects.sessionCard", { name: project.label })}
-          aria-expanded={cardOpen}
-          title={t("terminal.projects.sessionCard", { name: project.label })}
-          draggable={false}
-        >
-          <ChevronDownIcon size={12} className={cardOpen ? "is-open" : undefined} />
-        </button>
         {project.workingDirectory && (
           <button
             type="button"
             className="icon-button icon-button--sm"
-            onClick={(event) => openProjectCard(event, project.nodeId)}
+            onClick={(event) => openLaunchMenu(event, project.nodeId)}
             aria-label={t("terminal.projects.newSession")}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
             title={t("terminal.projects.newSession")}
             draggable={false}
           >
@@ -536,26 +528,24 @@ export function SessionProjectSidebar({
     return null;
   }
 
-  const floatingProject = projectCard
-    ? projectByNode.get(projectCard.projectNodeId)
+  const launchProject = launchMenu
+    ? projectByNode.get(launchMenu.projectNodeId)
     : null;
-  const cardSessions = floatingProject
-    ? sessionSidebarChildren(layout, floatingProject.nodeId)
-        .map((id) => sessionByNode.get(id))
-        .filter((session): session is SessionSidebarSessionItem => Boolean(session))
-    : [];
-  const cardWidth = Math.min(320, Math.max(240, window.innerWidth - 24));
-  const cardLeft = projectCard
-    ? projectCard.anchor.right + 8 + cardWidth <= window.innerWidth
-      ? projectCard.anchor.right + 8
-      : Math.max(12, projectCard.anchor.left - cardWidth - 8)
+  const menuWidth = Math.min(240, Math.max(200, window.innerWidth - 24));
+  const menuLeft = launchMenu
+    ? launchMenu.anchor.right + 8 + menuWidth <= window.innerWidth
+      ? launchMenu.anchor.right + 8
+      : Math.max(12, launchMenu.anchor.left - menuWidth - 8)
     : 12;
-  const cardTop = projectCard
-    ? Math.max(12, Math.min(projectCard.anchor.top, window.innerHeight - 420))
+  const menuTop = launchMenu
+    ? Math.max(12, Math.min(launchMenu.anchor.top, window.innerHeight - 280))
     : 12;
 
   return (
-    <aside className="session-projects" aria-label={t("terminal.projects")}>
+    <aside
+      className={`session-projects${mobileOpen ? " is-mobile-open" : ""}`}
+      aria-label={t("terminal.projects")}
+    >
       <div className="session-projects__title">
         <FolderIcon size={14} />
         <span>{t("terminal.projects")}</span>
@@ -602,55 +592,39 @@ export function SessionProjectSidebar({
         </div>
       </div>
 
-      {projectCard && floatingProject &&
+      {launchMenu && launchProject && launchProject.workingDirectory &&
         createPortal(
           <section
-            ref={projectCardRef}
-            className="session-project-card"
-            style={{ left: cardLeft, top: cardTop, width: cardWidth }}
-            aria-label={t("terminal.projects.sessionCard", {
-              name: floatingProject.label,
-            })}
+            ref={launchMenuRef}
+            className="session-launch-menu"
+            style={{ left: menuLeft, top: menuTop, width: menuWidth }}
+            role="menu"
+            aria-label={t("terminal.projects.newSession")}
           >
             <header>
-              <div>
-                <span className="eyebrow">{t("terminal.projects")}</span>
-                <strong>{floatingProject.label}</strong>
-              </div>
-              <FolderIcon size={16} />
+              <span className="eyebrow">{t("terminal.projects.newSession")}</span>
+              <strong className="truncate">{launchProject.label}</strong>
             </header>
-            <div className="session-project-card__sessions">
-              {cardSessions.map((session) => renderSession(session, 0))}
-              {cardSessions.length === 0 && (
-                <span className="session-project-card__empty">
-                  {t("terminal.empty.title")}
-                </span>
+            <div className="session-launch-menu__list">
+              {installedAgents.map((definition) => (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="button button--ghost button--sm"
+                  key={definition.id}
+                  onClick={() => {
+                    setLaunchMenu(null);
+                    onLaunch(launchProject, definition);
+                  }}
+                >
+                  <AgentIcon size={11} />
+                  {definition.label}
+                </button>
+              ))}
+              {installedAgents.length === 0 && (
+                <small>{t("terminal.addCli.none")}</small>
               )}
             </div>
-            {floatingProject.workingDirectory && (
-              <div className="session-project-card__launch">
-                <span>{t("terminal.projects.newSession")}</span>
-                <div>
-                  {installedAgents.map((definition) => (
-                    <button
-                      type="button"
-                      className="button button--ghost button--sm"
-                      key={definition.id}
-                      onClick={() => {
-                        setProjectCard(null);
-                        onLaunch(floatingProject, definition);
-                      }}
-                    >
-                      <AgentIcon size={11} />
-                      {definition.label}
-                    </button>
-                  ))}
-                  {installedAgents.length === 0 && (
-                    <small>{t("terminal.addCli.none")}</small>
-                  )}
-                </div>
-              </div>
-            )}
           </section>,
           document.body,
         )}

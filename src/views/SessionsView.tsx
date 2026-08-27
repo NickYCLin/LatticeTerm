@@ -226,6 +226,18 @@ export function SessionsView({
     null,
   );
   const [newProjectError, setNewProjectError] = useState<string | null>(null);
+  // Mobile hides the sidebar; this opens it as an overlay drawer, the only
+  // way to switch sessions there now that the tab strip is gone.
+  const [mobileTreeOpen, setMobileTreeOpen] = useState(false);
+
+  useEffect(() => {
+    if (!mobileTreeOpen) return;
+    function close(event: KeyboardEvent) {
+      if (event.key === "Escape") setMobileTreeOpen(false);
+    }
+    document.addEventListener("keydown", close, true);
+    return () => document.removeEventListener("keydown", close, true);
+  }, [mobileTreeOpen]);
 
   useEffect(() => {
     if (!folderEditor) return;
@@ -609,7 +621,6 @@ export function SessionsView({
   const activeProjectId = active ? projectIdForSession(active) : null;
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ?? projects[0] ?? null;
-  const visibleSessions = activeProject?.sessions ?? [];
   const sidebarProjects: SessionSidebarProjectItem[] = projects.map((project) => ({
     nodeId: sidebarProjectNodeId(project.id),
     projectId: project.id,
@@ -866,6 +877,13 @@ export function SessionsView({
     <div className="terminal-workspace">
       {closedCallout}
       <div className="terminal-workspace__body">
+        {mobileTreeOpen && (
+          <div
+            className="session-projects-scrim"
+            role="presentation"
+            onClick={() => setMobileTreeOpen(false)}
+          />
+        )}
         <SessionProjectSidebar
           projects={sidebarProjects}
           layout={reconciledSidebarLayout}
@@ -873,8 +891,12 @@ export function SessionsView({
           choosingProject={choosingProject}
           chooseError={Boolean(newProjectError && !newProjectDialog)}
           installedAgents={installedAgents}
+          mobileOpen={mobileTreeOpen}
           onChooseProject={() => void chooseProjectDirectory()}
-          onSelect={onSelect}
+          onSelect={(sessionId) => {
+            setMobileTreeOpen(false);
+            onSelect(sessionId);
+          }}
           onRemove={(sidebarSession) => {
             const session = sessions.find(
               (candidate) =>
@@ -886,7 +908,9 @@ export function SessionsView({
           }}
           onLaunch={(sidebarProject, definition) => {
             const project = projectMap.get(sidebarProject.projectId);
-            if (project) void launchInProject(project, definition);
+            if (!project) return;
+            setMobileTreeOpen(false);
+            void launchInProject(project, definition);
           }}
           onCreateFolder={(parentId) => openFolderEditor(parentId)}
           onRenameFolder={(folder) =>
@@ -914,95 +938,107 @@ export function SessionsView({
         />
 
         <section className="terminal-project-workspace">
-          <div className="session-tabs" role="tablist">
-        {visibleSessions.map((session) => {
-          const selected = session.sessionId === active.sessionId;
-          const Glyph =
-            session.kind === "agent"
-              ? AgentIcon
-              : session.kind === "ssh"
-              ? TerminalIcon
-              : session.kind === "sftp"
-                ? TransferIcon
-                : ScreenShareIcon;
-          return (
-            <div
-              className={`session-tab${selected ? " is-active" : ""}`}
-              key={session.sessionId}
-            >
-              {editingTab === session.sessionId ? (
-                <span className="session-tab__label session-tab__label--editing">
-                  <Glyph size={13} />
-                  <input
-                    className="session-tab__rename"
-                    value={tabDraft}
-                    autoFocus
-                    maxLength={80}
-                    onChange={(event) => setTabDraft(event.currentTarget.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void commitRename(session.sessionId);
-                      else if (event.key === "Escape") setEditingTab(null);
-                    }}
-                    onBlur={() => void commitRename(session.sessionId)}
-                    aria-label={t("terminal.rename")}
-                  />
-                </span>
-              ) : (
+          {(() => {
+            const ActiveGlyph =
+              active.kind === "agent"
+                ? AgentIcon
+                : active.kind === "ssh"
+                  ? TerminalIcon
+                  : active.kind === "sftp"
+                    ? TransferIcon
+                    : ScreenShareIcon;
+            return (
+              <header className="session-header">
                 <button
                   type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  className="session-tab__label"
-                  onClick={() => onSelect(session.sessionId)}
-                  onDoubleClick={
-                    session.kind === "agent"
-                      ? () => beginRename(session.sessionId, session.label)
-                      : undefined
-                  }
-                  title={session.kind === "agent" ? t("terminal.renameHint") : undefined}
+                  className="icon-button icon-button--sm session-header__tree-toggle"
+                  onClick={() => setMobileTreeOpen(true)}
+                  aria-label={t("terminal.projects")}
+                  title={t("terminal.projects")}
                 >
-                  <Glyph size={13} />
-                  <span className="truncate">{session.label}</span>
+                  <FolderIcon size={14} />
                 </button>
-              )}
-              {session.kind === "agent" && editingTab !== session.sessionId && (
-                <button
-                  type="button"
-                  className="icon-button icon-button--sm session-tab__rename-button"
-                  onClick={() => beginRename(session.sessionId, session.label)}
-                  aria-label={t("terminal.rename")}
-                  data-tooltip={t("terminal.rename")}
-                >
-                  <EditIcon size={12} />
-                </button>
-              )}
-              {session.kind === "ssh" && (
-                <button
-                  type="button"
-                  className={`icon-button icon-button--sm session-tab__files-button${
-                    filesOpen[session.sessionId] ? " is-active" : ""
-                  }`}
-                  onClick={() => void toggleFiles(session.sessionId)}
-                  aria-pressed={!!filesOpen[session.sessionId]}
-                  aria-label={t("terminal.openFiles")}
-                  data-tooltip={t("terminal.openFiles")}
-                >
-                  <FolderIcon size={12} />
-                </button>
-              )}
-              <button
-                type="button"
-                className="icon-button icon-button--sm"
-                onClick={() => void close(session)}
-                aria-label={t("terminal.disconnect")}
-                data-tooltip={t("terminal.disconnect")}
-              >
-                <CloseIcon size={12} />
-              </button>
-            </div>
-          );
-        })}
-          </div>
+                <div className="session-header__crumbs">
+                  <span
+                    className="session-header__project truncate"
+                    title={activeProject.workingDirectory ?? activeProject.label}
+                  >
+                    {activeProject.label}
+                  </span>
+                  <span className="session-header__sep" aria-hidden="true">
+                    ›
+                  </span>
+                  {editingTab === active.sessionId ? (
+                    <span className="session-header__label">
+                      <ActiveGlyph size={13} />
+                      <input
+                        className="session-header__rename"
+                        value={tabDraft}
+                        autoFocus
+                        maxLength={80}
+                        onChange={(event) => setTabDraft(event.currentTarget.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") void commitRename(active.sessionId);
+                          else if (event.key === "Escape") setEditingTab(null);
+                        }}
+                        onBlur={() => void commitRename(active.sessionId)}
+                        aria-label={t("terminal.rename")}
+                      />
+                    </span>
+                  ) : (
+                    <span
+                      className="session-header__label"
+                      onDoubleClick={
+                        active.kind === "agent"
+                          ? () => beginRename(active.sessionId, active.label)
+                          : undefined
+                      }
+                      title={active.kind === "agent" ? t("terminal.renameHint") : undefined}
+                    >
+                      <ActiveGlyph size={13} />
+                      <span className="truncate">{active.label}</span>
+                    </span>
+                  )}
+                </div>
+                <div className="session-header__actions">
+                  {active.kind === "agent" && editingTab !== active.sessionId && (
+                    <button
+                      type="button"
+                      className="icon-button icon-button--sm"
+                      onClick={() => beginRename(active.sessionId, active.label)}
+                      aria-label={t("terminal.rename")}
+                      data-tooltip={t("terminal.rename")}
+                    >
+                      <EditIcon size={12} />
+                    </button>
+                  )}
+                  {active.kind === "ssh" && (
+                    <button
+                      type="button"
+                      className={`icon-button icon-button--sm session-header__files-button${
+                        filesOpen[active.sessionId] ? " is-active" : ""
+                      }`}
+                      onClick={() => void toggleFiles(active.sessionId)}
+                      aria-pressed={!!filesOpen[active.sessionId]}
+                      aria-label={t("terminal.openFiles")}
+                      data-tooltip={t("terminal.openFiles")}
+                    >
+                      <FolderIcon size={12} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="icon-button icon-button--sm"
+                    onClick={() => void close(active)}
+                    aria-label={t("terminal.disconnect")}
+                    data-tooltip={t("terminal.disconnect")}
+                  >
+                    <CloseIcon size={12} />
+                  </button>
+                </div>
+              </header>
+            );
+          })()}
 
           <div className="terminal-stack">
         {agentGroups.map((group) => {
