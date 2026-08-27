@@ -884,31 +884,6 @@ export function SessionsView({
     );
   }
 
-  async function launchInProject(
-    project: SessionProject,
-    definition: AgentDefinition,
-  ) {
-    if (!project.workingDirectory) return;
-    try {
-      const launched = await agents.launch({
-        definitionId: definition.id,
-        label: "",
-        executable: "",
-        arguments: [],
-        resumeSessionId: null,
-        groupId: null,
-        seedInput: null,
-        workingDirectory: project.workingDirectory,
-        cols: 120,
-        rows: 32,
-      });
-      onSelect(launched.sessionId);
-    } catch {
-      // Full diagnostics remain available in the Agent Fleet view. A failed
-      // quick launch leaves the current project/session untouched.
-    }
-  }
-
   async function launchQuickChat(definition: AgentDefinition) {
     try {
       const home = homeDirectory ?? (await homeDir());
@@ -1002,12 +977,6 @@ export function SessionsView({
             if (!session) return;
             setRemoveSessionError(null);
             setPendingRemoveSession(session);
-          }}
-          onLaunch={(sidebarProject, definition) => {
-            const project = projectMap.get(sidebarProject.projectId);
-            if (!project) return;
-            setMobileTreeOpen(false);
-            void launchInProject(project, definition);
           }}
           onQuickLaunch={(definition) => {
             setMobileTreeOpen(false);

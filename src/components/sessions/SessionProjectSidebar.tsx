@@ -96,7 +96,6 @@ export function SessionProjectSidebar({
   onChooseProject,
   onSelect,
   onRemove,
-  onLaunch,
   onQuickLaunch,
   onCreateFolder,
   onRenameFolder,
@@ -114,10 +113,6 @@ export function SessionProjectSidebar({
   onChooseProject: () => void;
   onSelect: (sessionId: string) => void;
   onRemove: (session: SessionSidebarSessionItem) => void;
-  onLaunch: (
-    project: SessionSidebarProjectItem,
-    definition: AgentDefinition,
-  ) => void;
   onQuickLaunch: (definition: AgentDefinition) => void;
   onCreateFolder: (parentId: string | null) => void;
   onRenameFolder: (folder: SessionSidebarFolder) => void;
@@ -463,7 +458,6 @@ export function SessionProjectSidebar({
     const selected = project.sessions.some(
       (session) => session.sessionId === activeSessionId,
     );
-    const menuOpen = launchMenu?.projectNodeId === project.nodeId;
     return (
       <div
         role="treeitem"
@@ -485,20 +479,6 @@ export function SessionProjectSidebar({
           <FolderIcon size={13} />
           <span className="truncate">{project.label}</span>
         </button>
-        {project.workingDirectory && (
-          <button
-            type="button"
-            className="icon-button icon-button--sm"
-            onClick={(event) => openLaunchMenu(event, project.nodeId)}
-            aria-label={t("terminal.projects.newSession")}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            title={t("terminal.projects.newSession")}
-            data-tree-action="true"
-          >
-            <PlusIcon size={12} />
-          </button>
-        )}
       </div>
     );
   }
@@ -587,9 +567,6 @@ export function SessionProjectSidebar({
     return null;
   }
 
-  const launchProject = launchMenu
-    ? projectByNode.get(launchMenu.projectNodeId)
-    : null;
   const quickLaunchOpen = launchMenu?.projectNodeId === QUICK_LAUNCH_NODE;
   const menuWidth = Math.min(240, Math.max(200, window.innerWidth - 24));
   const menuLeft = launchMenu
@@ -668,31 +645,18 @@ export function SessionProjectSidebar({
         </div>
       </div>
 
-      {launchMenu &&
-        (quickLaunchOpen || (launchProject && launchProject.workingDirectory)) &&
+      {quickLaunchOpen &&
         createPortal(
           <section
             ref={launchMenuRef}
             className="session-launch-menu"
             style={{ left: menuLeft, top: menuTop, width: menuWidth }}
             role="menu"
-            aria-label={
-              quickLaunchOpen
-                ? t("terminal.quickChat")
-                : t("terminal.projects.newSession")
-            }
+            aria-label={t("terminal.quickChat")}
           >
             <header>
-              <span className="eyebrow">
-                {quickLaunchOpen
-                  ? t("terminal.quickChat")
-                  : t("terminal.projects.newSession")}
-              </span>
-              <strong className="truncate">
-                {quickLaunchOpen
-                  ? t("terminal.quickChat.hint")
-                  : launchProject?.label}
-              </strong>
+              <span className="eyebrow">{t("terminal.quickChat")}</span>
+              <strong className="truncate">{t("terminal.quickChat.hint")}</strong>
             </header>
             <div className="session-launch-menu__list">
               {installedAgents.map((definition) => (
@@ -703,8 +667,7 @@ export function SessionProjectSidebar({
                   key={definition.id}
                   onClick={() => {
                     setLaunchMenu(null);
-                    if (quickLaunchOpen) onQuickLaunch(definition);
-                    else if (launchProject) onLaunch(launchProject, definition);
+                    onQuickLaunch(definition);
                   }}
                 >
                   <AgentIcon size={11} />
