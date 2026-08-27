@@ -2920,7 +2920,7 @@ dependencies = [
  "keyring",
  "lattice-remote",
  "libc",
- "png 0.17.16",
+ "png 0.18.1",
  "portable-pty",
  "russh",
  "russh-sftp",
