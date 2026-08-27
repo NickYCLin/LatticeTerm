@@ -938,8 +938,8 @@ export const zhTW = {
   "remote.host.modeDirect": "區網直連",
   "remote.host.modeDirectHint": "在本機或區網開一個連接埠，對方需輸入 IP 與連接埠。",
   "remote.host.relayAddress": "中繼伺服器位址",
-  "remote.host.relayPlaceholder": "relay.example.com:44910",
-  "remote.host.relayHint": "填你自架的 lattice-relay 位址；未填連接埠時使用 44910。",
+  "remote.host.relayPlaceholder": "wss://relay.example.com",
+  "remote.host.relayHint": "公網請填 wss:// 網址；私有網路可填主機:連接埠，未填時使用 44910。",
   "remote.host.fixedCode": "固定配對碼（選填）",
   "remote.host.fixedCodePlaceholder": "留白自動產生",
   "remote.host.fixedCodeHint": "八位數字。設定後每次連線都用同一組碼；留白則每次分享時產生新碼。",
@@ -954,7 +954,7 @@ export const zhTW = {
   "remote.quick.deviceIdHint": "請對方開啟「分享這台裝置」，把畫面上的九位數 ID 告訴你。",
   "remote.quick.idInvalid": "裝置 ID 必須是九位數字。",
   "remote.quick.relayMissing": "請先填寫中繼伺服器位址。",
-  "remote.quick.relayHint": "與分享端使用同一台中繼伺服器。",
+  "remote.quick.relayHint": "與分享端使用同一個 wss:// 網址或私有中繼位址。",
   "remote.quick.submit": "連線",
 
   // Web RDP ----------------------------------------------------------------

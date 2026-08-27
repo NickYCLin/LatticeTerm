@@ -60,13 +60,8 @@ $SUDO systemctl daemon-reload
 $SUDO systemctl enable --now lattice-relay
 rm -rf "$BUILD_DIR"
 
-if command -v ufw >/dev/null 2>&1 && $SUDO ufw status | grep -q "Status: active"; then
-  echo "--> Opening TCP 44910 in ufw"
-  $SUDO ufw allow 44910/tcp
-fi
-
 sleep 1
 $SUDO systemctl --no-pager --lines 5 status lattice-relay
 REMOTE
 
-echo "==> Done. The relay listens on TCP 44910."
+echo "==> Done. The relay listens on 127.0.0.1:44910. Put HTTPS/WSS ingress in front of it for public use."

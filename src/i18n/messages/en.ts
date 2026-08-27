@@ -1014,8 +1014,8 @@ export const en: Messages = {
   "remote.host.modeDirect": "LAN direct",
   "remote.host.modeDirectHint": "Open a local port; the viewer needs your IP and port.",
   "remote.host.relayAddress": "Relay server address",
-  "remote.host.relayPlaceholder": "relay.example.com:44910",
-  "remote.host.relayHint": "Your self-hosted lattice-relay address; port defaults to 44910.",
+  "remote.host.relayPlaceholder": "wss://relay.example.com",
+  "remote.host.relayHint": "Use a wss:// URL on the public Internet; private addresses default to port 44910.",
   "remote.host.fixedCode": "Fixed pairing code (optional)",
   "remote.host.fixedCodePlaceholder": "Leave empty to generate one",
   "remote.host.fixedCodeHint": "Eight digits. A fixed code stays the same across sessions; empty generates a fresh code per share.",
@@ -1030,7 +1030,7 @@ export const en: Messages = {
   "remote.quick.deviceIdHint": "Ask them to open “Share this device” and read you the nine-digit ID.",
   "remote.quick.idInvalid": "A device ID has exactly nine digits.",
   "remote.quick.relayMissing": "Enter the relay server address first.",
-  "remote.quick.relayHint": "Use the same relay server as the sharing side.",
+  "remote.quick.relayHint": "Use the same wss:// URL or private relay address as the sharing side.",
   "remote.quick.submit": "Connect",
 
   // Web RDP ----------------------------------------------------------------

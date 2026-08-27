@@ -334,7 +334,7 @@ pub async fn start(
         if !(1..=10).contains(&request.fps) {
             return Err("Frame rate must be between 1 and 10 FPS.".to_string());
         }
-        lattice_remote::relay::parse_relay_address(&request.relay_address)
+        lattice_remote::relay::normalize_relay_endpoint(&request.relay_address)
             .map_err(|error| error.to_string())?;
         None
     } else {

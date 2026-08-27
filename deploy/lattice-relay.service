@@ -1,6 +1,7 @@
 # Lattice Remote relay server — systemd unit.
 # Installed by scripts/deploy-relay.sh; adjust the bind address or state path
 # here and run `systemctl daemon-reload && systemctl restart lattice-relay`.
+# The secure default expects an HTTPS/WebSocket ingress on the same host.
 [Unit]
 Description=Lattice Remote relay server
 After=network-online.target
@@ -10,7 +11,7 @@ Wants=network-online.target
 Type=simple
 User=lattice-relay
 Group=lattice-relay
-ExecStart=/usr/local/bin/lattice-relay --bind 0.0.0.0:44910 --state /var/lib/lattice-relay/devices.json
+ExecStart=/usr/local/bin/lattice-relay --bind 127.0.0.1:44910 --state /var/lib/lattice-relay/devices.json
 Restart=always
 RestartSec=2
 

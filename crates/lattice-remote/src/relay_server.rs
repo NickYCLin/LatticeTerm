@@ -12,6 +12,7 @@ use crate::relay::{
     hash_token, normalize_device_id, random_channel_id, read_client_message, write_server_message,
     RelayClientMessage, RelayServerMessage,
 };
+use crate::Transport;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -44,7 +45,7 @@ struct AgentEntry {
 #[derive(Default)]
 pub struct RelayState {
     agents: Mutex<HashMap<String, AgentEntry>>,
-    pending: Mutex<HashMap<String, oneshot::Sender<TcpStream>>>,
+    pending: Mutex<HashMap<String, oneshot::Sender<Transport>>>,
     tokens: Mutex<HashMap<String, String>>,
     state_path: Option<PathBuf>,
     generations: Mutex<u64>,
@@ -146,7 +147,7 @@ impl RelayState {
     }
 }
 
-async fn send_error(stream: &mut TcpStream, code: &str, detail: &str) {
+async fn send_error(stream: &mut Transport, code: &str, detail: &str) {
     let _ = write_server_message(
         stream,
         &RelayServerMessage::Error {
@@ -161,7 +162,7 @@ async fn send_error(stream: &mut TcpStream, code: &str, detail: &str) {
 /// and answers pings until the agent disappears.
 async fn run_agent_control(
     state: Arc<RelayState>,
-    stream: TcpStream,
+    stream: Transport,
     peer: SocketAddr,
     device_id: String,
     agent_name: String,
@@ -178,7 +179,7 @@ async fn run_agent_control(
     );
     println!("Registered device {device_id} from {peer}.");
 
-    let (mut read_half, write_half) = stream.into_split();
+    let (mut read_half, write_half) = tokio::io::split(stream);
     let writer = Arc::new(tokio::sync::Mutex::new(write_half));
     let ping_writer = Arc::clone(&writer);
 
@@ -224,7 +225,7 @@ async fn run_agent_control(
 
 async fn run_dial(
     state: Arc<RelayState>,
-    mut stream: TcpStream,
+    mut stream: Transport,
     peer: SocketAddr,
     device_id: String,
 ) {
@@ -263,7 +264,7 @@ async fn run_dial(
         return;
     };
 
-    let (channel_tx, channel_rx) = oneshot::channel::<TcpStream>();
+    let (channel_tx, channel_rx) = oneshot::channel::<Transport>();
     state
         .pending
         .lock()
@@ -329,8 +330,7 @@ async fn run_dial(
     }
 }
 
-async fn run_connection(state: Arc<RelayState>, mut stream: TcpStream, peer: SocketAddr) {
-    let _ = stream.set_nodelay(true);
+async fn run_connection(state: Arc<RelayState>, mut stream: Transport, peer: SocketAddr) {
     if !state.allow_connection(peer.ip()) {
         send_error(
             &mut stream,
@@ -412,7 +412,12 @@ pub async fn run(listener: TcpListener, state: Arc<RelayState>) {
         match listener.accept().await {
             Ok((stream, peer)) => {
                 let state = Arc::clone(&state);
-                tokio::spawn(run_connection(state, stream, peer));
+                tokio::spawn(async move {
+                    let negotiated = timeout(FIRST_MESSAGE_LIMIT, negotiate_carrier(stream)).await;
+                    if let Ok(Ok(transport)) = negotiated {
+                        run_connection(state, transport, peer).await;
+                    }
+                });
             }
             Err(error) => {
                 eprintln!("Could not accept a connection: {error}");
@@ -420,6 +425,18 @@ pub async fn run(listener: TcpListener, state: Arc<RelayState>) {
             }
         }
     }
+}
+
+/// One listener supports native relay TCP and WebSocket upgrades. Relay JSON
+/// begins with a zero high byte in its bounded length prefix, while every
+/// WebSocket handshake begins with an HTTP `GET` request.
+async fn negotiate_carrier(stream: TcpStream) -> Result<Transport, std::io::Error> {
+    stream.set_nodelay(true)?;
+    let mut first = [0_u8; 1];
+    if stream.peek(&mut first).await? == 1 && first[0] == 0 {
+        return Ok(Transport::Tcp(stream));
+    }
+    Transport::accept_websocket(stream).await
 }
 
 #[cfg(test)]
@@ -502,13 +519,9 @@ mod tests {
             assert_eq!(secure.receive().await.unwrap(), RemoteMessage::KeepAlive);
         });
 
-        let (stream, agent_name) = dial(
-            &address.ip().to_string(),
-            address.port(),
-            &identity.device_id,
-        )
-        .await
-        .unwrap();
+        let (stream, agent_name) = dial(&address.to_string(), &identity.device_id)
+            .await
+            .unwrap();
         assert_eq!(agent_name, "Test host");
         let mut viewer = SecureConnection::initiate(stream, "1234-5678")
             .await
@@ -516,6 +529,65 @@ mod tests {
         let hello = viewer.receive().await.unwrap();
         assert!(matches!(hello, RemoteMessage::Hello(_)));
         viewer.send(&RemoteMessage::KeepAlive).await.unwrap();
+        agent.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_viewer_and_agent_keep_noise_end_to_end() {
+        let (address, _state) = start_relay().await;
+        let endpoint = format!("ws://{address}/");
+        let identity = DeviceIdentity::generate().unwrap();
+        let mut control = Transport::connect(&endpoint).await.unwrap();
+        write_client_message(
+            &mut control,
+            &RelayClientMessage::Register {
+                device_id: identity.device_id.clone(),
+                auth_token: identity.auth_token.clone(),
+                agent_name: "WebSocket host".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            read_server_message(&mut control).await.unwrap(),
+            RelayServerMessage::Registered
+        );
+
+        let session_endpoint = endpoint.clone();
+        let agent_identity = identity.clone();
+        let agent = tokio::spawn(async move {
+            let RelayServerMessage::Invite { channel_id } =
+                read_server_message(&mut control).await.unwrap()
+            else {
+                panic!("expected a relay invite");
+            };
+            let mut session = Transport::connect(&session_endpoint).await.unwrap();
+            write_client_message(
+                &mut session,
+                &RelayClientMessage::Join {
+                    channel_id,
+                    device_id: agent_identity.device_id,
+                    auth_token: agent_identity.auth_token,
+                },
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                read_server_message(&mut session).await.unwrap(),
+                RelayServerMessage::Linked { .. }
+            ));
+            let mut secure = SecureConnection::accept(session, "24681357").await.unwrap();
+            assert_eq!(secure.receive().await.unwrap(), RemoteMessage::KeepAlive);
+            secure.send(&RemoteMessage::KeepAlive).await.unwrap();
+        });
+
+        let (stream, agent_name) = dial(&endpoint, &identity.device_id).await.unwrap();
+        assert_eq!(agent_name, "WebSocket host");
+        let mut viewer = SecureConnection::initiate(stream, "2468-1357")
+            .await
+            .unwrap();
+        viewer.send(&RemoteMessage::KeepAlive).await.unwrap();
+        assert_eq!(viewer.receive().await.unwrap(), RemoteMessage::KeepAlive);
         agent.await.unwrap();
     }
 
@@ -534,9 +606,10 @@ mod tests {
     #[tokio::test]
     async fn dialing_an_unknown_device_reports_offline() {
         let (address, _state) = start_relay().await;
-        let error = dial(&address.ip().to_string(), address.port(), "123456789")
-            .await
-            .unwrap_err();
+        let error = match dial(&address.to_string(), "123456789").await {
+            Err(error) => error,
+            Ok(_) => panic!("an unknown device unexpectedly connected"),
+        };
         match error {
             crate::relay::RelayError::Rejected { code, .. } => assert_eq!(code, "offline"),
             other => panic!("expected an offline rejection, got {other:?}"),
