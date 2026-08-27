@@ -229,7 +229,7 @@ pub struct DeviceIdentity {
 }
 
 fn decode_hex(input: &str) -> Result<Vec<u8>, RelayError> {
-    if input.len() % 2 != 0 || !input.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !input.len().is_multiple_of(2) || !input.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(RelayError::Identity(
             "the identity key is not valid hex".to_string(),
         ));
