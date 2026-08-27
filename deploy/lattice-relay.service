@@ -14,9 +14,11 @@ Group=lattice-relay
 ExecStart=/usr/local/bin/lattice-relay --bind 127.0.0.1:44910 --state /var/lib/lattice-relay/devices.json
 Restart=always
 RestartSec=2
+UMask=0077
 
 # The relay needs nothing but a socket and its state file.
 StateDirectory=lattice-relay
+StateDirectoryMode=0700
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -26,6 +28,7 @@ ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target
