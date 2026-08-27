@@ -368,6 +368,9 @@ export const en: Messages = {
   "settings.density.compact": "Compact",
   "settings.motion": "Motion",
   "settings.motionHint": "Turn animation off if it bothers you.",
+  "settings.motionHint.reduced": "Drawer, dialog, overlay and hover transitions are now disabled.",
+  "settings.motionHint.systemReduced": "Your system already requests reduced motion, so both choices will look the same.",
+  "settings.motionHint.systemActive": "Drawer, dialog and interface transitions currently follow your system setting.",
   "settings.motion.system": "Follow system",
   "settings.motion.reduced": "Reduce motion",
   "settings.security": "Security",
@@ -684,6 +687,13 @@ export const en: Messages = {
   "terminal.projects.moveToRoot": "Drop here to move to the top level",
   "terminal.projects.dragHint": "Drag to reorder or move into a custom folder",
   "terminal.projects.sessionCard": "Sessions in “{name}”",
+  "terminal.projects.sessionRemove": "Remove session",
+  "terminal.projects.sessionRemoveFor": "Remove session “{name}”",
+  "terminal.projects.sessionRemoveTitle": "Remove “{name}”?",
+  "terminal.projects.sessionRemoveBody":
+    "This immediately disconnects and removes the session from the sidebar. Unsaved work may be lost.",
+  "terminal.projects.sessionRemoveAction": "Disconnect and remove",
+  "terminal.projects.sessionRemoveFailed": "Could not remove the session: {detail}",
   "terminal.projects.status.working": "Working",
   "terminal.projects.status.attention": "Needs attention",
   "terminal.projects.status.idle": "Idle",
@@ -737,7 +747,7 @@ export const en: Messages = {
     "Saved with the item to the workspace, so the list shows at a glance what it is for. Just for you; up to 200 bytes.",
   "agents.startupInstructions": "Shared instructions for every new CLI",
   "agents.startupInstructions.hint":
-    "This text is sent after a new session reaches its interactive prompt. Save an empty value to disable it; installer commands never receive it.",
+    "This text is sent after a brand-new session reaches its interactive prompt. Automatically restored sessions and installer commands never receive it. Save an empty value to disable it.",
   "agents.startupInstructions.enabled": "Enabled",
   "agents.startupInstructions.disabled": "Disabled",
   "agents.startupInstructions.placeholder":

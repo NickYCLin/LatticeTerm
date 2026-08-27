@@ -4,7 +4,7 @@
  * Active preferences and local-data security tools take effect immediately.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import mobileDownloadQr from "../assets/mobile-download-qr.svg";
 import type {
   DensityChoice,
@@ -161,6 +161,28 @@ export function SettingsView({
   const [clipboardBusy, setClipboardBusy] = useState(false);
   const [clipboardNotice, setClipboardNotice] =
     useState<MessageKey | null>(null);
+  const [systemPrefersReducedMotion, setSystemPrefersReducedMotion] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true,
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!query) return;
+    const updateMotionPreference = () =>
+      setSystemPrefersReducedMotion(query.matches);
+    updateMotionPreference();
+    query.addEventListener("change", updateMotionPreference);
+    return () => query.removeEventListener("change", updateMotionPreference);
+  }, []);
+
+  const motionHintKey: MessageKey =
+    preferences.motion === "reduced"
+      ? "settings.motionHint.reduced"
+      : systemPrefersReducedMotion
+        ? "settings.motionHint.systemReduced"
+        : "settings.motionHint.systemActive";
 
   return (
     <div className="stack">
@@ -233,7 +255,7 @@ export function SettingsView({
           />
           <SegmentedSetting
             title={t("settings.motion")}
-            description={t("settings.motionHint")}
+            description={t(motionHintKey)}
             choices={motionChoices.map((choice) => ({
               value: choice.value,
               label: t(choice.labelKey),
@@ -476,12 +498,6 @@ export function SettingsView({
         </header>
 
         <dl className="field-list">
-          <div className="field-row">
-            <dt className="field-row__label">{t("settings.updater.current")}</dt>
-            <dd className="field-row__value mono">
-              {summary?.version ?? APP_VERSION}
-            </dd>
-          </div>
           <div className="field-row">
             <dt className="field-row__label">{t("settings.updater.status")}</dt>
             <dd className="field-row__value">

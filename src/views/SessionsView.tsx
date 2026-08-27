@@ -204,6 +204,12 @@ export function SessionsView({
   const [folderDraft, setFolderDraft] = useState("");
   const [pendingDeleteFolder, setPendingDeleteFolder] =
     useState<SessionSidebarFolder | null>(null);
+  const [pendingRemoveSession, setPendingRemoveSession] =
+    useState<SessionRef | null>(null);
+  const [removingSession, setRemovingSession] = useState(false);
+  const [removeSessionError, setRemoveSessionError] = useState<string | null>(
+    null,
+  );
   const [newProjectDirectory, setNewProjectDirectory] = useState<string | null>(
     null,
   );
@@ -832,6 +838,20 @@ export function SessionsView({
     if (session.sessionId === active.sessionId) onSelect(null);
   }
 
+  async function removeSession(session: SessionRef) {
+    if (session.kind !== "agent") {
+      await close(session);
+      return;
+    }
+    const wasActive = session.members.some(
+      (member) => member.sessionId === active.sessionId,
+    );
+    for (const member of session.members) {
+      await agents.disconnect(member.sessionId);
+    }
+    if (wasActive) onSelect(null);
+  }
+
   return (
     <div className="terminal-workspace">
       {closedCallout}
@@ -845,6 +865,15 @@ export function SessionsView({
           installedAgents={installedAgents}
           onChooseProject={() => void chooseProjectDirectory()}
           onSelect={onSelect}
+          onRemove={(sidebarSession) => {
+            const session = sessions.find(
+              (candidate) =>
+                sidebarSessionNodeId(candidate) === sidebarSession.nodeId,
+            );
+            if (!session) return;
+            setRemoveSessionError(null);
+            setPendingRemoveSession(session);
+          }}
           onLaunch={(sidebarProject, definition) => {
             const project = projectMap.get(sidebarProject.projectId);
             if (project) void launchInProject(project, definition);
@@ -1228,6 +1257,41 @@ export function SessionsView({
               ),
             );
             setPendingDeleteFolder(null);
+          }}
+        />
+      )}
+      {pendingRemoveSession && (
+        <ConfirmDialog
+          title={t("terminal.projects.sessionRemoveTitle", {
+            name: pendingRemoveSession.label,
+          })}
+          body={
+            removeSessionError
+              ? t("terminal.projects.sessionRemoveFailed", {
+                  detail: removeSessionError,
+                })
+              : t("terminal.projects.sessionRemoveBody")
+          }
+          confirmLabel={t("terminal.projects.sessionRemoveAction")}
+          cancelLabel={t("common.cancel")}
+          confirmDisabled={removingSession}
+          onCancel={() => {
+            if (removingSession) return;
+            setPendingRemoveSession(null);
+            setRemoveSessionError(null);
+          }}
+          onConfirm={() => {
+            if (removingSession) return;
+            setRemovingSession(true);
+            setRemoveSessionError(null);
+            void removeSession(pendingRemoveSession)
+              .then(() => setPendingRemoveSession(null))
+              .catch((reason) =>
+                setRemoveSessionError(
+                  reason instanceof Error ? reason.message : String(reason),
+                ),
+              )
+              .finally(() => setRemovingSession(false));
           }}
         />
       )}

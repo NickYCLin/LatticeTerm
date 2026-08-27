@@ -72,12 +72,17 @@ export interface AgentLaunchRequest {
   groupId?: string | null;
   /** A handoff brief pasted in once the CLI is interactive; omit for none. */
   seedInput?: string | null;
+  /** Relaunches saved work and must not inject the new-session instructions. */
+  restoreExistingSession?: boolean;
   workingDirectory: string;
   cols: number;
   rows: number;
 }
 
-export type AgentLaunchPlanDraft = Omit<AgentLaunchRequest, "cols" | "rows"> & {
+export type AgentLaunchPlanDraft = Omit<
+  AgentLaunchRequest,
+  "cols" | "rows" | "restoreExistingSession"
+> & {
   /** Free-text memo, e.g. which project this plan is for. "" means none. */
   note: string;
 };

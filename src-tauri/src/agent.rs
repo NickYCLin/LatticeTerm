@@ -306,6 +306,10 @@ pub struct AgentLaunchRequest {
     /// can pick up the previous one's conversation. Absent means a clean start.
     #[serde(default)]
     pub seed_input: Option<String>,
+    /// Automatic workspace restoration resumes existing work. It must not
+    /// prepend instructions intended only for a newly started CLI task.
+    #[serde(default)]
+    pub restore_existing_session: bool,
     pub working_directory: String,
     pub cols: u32,
     pub rows: u32,
@@ -1918,13 +1922,15 @@ pub fn launch_request_from_plan(
     // blank chat". Codex itself resolves --last within the current working
     // directory, so LatticeTerm does not need to persist a session id or read
     // the CLI's private transcript store. Explicit legacy resume ids still win.
+    let mut restore_existing_session = validated.resume_session_id.is_some();
     let arguments = if validated.resume_session_id.is_none() && validated.arguments.is_empty() {
-        AGENTS
+        let resume_arguments = AGENTS
             .iter()
             .find(|agent| agent.id == validated.definition_id)
             .and_then(|agent| agent.resume_latest_recipe)
-            .map(AgentResumeLatestRecipe::arguments)
-            .unwrap_or_default()
+            .map(AgentResumeLatestRecipe::arguments);
+        restore_existing_session = resume_arguments.is_some();
+        resume_arguments.unwrap_or_default()
     } else {
         validated.arguments
     };
@@ -1938,6 +1944,7 @@ pub fn launch_request_from_plan(
         // A saved plan launches its own tab; grouping is a live-tab action.
         group_id: None,
         seed_input: None,
+        restore_existing_session,
         working_directory: validated.working_directory,
         cols,
         rows,
@@ -1952,7 +1959,10 @@ pub fn apply_startup_instructions(
     instructions: &str,
 ) -> Result<(), String> {
     let instructions = instructions.trim();
-    if instructions.is_empty() || request.definition_id == "custom" {
+    if instructions.is_empty()
+        || request.definition_id == "custom"
+        || request.restore_existing_session
+    {
         return Ok(());
     }
     let existing = request
@@ -2809,6 +2819,7 @@ session id: 0199aa11-"
             resume_session_id: None,
             group_id: None,
             seed_input: Some("Continue the previous review.".to_string()),
+            restore_existing_session: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 120,
             rows: 32,
@@ -2822,6 +2833,11 @@ session id: 0199aa11-"
         request.definition_id = "custom".to_string();
         request.seed_input = None;
         apply_startup_instructions(&mut request, "Never send this to installers.").unwrap();
+        assert!(request.seed_input.is_none());
+
+        request.definition_id = "codex".to_string();
+        request.restore_existing_session = true;
+        apply_startup_instructions(&mut request, "Do not repeat this in resumed work.").unwrap();
         assert!(request.seed_input.is_none());
     }
 
@@ -3303,6 +3319,7 @@ model = "gpt-5.3-codex"
         let request = launch_request_from_plan(&plan, 80, 24).unwrap();
         assert_eq!(request.resume_session_id.as_deref(), Some("session-42"));
         assert!(request.arguments.is_empty());
+        assert!(request.restore_existing_session);
     }
 
     #[test]
@@ -3325,6 +3342,7 @@ model = "gpt-5.3-codex"
         let request = launch_request_from_plan(&plan, 80, 24).unwrap();
         assert_eq!(request.arguments, vec!["resume", "--last"]);
         assert!(request.resume_session_id.is_none());
+        assert!(request.restore_existing_session);
 
         let antigravity = normalize_launch_plan(
             "agent-plan-latest-antigravity".to_string(),
@@ -3339,12 +3357,9 @@ model = "gpt-5.3-codex"
             },
         )
         .unwrap();
-        assert_eq!(
-            launch_request_from_plan(&antigravity, 80, 24)
-                .unwrap()
-                .arguments,
-            vec!["--continue"]
-        );
+        let antigravity_request = launch_request_from_plan(&antigravity, 80, 24).unwrap();
+        assert_eq!(antigravity_request.arguments, vec!["--continue"]);
+        assert!(antigravity_request.restore_existing_session);
 
         let hermes = normalize_launch_plan(
             "agent-plan-fresh-hermes".to_string(),
@@ -3359,10 +3374,9 @@ model = "gpt-5.3-codex"
             },
         )
         .unwrap();
-        assert!(launch_request_from_plan(&hermes, 80, 24)
-            .unwrap()
-            .arguments
-            .is_empty());
+        let hermes_request = launch_request_from_plan(&hermes, 80, 24).unwrap();
+        assert!(hermes_request.arguments.is_empty());
+        assert!(!hermes_request.restore_existing_session);
     }
 
     #[test]
@@ -3420,6 +3434,7 @@ model = "gpt-5.3-codex"
             resume_session_id: None,
             group_id: None,
             seed_input: None,
+            restore_existing_session: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -3478,6 +3493,7 @@ model = "gpt-5.3-codex"
             resume_session_id: None,
             group_id: Some("restored-project".to_string()),
             seed_input: None,
+            restore_existing_session: true,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -3554,6 +3570,7 @@ model = "gpt-5.3-codex"
             resume_session_id: None,
             group_id: None,
             seed_input: None,
+            restore_existing_session: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -3604,6 +3621,7 @@ model = "gpt-5.3-codex"
             resume_session_id: None,
             group_id: None,
             seed_input: None,
+            restore_existing_session: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -3658,6 +3676,7 @@ model = "gpt-5.3-codex"
             resume_session_id: None,
             group_id: None,
             seed_input: None,
+            restore_existing_session: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -3703,6 +3722,7 @@ model = "gpt-5.3-codex"
                         resume_session_id: None,
                         group_id: None,
                         seed_input: None,
+                        restore_existing_session: false,
                         working_directory: std::env::current_dir().unwrap().display().to_string(),
                         cols: 80,
                         rows: 24,
@@ -3764,6 +3784,7 @@ model = "gpt-5.3-codex"
             resume_session_id: None,
             group_id: None,
             seed_input: None,
+            restore_existing_session: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,

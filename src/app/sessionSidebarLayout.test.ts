@@ -7,6 +7,7 @@ import {
   removeSessionSidebarFolder,
   sanitizeSessionSidebarLayout,
   sessionSidebarChildren,
+  sessionSidebarDropPlacement,
 } from "./sessionSidebarLayout";
 
 const project = { id: "project:local:latticeterm", defaultParentId: null };
@@ -51,6 +52,74 @@ describe("session sidebar layout", () => {
     expect(sessionSidebarChildren(layout, "folder:active")).toEqual([
       project.id,
       session.id,
+    ]);
+  });
+
+  it("drops project rows into the requested folder", () => {
+    let layout = reconcileSessionSidebarLayout(emptySessionSidebarLayout, [
+      project,
+      session,
+    ]);
+    layout = createSessionSidebarFolder(
+      layout,
+      { id: "folder:work", name: "工作" },
+      null,
+    );
+
+    const destination = sessionSidebarDropPlacement(
+      layout,
+      project.id,
+      "folder:work",
+      true,
+      false,
+    );
+    expect(destination).toEqual({
+      parentId: "folder:work",
+      beforeNodeId: null,
+    });
+
+    layout = moveSessionSidebarNode(
+      layout,
+      project.id,
+      destination!.parentId,
+      destination!.beforeNodeId,
+    );
+    expect(sessionSidebarChildren(layout, "folder:work")).toEqual([
+      project.id,
+    ]);
+  });
+
+  it("reorders ordinary rows at the exact drop edge", () => {
+    const secondProject = { id: "project:local:mysqlpunk", defaultParentId: null };
+    const thirdProject = { id: "project:local:mqttape", defaultParentId: null };
+    let layout = reconcileSessionSidebarLayout(emptySessionSidebarLayout, [
+      project,
+      secondProject,
+      thirdProject,
+    ]);
+
+    const destination = sessionSidebarDropPlacement(
+      layout,
+      thirdProject.id,
+      project.id,
+      false,
+      true,
+    );
+    expect(destination).toEqual({
+      parentId: null,
+      beforeNodeId: secondProject.id,
+    });
+
+    layout = moveSessionSidebarNode(
+      layout,
+      thirdProject.id,
+      destination!.parentId,
+      destination!.beforeNodeId,
+    );
+    expect(sessionSidebarChildren(layout, null)).toEqual([
+      project.id,
+      thirdProject.id,
+      secondProject.id,
     ]);
   });
 

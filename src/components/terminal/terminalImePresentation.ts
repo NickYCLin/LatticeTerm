@@ -20,6 +20,7 @@ function linuxWebKitCompositionQuirks(): boolean {
  */
 export class TerminalImePresentation {
   private composing = false;
+  private positionFrozen = false;
   private textareaCleanupTimer?: ReturnType<typeof globalThis.setTimeout>;
   private readonly trimTrailingCompositionSpace: boolean;
   private readonly onCompositionStart = () => {
@@ -28,11 +29,33 @@ export class TerminalImePresentation {
       this.textareaCleanupTimer = undefined;
     }
     this.composing = true;
+    this.clearFrozenPosition();
     // Full-screen CLIs can enable DEC private cursor blinking after the
     // terminal was created. Freeze it again while the user is reviewing and
     // selecting IME candidates so the caret does not flash through preedit.
     this.terminal.options.cursorBlink = false;
     this.terminal.element?.classList.add("is-ime-composing");
+  };
+  private readonly onCompositionUpdate = () => {
+    if (!this.composing || this.positionFrozen) return;
+    const root = this.terminal.element;
+    const compositionView = root?.querySelector<HTMLElement>(
+      ".composition-view.active",
+    );
+    if (!root || !compositionView) return;
+    const left = compositionView.style.left || this.textarea?.style.left;
+    const top = compositionView.style.top || this.textarea?.style.top;
+    if (!left || !top) return;
+
+    // xterm recalculates the preedit overlay and hidden textarea from its live
+    // buffer cursor after every composition update. Terminal output can move
+    // that cursor while Windows TSF is still composing, making unfinished
+    // Chinese text jump and flash. Lock both elements to the first preedit
+    // position until Windows commits or cancels the composition.
+    root.style.setProperty("--latticeterm-ime-left", left);
+    root.style.setProperty("--latticeterm-ime-top", top);
+    root.classList.add("is-ime-position-frozen");
+    this.positionFrozen = true;
   };
   private readonly onCompositionEnd = () => {
     this.finish();
@@ -72,6 +95,7 @@ export class TerminalImePresentation {
   ) {
     this.trimTrailingCompositionSpace = trimTrailingCompositionSpace;
     textarea?.addEventListener("compositionstart", this.onCompositionStart);
+    textarea?.addEventListener("compositionupdate", this.onCompositionUpdate);
     textarea?.addEventListener("compositionend", this.onCompositionEnd);
     textarea?.addEventListener("blur", this.onBlur);
     textarea?.addEventListener("input", this.onInput);
@@ -95,14 +119,28 @@ export class TerminalImePresentation {
       "compositionstart",
       this.onCompositionStart,
     );
+    this.textarea?.removeEventListener(
+      "compositionupdate",
+      this.onCompositionUpdate,
+    );
     this.textarea?.removeEventListener("compositionend", this.onCompositionEnd);
     this.textarea?.removeEventListener("blur", this.onBlur);
     this.textarea?.removeEventListener("input", this.onInput);
     this.terminal.element?.classList.remove("is-ime-composing");
+    this.clearFrozenPosition();
   }
 
   private finish() {
     this.composing = false;
     this.terminal.element?.classList.remove("is-ime-composing");
+    this.clearFrozenPosition();
+  }
+
+  private clearFrozenPosition() {
+    const root = this.terminal.element;
+    root?.classList.remove("is-ime-position-frozen");
+    root?.style.removeProperty("--latticeterm-ime-left");
+    root?.style.removeProperty("--latticeterm-ime-top");
+    this.positionFrozen = false;
   }
 }

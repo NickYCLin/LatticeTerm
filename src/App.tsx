@@ -262,6 +262,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 resumeSessionId: saved.resumeSessionId,
                 groupId: saved.groupKey,
                 seedInput: null,
+                restoreExistingSession: true,
                 workingDirectory: saved.workingDirectory,
                 cols: 120,
                 rows: 32,

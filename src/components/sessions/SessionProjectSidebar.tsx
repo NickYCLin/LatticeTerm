@@ -12,6 +12,7 @@ import { createPortal } from "react-dom";
 import type { AgentDefinition } from "../../app/useAgentSessions";
 import type { SessionSidebarStatus } from "../../app/sessionStatus";
 import {
+  sessionSidebarDropPlacement,
   sessionSidebarChildren,
   type SessionSidebarFolder,
   type SessionSidebarLayout,
@@ -86,6 +87,7 @@ export function SessionProjectSidebar({
   installedAgents,
   onChooseProject,
   onSelect,
+  onRemove,
   onLaunch,
   onCreateFolder,
   onRenameFolder,
@@ -101,6 +103,7 @@ export function SessionProjectSidebar({
   installedAgents: AgentDefinition[];
   onChooseProject: () => void;
   onSelect: (sessionId: string) => void;
+  onRemove: (session: SessionSidebarSessionItem) => void;
   onLaunch: (
     project: SessionSidebarProjectItem,
     definition: AgentDefinition,
@@ -133,6 +136,7 @@ export function SessionProjectSidebar({
     [sessions],
   );
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
+  const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [projectCard, setProjectCard] = useState<FloatingProjectCard | null>(null);
   const projectCardRef = useRef<HTMLElement>(null);
   const cardAnchorRef = useRef<HTMLButtonElement | null>(null);
@@ -185,13 +189,33 @@ export function SessionProjectSidebar({
   function startDrag(event: DragEvent<HTMLElement>, nodeId: string) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/x-latticeterm-session-node", nodeId);
+    // WebView2 reliably exposes text/plain during the whole drag lifecycle;
+    // keep the custom type too so other browser engines stay unambiguous.
+    event.dataTransfer.setData("text/plain", nodeId);
     setDraggedNodeId(nodeId);
   }
 
   function dragged(event: DragEvent<HTMLElement>): string | null {
     return (
       event.dataTransfer.getData("text/x-latticeterm-session-node") ||
+      event.dataTransfer.getData("text/plain") ||
       draggedNodeId
+    );
+  }
+
+  function dragOverNode(event: DragEvent<HTMLElement>, targetNodeId: string) {
+    const sourceNodeId = dragged(event);
+    if (!sourceNodeId || sourceNodeId === targetNodeId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTargetNodeId(targetNodeId);
+  }
+
+  function dragLeaveNode(event: DragEvent<HTMLElement>, targetNodeId: string) {
+    const next = event.relatedTarget as Node | null;
+    if (next && event.currentTarget.contains(next)) return;
+    setDropTargetNodeId((current) =>
+      current === targetNodeId ? null : current,
     );
   }
 
@@ -202,19 +226,29 @@ export function SessionProjectSidebar({
     if (!sourceNodeId || sourceNodeId === targetNodeId) return;
     const targetKind = nodeKind(targetNodeId);
     const sourceKind = nodeKind(sourceNodeId);
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const lowerHalf = event.clientY > bounds.top + bounds.height * 0.46;
-    const canNest =
+    setDropTargetNodeId(null);
+    // A folder/project row is an explicit container target. Requiring the
+    // pointer to hit only its lower half made ordinary drops look ignored.
+    const targetIsContainer =
       targetKind === "folder" ||
       (targetKind === "project" && sourceKind === "session");
-    if (canNest && lowerHalf) {
-      onMove(sourceNodeId, targetNodeId);
-    } else {
-      onMove(
-        sourceNodeId,
-        layout.placements[targetNodeId]?.parentId ?? null,
-        targetNodeId,
-      );
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const placement = sessionSidebarDropPlacement(
+      layout,
+      sourceNodeId,
+      targetNodeId,
+      targetIsContainer,
+      event.clientY > bounds.top + bounds.height / 2,
+    );
+    if (!placement) return;
+    onMove(sourceNodeId, placement.parentId, placement.beforeNodeId);
+    if (targetIsContainer) {
+      if (
+        targetKind === "folder" &&
+        layout.collapsedFolderIds.includes(targetNodeId)
+      ) {
+        onToggleFolder(targetNodeId);
+      }
     }
     setDraggedNodeId(null);
   }
@@ -251,27 +285,52 @@ export function SessionProjectSidebar({
   function renderSession(session: SessionSidebarSessionItem, depth: number) {
     const Glyph = glyphFor(session.kind);
     return (
-      <button
-        type="button"
+      <div
         role="treeitem"
         className={`session-tree__session${
           session.sessionId === activeSessionId ? " is-active" : ""
-        }`}
+        }${dropTargetNodeId === session.nodeId ? " is-drop-target" : ""}`}
         style={treeStyle(depth)}
         key={session.nodeId}
         draggable
         aria-grabbed={draggedNodeId === session.nodeId}
         onDragStart={(event) => startDrag(event, session.nodeId)}
-        onDragEnd={() => setDraggedNodeId(null)}
-        onDragOver={(event) => event.preventDefault()}
+        onDragEnd={() => {
+          setDraggedNodeId(null);
+          setDropTargetNodeId(null);
+        }}
+        onDragOver={(event) => dragOverNode(event, session.nodeId)}
+        onDragLeave={(event) => dragLeaveNode(event, session.nodeId)}
         onDrop={(event) => dropOnNode(event, session.nodeId)}
-        onClick={() => onSelect(session.sessionId)}
-        title={`${session.label} · ${t("terminal.projects.dragHint")}`}
       >
-        <Glyph size={12} />
-        <span className="truncate">{session.label}</span>
-        {statusMark(session)}
-      </button>
+        <button
+          type="button"
+          className="session-tree__session-select"
+          onClick={() => onSelect(session.sessionId)}
+          title={`${session.label} · ${t("terminal.projects.dragHint")}`}
+          draggable={false}
+        >
+          <Glyph size={12} />
+          <span className="truncate">{session.label}</span>
+          {statusMark(session)}
+        </button>
+        <button
+          type="button"
+          className="icon-button icon-button--sm icon-button--danger session-tree__session-remove"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove(session);
+          }}
+          aria-label={t("terminal.projects.sessionRemoveFor", {
+            name: session.label,
+          })}
+          title={t("terminal.projects.sessionRemove")}
+          draggable={false}
+        >
+          <TrashIcon size={11} />
+        </button>
+      </div>
     );
   }
 
@@ -284,14 +343,20 @@ export function SessionProjectSidebar({
       <div
         role="treeitem"
         aria-expanded={cardOpen}
-        className={`session-tree__project${selected ? " is-active" : ""}`}
+        className={`session-tree__project${selected ? " is-active" : ""}${
+          dropTargetNodeId === project.nodeId ? " is-drop-target" : ""
+        }`}
         style={treeStyle(depth)}
         key={project.nodeId}
         draggable
         aria-grabbed={draggedNodeId === project.nodeId}
         onDragStart={(event) => startDrag(event, project.nodeId)}
-        onDragEnd={() => setDraggedNodeId(null)}
-        onDragOver={(event) => event.preventDefault()}
+        onDragEnd={() => {
+          setDraggedNodeId(null);
+          setDropTargetNodeId(null);
+        }}
+        onDragOver={(event) => dragOverNode(event, project.nodeId)}
+        onDragLeave={(event) => dragLeaveNode(event, project.nodeId)}
         onDrop={(event) => dropOnNode(event, project.nodeId)}
       >
         <button
@@ -335,13 +400,19 @@ export function SessionProjectSidebar({
     return (
       <div className="session-tree__folder" key={folder.id} role="treeitem" aria-expanded={!collapsed}>
         <div
-          className="session-tree__folder-row"
+          className={`session-tree__folder-row${
+            dropTargetNodeId === folder.id ? " is-drop-target" : ""
+          }`}
           style={treeStyle(depth)}
           draggable
           aria-grabbed={draggedNodeId === folder.id}
           onDragStart={(event) => startDrag(event, folder.id)}
-          onDragEnd={() => setDraggedNodeId(null)}
-          onDragOver={(event) => event.preventDefault()}
+          onDragEnd={() => {
+            setDraggedNodeId(null);
+            setDropTargetNodeId(null);
+          }}
+          onDragOver={(event) => dragOverNode(event, folder.id)}
+          onDragLeave={(event) => dragLeaveNode(event, folder.id)}
           onDrop={(event) => dropOnNode(event, folder.id)}
         >
           <button
@@ -474,6 +545,7 @@ export function SessionProjectSidebar({
             const sourceNodeId = dragged(event);
             if (sourceNodeId) onMove(sourceNodeId, null);
             setDraggedNodeId(null);
+            setDropTargetNodeId(null);
           }}
         >
           {t("terminal.projects.moveToRoot")}

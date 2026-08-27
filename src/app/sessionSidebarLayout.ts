@@ -257,6 +257,46 @@ export function sessionSidebarChildren(
     .map(([id]) => id);
 }
 
+export interface SessionSidebarDropPlacement {
+  parentId: string | null;
+  beforeNodeId: string | null;
+}
+
+/**
+ * Resolves the layout destination for a pointer drop. Container rows receive
+ * the node as a child; ordinary rows use their upper/lower half to insert the
+ * node before or after the target without losing the surrounding order.
+ */
+export function sessionSidebarDropPlacement(
+  layout: SessionSidebarLayout,
+  sourceNodeId: string,
+  targetNodeId: string,
+  targetIsContainer: boolean,
+  placeAfter: boolean,
+): SessionSidebarDropPlacement | null {
+  if (
+    sourceNodeId === targetNodeId ||
+    !layout.placements[sourceNodeId] ||
+    !layout.placements[targetNodeId]
+  ) {
+    return null;
+  }
+  if (targetIsContainer) {
+    return { parentId: targetNodeId, beforeNodeId: null };
+  }
+
+  const parentId = layout.placements[targetNodeId].parentId;
+  const siblings = sessionSidebarChildren(layout, parentId).filter(
+    (id) => id !== sourceNodeId,
+  );
+  const targetIndex = siblings.indexOf(targetNodeId);
+  if (targetIndex < 0) return null;
+  return {
+    parentId,
+    beforeNodeId: placeAfter ? siblings[targetIndex + 1] ?? null : targetNodeId,
+  };
+}
+
 export function createSessionSidebarFolder(
   layout: SessionSidebarLayout,
   folder: SessionSidebarFolder,
