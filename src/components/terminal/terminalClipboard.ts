@@ -87,8 +87,10 @@ async function pasteFromClipboard(
         if (item.types.includes("text/plain")) {
           const blob = await item.getType("text/plain");
           const text = await blob.text();
-          if (text) terminal.paste(text);
-          return;
+          if (text) {
+            terminal.paste(text);
+            return;
+          }
         }
       }
       const hasImage = items.some((item) =>
@@ -105,8 +107,17 @@ async function pasteFromClipboard(
 
   try {
     const text = await navigator.clipboard.readText();
-    if (text) terminal.paste(text);
+    if (text) {
+      terminal.paste(text);
+      return;
+    }
   } catch {
     // Nothing usable on the clipboard.
   }
+
+  // Last resort for webviews with no structured clipboard read — WebKitGTK on
+  // Linux is the one we ship on — where an image-only clipboard is
+  // indistinguishable from an empty one. The handler asks the backend, which
+  // reads the real system clipboard and does nothing when it holds no image.
+  onImagePaste?.();
 }
