@@ -125,7 +125,12 @@ are ignored. File access stays disabled unless --file-root explicitly shares\n\
 one folder; every remote path is then confined to that folder.\n\n\
 Terminal mode: --terminal shares an encrypted shell session instead of the\n\
 display, so a headless host (no desktop) works too. --allow-input lets the\n\
-viewer type; without it the terminal is watch-only. --fps is ignored.\n"
+viewer type; without it the terminal is watch-only. --fps is ignored.\n\n\
+Unattended access: --pair-code fixes the eight-digit code so a trusted viewer\n\
+can reconnect any time (all modes). Without it a fresh code is generated per\n\
+run. Five failed pairings in a row stop the agent. Typical headless setup:\n\
+  lattice-agent --relay wss://relay.example.com --terminal --allow-input \\\n\
+                --pair-code 12345678\n"
 }
 
 fn parse_options() -> Result<Options, String> {

@@ -123,6 +123,8 @@ Agent 顯示的八位數配對碼五分鐘後失效，連續五次失敗就會�
 
 跨 NAT 使用時，分享端與檢視端可填同一個 `wss://` Lattice Relay 網址，再以九位數裝置 ID 與八位數配對碼連線。公網 Relay 應只監聽 loopback，並放在 Cloudflare Tunnel、nginx 或 Caddy 等 HTTPS/WebSocket 入口後；原生 `主機:連接埠` 模式沒有 TLS，只適合可信任的私有網路或 VPN。完整部署方式見 [Lattice Remote 中繼伺服器](docs/RELAY_SERVER.zh-TW.md)。
 
+沒有桌面環境的純文字主機加上 `--terminal` 即可分享加密的 shell 終端機（而非畫面）；搭配 `--pair-code 12345678` 固定配對碼即可無人值守隨時重連，連續五次配對失敗會自動停止。檢視端一樣以裝置 ID＋配對碼連線，開啟的是終端分頁。細節見 `lattice-agent --help` 與上述中繼文件。
+
 ### 執行 AI Agent Fleet
 
 Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示後端不可用。開啟側邊導覽的「AI Agent Fleet」，選擇工作目錄後即可啟動已偵測到的內建 CLI。未偵測到工具時，卡片會先列出經專案固定的安裝指令；使用者確認後才會開啟安裝終端，LatticeTerm 不會在背景靜默下載或執行安裝。若該平台沒有可直接執行的安全安裝方式，則提供可複製的安裝說明網址。安裝程式若更新 PATH，可能需要重開 LatticeTerm 才會被偵測到。批次提示必須先勾選執行中的目標並再次確認，LatticeTerm 不保存提示內容。

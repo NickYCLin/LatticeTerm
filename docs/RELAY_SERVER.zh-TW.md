@@ -68,6 +68,17 @@ cloudflared tunnel --url http://127.0.0.1:44910 --no-autoupdate
   分享的是加密的 shell 終端機而不是畫面；檢視端一樣用裝置 ID＋配對碼
   連線，開啟的會是終端分頁。不加 `--allow-input` 則對方只能看不能打字；
   `--file-root` 檔案分享照常可用。
+- **無人值守（固定密碼）**：任何模式都可加 `--pair-code 12345678`
+  把八位數配對碼固定下來，之後隨時可用同一組密碼重連；不加則每次
+  啟動產生新碼。連續五次配對失敗 agent 會自動停止，防止暴力嘗試。
+  headless 主機常駐分享的完整範例：
+
+  ```bash
+  lattice-agent --relay wss://你的伺服器 --terminal --allow-input \
+    --pair-code 12345678
+  ```
+
+  建議搭配 systemd 服務常駐執行，開機即可連線。
 
 ## 協定摘要
 
