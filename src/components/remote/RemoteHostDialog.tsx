@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { SensitiveClipboardClearChoice } from "../../app/preferences";
+import {
+  formatDeviceId,
+  loadRelayAddress,
+  saveRelayAddress,
+} from "../../app/remoteRelay";
 import { copySensitiveText } from "../../app/sensitiveClipboard";
 import type { RemoteHostApi } from "../../app/useRemoteHost";
 import { useI18n } from "../../i18n/context";
@@ -17,6 +22,12 @@ export function RemoteHostDialog({
   onClose: () => void;
 }) {
   const { t } = useI18n();
+  const [savedRelay] = useState(() => loadRelayAddress(window.localStorage));
+  const [mode, setMode] = useState<"relay" | "direct">(
+    savedRelay ? "relay" : "direct",
+  );
+  const [relayAddress, setRelayAddress] = useState(savedRelay);
+  const [fixedCode, setFixedCode] = useState("");
   const [bindAddress, setBindAddress] = useState("127.0.0.1");
   const [port, setPort] = useState(44_900);
   const [fps, setFps] = useState(5);
@@ -25,7 +36,9 @@ export function RemoteHostDialog({
   const [fileRoot, setFileRoot] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [copied, setCopied] = useState<"address" | "code" | null>(null);
+  const [copied, setCopied] = useState<"address" | "code" | "deviceId" | null>(
+    null,
+  );
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1_000));
 
   useEffect(() => {
@@ -70,7 +83,14 @@ export function RemoteHostDialog({
         allowInput,
         allowFiles,
         fileRoot: fileRoot.trim(),
+        mode,
+        relayAddress: mode === "relay" ? relayAddress.trim() : "",
+        pairingCode: mode === "relay" ? fixedCode.trim() : "",
       });
+      if (mode === "relay") {
+        saveRelayAddress(window.localStorage, relayAddress);
+      }
+      setFixedCode("");
       setNow(Math.floor(Date.now() / 1_000));
     } catch (error) {
       setProblem(error instanceof Error ? error.message : String(error));
@@ -91,7 +111,7 @@ export function RemoteHostDialog({
     }
   }
 
-  async function copy(kind: "address" | "code", value: string) {
+  async function copy(kind: "address" | "code" | "deviceId", value: string) {
     try {
       if (kind === "code") {
         await copySensitiveText(value, sensitiveClipboardClear);
@@ -185,18 +205,35 @@ export function RemoteHostDialog({
               </div>
 
               <div className="remote-host-share-grid">
-                <div className="remote-host-value">
-                  <span>{t("remote.host.address")}</span>
-                  <code>{host.status.address}</code>
-                  <button
-                    type="button"
-                    className="icon-button icon-button--sm"
-                    onClick={() => void copy("address", host.status!.address)}
-                    aria-label={t("remote.host.copyAddress")}
-                  >
-                    <CopyIcon size={13} />
-                  </button>
-                </div>
+                {host.status.deviceId ? (
+                  <div className="remote-host-value remote-host-value--device">
+                    <span>{t("remote.host.deviceId")}</span>
+                    <code>{formatDeviceId(host.status.deviceId)}</code>
+                    <button
+                      type="button"
+                      className="icon-button icon-button--sm"
+                      onClick={() =>
+                        void copy("deviceId", host.status!.deviceId ?? "")
+                      }
+                      aria-label={t("remote.host.copyDeviceId")}
+                    >
+                      <CopyIcon size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="remote-host-value">
+                    <span>{t("remote.host.address")}</span>
+                    <code>{host.status.address}</code>
+                    <button
+                      type="button"
+                      className="icon-button icon-button--sm"
+                      onClick={() => void copy("address", host.status!.address)}
+                      aria-label={t("remote.host.copyAddress")}
+                    >
+                      <CopyIcon size={13} />
+                    </button>
+                  </div>
+                )}
                 {host.status.pairingCode && (
                   <div className="remote-host-value remote-host-value--code">
                     <span>{t("remote.host.code")}</span>
@@ -224,7 +261,11 @@ export function RemoteHostDialog({
               {host.status.state !== "streaming" && (
                 <div className="remote-host-expiry">
                   <ShieldIcon size={14} />
-                  <span>{t("remote.host.expires", { time: expiry })}</span>
+                  <span>
+                    {host.status.expiresAt === 0
+                      ? t("remote.host.codePersistent")
+                      : t("remote.host.expires", { time: expiry })}
+                  </span>
                   <span>
                     {t("remote.host.attempts", {
                       count: host.status.attemptsRemaining,
@@ -264,38 +305,118 @@ export function RemoteHostDialog({
             </div>
           ) : (
             <form onSubmit={submit}>
-              <div className="field-grid field-grid--even">
-                <div className="field">
-                  <label className="field__label" htmlFor="remote-host-address">
-                    {t("remote.host.bindAddress")}
-                  </label>
-                  <input
-                    id="remote-host-address"
-                    className="input mono"
-                    value={bindAddress}
-                    disabled={busy}
-                    onChange={(event) => setBindAddress(event.currentTarget.value)}
-                  />
-                  <small className="field__optional">
-                    {t("remote.host.bindHint")}
-                  </small>
-                </div>
-                <div className="field">
-                  <label className="field__label" htmlFor="remote-host-port">
-                    {t("remote.host.port")}
-                  </label>
-                  <input
-                    id="remote-host-port"
-                    className="input mono"
-                    type="number"
-                    min={1}
-                    max={65_535}
-                    value={port}
-                    disabled={busy}
-                    onChange={(event) => setPort(Number(event.currentTarget.value))}
-                  />
-                </div>
+              <div
+                className="remote-host-mode"
+                role="radiogroup"
+                aria-label={t("remote.host.mode")}
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={mode === "relay"}
+                  className={`remote-host-mode__option${
+                    mode === "relay" ? " is-active" : ""
+                  }`}
+                  disabled={busy}
+                  onClick={() => setMode("relay")}
+                >
+                  <strong>{t("remote.host.modeRelay")}</strong>
+                  <small>{t("remote.host.modeRelayHint")}</small>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={mode === "direct"}
+                  className={`remote-host-mode__option${
+                    mode === "direct" ? " is-active" : ""
+                  }`}
+                  disabled={busy}
+                  onClick={() => setMode("direct")}
+                >
+                  <strong>{t("remote.host.modeDirect")}</strong>
+                  <small>{t("remote.host.modeDirectHint")}</small>
+                </button>
               </div>
+
+              {mode === "relay" && (
+                <>
+                  <div className="field">
+                    <label className="field__label" htmlFor="remote-host-relay">
+                      {t("remote.host.relayAddress")}
+                    </label>
+                    <input
+                      id="remote-host-relay"
+                      className="input mono"
+                      value={relayAddress}
+                      disabled={busy}
+                      required
+                      placeholder={t("remote.host.relayPlaceholder")}
+                      onChange={(event) =>
+                        setRelayAddress(event.currentTarget.value)
+                      }
+                    />
+                    <small className="field__optional">
+                      {t("remote.host.relayHint")}
+                    </small>
+                  </div>
+                  <div className="field">
+                    <label
+                      className="field__label"
+                      htmlFor="remote-host-fixed-code"
+                    >
+                      {t("remote.host.fixedCode")}
+                    </label>
+                    <input
+                      id="remote-host-fixed-code"
+                      className="input mono"
+                      value={fixedCode}
+                      disabled={busy}
+                      inputMode="numeric"
+                      maxLength={9}
+                      placeholder={t("remote.host.fixedCodePlaceholder")}
+                      onChange={(event) => setFixedCode(event.currentTarget.value)}
+                    />
+                    <small className="field__optional">
+                      {t("remote.host.fixedCodeHint")}
+                    </small>
+                  </div>
+                </>
+              )}
+
+              {mode === "direct" && (
+                <div className="field-grid field-grid--even">
+                  <div className="field">
+                    <label className="field__label" htmlFor="remote-host-address">
+                      {t("remote.host.bindAddress")}
+                    </label>
+                    <input
+                      id="remote-host-address"
+                      className="input mono"
+                      value={bindAddress}
+                      disabled={busy}
+                      onChange={(event) => setBindAddress(event.currentTarget.value)}
+                    />
+                    <small className="field__optional">
+                      {t("remote.host.bindHint")}
+                    </small>
+                  </div>
+                  <div className="field">
+                    <label className="field__label" htmlFor="remote-host-port">
+                      {t("remote.host.port")}
+                    </label>
+                    <input
+                      id="remote-host-port"
+                      className="input mono"
+                      type="number"
+                      min={1}
+                      max={65_535}
+                      value={port}
+                      disabled={busy}
+                      onChange={(event) => setPort(Number(event.currentTarget.value))}
+                    />
+                  </div>
+                </div>
+              )}
 
               <div className="field">
                 <label className="field__label" htmlFor="remote-host-fps">

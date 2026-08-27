@@ -7,13 +7,19 @@ export interface RemoteHostStatus {
   hostId: string;
   address: string;
   pairingCode: string;
+  /** Zero means the code stays valid while sharing is on. */
   expiresAt: number;
   viewOnly: boolean;
   fileTransfer: boolean;
   fileRoot?: string;
-  state: "waiting" | "pairing" | "streaming";
+  state: "waiting" | "pairing" | "streaming" | "reconnecting";
   peer?: string;
   attemptsRemaining: number;
+  /** Relay mode: the permanent nine-digit device ID viewers dial. */
+  deviceId?: string | null;
+  relay?: string | null;
+  /** True when the agent keeps serving sessions until stopped. */
+  persistent: boolean;
 }
 
 export interface RemoteHostStartRequest {
@@ -26,6 +32,11 @@ export interface RemoteHostStartRequest {
   allowFiles: boolean;
   /** Empty selects the current user's home folder in the native backend. */
   fileRoot: string;
+  /** "direct" listens locally; "relay" registers the device ID on a relay. */
+  mode: "direct" | "relay";
+  relayAddress: string;
+  /** Optional fixed pairing code for relay mode; empty generates one. */
+  pairingCode: string;
 }
 
 export interface RemoteHostApi {

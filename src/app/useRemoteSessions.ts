@@ -18,6 +18,8 @@ export interface RemoteSessionSummary {
   profileId: string;
   host: string;
   port: number;
+  /** True when the session reached the host by device ID over a relay. */
+  viaRelay: boolean;
   agentName: string;
   width: number;
   height: number;
@@ -59,6 +61,9 @@ export interface RemoteConnectRequest {
   port: number;
   /** One-time secret passed to one IPC call and never retained here. */
   pairingCode: string;
+  /** When set, the backend dials this nine-digit ID through the relay. */
+  deviceId?: string;
+  relayAddress?: string;
 }
 
 export type RemoteConnectOutcome =

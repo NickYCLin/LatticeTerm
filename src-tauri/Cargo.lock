@@ -2896,6 +2896,8 @@ dependencies = [
 name = "lattice-remote"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
  "snow",
  "thiserror 2.0.20",

@@ -3,14 +3,14 @@ use sha2::{Digest, Sha256};
 use snow::{params::NoiseParams, Builder, TransportState};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
+
+pub(crate) use crate::wire::{read_wire, write_wire};
 
 const NOISE_PATTERN: &str = "Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s";
 const PROLOGUE: &[u8] = b"Lattice Remote v2 direct encrypted workspace";
-const MAX_WIRE_MESSAGE: usize = 65_535;
-const MAX_PLAINTEXT: usize = MAX_WIRE_MESSAGE - 16;
+const MAX_PLAINTEXT: usize = crate::wire::MAX_WIRE_MESSAGE - 16;
 
 #[derive(Debug, Error)]
 pub enum RemoteError {
@@ -59,19 +59,24 @@ pub fn generate_pairing_code() -> Result<String, RemoteError> {
     Ok(format!("{:08}", u32::from_be_bytes(bytes) % 100_000_000))
 }
 
-pub struct SecureConnection {
-    stream: TcpStream,
+/// An encrypted protocol channel over any byte stream. Direct connections use
+/// a plain `TcpStream`; relayed connections hand over the stream after the
+/// rendezvous exchange, and the Noise handshake runs end to end regardless.
+pub struct SecureConnection<S = TcpStream> {
+    stream: S,
     transport: TransportState,
 }
 
-impl SecureConnection {
+impl SecureConnection<TcpStream> {
     pub async fn connect(host: &str, port: u16, pairing_code: &str) -> Result<Self, RemoteError> {
         let stream = TcpStream::connect((host, port)).await?;
+        stream.set_nodelay(true)?;
         Self::initiate(stream, pairing_code).await
     }
+}
 
-    pub async fn initiate(mut stream: TcpStream, pairing_code: &str) -> Result<Self, RemoteError> {
-        stream.set_nodelay(true)?;
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> SecureConnection<S> {
+    pub async fn initiate(mut stream: S, pairing_code: &str) -> Result<Self, RemoteError> {
         let psk = pairing_key(pairing_code)?;
         let params: NoiseParams = NOISE_PATTERN.parse().map_err(|_| RemoteError::Pairing)?;
         let keypair = Builder::new(params.clone())
@@ -111,8 +116,7 @@ impl SecureConnection {
         Ok(Self { stream, transport })
     }
 
-    pub async fn accept(mut stream: TcpStream, pairing_code: &str) -> Result<Self, RemoteError> {
-        stream.set_nodelay(true)?;
+    pub async fn accept(mut stream: S, pairing_code: &str) -> Result<Self, RemoteError> {
         let psk = pairing_key(pairing_code)?;
         let params: NoiseParams = NOISE_PATTERN.parse().map_err(|_| RemoteError::Pairing)?;
         let keypair = Builder::new(params.clone())
@@ -168,8 +172,8 @@ impl SecureConnection {
     /// as long as each direction stays single-tasked — which the halves
     /// enforce by taking `&mut self`. The shared mutex only serialises the
     /// brief non-async encrypt/decrypt calls.
-    pub fn split(self) -> (SecureReader, SecureWriter) {
-        let (read_half, write_half) = self.stream.into_split();
+    pub fn split(self) -> (SecureReader<S>, SecureWriter<S>) {
+        let (read_half, write_half) = tokio::io::split(self.stream);
         let transport = Arc::new(Mutex::new(self.transport));
         (
             SecureReader {
@@ -184,12 +188,12 @@ impl SecureConnection {
     }
 }
 
-pub struct SecureReader {
-    stream: OwnedReadHalf,
+pub struct SecureReader<S = TcpStream> {
+    stream: ReadHalf<S>,
     transport: Arc<Mutex<TransportState>>,
 }
 
-impl SecureReader {
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> SecureReader<S> {
     pub async fn receive(&mut self) -> Result<RemoteMessage, RemoteError> {
         let encrypted = read_wire(&mut self.stream).await?;
         let mut transport = self.transport.lock().map_err(|_| RemoteError::Pairing)?;
@@ -197,12 +201,12 @@ impl SecureReader {
     }
 }
 
-pub struct SecureWriter {
-    stream: OwnedWriteHalf,
+pub struct SecureWriter<S = TcpStream> {
+    stream: WriteHalf<S>,
     transport: Arc<Mutex<TransportState>>,
 }
 
-impl SecureWriter {
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> SecureWriter<S> {
     pub async fn send(&mut self, message: &RemoteMessage) -> Result<(), RemoteError> {
         let encrypted = {
             let mut transport = self.transport.lock().map_err(|_| RemoteError::Pairing)?;
@@ -231,35 +235,6 @@ fn open(transport: &mut TransportState, encrypted: &[u8]) -> Result<RemoteMessag
         .read_message(encrypted, &mut plaintext)
         .map_err(|_| RemoteError::Pairing)?;
     RemoteMessage::decode(&plaintext[..read]).map_err(RemoteError::from)
-}
-
-async fn write_wire<W: AsyncWrite + Unpin>(
-    stream: &mut W,
-    bytes: &[u8],
-) -> Result<(), RemoteError> {
-    if bytes.is_empty() || bytes.len() > MAX_WIRE_MESSAGE {
-        return Err(RemoteError::MessageTooLarge);
-    }
-    stream.write_u32(bytes.len() as u32).await?;
-    stream.write_all(bytes).await?;
-    stream.flush().await?;
-    Ok(())
-}
-
-async fn read_wire<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Vec<u8>, RemoteError> {
-    let length = match stream.read_u32().await {
-        Ok(length) => length as usize,
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(RemoteError::ConnectionClosed)
-        }
-        Err(error) => return Err(RemoteError::Io(error)),
-    };
-    if length == 0 || length > MAX_WIRE_MESSAGE {
-        return Err(RemoteError::MessageTooLarge);
-    }
-    let mut bytes = vec![0u8; length];
-    stream.read_exact(&mut bytes).await?;
-    Ok(bytes)
 }
 
 #[cfg(test)]

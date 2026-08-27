@@ -1,0 +1,30 @@
+# Lattice Remote relay server — systemd unit.
+# Installed by scripts/deploy-relay.sh; adjust the bind address or state path
+# here and run `systemctl daemon-reload && systemctl restart lattice-relay`.
+[Unit]
+Description=Lattice Remote relay server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lattice-relay
+Group=lattice-relay
+ExecStart=/usr/local/bin/lattice-relay --bind 0.0.0.0:44910 --state /var/lib/lattice-relay/devices.json
+Restart=always
+RestartSec=2
+
+# The relay needs nothing but a socket and its state file.
+StateDirectory=lattice-relay
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

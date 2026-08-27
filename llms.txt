@@ -28,4 +28,4 @@
 
 - AI CLI credentials remain owned by each CLI and are not stored by LatticeTerm.
 - Remote connections use real backends; planned capabilities are labelled rather than simulated.
-- Lattice Remote currently supports direct endpoint pairing. Stable numeric device IDs, signaling, relay and NAT traversal are planned, not implemented.
+- Lattice Remote supports direct endpoint pairing and a self-hosted lattice-relay: permanent nine-digit device IDs reachable across networks, end-to-end encrypted with the relay forwarding ciphertext only. NAT hole-punching is planned, not implemented.

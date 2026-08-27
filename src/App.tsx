@@ -35,6 +35,7 @@ import { useAgentSessions } from "./app/useAgentSessions";
 import { useSshSessions } from "./app/useSshSessions";
 import { useSftpSessions } from "./app/useSftpSessions";
 import { useRemoteSessions } from "./app/useRemoteSessions";
+import { useRemoteHost } from "./app/useRemoteHost";
 import { useRdpSessions } from "./app/useRdpSessions";
 import { useVncSessions } from "./app/useVncSessions";
 import { useVault } from "./app/useVault";
@@ -65,7 +66,7 @@ import {
 } from "./app/workspaceSessionPersistence";
 import { loadAuthPref } from "./app/authPreferences";
 import { prepareNotificationAudio } from "./app/notificationSounds";
-import { PlusIcon } from "./components/icons";
+import { PlusIcon, ScreenShareIcon } from "./components/icons";
 import "./styles/index.css";
 
 const ConnectionsView = lazy(() =>
@@ -133,6 +134,16 @@ const VncConnectFlow = lazy(() =>
     default: module.VncConnectFlow,
   })),
 );
+const RemoteHostDialog = lazy(() =>
+  import("./components/remote/RemoteHostDialog").then((module) => ({
+    default: module.RemoteHostDialog,
+  })),
+);
+const RemoteQuickConnect = lazy(() =>
+  import("./components/remote/RemoteQuickConnect").then((module) => ({
+    default: module.RemoteQuickConnect,
+  })),
+);
 const SftpConnectFlow = lazy(() =>
   import("./components/sftp/SftpConnectFlow").then((module) => ({
     default: module.SftpConnectFlow,
@@ -171,6 +182,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const ssh = useSshSessions();
   const sftp = useSftpSessions();
   const remote = useRemoteSessions();
+  const remoteHost = useRemoteHost();
   const rdp = useRdpSessions();
   const vnc = useVncSessions();
   const vault = useVault();
@@ -242,6 +254,8 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const [profileDeleteError, setProfileDeleteError] = useState<string | null>(
     null,
   );
+  const [remoteHostOpen, setRemoteHostOpen] = useState(false);
+  const [quickConnectOpen, setQuickConnectOpen] = useState(false);
   const [connectTarget, setConnectTarget] = useState<ConnectionProfile | null>(
     null,
   );
@@ -672,6 +686,34 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           }
           actions={
             <>
+              {!onMobile && (
+                <button
+                  type="button"
+                  className="button button--ghost"
+                  onClick={() => setQuickConnectOpen(true)}
+                >
+                  <ScreenShareIcon size={15} />
+                  {t("remote.quick.action")}
+                </button>
+              )}
+              {!onMobile && (
+                <button
+                  type="button"
+                  className={
+                    remoteHost.status
+                      ? "button button--secondary"
+                      : "button button--ghost"
+                  }
+                  onClick={() => setRemoteHostOpen(true)}
+                >
+                  <ScreenShareIcon size={15} />
+                  {t(
+                    remoteHost.status
+                      ? "remote.host.activeAction"
+                      : "remote.host.action",
+                  )}
+                </button>
+              )}
               {view === "connections" && profiles.length > 0 && (
                 <button
                   type="button"
@@ -877,6 +919,32 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
 
       {connectTarget && runtime.host === "browser" && (
         <DesktopBackendRequiredDialog onClose={() => setConnectTarget(null)} />
+      )}
+
+      {remoteHostOpen && runtime.host === "browser" && (
+        <DesktopBackendRequiredDialog onClose={() => setRemoteHostOpen(false)} />
+      )}
+      {remoteHostOpen && runtime.host === "tauri" && (
+        <RemoteHostDialog
+          host={remoteHost}
+          sensitiveClipboardClear={preferences.sensitiveClipboardClear}
+          onClose={() => setRemoteHostOpen(false)}
+        />
+      )}
+
+      {quickConnectOpen && runtime.host === "browser" && (
+        <DesktopBackendRequiredDialog onClose={() => setQuickConnectOpen(false)} />
+      )}
+      {quickConnectOpen && runtime.host === "tauri" && (
+        <RemoteQuickConnect
+          remote={remote}
+          onConnected={(sessionId) => {
+            setQuickConnectOpen(false);
+            setActiveSessionId(sessionId);
+            setView("terminal");
+          }}
+          onCancel={() => setQuickConnectOpen(false)}
+        />
       )}
 
       {runtime.host === "tauri" && connectTarget?.protocol === "ssh" && (

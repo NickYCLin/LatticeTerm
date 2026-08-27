@@ -34,6 +34,15 @@ pub struct RemoteHostStartRequest {
     /// Empty means the current user's home folder when file sharing is enabled.
     #[serde(default)]
     pub file_root: String,
+    /// "direct" (default) listens locally; "relay" registers the permanent
+    /// device ID on a relay server and keeps serving sessions until stopped.
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub relay_address: String,
+    /// Optional fixed pairing code for relay mode; empty generates one.
+    #[serde(default)]
+    pub pairing_code: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -42,6 +51,7 @@ pub struct RemoteHostStatus {
     pub host_id: String,
     pub address: String,
     pub pairing_code: String,
+    /// Zero means the code stays valid while sharing is on.
     pub expires_at: u64,
     pub view_only: bool,
     pub file_transfer: bool,
@@ -49,6 +59,11 @@ pub struct RemoteHostStatus {
     pub state: &'static str,
     pub peer: Option<String>,
     pub attempts_remaining: u32,
+    /// Relay mode: the permanent nine-digit device ID viewers dial.
+    pub device_id: Option<String>,
+    pub relay: Option<String>,
+    /// True when the agent keeps serving sessions until stopped.
+    pub persistent: bool,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +80,12 @@ enum AgentEvent {
         view_only: bool,
         file_transfer: bool,
         file_root: Option<String>,
+        #[serde(default)]
+        device_id: Option<String>,
+        #[serde(default)]
+        relay: Option<String>,
+        #[serde(default)]
+        persistent: bool,
     },
     PairingRequest {
         peer: String,
@@ -74,6 +95,12 @@ enum AgentEvent {
     },
     Paired {
         peer: String,
+    },
+    SessionEnded {
+        reason: String,
+    },
+    RelayState {
+        connected: bool,
     },
     Failed {
         stage: String,
@@ -228,19 +255,42 @@ fn bind_target(request: &RemoteHostStartRequest) -> Result<SocketAddr, String> {
     Ok(SocketAddr::new(address, request.port))
 }
 
+/// Where the agent runs: listening locally, or registered on a relay under
+/// the permanent device identity kept in the app data folder.
+enum AgentTarget<'a> {
+    Direct(SocketAddr),
+    Relay {
+        address: &'a str,
+        identity: &'a Path,
+        pairing_code: Option<&'a str>,
+    },
+}
+
 fn spawn_agent(
-    target: SocketAddr,
+    target: AgentTarget<'_>,
     fps: u32,
     allow_input: bool,
     file_root: Option<&Path>,
 ) -> Result<(Child, tokio::process::ChildStdout), String> {
     let mut command = Command::new(agent_path()?);
-    command
-        .arg("--json")
-        .arg("--bind")
-        .arg(target.to_string())
-        .arg("--fps")
-        .arg(fps.to_string());
+    command.arg("--json");
+    match target {
+        AgentTarget::Direct(address) => {
+            command.arg("--bind").arg(address.to_string());
+        }
+        AgentTarget::Relay {
+            address,
+            identity,
+            pairing_code,
+        } => {
+            command.arg("--relay").arg(address);
+            command.arg("--identity").arg(identity);
+            if let Some(code) = pairing_code {
+                command.arg("--pair-code").arg(code);
+            }
+        }
+    }
+    command.arg("--fps").arg(fps.to_string());
     if allow_input {
         command.arg("--allow-input");
     }
@@ -279,7 +329,36 @@ pub async fn start(
         return Err("This device is already sharing its display.".to_string());
     }
 
-    let target = bind_target(&request)?;
+    let relay_mode = request.mode.trim() == "relay";
+    let direct_target = if relay_mode {
+        if !(1..=10).contains(&request.fps) {
+            return Err("Frame rate must be between 1 and 10 FPS.".to_string());
+        }
+        lattice_remote::relay::parse_relay_address(&request.relay_address)
+            .map_err(|error| error.to_string())?;
+        None
+    } else {
+        Some(bind_target(&request)?)
+    };
+    let fixed_code = if relay_mode && !request.pairing_code.trim().is_empty() {
+        Some(
+            lattice_remote::normalize_pairing_code(&request.pairing_code)
+                .map_err(|error| error.to_string())?,
+        )
+    } else {
+        None
+    };
+    let identity_path = if relay_mode {
+        let base = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("Cannot locate the app data folder: {error}"))?;
+        std::fs::create_dir_all(&base)
+            .map_err(|error| format!("Cannot prepare the app data folder: {error}"))?;
+        Some(base.join("remote-identity.json"))
+    } else {
+        None
+    };
     let file_root = if request.allow_files {
         let requested = request.file_root.trim();
         let path = if requested.is_empty() {
@@ -298,6 +377,15 @@ pub async fn start(
     } else {
         None
     };
+    let target = match (&direct_target, &identity_path) {
+        (Some(address), _) => AgentTarget::Direct(*address),
+        (None, Some(identity)) => AgentTarget::Relay {
+            address: request.relay_address.trim(),
+            identity,
+            pairing_code: fixed_code.as_deref(),
+        },
+        (None, None) => return Err("The sharing mode is incomplete.".to_string()),
+    };
     let (mut child, stdout) = spawn_agent(
         target,
         request.fps,
@@ -312,48 +400,55 @@ pub async fn start(
         Err(_) => Err("The Lattice Agent did not become ready within 12 seconds.".to_string()),
     };
 
-    let (address, pairing_code, expires_in_seconds, view_only, file_transfer, file_root) =
-        match first {
-            Ok(AgentEvent::Ready {
-                address,
-                pairing_code,
-                expires_in_seconds,
-                view_only,
-                file_transfer,
-                file_root,
-            }) => (
-                address,
-                pairing_code,
-                expires_in_seconds,
-                view_only,
-                file_transfer,
-                file_root,
-            ),
-            Ok(AgentEvent::Failed { stage, detail }) => {
-                let _ = child.kill().await;
-                return Err(format!("{stage}: {detail}"));
-            }
-            Ok(_) => {
-                let _ = child.kill().await;
-                return Err("The Lattice Agent did not report a ready event first.".to_string());
-            }
-            Err(error) => {
-                let _ = child.kill().await;
-                return Err(error);
-            }
-        };
+    let ready = match first {
+        Ok(ready @ AgentEvent::Ready { .. }) => ready,
+        Ok(AgentEvent::Failed { stage, detail }) => {
+            let _ = child.kill().await;
+            return Err(format!("{stage}: {detail}"));
+        }
+        Ok(_) => {
+            let _ = child.kill().await;
+            return Err("The Lattice Agent did not report a ready event first.".to_string());
+        }
+        Err(error) => {
+            let _ = child.kill().await;
+            return Err(error);
+        }
+    };
+    let AgentEvent::Ready {
+        address,
+        pairing_code,
+        expires_in_seconds,
+        view_only,
+        file_transfer,
+        file_root,
+        device_id,
+        relay,
+        persistent,
+    } = ready
+    else {
+        unreachable!("checked above");
+    };
 
     let status = RemoteHostStatus {
         host_id: host_id(),
         address,
         pairing_code,
-        expires_at: now_seconds().saturating_add(expires_in_seconds),
+        // Zero from the agent means the code never expires while sharing.
+        expires_at: if expires_in_seconds == 0 {
+            0
+        } else {
+            now_seconds().saturating_add(expires_in_seconds)
+        },
         view_only,
         file_transfer,
         file_root,
         state: "waiting",
         peer: None,
         attempts_remaining: 5,
+        device_id,
+        relay,
+        persistent,
     };
     let record = Arc::new(RemoteHostRecord {
         status: Mutex::new(status.clone()),
@@ -395,8 +490,30 @@ pub async fn start(
                     if let Ok(mut status) = record.status.lock() {
                         status.state = "streaming";
                         status.peer = Some(peer);
-                        status.pairing_code.clear();
+                        // A one-shot code is spent now; a persistent share
+                        // keeps its code for the sessions that follow.
+                        if !status.persistent {
+                            status.pairing_code.clear();
+                        }
                         emit_status(&watcher_app, &status);
+                    }
+                }
+                Ok(AgentEvent::SessionEnded { reason }) => {
+                    // The viewer side already surfaced the reason through
+                    // remote://closed; the host only returns to waiting.
+                    drop(reason);
+                    if let Ok(mut status) = record.status.lock() {
+                        status.state = "waiting";
+                        status.peer = None;
+                        emit_status(&watcher_app, &status);
+                    }
+                }
+                Ok(AgentEvent::RelayState { connected }) => {
+                    if let Ok(mut status) = record.status.lock() {
+                        if status.state != "streaming" {
+                            status.state = if connected { "waiting" } else { "reconnecting" };
+                            emit_status(&watcher_app, &status);
+                        }
                     }
                 }
                 Ok(AgentEvent::Failed { stage, detail }) => {
@@ -474,6 +591,9 @@ mod tests {
             allow_input: false,
             allow_files: false,
             file_root: String::new(),
+            mode: String::new(),
+            relay_address: String::new(),
+            pairing_code: String::new(),
         })
         .unwrap();
         assert_eq!(ipv4.to_string(), "192.168.1.20:44900");
@@ -485,6 +605,9 @@ mod tests {
             allow_input: true,
             allow_files: false,
             file_root: String::new(),
+            mode: String::new(),
+            relay_address: String::new(),
+            pairing_code: String::new(),
         })
         .unwrap();
         assert_eq!(ipv6.to_string(), "[::1]:44900");
@@ -500,6 +623,9 @@ mod tests {
                 allow_input: false,
                 allow_files: false,
                 file_root: String::new(),
+                mode: String::new(),
+                relay_address: String::new(),
+                pairing_code: String::new(),
             })
             .is_err());
         }

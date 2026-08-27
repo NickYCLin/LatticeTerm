@@ -8,6 +8,7 @@
 use crate::remote_files::{RemoteDirectory, RemoteFileTransfer, RemoteFilesClient};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use lattice_remote::relay::{dial, format_device_id, parse_relay_address, RelayError};
 use lattice_remote::{
     normalize_pairing_code, FrameAssembler, PointerButton, RemoteInput, RemoteMessage,
     SecureConnection, MAX_WHEEL_UNITS, PROTOCOL_VERSION,
@@ -28,10 +29,18 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 #[serde(rename_all = "camelCase")]
 pub struct RemoteConnectRequest {
     pub profile_id: String,
+    #[serde(default)]
     pub hostname: String,
+    #[serde(default)]
     pub port: u16,
     /// One-time secret. Never copied into a session record or event.
     pub pairing_code: String,
+    /// When set, the connection goes through a relay by nine-digit device ID
+    /// instead of dialing hostname:port directly.
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub relay_address: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,6 +50,8 @@ pub struct RemoteSessionSummary {
     pub profile_id: String,
     pub host: String,
     pub port: u16,
+    /// True when the session reached the host by device ID over a relay.
+    pub via_relay: bool,
     pub agent_name: String,
     pub width: u32,
     pub height: u32,
@@ -223,7 +234,8 @@ pub async fn connect(
     registry: Arc<RemoteRegistry>,
     request: RemoteConnectRequest,
 ) -> RemoteConnectOutcome {
-    if request.profile_id.trim().is_empty() || request.hostname.trim().is_empty() {
+    let via_relay = !request.device_id.trim().is_empty();
+    if request.profile_id.trim().is_empty() || (!via_relay && request.hostname.trim().is_empty()) {
         return failed("connect", "The connection target is incomplete.");
     }
     let pairing_code = match normalize_pairing_code(&request.pairing_code) {
@@ -231,15 +243,43 @@ pub async fn connect(
         Err(error) => return failed("pairing", error.to_string()),
     };
 
-    let mut connection = match timeout(
-        Duration::from_secs(12),
-        SecureConnection::connect(&request.hostname, request.port, &pairing_code),
-    )
-    .await
-    {
-        Ok(Ok(connection)) => connection,
-        Ok(Err(error)) => return failed("pairing", error.to_string()),
-        Err(_) => return failed("connect", "The Agent did not answer within 12 seconds."),
+    let mut connection = if via_relay {
+        let (relay_host, relay_port) = match parse_relay_address(&request.relay_address) {
+            Ok(address) => address,
+            Err(error) => return failed("connect", error.to_string()),
+        };
+        let stream = match timeout(
+            Duration::from_secs(15),
+            dial(&relay_host, relay_port, &request.device_id),
+        )
+        .await
+        {
+            Ok(Ok((stream, _agent_name))) => stream,
+            Ok(Err(RelayError::Rejected { detail, .. })) => return failed("connect", detail),
+            Ok(Err(error)) => return failed("connect", error.to_string()),
+            Err(_) => return failed("connect", "The relay did not answer within 15 seconds."),
+        };
+        match timeout(
+            Duration::from_secs(12),
+            SecureConnection::initiate(stream, &pairing_code),
+        )
+        .await
+        {
+            Ok(Ok(connection)) => connection,
+            Ok(Err(error)) => return failed("pairing", error.to_string()),
+            Err(_) => return failed("connect", "The Agent did not answer within 12 seconds."),
+        }
+    } else {
+        match timeout(
+            Duration::from_secs(12),
+            SecureConnection::connect(&request.hostname, request.port, &pairing_code),
+        )
+        .await
+        {
+            Ok(Ok(connection)) => connection,
+            Ok(Err(error)) => return failed("pairing", error.to_string()),
+            Err(_) => return failed("connect", "The Agent did not answer within 12 seconds."),
+        }
     };
 
     // Waiting for the encrypted Hello proves the responder accepted the PSK.
@@ -261,8 +301,13 @@ pub async fn connect(
     let session = RemoteSessionSummary {
         session_id: session_id(),
         profile_id: request.profile_id,
-        host: request.hostname,
+        host: if via_relay {
+            format_device_id(request.device_id.trim())
+        } else {
+            request.hostname
+        },
         port: request.port,
+        via_relay,
         agent_name: hello.agent_name,
         width: hello.width,
         height: hello.height,

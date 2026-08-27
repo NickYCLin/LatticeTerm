@@ -7,7 +7,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 [下載安裝](#-下載與安裝-downloads) · [功能現況](#完成度總覽) · [程式碼與文件導覽](docs/README.md) · [安全性](SECURITY.md) · [參與貢獻](CONTRIBUTING.md) · [English project map](llms.txt)
 
 > [!NOTE]
-> LatticeTerm 目前處於 **公開測試與功能成熟化階段**。桌面端的連線管理、SSH／SFTP／Tunnel、Web RDP、VNC、本機 AI Agent Fleet、安全保管庫、備份、跨平台安裝檔與自動更新已可實際使用；背景 Agent daemon、遠端 Fleet、Relay／NAT 穿透與 iOS 等進階能力仍依後續藍圖開發。
+> LatticeTerm 目前處於 **公開測試與功能成熟化階段**。桌面端的連線管理、SSH／SFTP／Tunnel、Web RDP、VNC、本機 AI Agent Fleet、安全保管庫、備份、跨平台安裝檔與自動更新已可實際使用，Lattice Remote 亦支援自架中繼與數字裝置 ID；背景 Agent daemon、遠端 Fleet、NAT 直連穿透與 iOS 等進階能力仍依後續藍圖開發。
 
 ## 完成度總覽
 
@@ -16,7 +16,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | 桌面連線工作區 | **可用** | Windows、Linux 與 macOS 支援 SSH、SFTP、SSH Tunnel、Web RDP、VNC、主機資源與工作階段管理。 |
 | 安全與資料保護 | **可用** | 嚴格主機信任、作業系統認證儲存、主密碼加密保管庫、敏感剪貼簿與加密備份均已接入真實後端。 |
 | 本機 AI Agent Fleet | **可用** | 多 CLI PTY、Reporter、批次提示、同分頁加開 CLI 並帶入目前對話、安全啟動工作區與同程序重新 attach 已完成。 |
-| Lattice Remote | **基礎功能可用** | 已完成使用者主動啟動、一次性配對、端對端加密、主螢幕直連，以及由分享端分別授權的鍵盤／滑鼠控制與單一根目錄檔案瀏覽、上下載；Relay、NAT 穿透與無人值守尚未加入。 |
+| Lattice Remote | **基礎功能可用** | 已完成使用者主動啟動、一次性配對、端對端加密、主螢幕直連，以及由分享端分別授權的鍵盤／滑鼠控制與單一根目錄檔案瀏覽、上下載；另支援自架 lattice-relay 中繼：永久九位數裝置 ID、跨網路連線與固定配對碼（無人值守）；NAT 直連穿透尚未加入。 |
 | 發行與更新 | **可用** | Windows x64、Linux x64／arm64、macOS Apple Silicon 安裝檔、更新簽章、Release PR 與應用程式內更新已自動化。 |
 | Android | **預覽** | 共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面可建置；需要桌面 sidecar 的 RDP、VNC 與 Agent Fleet 不提供。 |
 | 進階 Agent 與行動能力 | **規劃中** | 跨程序 daemon、遠端 Fleet、任務編排、每 Agent 沙箱與 iOS 尚未完成。 |
@@ -72,7 +72,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 
 ## 後續開發重點
 
-1. **Lattice Remote 連線範圍**：鍵盤／滑鼠遠端控制已可用（由分享端明確授權）；接著加入免帳戶數字裝置 ID、自建 Signal／Relay、NAT 穿透、裝置身分與重放防護，再分階段提供無人值守。連線清單先保存在本機，帳戶只作為日後跨裝置同步與團隊權限的選配層。
+1. **Lattice Remote 連線範圍**：鍵盤／滑鼠遠端控制已可用（由分享端明確授權）；免帳戶數字裝置 ID 與自架 Relay（`docs/RELAY_SERVER.zh-TW.md`）已可用，固定配對碼提供基本無人值守；接著加入 NAT 直連穿透、裝置公鑰釘選與重放防護強化。連線清單先保存在本機，帳戶只作為日後跨裝置同步與團隊權限的選配層。
 2. **Agent 常駐與遠端能力**：把 PTY owner 抽成使用者自行啟動的背景 daemon，支援跨程序重新 attach，並先以 SSH transport 實作遠端 Agent Fleet。
 3. **Agent 編排與隔離**：補齊工具 hook、token／cost 可觀測事件、依賴圖、佇列、排程、資源限制與每 Agent 沙箱／檔案範圍策略。
 4. **平台完整度**：設計安全的 Windows npm shim adapter、持續強化 Android 發行流程，並在 macOS／Xcode 環境啟動 iOS 建置與驗證。

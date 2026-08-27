@@ -504,6 +504,51 @@
   box-shadow: 0 0 0 0.3rem var(--ok-soft);
 }
 
+.remote-host-state__dot.state-reconnecting {
+  background: var(--danger);
+  box-shadow: 0 0 0 0.3rem var(--danger-soft);
+}
+
+/* Relay vs direct sharing chooser. */
+.remote-host-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.remote-host-mode__option {
+  display: grid;
+  gap: 0.2rem;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  text-align: left;
+  cursor: pointer;
+}
+
+.remote-host-mode__option.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface-solid));
+}
+
+.remote-host-mode__option small {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+/* The nine-digit ID reads in groups of three, large enough to dictate. */
+.remote-quick-id {
+  font-size: var(--text-lg);
+  letter-spacing: 0.12em;
+}
+
+.remote-host-value--device code {
+  font-size: var(--text-md);
+  letter-spacing: 0.1em;
+}
+
 .remote-host-share-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

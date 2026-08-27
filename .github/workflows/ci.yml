@@ -82,13 +82,13 @@ jobs:
       - name: Test Rust
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml
-          cargo test --manifest-path crates/lattice-remote/Cargo.toml --features agent
+          cargo test --manifest-path crates/lattice-remote/Cargo.toml --features "agent relay-server"
           cargo test --manifest-path crates/lattice-rdp/Cargo.toml
           cargo test --manifest-path crates/lattice-vnc/Cargo.toml
 
       - name: Lint Rust
         run: |
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path crates/lattice-remote/Cargo.toml --features agent --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/lattice-remote/Cargo.toml --features "agent relay-server" --all-targets -- -D warnings
           cargo clippy --manifest-path crates/lattice-rdp/Cargo.toml --all-targets -- -D warnings
           cargo clippy --manifest-path crates/lattice-vnc/Cargo.toml --all-targets -- -D warnings

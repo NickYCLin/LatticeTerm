@@ -1,16 +1,21 @@
 //! Lattice Remote.
 //!
-//! The protocol keeps a narrow boundary: direct TCP, one-time pairing,
-//! encrypted transport, and JPEG frames. Input injection and access to one
-//! shared file root are separately opt-in per share; the agent never persists
-//! a secret, discovers devices, or exposes a relay.
+//! The protocol keeps a narrow boundary: an end-to-end encrypted transport
+//! over direct TCP or a blind relay, pairing-code authentication, and JPEG
+//! frames. Input injection and access to one shared file root are separately
+//! opt-in per share. The optional relay only matches a viewer to a device ID
+//! and forwards ciphertext; it never sees pairing codes or frame contents.
 
 #[cfg(feature = "agent")]
 pub mod host_files;
 #[cfg(feature = "agent")]
 pub mod host_input;
 mod protocol;
+pub mod relay;
+#[cfg(feature = "relay-server")]
+pub mod relay_server;
 mod secure;
+mod wire;
 
 pub use protocol::{
     frame_messages, CompleteFrame, FrameAssembler, FrameDescriptor, FrameFormat, PointerButton,

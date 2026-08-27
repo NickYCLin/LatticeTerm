@@ -1,4 +1,8 @@
 use image::{imageops::FilterType, DynamicImage};
+use lattice_remote::relay::{
+    format_device_id, parse_relay_address, read_server_message, write_client_message,
+    DeviceIdentity, RelayClientMessage, RelayServerMessage,
+};
 use lattice_remote::{
     frame_messages, generate_pairing_code, host_files::HostUpload, host_files::SharedFiles,
     host_input::InputInjector, normalize_pairing_code, FrameFormat, RemoteFileRequest,
@@ -14,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout};
 use xcap::Monitor;
@@ -25,7 +29,10 @@ const MAX_WIDTH: u32 = 1280;
 const MAX_HEIGHT: u32 = 720;
 const MAX_PAIRING_FAILURES: u32 = 5;
 const PAIRING_LIFETIME: Duration = Duration::from_secs(5 * 60);
+const RELAY_PING_INTERVAL: Duration = Duration::from_secs(25);
+const RELAY_RECONNECT_CAP: Duration = Duration::from_secs(60);
 
+#[derive(Clone)]
 struct Options {
     bind: SocketAddr,
     pairing_code: String,
@@ -33,6 +40,8 @@ struct Options {
     json: bool,
     allow_input: bool,
     file_root: Option<PathBuf>,
+    relay: Option<String>,
+    identity_file: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -45,10 +54,16 @@ enum AgentEvent<'a> {
     Ready {
         address: String,
         pairing_code: String,
+        /// Zero means the code does not expire while sharing stays on.
         expires_in_seconds: u64,
         view_only: bool,
         file_transfer: bool,
         file_root: Option<String>,
+        /// Present in relay mode: the permanent nine-digit device ID.
+        device_id: Option<String>,
+        relay: Option<String>,
+        /// True when the agent keeps serving sessions until stopped.
+        persistent: bool,
     },
     PairingRequest {
         peer: String,
@@ -58,6 +73,14 @@ enum AgentEvent<'a> {
     },
     Paired {
         peer: String,
+    },
+    /// Relay mode only: one session ended and the agent waits for the next.
+    SessionEnded {
+        reason: String,
+    },
+    /// Relay mode only: the control link dropped or came back.
+    RelayState {
+        connected: bool,
     },
     Failed {
         stage: &'a str,
@@ -80,11 +103,18 @@ fn emit_event(json: bool, event: &AgentEvent<'_>) {
 
 fn help() -> &'static str {
     "Lattice Remote agent\n\n\
-Usage: lattice-agent [--bind ADDRESS:PORT] [--pair-code 1234-5678] [--fps 1-10] [--allow-input] [--file-root PATH] [--json]\n\n\
-The safe default listens on 127.0.0.1 only. To receive a LAN connection, pass\n\
-the machine's LAN address explicitly, for example --bind 192.168.1.20:44900.\n\
-The agent accepts one successfully paired connection, streams the primary\n\
-display over an encrypted channel, then exits.\n\n\
+Usage: lattice-agent [--bind ADDRESS:PORT] [--relay HOST[:PORT]] [--identity FILE]\n\
+                     [--pair-code 1234-5678] [--fps 1-10] [--allow-input]\n\
+                     [--file-root PATH] [--json]\n\n\
+Direct mode (default): the safe default listens on 127.0.0.1 only. To receive\n\
+a LAN connection, pass the machine's LAN address explicitly, for example\n\
+--bind 192.168.1.20:44900. The agent accepts one successfully paired\n\
+connection, streams the primary display over an encrypted channel, then exits.\n\n\
+Relay mode: --relay connects outward to a lattice-relay server and registers\n\
+this machine's permanent nine-digit device ID (kept in --identity, default\n\
+under the user data folder). A viewer then reaches this machine by ID alone;\n\
+the pairing code still authenticates every session end to end, the relay only\n\
+forwards ciphertext, and the agent keeps serving sessions until stopped.\n\n\
 By default the session is view-only. Pass --allow-input to let the paired\n\
 viewer control this machine's mouse and keyboard; without it, input messages\n\
 are ignored. File access stays disabled unless --file-root explicitly shares\n\
@@ -100,10 +130,26 @@ fn parse_options() -> Result<Options, String> {
     let mut json = false;
     let mut allow_input = false;
     let mut file_root = None;
+    let mut relay = None;
+    let mut identity_file = None;
     let mut arguments = env::args().skip(1);
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
+            "--relay" => {
+                let address = arguments
+                    .next()
+                    .ok_or_else(|| "--relay needs HOST or HOST:PORT".to_string())?;
+                parse_relay_address(&address).map_err(|error| error.to_string())?;
+                relay = Some(address);
+            }
+            "--identity" => {
+                identity_file = Some(PathBuf::from(
+                    arguments
+                        .next()
+                        .ok_or_else(|| "--identity needs a file path".to_string())?,
+                ));
+            }
             "--bind" => {
                 bind = arguments
                     .next()
@@ -159,7 +205,26 @@ fn parse_options() -> Result<Options, String> {
         json,
         allow_input,
         file_root,
+        relay,
+        identity_file,
     })
+}
+
+fn default_identity_path() -> Option<PathBuf> {
+    if cfg!(windows) {
+        env::var_os("APPDATA").map(|base| {
+            PathBuf::from(base)
+                .join("LatticeRemote")
+                .join("identity.json")
+        })
+    } else {
+        env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
+            })
+            .map(|base| base.join("lattice-remote").join("identity.json"))
+    }
 }
 
 fn target_size(width: u32, height: u32) -> (u32, u32) {
@@ -633,6 +698,301 @@ async fn serve(
     stream_result
 }
 
+/// How one relayed session concluded, reported back to the control loop.
+enum SessionOutcome {
+    /// The viewer failed the pairing handshake.
+    Rejected,
+    /// A paired session ran and finished for the given reason.
+    Ended(String),
+}
+
+/// Serves one invited session over a fresh relay connection. The pairing code
+/// still authenticates the viewer end to end; the relay only linked sockets.
+async fn run_relay_session(
+    relay_host: String,
+    relay_port: u16,
+    channel_id: String,
+    identity: DeviceIdentity,
+    options: Options,
+) -> SessionOutcome {
+    let mut stream = match TcpStream::connect((relay_host.as_str(), relay_port)).await {
+        Ok(stream) => stream,
+        Err(error) => return SessionOutcome::Ended(format!("Could not reach the relay: {error}")),
+    };
+    let _ = stream.set_nodelay(true);
+    if write_client_message(
+        &mut stream,
+        &RelayClientMessage::Join {
+            channel_id,
+            device_id: identity.device_id.clone(),
+            auth_token: identity.auth_token.clone(),
+        },
+    )
+    .await
+    .is_err()
+    {
+        return SessionOutcome::Ended("The relay dropped the session invite.".to_string());
+    }
+    match timeout(Duration::from_secs(10), read_server_message(&mut stream)).await {
+        Ok(Ok(RelayServerMessage::Linked { .. })) => {}
+        _ => return SessionOutcome::Ended("The relay did not link the session.".to_string()),
+    }
+
+    emit_event(
+        options.json,
+        &AgentEvent::PairingRequest {
+            peer: "relay".to_string(),
+        },
+    );
+    let secure = match timeout(
+        Duration::from_secs(10),
+        SecureConnection::accept(stream, &options.pairing_code),
+    )
+    .await
+    {
+        Ok(Ok(secure)) => secure,
+        Ok(Err(_)) | Err(_) => return SessionOutcome::Rejected,
+    };
+    emit_event(
+        options.json,
+        &AgentEvent::Paired {
+            peer: "relay".to_string(),
+        },
+    );
+    match serve(secure, options.fps, options.allow_input, options.file_root).await {
+        Ok(()) => SessionOutcome::Ended("Remote session completed.".to_string()),
+        Err(error) => SessionOutcome::Ended(format!("Session ended: {error}")),
+    }
+}
+
+/// Relay mode: register the permanent device ID, then keep serving sessions
+/// until stopped. The control link reconnects with backoff; a session in
+/// flight rides its own connection and survives a control drop.
+async fn run_relay(options: &Options) -> String {
+    let relay_raw = options.relay.clone().expect("relay mode requires --relay");
+    let (relay_host, relay_port) = match parse_relay_address(&relay_raw) {
+        Ok(address) => address,
+        Err(error) => {
+            emit_event(
+                options.json,
+                &AgentEvent::Failed {
+                    stage: "relay",
+                    detail: error.to_string(),
+                },
+            );
+            return "The relay address is invalid.".to_string();
+        }
+    };
+    let identity_path = match options.identity_file.clone().or_else(default_identity_path) {
+        Some(path) => path,
+        None => {
+            let detail = "No identity file location is available.".to_string();
+            emit_event(
+                options.json,
+                &AgentEvent::Failed {
+                    stage: "identity",
+                    detail: detail.clone(),
+                },
+            );
+            return detail;
+        }
+    };
+    let identity = match DeviceIdentity::load_or_create(&identity_path) {
+        Ok(identity) => identity,
+        Err(error) => {
+            emit_event(
+                options.json,
+                &AgentEvent::Failed {
+                    stage: "identity",
+                    detail: error.to_string(),
+                },
+            );
+            return format!("Cannot load the device identity: {error}");
+        }
+    };
+
+    let formatted_code = format!(
+        "{}-{}",
+        &options.pairing_code[..4],
+        &options.pairing_code[4..]
+    );
+    let mut failed_pairings = 0u32;
+    let mut announced = false;
+    let mut link_up = false;
+    let mut reconnect_delay = Duration::from_secs(1);
+
+    loop {
+        let connected = async {
+            let stream = TcpStream::connect((relay_host.as_str(), relay_port))
+                .await
+                .map_err(|error| error.to_string())?;
+            let _ = stream.set_nodelay(true);
+            let (mut read_half, mut write_half) = stream.into_split();
+            write_client_message(
+                &mut write_half,
+                &RelayClientMessage::Register {
+                    device_id: identity.device_id.clone(),
+                    auth_token: identity.auth_token.clone(),
+                    agent_name: agent_name(),
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            match timeout(Duration::from_secs(10), read_server_message(&mut read_half)).await {
+                Ok(Ok(RelayServerMessage::Registered)) => Ok((read_half, write_half, None)),
+                Ok(Ok(RelayServerMessage::Error { code, detail })) => {
+                    Ok((read_half, write_half, Some((code, detail))))
+                }
+                _ => Err("The relay did not answer the registration.".to_string()),
+            }
+        }
+        .await;
+
+        let (mut read_half, mut write_half) = match connected {
+            Ok((_, _, Some((code, detail)))) => {
+                emit_event(
+                    options.json,
+                    &AgentEvent::Failed {
+                        stage: "relay",
+                        detail: detail.clone(),
+                    },
+                );
+                return format!("The relay refused this device ({code}): {detail}");
+            }
+            Ok((read_half, write_half, None)) => (read_half, write_half),
+            Err(detail) => {
+                if !announced {
+                    emit_event(
+                        options.json,
+                        &AgentEvent::Failed {
+                            stage: "relay",
+                            detail: detail.clone(),
+                        },
+                    );
+                    return format!("Cannot reach the relay: {detail}");
+                }
+                if link_up {
+                    link_up = false;
+                    emit_event(options.json, &AgentEvent::RelayState { connected: false });
+                }
+                sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(RELAY_RECONNECT_CAP);
+                continue;
+            }
+        };
+        reconnect_delay = Duration::from_secs(1);
+
+        if !announced {
+            announced = true;
+            emit_event(
+                options.json,
+                &AgentEvent::Ready {
+                    address: relay_raw.clone(),
+                    pairing_code: formatted_code.clone(),
+                    expires_in_seconds: 0,
+                    view_only: !options.allow_input,
+                    file_transfer: options.file_root.is_some(),
+                    file_root: options
+                        .file_root
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
+                    device_id: Some(identity.device_id.clone()),
+                    relay: Some(relay_raw.clone()),
+                    persistent: true,
+                },
+            );
+            if !options.json {
+                println!("Lattice Remote is ready over the relay {relay_raw}.");
+                println!("Device ID: {}", format_device_id(&identity.device_id));
+                println!("Pairing code: {formatted_code}");
+                println!("The code stays valid until sharing stops.");
+            }
+        }
+        if !link_up {
+            link_up = true;
+            emit_event(options.json, &AgentEvent::RelayState { connected: true });
+        }
+
+        // A writer channel serialises pings; the reader loop below owns
+        // invites and session outcomes.
+        let (control_tx, mut control_rx) = mpsc::channel::<RelayClientMessage>(4);
+        let writer_task = tokio::spawn(async move {
+            while let Some(message) = control_rx.recv().await {
+                if write_client_message(&mut write_half, &message)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let ping_tx = control_tx.clone();
+        let ping_task = tokio::spawn(async move {
+            loop {
+                sleep(RELAY_PING_INTERVAL).await;
+                if ping_tx.send(RelayClientMessage::Ping).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        // Sessions run inline: pings keep flowing from their own task, so a
+        // long session cannot get this device deregistered, and a second
+        // viewer's dial simply times out while a session streams. `serve`
+        // holds OS capture handles that are not `Send`, which also rules
+        // out spawning sessions onto other threads.
+        let fatal = loop {
+            match read_server_message(&mut read_half).await {
+                Ok(RelayServerMessage::Invite { channel_id }) => {
+                    let outcome = run_relay_session(
+                        relay_host.clone(),
+                        relay_port,
+                        channel_id,
+                        identity.clone(),
+                        options.clone(),
+                    )
+                    .await;
+                    match outcome {
+                        SessionOutcome::Rejected => {
+                            failed_pairings += 1;
+                            let attempts_remaining =
+                                MAX_PAIRING_FAILURES.saturating_sub(failed_pairings);
+                            emit_event(
+                                options.json,
+                                &AgentEvent::PairingRejected { attempts_remaining },
+                            );
+                            if failed_pairings >= MAX_PAIRING_FAILURES {
+                                break Some(
+                                    "Too many failed pairing attempts; the Agent stopped."
+                                        .to_string(),
+                                );
+                            }
+                        }
+                        SessionOutcome::Ended(reason) => {
+                            failed_pairings = 0;
+                            emit_event(options.json, &AgentEvent::SessionEnded { reason });
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => break None,
+            }
+        };
+
+        ping_task.abort();
+        writer_task.abort();
+        if let Some(reason) = fatal {
+            return reason;
+        }
+        if link_up {
+            link_up = false;
+            emit_event(options.json, &AgentEvent::RelayState { connected: false });
+        }
+        sleep(reconnect_delay).await;
+        reconnect_delay = (reconnect_delay * 2).min(RELAY_RECONNECT_CAP);
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let requested_json = env::args().any(|argument| argument == "--json");
@@ -652,6 +1012,20 @@ async fn main() {
             std::process::exit(2);
         }
     };
+
+    if options.relay.is_some() {
+        let stop_reason = run_relay(&options).await;
+        emit_event(
+            options.json,
+            &AgentEvent::Stopped {
+                reason: stop_reason.clone(),
+            },
+        );
+        if !options.json {
+            eprintln!("{stop_reason}");
+        }
+        return;
+    }
 
     let listener = match TcpListener::bind(options.bind).await {
         Ok(listener) => listener,
@@ -688,6 +1062,9 @@ async fn main() {
                 .file_root
                 .as_ref()
                 .map(|path| path.display().to_string()),
+            device_id: None,
+            relay: None,
+            persistent: false,
         },
     );
     if !options.json {
@@ -710,7 +1087,10 @@ async fn main() {
             break "Pairing code expired after five minutes.".to_string();
         }
         let (stream, peer) = match timeout(remaining, listener.accept()).await {
-            Ok(Ok(connection)) => connection,
+            Ok(Ok((stream, peer))) => {
+                let _ = stream.set_nodelay(true);
+                (stream, peer)
+            }
             Ok(Err(error)) => {
                 if !options.json {
                     eprintln!("Could not accept connection: {error}");
@@ -811,9 +1191,14 @@ mod tests {
             view_only: true,
             file_transfer: false,
             file_root: None,
+            device_id: Some("123456789".to_string()),
+            relay: Some("relay.example.com".to_string()),
+            persistent: true,
         };
         let json = serde_json::to_value(event).expect("serialize agent event");
         assert_eq!(json["kind"], "ready");
         assert_eq!(json["pairingCode"], "1234-5678");
+        assert_eq!(json["deviceId"], "123456789");
+        assert_eq!(json["persistent"], true);
     }
 }
