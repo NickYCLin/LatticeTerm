@@ -1,12 +1,16 @@
 /**
- * Ctrl+C / Ctrl+V clipboard support for the terminal panes.
+ * Ctrl+C / Ctrl+V and right-click clipboard support for the terminal panes.
  *
  * xterm.js leaves Ctrl+C as an interrupt and has no Ctrl+V binding, which trips
- * up anyone used to a desktop terminal. This mirrors the Windows Terminal rule:
- * Ctrl+C copies when there is a selection and otherwise falls through to ^C, and
- * Ctrl+V pastes. Text is pasted straight in; an image on the clipboard is handed
- * to the optional image handler (agent terminals turn it into a file the CLI can
+ * up anyone used to a desktop terminal. This mirrors the Windows Terminal rules:
+ * Ctrl+C copies when there is a selection and otherwise falls through to ^C,
+ * Ctrl+V pastes, and right-click copies the selection or pastes when there is
+ * none. Text is pasted straight in; an image on the clipboard is handed to the
+ * optional image handler (agent terminals turn it into a file the CLI can
  * read — SSH panes have no local target, so they simply ignore it).
+ *
+ * Tip that full-screen CLIs make necessary: when a TUI captures the mouse,
+ * plain dragging goes to the application — xterm still selects with Shift+drag.
  */
 
 import type { Terminal } from "@xterm/xterm";
@@ -52,6 +56,21 @@ export function attachTerminalClipboard(
     }
 
     return true;
+  });
+
+  // Callers attach after `terminal.open()`, so the element exists here.
+  terminal.element?.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    if (terminal.hasSelection()) {
+      const selection = terminal.getSelection();
+      if (selection) {
+        void navigator.clipboard.writeText(selection).catch(() => {});
+      }
+      // Dropping the highlight is the visible cue that the copy happened.
+      terminal.clearSelection();
+    } else {
+      void pasteFromClipboard(terminal, options.onImagePaste);
+    }
   });
 }
 
