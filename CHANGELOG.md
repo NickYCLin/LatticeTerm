@@ -4,6 +4,18 @@
 
 ---
 
+## [0.25.0](https://github.com/NickYCLin/lattice-term/compare/v0.24.0...v0.25.0) (2026-08-27)
+
+
+### 🚀 新增功能
+
+* **workspace:** 加密還原 Agent 終端輸出 ([70372f0](https://github.com/NickYCLin/lattice-term/commit/70372f0da102f063c04b07b8cbf8c311904d4f19))
+
+
+### 🛠️ 問題修正
+
+* **workspace:** 修正工作階段整理與桌面互動 ([720f96d](https://github.com/NickYCLin/lattice-term/commit/720f96ddbf2011cb7e1af417246bc5ece7c025df))
+
 ## [0.24.0](https://github.com/NickYCLin/lattice-term/compare/v0.23.0...v0.24.0) (2026-08-26)
 
 
