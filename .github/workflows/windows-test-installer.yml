@@ -1,0 +1,78 @@
+name: Windows test installer
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/windows-test-installer.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/build-*.mjs"
+      - "src/**"
+      - "src-tauri/**"
+      - "crates/lattice-remote/**"
+      - "crates/lattice-rdp/**"
+      - "crates/lattice-vnc/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-test-installer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows amd64 test installer
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri -> target
+            crates/lattice-remote -> target
+            crates/lattice-rdp -> target
+            crates/lattice-vnc -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # Test installers are intentionally unsigned and never published as a
+      # GitHub Release. They also stay endpoint-agnostic: the user enters the
+      # current wss:// relay URL in the app, so a Quick Tunnel restart does not
+      # require rebuilding or reinstalling LatticeTerm.
+      - name: Build unsigned NSIS installer
+        run: >-
+          npx tauri build --bundles nsis --no-sign --ci
+          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Verify installer output
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Tauri did not produce an NSIS installer." }
+          Get-FileHash -Algorithm SHA256 $installer.FullName
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: LatticeTerm-Windows-amd64-test
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 7
