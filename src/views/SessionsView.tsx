@@ -56,6 +56,8 @@ import {
   TransferIcon,
 } from "../components/icons";
 import { AgentTerminalPane } from "../components/agents/AgentTerminalPane";
+import { HostMetricsPanel } from "../components/connections/HostMetricsPanel";
+import { useSessionHostMetrics } from "../app/useHostMetrics";
 import { RemotePane } from "../components/remote/RemotePane";
 import { RdpPane } from "../components/rdp/RdpPane";
 import { VncPane } from "../components/vnc/VncPane";
@@ -166,6 +168,23 @@ export function SessionsView({
       }
     }
   }
+
+  // A fresh SSH tab opens with its file browser visible, so the remote
+  // folders are on screen right after connecting; the header toggle still
+  // remembers a manual close per tab. The ref guards against re-attaching
+  // while the first toggle's state update is still in flight.
+  const autoOpenedFilesRef = useRef(new Set<string>());
+  useEffect(() => {
+    for (const session of ssh.sessions) {
+      if (
+        filesOpen[session.sessionId] === undefined &&
+        !autoOpenedFilesRef.current.has(session.sessionId)
+      ) {
+        autoOpenedFilesRef.current.add(session.sessionId);
+        void toggleFiles(session.sessionId);
+      }
+    }
+  }, [ssh.sessions, filesOpen]);
 
   // When an SSH tab goes away, tear down the browser channel it owned so the
   // panel and its SFTP session do not linger.
@@ -596,6 +615,13 @@ export function SessionsView({
     sessions.find((session) => session.sessionId === activeSessionId) ??
     sessions[0] ??
     null;
+  // Live host readings for the active SSH tab, polled only while its files
+  // sidebar is on screen.
+  const activeSshSessionId =
+    active?.kind === "ssh" && filesOpen[active.sessionId]
+      ? active.sessionId
+      : null;
+  const sshHostMetrics = useSessionHostMetrics(activeSshSessionId);
   const projectMap = new Map<string, SessionProject>();
   for (const session of sessions) {
     const id = projectIdForSession(session);
@@ -1216,6 +1242,12 @@ export function SessionsView({
                       sftp={sftp}
                       active={isActive}
                     />
+                    {isActive && (
+                      <div className="ssh-split__metrics">
+                        <span className="eyebrow">{t("metrics.title")}</span>
+                        <HostMetricsPanel state={sshHostMetrics} />
+                      </div>
+                    )}
                   </aside>
                 )}
                 <div className="ssh-split__term">

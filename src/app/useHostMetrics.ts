@@ -20,8 +20,6 @@ export function useHostMetrics(
   profile: ConnectionProfile | null,
   sessions: SessionSummary[],
 ): MetricsState {
-  const [state, setState] = useState<MetricsState>(initialMetricsState);
-
   // Only SSH sessions can host the probe; the panel needs one for *this*
   // profile specifically, not any open session.
   const sessionId =
@@ -30,6 +28,18 @@ export function useHostMetrics(
           ?.sessionId ?? null)
       : null;
   const supported = profile?.protocol === "ssh";
+  return useSessionHostMetrics(supported ? sessionId : null, supported);
+}
+
+/**
+ * Polls the probe over one specific SSH session. Passing `null` stops the
+ * polling, so callers hand in the id only while their panel is visible.
+ */
+export function useSessionHostMetrics(
+  sessionId: string | null,
+  supported = true,
+): MetricsState {
+  const [state, setState] = useState<MetricsState>(initialMetricsState);
 
   useEffect(() => {
     if (!supported) {
