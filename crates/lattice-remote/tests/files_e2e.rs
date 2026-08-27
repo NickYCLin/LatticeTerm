@@ -5,7 +5,8 @@
 #![cfg(feature = "agent")]
 
 use lattice_remote::{
-    RemoteFileRequest, RemoteFileResponse, RemoteMessage, SecureConnection, PROTOCOL_VERSION,
+    RemoteFileRequest, RemoteFileResponse, RemoteMessage, SecureConnection, Transport,
+    PROTOCOL_VERSION,
 };
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -23,7 +24,7 @@ fn agent_binary() -> PathBuf {
     path
 }
 
-async fn next_file_response(connection: &mut SecureConnection) -> RemoteFileResponse {
+async fn next_file_response(connection: &mut SecureConnection<Transport>) -> RemoteFileResponse {
     loop {
         match connection.receive().await.expect("encrypted message") {
             RemoteMessage::FileResponse(response) => return response,

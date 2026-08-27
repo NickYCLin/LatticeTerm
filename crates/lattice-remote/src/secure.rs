@@ -67,11 +67,13 @@ pub struct SecureConnection<S = TcpStream> {
     transport: TransportState,
 }
 
-impl SecureConnection<TcpStream> {
+impl SecureConnection<crate::Transport> {
+    /// Dials a direct TCP connection and wraps it in [`crate::Transport`], so
+    /// callers that also accept relayed WebSocket streams share one type.
     pub async fn connect(host: &str, port: u16, pairing_code: &str) -> Result<Self, RemoteError> {
         let stream = TcpStream::connect((host, port)).await?;
         stream.set_nodelay(true)?;
-        Self::initiate(stream, pairing_code).await
+        Self::initiate(crate::Transport::from(stream), pairing_code).await
     }
 }
 

@@ -13,7 +13,7 @@ use lattice_remote::relay::{
 };
 use lattice_remote::{
     normalize_pairing_code, FrameAssembler, PointerButton, RemoteInput, RemoteMessage,
-    SecureConnection, Transport, MAX_WHEEL_UNITS, PROTOCOL_VERSION,
+    SecureConnection, MAX_WHEEL_UNITS, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,7 +21,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 use tokio::time::timeout;
@@ -277,11 +276,10 @@ pub async fn connect(
             Err(_) => return failed("connect", "The Agent did not answer within 12 seconds."),
         }
     } else {
-        match timeout(Duration::from_secs(12), async {
-            let stream = TcpStream::connect((request.hostname.as_str(), request.port)).await?;
-            stream.set_nodelay(true)?;
-            SecureConnection::initiate(Transport::from(stream), &pairing_code).await
-        })
+        match timeout(
+            Duration::from_secs(12),
+            SecureConnection::connect(request.hostname.as_str(), request.port, &pairing_code),
+        )
         .await
         {
             Ok(Ok(connection)) => connection,
