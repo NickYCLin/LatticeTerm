@@ -106,7 +106,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 | 同程序介面重新 attach | 已完成 | 先訂閱事件再 hydration；session 關閉不會被舊快照復活，最近 256 KiB PTY 輸出依 offset 去重重播 |
 | 工具專用語意 Adapter | 部分完成 | Reporter 狀態模型、舊工作區續接 recipe 與保守的 session ID 擷取仍保留；工具 hook、token／cost 擷取尚未完成 |
 | 跨程序背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段；目前只支援同一桌面程序內的 WebView 重新 attach |
-| 跨重啟還原 | 部分完成 | 已保存的 Codex 項目會續接同工作目錄最近的對話，舊版原生續接項目也可相容還原；應用程式程序重啟後的原 PTY、pane 與輸出還原尚未完成 |
+| 跨重啟還原 | 部分完成 | 已保存的 Codex 項目會續接同工作目錄最近的對話；正常關閉時，每個 Agent 最近 256 KiB 終端輸出會以 OS 安全儲存區中的裝置金鑰加密保存，重啟同一項目後先重播。若安全儲存區不可用就不落地輸出；原 PTY 程序與可互動 pane 仍無法跨程序存活 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 任務編排 | 部分完成 | broadcast prompt 已完成；依賴圖、佇列與排程仍待實作 |
 | 權限隔離 | 未完成 | 尚無每 Agent 容器、沙箱或檔案範圍策略 |

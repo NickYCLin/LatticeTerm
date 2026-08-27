@@ -581,6 +581,16 @@ struct OutputBuffer {
 }
 
 impl OutputBuffer {
+    fn from_tail(bytes: &[u8]) -> Self {
+        let start = bytes.len().saturating_sub(MAX_OUTPUT_SNAPSHOT_BYTES);
+        let tail = &bytes[start..];
+        Self {
+            bytes: tail.iter().copied().collect(),
+            start_offset: 0,
+            end_offset: tail.len() as u64,
+        }
+    }
+
     fn append(&mut self, bytes: &[u8]) -> u64 {
         let offset = self.end_offset;
         self.end_offset = self.end_offset.saturating_add(bytes.len() as u64);
@@ -602,6 +612,17 @@ impl OutputBuffer {
             base64: encode(&bytes),
         }
     }
+
+    fn tail(&self) -> Vec<u8> {
+        self.bytes.iter().copied().collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTerminalHistorySnapshot {
+    pub group_id: String,
+    pub definition_id: String,
+    pub output: Vec<u8>,
 }
 
 /// Rolling window over a session's output while its native session id has
@@ -969,6 +990,30 @@ impl AgentRegistry {
             })
             .collect::<Vec<_>>();
         snapshots.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        snapshots
+    }
+
+    pub fn terminal_history_snapshots(&self) -> Vec<AgentTerminalHistorySnapshot> {
+        let Ok(sessions) = self.sessions.lock() else {
+            return Vec::new();
+        };
+        let mut snapshots = sessions
+            .values()
+            .filter_map(|entry| {
+                let summary = entry.summary.lock().ok()?;
+                let output = entry.output.lock().ok()?.tail();
+                (!output.is_empty()).then(|| AgentTerminalHistorySnapshot {
+                    group_id: summary.group_id.clone(),
+                    definition_id: summary.definition_id.clone(),
+                    output,
+                })
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| {
+            left.group_id
+                .cmp(&right.group_id)
+                .then_with(|| left.definition_id.cmp(&right.definition_id))
+        });
         snapshots
     }
 
@@ -2259,6 +2304,15 @@ pub fn launch(
     registry: Arc<AgentRegistry>,
     request: AgentLaunchRequest,
 ) -> Result<AgentSessionSummary, String> {
+    launch_with_replay(sink, registry, request, None)
+}
+
+pub fn launch_with_replay(
+    sink: Arc<dyn AgentSink>,
+    registry: Arc<AgentRegistry>,
+    request: AgentLaunchRequest,
+    restored_output: Option<Vec<u8>>,
+) -> Result<AgentSessionSummary, String> {
     let launched_at = Instant::now();
     let size = validated_size(request.cols, request.rows)?;
     let (definition_id, label, executable, arguments, working_directory) =
@@ -2359,12 +2413,19 @@ pub fn launch(
             input_buffer: String::new(),
             model_command_active: false,
         }),
-        output: Mutex::new(OutputBuffer::default()),
+        output: Mutex::new(OutputBuffer::from_tail(
+            restored_output.as_deref().unwrap_or_default(),
+        )),
         startup_gate: StartupGate::default(),
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
         let _ = terminate_agent_entry(entry.as_ref());
         return Err(error);
+    }
+
+    if let Some(bytes) = restored_output.as_deref().filter(|bytes| !bytes.is_empty()) {
+        let start = bytes.len().saturating_sub(MAX_OUTPUT_SNAPSHOT_BYTES);
+        sink.data(&session_id, 0, &bytes[start..]);
     }
 
     let reader_id = session_id.clone();
@@ -2570,6 +2631,7 @@ mod tests {
     struct TestSink {
         data: Mutex<Vec<u8>>,
         session_data: Mutex<HashMap<String, Vec<u8>>>,
+        chunks: Mutex<Vec<(String, u64, Vec<u8>)>>,
         states: Mutex<Vec<(String, AgentLifecycle, AgentStateSource)>>,
         closed: Mutex<Vec<String>>,
         captured: Mutex<Vec<(String, String)>>,
@@ -2577,8 +2639,12 @@ mod tests {
     }
 
     impl AgentSink for TestSink {
-        fn data(&self, session_id: &str, _offset: u64, bytes: &[u8]) {
+        fn data(&self, session_id: &str, offset: u64, bytes: &[u8]) {
             self.data.lock().unwrap().extend_from_slice(bytes);
+            self.chunks
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), offset, bytes.to_vec()));
             self.session_data
                 .lock()
                 .unwrap()
@@ -3390,6 +3456,79 @@ model = "gpt-5.3-codex"
             .any(|(_, state, source)| *state == AgentLifecycle::Done
                 && *source == AgentStateSource::Integration));
 
+        disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restored_output_replays_before_new_pty_data() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        let request = AgentLaunchRequest {
+            definition_id: "custom".to_string(),
+            label: "History replay smoke test".to_string(),
+            executable: "powershell.exe".to_string(),
+            arguments: vec![
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Write-Output 'fresh-terminal-output'; Start-Sleep -Seconds 5".to_string(),
+            ],
+            resume_session_id: None,
+            group_id: Some("restored-project".to_string()),
+            seed_input: None,
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 80,
+            rows: 24,
+        };
+        let restored = b"previous-terminal-output\r\n".to_vec();
+        let session = launch_with_replay(
+            sink.clone(),
+            registry.clone(),
+            request,
+            Some(restored.clone()),
+        )
+        .unwrap();
+
+        let query_deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < query_deadline
+            && !collector
+                .data
+                .lock()
+                .unwrap()
+                .windows(4)
+                .any(|bytes| bytes == b"\x1b[6n")
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        send_bytes(sink.as_ref(), &registry, &session.session_id, b"\x1b[1;1R").unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline
+            && !String::from_utf8_lossy(&collector.data.lock().unwrap())
+                .contains("fresh-terminal-output")
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(String::from_utf8_lossy(&collector.data.lock().unwrap())
+            .contains("fresh-terminal-output"));
+
+        let chunks = collector.chunks.lock().unwrap();
+        assert_eq!(chunks[0], (session.session_id.clone(), 0, restored.clone()));
+        assert!(chunks
+            .iter()
+            .skip(1)
+            .all(|(id, offset, _)| id != &session.session_id || *offset >= restored.len() as u64));
+        drop(chunks);
+
+        let history = registry.terminal_history_snapshots();
+        let restored_history = history
+            .iter()
+            .find(|entry| entry.group_id == "restored-project")
+            .expect("restored session history");
+        assert!(restored_history.output.starts_with(&restored));
+        assert!(String::from_utf8_lossy(&restored_history.output).contains("fresh-terminal-output"));
         disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
     }
 

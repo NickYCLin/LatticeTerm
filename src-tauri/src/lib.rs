@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_history;
 pub mod agent_plans;
 pub mod backup;
 pub mod clipboard;
@@ -26,6 +27,7 @@ use crate::agent::{
     AgentLaunchRequest, AgentOutputSnapshot, AgentRegistry, AgentRestoreOutcome,
     AgentSessionSummary, MAX_SAVED_AGENT_PLANS,
 };
+use crate::agent_history::AgentTerminalHistoryStore;
 use crate::agent_plans::{AgentPlanSnapshot, FileAgentPlanStore};
 use crate::backup::{DecryptedBackup, ValidatedAppData};
 use crate::clipboard::{SensitiveClipboard, SensitiveClipboardClearOutcome};
@@ -59,6 +61,7 @@ use tauri::{AppHandle, Manager, State};
 use zeroize::Zeroizing;
 
 type AppStorage = Mutex<FileStorage>;
+type AppAgentHistory = Mutex<AgentTerminalHistoryStore>;
 type AppAgentPlans = Mutex<FileAgentPlanStore>;
 
 /// The trust store, or the reason it could not be opened.
@@ -326,18 +329,37 @@ fn agent_launch(
     mut request: AgentLaunchRequest,
     registry: State<'_, Arc<AgentRegistry>>,
     plans: State<'_, AppAgentPlans>,
+    history: State<'_, AppAgentHistory>,
 ) -> Result<AgentSessionSummary, String> {
+    let replay_key = request
+        .group_id
+        .clone()
+        .filter(|group_id| !group_id.trim().is_empty())
+        .map(|group_id| (group_id, request.definition_id.clone()));
+    let restored_output = replay_key.as_ref().and_then(|(group_id, definition_id)| {
+        history
+            .lock()
+            .ok()
+            .and_then(|store| store.replay_for(group_id, definition_id))
+    });
     let startup_instructions = plans
         .lock()
         .map_err(|error| error.to_string())?
         .snapshot()
         .startup_instructions;
     crate::agent::apply_startup_instructions(&mut request, &startup_instructions)?;
-    crate::agent::launch(
+    let launched = crate::agent::launch_with_replay(
         Arc::new(crate::agent::EventSink(app)),
         Arc::clone(registry.inner()),
         request,
-    )
+        restored_output,
+    )?;
+    if let Some((group_id, definition_id)) = replay_key {
+        if let Ok(mut store) = history.lock() {
+            store.consume_replay(&group_id, &definition_id);
+        }
+    }
+    Ok(launched)
 }
 
 #[tauri::command]
@@ -1652,6 +1674,7 @@ pub fn run() {
             app.manage(Mutex::new(storage));
             let agent_plans = FileAgentPlanStore::open(&dir).map_err(std::io::Error::other)?;
             app.manage(Mutex::new(agent_plans));
+            app.manage(Mutex::new(AgentTerminalHistoryStore::open(&dir)));
 
             // A trust store that cannot be read is carried as a reason rather
             // than a panic: the app still runs, and connecting explains why it
@@ -1777,7 +1800,11 @@ pub fn run() {
         .expect("error while building LatticeTerm");
     app.run(|handle, event| {
         if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
-            handle.state::<Arc<AgentRegistry>>().stop_all();
+            let registry = handle.state::<Arc<AgentRegistry>>();
+            if let Ok(mut history) = handle.state::<AppAgentHistory>().lock() {
+                let _ = history.save(registry.terminal_history_snapshots());
+            }
+            registry.stop_all();
             handle.state::<Arc<TunnelRegistry>>().stop_all();
             handle
                 .state::<Arc<SensitiveClipboard>>()
