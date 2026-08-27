@@ -1467,7 +1467,8 @@ fn well_known_agent_path(agent_id: &str, local_app_data: &Path) -> Option<PathBu
 fn find_well_known_agent_executable(agent: &AgentSpec) -> Option<PathBuf> {
     let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
     let candidate = well_known_agent_path(agent.id, &local_app_data)?;
-    is_executable(&candidate).then(|| candidate.canonicalize().ok().unwrap_or(candidate))
+    is_executable(&candidate)
+        .then(|| plain_win32_path(candidate.canonicalize().unwrap_or(candidate)))
 }
 
 #[cfg(not(windows))]
@@ -1737,7 +1738,9 @@ fn find_executable(command: &str) -> Option<PathBuf> {
                 candidate.set_extension(extension.to_string_lossy().trim_start_matches('.'));
             }
             if is_executable(&candidate) {
-                return candidate.canonicalize().ok().or(Some(candidate));
+                return Some(plain_win32_path(
+                    candidate.canonicalize().unwrap_or(candidate),
+                ));
             }
         }
     }
@@ -1764,17 +1767,17 @@ fn plain_windows_path(path: &Path) -> OsString {
         .unwrap_or_else(|| path.as_os_str().to_os_string())
 }
 
-/// `canonicalize` returns verbatim (`\\?\`) paths on Windows. The child CLI
-/// records its cwd exactly as given, so the prefix would surface in prompts
-/// and native resume flows; working directories are stripped back to plain
-/// Win32 form before use.
+/// `canonicalize` returns verbatim (`\\?\`) paths on Windows, and the prefix
+/// leaks into everything downstream: the child CLI records its cwd exactly as
+/// given, and detected executable paths show up on the Agent Fleet cards.
+/// Every canonicalized path is stripped back to plain Win32 form.
 #[cfg(windows)]
-fn plain_directory(path: PathBuf) -> PathBuf {
+fn plain_win32_path(path: PathBuf) -> PathBuf {
     PathBuf::from(plain_windows_path(&path))
 }
 
 #[cfg(not(windows))]
-fn plain_directory(path: PathBuf) -> PathBuf {
+fn plain_win32_path(path: PathBuf) -> PathBuf {
     path
 }
 
@@ -1948,7 +1951,7 @@ pub fn normalize_launch_plan(
                 .to_string(),
         );
     }
-    let working_directory = plain_directory(
+    let working_directory = plain_win32_path(
         PathBuf::from(validate_text(
             &draft.working_directory,
             "Working directory",
@@ -2088,7 +2091,7 @@ fn resolve_launch(
                 .flatten()
         })
         .ok_or_else(|| format!("{default_label} is not installed or is not available on PATH."))?;
-    let working_directory = plain_directory(
+    let working_directory = plain_win32_path(
         PathBuf::from(validate_text(
             &request.working_directory,
             "Working directory",
@@ -3117,11 +3120,11 @@ model = "gpt-5.3-codex"
     #[test]
     fn working_directories_lose_the_verbatim_prefix() {
         assert_eq!(
-            plain_directory(PathBuf::from(r"\\?\D:\project\demo")),
+            plain_win32_path(PathBuf::from(r"\\?\D:\project\demo")),
             PathBuf::from(r"D:\project\demo")
         );
         assert_eq!(
-            plain_directory(PathBuf::from(r"\\?\UNC\nas\share")),
+            plain_win32_path(PathBuf::from(r"\\?\UNC\nas\share")),
             PathBuf::from(r"\\nas\share")
         );
     }
@@ -3425,7 +3428,7 @@ model = "gpt-5.3-codex"
         assert_eq!(plan.note, "審查 payments 專案");
         assert_eq!(
             PathBuf::from(&plan.working_directory),
-            plain_directory(directory.canonicalize().unwrap())
+            plain_win32_path(directory.canonicalize().unwrap())
         );
         let mut tampered = plan.clone();
         tampered.arguments = vec!["--token=manually-injected".to_string()];
