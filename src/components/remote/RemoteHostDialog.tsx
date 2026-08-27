@@ -11,6 +11,7 @@ import type { RemoteHostApi } from "../../app/useRemoteHost";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { CloseIcon, CopyIcon, ScreenShareIcon, ShieldIcon } from "../icons";
+import { RelayAddressField } from "./RelayAddressField";
 
 export function RemoteHostDialog({
   host,
@@ -340,25 +341,15 @@ export function RemoteHostDialog({
 
               {mode === "relay" && (
                 <>
-                  <div className="field">
-                    <label className="field__label" htmlFor="remote-host-relay">
-                      {t("remote.host.relayAddress")}
-                    </label>
-                    <input
-                      id="remote-host-relay"
-                      className="input mono"
-                      value={relayAddress}
-                      disabled={busy}
-                      required
-                      placeholder={t("remote.host.relayPlaceholder")}
-                      onChange={(event) =>
-                        setRelayAddress(event.currentTarget.value)
-                      }
-                    />
-                    <small className="field__optional">
-                      {t("remote.host.relayHint")}
-                    </small>
-                  </div>
+                  <RelayAddressField
+                    id="remote-host-relay"
+                    value={relayAddress}
+                    hasSaved={!!savedRelay}
+                    busy={busy}
+                    required
+                    hint={t("remote.host.relayHint")}
+                    onChange={setRelayAddress}
+                  />
                   <div className="field">
                     <label
                       className="field__label"

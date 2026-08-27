@@ -10,6 +10,7 @@ import type { RemoteApi } from "../../app/useRemoteSessions";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { CloseIcon, ScreenShareIcon, ShieldIcon } from "../icons";
+import { RelayAddressField } from "./RelayAddressField";
 
 /**
  * AnyDesk-style entry: type the other machine's nine-digit device ID and its
@@ -25,9 +26,8 @@ export function RemoteQuickConnect({
   onCancel: () => void;
 }) {
   const { t } = useI18n();
-  const [relayAddress, setRelayAddress] = useState(() =>
-    loadRelayAddress(window.localStorage),
-  );
+  const [savedRelay] = useState(() => loadRelayAddress(window.localStorage));
+  const [relayAddress, setRelayAddress] = useState(savedRelay);
   const [deviceId, setDeviceId] = useState("");
   const [pairingCode, setPairingCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -171,22 +171,14 @@ export function RemoteQuickConnect({
             </div>
           </div>
 
-          <div className="field">
-            <label className="field__label" htmlFor="remote-quick-relay">
-              {t("remote.host.relayAddress")}
-            </label>
-            <input
-              id="remote-quick-relay"
-              className="input mono"
-              value={relayAddress}
-              disabled={busy}
-              placeholder={t("remote.host.relayPlaceholder")}
-              onChange={(event) => setRelayAddress(event.currentTarget.value)}
-            />
-            <small className="field__optional">
-              {t("remote.quick.relayHint")}
-            </small>
-          </div>
+          <RelayAddressField
+            id="remote-quick-relay"
+            value={relayAddress}
+            hasSaved={!!savedRelay}
+            busy={busy}
+            hint={t("remote.quick.relayHint")}
+            onChange={setRelayAddress}
+          />
 
           <div className="dialog__actions">
             <button

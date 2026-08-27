@@ -1,5 +1,28 @@
 /* Lattice Remote view-only session. */
 
+/* Collapsed relay field: the address stays saved and out of sight, day-to-day
+   flows only deal with device ID and pairing code. */
+.relay-address-saved {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  background: var(--surface-sunken);
+}
+
+.relay-address-saved > svg {
+  flex: none;
+  color: var(--ok);
+}
+
+.relay-address-saved > .button {
+  margin-left: auto;
+}
+
 .remote-code-field {
   position: relative;
   display: flex;

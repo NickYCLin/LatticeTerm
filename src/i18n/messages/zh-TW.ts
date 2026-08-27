@@ -956,6 +956,8 @@ export const zhTW = {
   "remote.quick.relayMissing": "請先填寫中繼伺服器位址。",
   "remote.quick.relayHint": "與分享端使用同一個 wss:// 網址或私有中繼位址。",
   "remote.quick.submit": "連線",
+  "remote.relay.saved": "使用已儲存的中繼伺服器",
+  "remote.relay.change": "修改",
 
   // Web RDP ----------------------------------------------------------------
   "rdp.connect.title": "RDP 連線到 {name}",

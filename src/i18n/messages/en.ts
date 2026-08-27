@@ -1032,6 +1032,8 @@ export const en: Messages = {
   "remote.quick.relayMissing": "Enter the relay server address first.",
   "remote.quick.relayHint": "Use the same wss:// URL or private relay address as the sharing side.",
   "remote.quick.submit": "Connect",
+  "remote.relay.saved": "Using the saved relay server",
+  "remote.relay.change": "Change",
 
   // Web RDP ----------------------------------------------------------------
   "rdp.connect.title": "RDP connect to {name}",
