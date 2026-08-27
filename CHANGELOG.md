@@ -4,6 +4,26 @@
 
 ---
 
+## [0.26.0](https://github.com/NickYCLin/lattice-term/compare/v0.25.0...v0.26.0) (2026-08-27)
+
+
+### 🚀 新增功能
+
+* **remote:** 以裝置 ID 經自架中繼連線 ([7c12190](https://github.com/NickYCLin/lattice-term/commit/7c12190786291155201f82d02b092a13a79b2c8a))
+* **remote:** 支援以 WSS 穿越 HTTPS 中繼入口 ([8157a4f](https://github.com/NickYCLin/lattice-term/commit/8157a4f5bd7cc183e7ef3772c5f941f954b96381))
+* **remote:** 釘選裝置金鑰並限制中繼撥號頻率 ([403a5d8](https://github.com/NickYCLin/lattice-term/commit/403a5d898bf6ed6bdc3abff21b17610f09a6e611))
+
+
+### 🛠️ 問題修正
+
+* **remote:** 依 clippy 改用 is_multiple_of 檢查十六進位長度 ([d87484e](https://github.com/NickYCLin/lattice-term/commit/d87484e0ad2b12444ee80229a5013f4af014b0a5))
+* **workspace:** 修正工作階段搬移與完成提示音 ([7593414](https://github.com/NickYCLin/lattice-term/commit/7593414473824f5c3cee1a2db1b0320305ec40d6))
+
+
+### 🧹 架構優化
+
+* **workspace:** 改以側欄為唯一的工作階段切換入口 ([e18a4b6](https://github.com/NickYCLin/lattice-term/commit/e18a4b6c8c1b89228aa97d1c372c3ff2bd74bdda))
+
 ## [0.25.0](https://github.com/NickYCLin/lattice-term/compare/v0.24.0...v0.25.0) (2026-08-27)
 
 
