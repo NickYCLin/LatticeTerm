@@ -325,14 +325,25 @@ impl client::Handler for TrustingHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &ssh_key::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         // `ssh-key` already formats fingerprints the way OpenSSH prints them,
         // so what the user compares here matches `ssh-keygen -lf` byte for byte.
-        let fingerprint = server_public_key
-            .fingerprint(ssh_key::HashAlg::Sha256)
-            .to_string();
-        let algorithm = server_public_key.algorithm().to_string();
+        // A host certificate is pinned by its embedded key, keeping the
+        // trust-on-first-use record independent of certificate renewals.
+        let (fingerprint, algorithm) = match server_public_key {
+            russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => (
+                key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+                key.algorithm().to_string(),
+            ),
+            russh::keys::PublicKeyOrCertificate::Certificate(certificate) => (
+                certificate
+                    .public_key()
+                    .fingerprint(ssh_key::HashAlg::Sha256)
+                    .to_string(),
+                certificate.algorithm().to_string(),
+            ),
+        };
 
         let verdict = match &self.known {
             Some(record) if record.fingerprint == fingerprint => TrustVerdict::Trusted {

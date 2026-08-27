@@ -164,9 +164,9 @@ fn seal(
 
     let mut nonce_bytes = [0u8; NONCE_BYTES];
     getrandom::fill(&mut nonce_bytes).map_err(|error| error.to_string())?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+    let cipher = XChaCha20Poly1305::new(<&Key>::try_from(key.as_slice()).expect("32-byte key"));
     let ciphertext = cipher
-        .encrypt(XNonce::from_slice(&nonce_bytes), plaintext.as_slice())
+        .encrypt(&XNonce::from(nonce_bytes), plaintext.as_slice())
         .map_err(|_| "the vault could not be sealed".to_string())?;
     plaintext.zeroize();
 
@@ -205,18 +205,16 @@ fn unseal(
     file: &VaultFile,
     key: &[u8; KEY_BYTES],
 ) -> Result<HashMap<String, Zeroizing<String>>, String> {
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+    let cipher = XChaCha20Poly1305::new(<&Key>::try_from(key.as_slice()).expect("32-byte key"));
     let nonce = from_b64(&file.nonce)?;
-    if nonce.len() != NONCE_BYTES {
+    let Ok(nonce) = <&XNonce>::try_from(nonce.as_slice()) else {
         return Err("the vault nonce has the wrong size".to_string());
-    }
+    };
     let ciphertext = from_b64(&file.ciphertext)?;
-    let mut plaintext = cipher
-        .decrypt(XNonce::from_slice(&nonce), ciphertext.as_slice())
-        .map_err(|_| {
-            // AEAD cannot tell a wrong key from a tampered file; say both.
-            "the master password is wrong, or the vault file was modified".to_string()
-        })?;
+    let mut plaintext = cipher.decrypt(nonce, ciphertext.as_slice()).map_err(|_| {
+        // AEAD cannot tell a wrong key from a tampered file; say both.
+        "the master password is wrong, or the vault file was modified".to_string()
+    })?;
     let payload: VaultEntries =
         serde_json::from_slice(&plaintext).map_err(|error| error.to_string())?;
     plaintext.zeroize();

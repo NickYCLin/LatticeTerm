@@ -25,7 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `ring` instead of the default aws-lc-rs backend: aws-lc-sys needs NASM and a
 # C toolchain on Windows, and complicates Android/iOS cross-compilation.
-russh = { version = "0.62.7", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh = { version = "0.63.1", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.4.0"
 sha2 = "0.11.0"
 base64 = "0.23.1"
@@ -39,11 +39,11 @@ keyring = "4.1.6"
 zeroize = "1.9.0"
 portable-pty = "0.9.0"
 libc = "0.2"
-getrandom = "0.3.4"
+getrandom = "0.4.3"
 argon2 = "0.5"
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11.0"
 tempfile = "3.27.0"
-png = "0.17.16"
+png = "0.18.1"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"

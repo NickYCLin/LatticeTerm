@@ -68,10 +68,10 @@ fn seal(key: &[u8; KEY_BYTES], entries: &[HistoryEntry]) -> Result<HistoryEnvelo
     .map_err(|error| error.to_string())?;
     let mut nonce = [0_u8; NONCE_BYTES];
     getrandom::fill(&mut nonce).map_err(|error| error.to_string())?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+    let cipher = XChaCha20Poly1305::new(<&Key>::try_from(key.as_slice()).expect("32-byte key"));
     let ciphertext = cipher
         .encrypt(
-            XNonce::from_slice(&nonce),
+            &XNonce::from(nonce),
             Payload {
                 msg: plaintext.as_slice(),
                 aad: AAD,
@@ -94,14 +94,14 @@ fn unseal(key: &[u8; KEY_BYTES], envelope: &HistoryEnvelope) -> Result<Vec<Histo
         ));
     }
     let nonce = from_b64(&envelope.nonce, "nonce")?;
-    if nonce.len() != NONCE_BYTES {
+    let Ok(nonce) = <&XNonce>::try_from(nonce.as_slice()) else {
         return Err("The Agent terminal history nonce has the wrong size.".to_string());
-    }
+    };
     let ciphertext = from_b64(&envelope.ciphertext, "ciphertext")?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+    let cipher = XChaCha20Poly1305::new(<&Key>::try_from(key.as_slice()).expect("32-byte key"));
     let mut plaintext = cipher
         .decrypt(
-            XNonce::from_slice(&nonce),
+            nonce,
             Payload {
                 msg: ciphertext.as_slice(),
                 aad: AAD,

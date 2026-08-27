@@ -224,10 +224,12 @@ pub fn create_encrypted_backup(
     let key = derive_key(password, &kdf)?;
     let mut nonce = [0_u8; NONCE_BYTES];
     getrandom::fill(&mut nonce).map_err(|error| error.to_string())?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key.as_ref()));
+    let cipher = XChaCha20Poly1305::new(
+        <&Key>::try_from(key.as_ref()).map_err(|_| "The derived key has the wrong size.")?,
+    );
     let ciphertext = cipher
         .encrypt(
-            XNonce::from_slice(&nonce),
+            &XNonce::from(nonce),
             AeadPayload {
                 msg: &plaintext,
                 aad: AAD,
@@ -264,17 +266,19 @@ pub fn open_encrypted_backup(contents: &str, password: &str) -> Result<Decrypted
 
     let key = derive_key(password, &envelope.kdf)?;
     let nonce = from_b64("nonce", &envelope.nonce)?;
-    if nonce.len() != NONCE_BYTES {
+    let Ok(nonce) = <&XNonce>::try_from(nonce.as_slice()) else {
         return Err("The backup nonce has the wrong size.".to_string());
-    }
+    };
     let ciphertext = from_b64("ciphertext", &envelope.ciphertext)?;
     if ciphertext.len() > MAX_PAYLOAD_BYTES + 16 {
         return Err("The encrypted backup payload is too large.".to_string());
     }
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key.as_ref()));
+    let cipher = XChaCha20Poly1305::new(
+        <&Key>::try_from(key.as_ref()).map_err(|_| "The derived key has the wrong size.")?,
+    );
     let mut plaintext = cipher
         .decrypt(
-            XNonce::from_slice(&nonce),
+            nonce,
             AeadPayload {
                 msg: &ciphertext,
                 aad: AAD,

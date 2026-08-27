@@ -392,7 +392,7 @@ impl client::Handler for TunnelHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::ssh_key::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         self.trust.check_server_key(server_public_key).await
     }
