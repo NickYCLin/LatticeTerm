@@ -744,9 +744,14 @@ async fn run_relay_session(
             peer: "relay".to_string(),
         },
     );
+    // The permanent identity key lets returning viewers pin this device.
+    let static_key = match identity.noise_private_bytes() {
+        Ok(static_key) => static_key,
+        Err(error) => return SessionOutcome::Ended(format!("Identity key unavailable: {error}")),
+    };
     let secure = match timeout(
         Duration::from_secs(10),
-        SecureConnection::accept(stream, &options.pairing_code),
+        SecureConnection::accept_with_static_key(stream, &options.pairing_code, &static_key),
     )
     .await
     {

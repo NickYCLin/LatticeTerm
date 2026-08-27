@@ -13,6 +13,7 @@ pub mod rdp;
 pub mod remote;
 pub mod remote_files;
 pub mod remote_host;
+pub mod remote_pins;
 pub mod sftp;
 pub mod sftp_transfers;
 pub mod ssh;

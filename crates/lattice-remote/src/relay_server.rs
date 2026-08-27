@@ -13,10 +13,10 @@ use crate::relay::{
     RelayClientMessage, RelayServerMessage,
 };
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
@@ -29,6 +29,11 @@ const CONTROL_IDLE_LIMIT: Duration = Duration::from_secs(90);
 const JOIN_WAIT_LIMIT: Duration = Duration::from_secs(12);
 /// How long a brand-new connection has to say what it wants.
 const FIRST_MESSAGE_LIMIT: Duration = Duration::from_secs(10);
+/// New connections allowed per client IP inside the rate window. Generous
+/// for real use (register + a session is a handful), tight enough to stop
+/// pairing-code guessing or device-ID scanning through the relay.
+const CONNECTIONS_PER_WINDOW: usize = 30;
+const RATE_WINDOW: Duration = Duration::from_secs(60);
 
 struct AgentEntry {
     agent_name: String,
@@ -43,6 +48,7 @@ pub struct RelayState {
     tokens: Mutex<HashMap<String, String>>,
     state_path: Option<PathBuf>,
     generations: Mutex<u64>,
+    rates: Mutex<HashMap<IpAddr, Vec<Instant>>>,
 }
 
 impl RelayState {
@@ -59,6 +65,26 @@ impl RelayState {
         let mut current = self.generations.lock().expect("generation lock");
         *current += 1;
         *current
+    }
+
+    /// Sliding-window limit on how often one IP may open connections.
+    fn allow_connection(&self, ip: IpAddr) -> bool {
+        let now = Instant::now();
+        let mut rates = self.rates.lock().expect("rate lock");
+        let recent = rates.entry(ip).or_default();
+        recent.retain(|at| now.duration_since(*at) < RATE_WINDOW);
+        if recent.len() >= CONNECTIONS_PER_WINDOW {
+            return false;
+        }
+        recent.push(now);
+        // Idle buckets are pruned so a scan cannot grow the map forever.
+        if rates.len() > 10_000 {
+            rates.retain(|_, entries| {
+                entries.retain(|at| now.duration_since(*at) < RATE_WINDOW);
+                !entries.is_empty()
+            });
+        }
+        true
     }
 
     fn verify_or_claim(&self, device_id: &str, auth_token: &str) -> Result<(), &'static str> {
@@ -305,6 +331,15 @@ async fn run_dial(
 
 async fn run_connection(state: Arc<RelayState>, mut stream: TcpStream, peer: SocketAddr) {
     let _ = stream.set_nodelay(true);
+    if !state.allow_connection(peer.ip()) {
+        send_error(
+            &mut stream,
+            "rateLimited",
+            "Too many connections from this address; wait a minute.",
+        )
+        .await;
+        return;
+    }
     let first = match timeout(FIRST_MESSAGE_LIMIT, read_client_message(&mut stream)).await {
         Ok(Ok(message)) => message,
         Ok(Err(_)) | Err(_) => return,
@@ -482,6 +517,18 @@ mod tests {
         assert!(matches!(hello, RemoteMessage::Hello(_)));
         viewer.send(&RemoteMessage::KeepAlive).await.unwrap();
         agent.await.unwrap();
+    }
+
+    #[test]
+    fn one_address_is_rate_limited_inside_the_window() {
+        let state = RelayState::default();
+        let ip: IpAddr = "203.0.113.9".parse().unwrap();
+        for _ in 0..CONNECTIONS_PER_WINDOW {
+            assert!(state.allow_connection(ip));
+        }
+        assert!(!state.allow_connection(ip));
+        // Another address is unaffected.
+        assert!(state.allow_connection("203.0.113.10".parse().unwrap()));
     }
 
     #[tokio::test]

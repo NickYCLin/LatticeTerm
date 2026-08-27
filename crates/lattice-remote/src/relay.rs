@@ -212,14 +212,35 @@ pub fn hash_token(token: &str) -> String {
         .collect()
 }
 
-/// A device's permanent relay identity: the nine-digit ID people type, and
-/// the secret token that proves ownership of that ID to the relay. The token
-/// never leaves the device except toward the relay, which stores only a hash.
+/// A device's permanent relay identity: the nine-digit ID people type, the
+/// secret token that proves ownership of that ID to the relay, and the Noise
+/// static key that lets viewers pin this device across sessions. Neither
+/// secret leaves the device: the relay only ever stores a token hash, and the
+/// Noise handshake transmits just the public half of the key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceIdentity {
     pub device_id: String,
     pub auth_token: String,
+    /// Hex-encoded X25519 private key. Empty only in identity files written
+    /// by older builds; `load_or_create` upgrades those in place.
+    #[serde(default)]
+    pub noise_private: String,
+}
+
+fn decode_hex(input: &str) -> Result<Vec<u8>, RelayError> {
+    if input.len() % 2 != 0 || !input.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(RelayError::Identity(
+            "the identity key is not valid hex".to_string(),
+        ));
+    }
+    (0..input.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&input[index..index + 2], 16)
+                .map_err(|_| RelayError::Identity("the identity key is not valid hex".to_string()))
+        })
+        .collect()
 }
 
 impl DeviceIdentity {
@@ -229,15 +250,38 @@ impl DeviceIdentity {
         Ok(Self {
             device_id: format!("{:09}", seed % 1_000_000_000),
             auth_token: random_token()?,
+            noise_private: random_token()?,
         })
     }
 
+    /// The device's permanent Noise static private key.
+    pub fn noise_private_bytes(&self) -> Result<Vec<u8>, RelayError> {
+        let bytes = decode_hex(&self.noise_private)?;
+        if bytes.len() != 32 {
+            return Err(RelayError::Identity(
+                "the identity key has the wrong length".to_string(),
+            ));
+        }
+        Ok(bytes)
+    }
+
+    fn write(&self, path: &Path) -> Result<(), RelayError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| RelayError::Identity(error.to_string()))?;
+        }
+        let json = serde_json::to_vec_pretty(self)
+            .map_err(|error| RelayError::Identity(error.to_string()))?;
+        std::fs::write(path, json).map_err(|error| RelayError::Identity(error.to_string()))
+    }
+
     /// Loads the identity file, creating it on first use so the device keeps
-    /// the same ID across restarts.
+    /// the same ID across restarts. Files from builds without a Noise key
+    /// gain one here, keeping their device ID and token.
     pub fn load_or_create(path: &Path) -> Result<Self, RelayError> {
         match std::fs::read(path) {
             Ok(bytes) => {
-                let identity: Self = serde_json::from_slice(&bytes)
+                let mut identity: Self = serde_json::from_slice(&bytes)
                     .map_err(|error| RelayError::Identity(error.to_string()))?;
                 normalize_device_id(&identity.device_id)?;
                 if identity.auth_token.trim().is_empty() {
@@ -245,18 +289,16 @@ impl DeviceIdentity {
                         "the identity file is missing its token".to_string(),
                     ));
                 }
+                if identity.noise_private.trim().is_empty() {
+                    identity.noise_private = random_token()?;
+                    identity.write(path)?;
+                }
+                identity.noise_private_bytes()?;
                 Ok(identity)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let identity = Self::generate()?;
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|error| RelayError::Identity(error.to_string()))?;
-                }
-                let json = serde_json::to_vec_pretty(&identity)
-                    .map_err(|error| RelayError::Identity(error.to_string()))?;
-                std::fs::write(path, json)
-                    .map_err(|error| RelayError::Identity(error.to_string()))?;
+                identity.write(path)?;
                 Ok(identity)
             }
             Err(error) => Err(RelayError::Identity(error.to_string())),
@@ -294,6 +336,32 @@ mod tests {
         assert!(normalize_device_id("12345678").is_err());
         assert!(normalize_device_id("12345678a").is_err());
         assert_eq!(format_device_id("123456789"), "123 456 789");
+    }
+
+    #[test]
+    fn an_identity_file_without_a_noise_key_gains_one_in_place() {
+        let directory = std::env::temp_dir().join(format!(
+            "lattice-relay-migrate-{}-{}",
+            std::process::id(),
+            random_token().unwrap()
+        ));
+        let path = directory.join("identity.json");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            &path,
+            br#"{"deviceId":"123456789","authToken":"legacy-token"}"#,
+        )
+        .unwrap();
+
+        let upgraded = DeviceIdentity::load_or_create(&path).unwrap();
+        assert_eq!(upgraded.device_id, "123456789");
+        assert_eq!(upgraded.auth_token, "legacy-token");
+        assert_eq!(upgraded.noise_private_bytes().unwrap().len(), 32);
+
+        // The upgrade is persisted, and the key stays put afterwards.
+        let reloaded = DeviceIdentity::load_or_create(&path).unwrap();
+        assert_eq!(reloaded.noise_private, upgraded.noise_private);
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

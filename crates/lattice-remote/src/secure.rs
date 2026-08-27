@@ -116,16 +116,29 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> SecureConnection<S> {
         Ok(Self { stream, transport })
     }
 
-    pub async fn accept(mut stream: S, pairing_code: &str) -> Result<Self, RemoteError> {
-        let psk = pairing_key(pairing_code)?;
+    /// Accepts with a throwaway static key: right for one-shot direct
+    /// pairing, where nothing outlives the session that a viewer could pin.
+    pub async fn accept(stream: S, pairing_code: &str) -> Result<Self, RemoteError> {
         let params: NoiseParams = NOISE_PATTERN.parse().map_err(|_| RemoteError::Pairing)?;
-        let keypair = Builder::new(params.clone())
+        let keypair = Builder::new(params)
             .generate_keypair()
             .map_err(|_| RemoteError::Pairing)?;
+        Self::accept_with_static_key(stream, pairing_code, &keypair.private).await
+    }
+
+    /// Accepts with the device's permanent static key, so returning viewers
+    /// can pin this device's public identity across sessions.
+    pub async fn accept_with_static_key(
+        mut stream: S,
+        pairing_code: &str,
+        static_private_key: &[u8],
+    ) -> Result<Self, RemoteError> {
+        let psk = pairing_key(pairing_code)?;
+        let params: NoiseParams = NOISE_PATTERN.parse().map_err(|_| RemoteError::Pairing)?;
         let builder = Builder::new(params)
             .prologue(PROLOGUE)
             .map_err(|_| RemoteError::Pairing)?
-            .local_private_key(&keypair.private)
+            .local_private_key(static_private_key)
             .map_err(|_| RemoteError::Pairing)?
             .psk(3, &psk)
             .map_err(|_| RemoteError::Pairing)?;
@@ -154,6 +167,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> SecureConnection<S> {
             .into_transport_mode()
             .map_err(|_| RemoteError::Pairing)?;
         Ok(Self { stream, transport })
+    }
+
+    /// The peer's Noise static public key, exchanged during the handshake.
+    /// Viewers pin this for relay devices, which keep a permanent key.
+    pub fn remote_static_key(&self) -> Option<Vec<u8>> {
+        self.transport.get_remote_static().map(<[u8]>::to_vec)
     }
 
     pub async fn send(&mut self, message: &RemoteMessage) -> Result<(), RemoteError> {
@@ -365,6 +384,54 @@ mod tests {
                 },
             ],
         );
+    }
+
+    #[tokio::test]
+    async fn a_persistent_static_key_shows_the_same_identity_across_sessions() {
+        use crate::relay::DeviceIdentity;
+
+        let identity = DeviceIdentity::generate().unwrap();
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let key = identity.noise_private_bytes().unwrap();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                SecureConnection::accept_with_static_key(stream, "12345678", &key)
+                    .await
+                    .unwrap()
+            });
+            let stream = TcpStream::connect(address).await.unwrap();
+            let client = SecureConnection::initiate(stream, "12345678")
+                .await
+                .unwrap();
+            seen.push(
+                client
+                    .remote_static_key()
+                    .expect("responder sent a static key"),
+            );
+            server.await.unwrap();
+        }
+        assert_eq!(seen[0], seen[1]);
+
+        // A different identity presents a different key.
+        let other = DeviceIdentity::generate().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let key = other.noise_private_bytes().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            SecureConnection::accept_with_static_key(stream, "12345678", &key)
+                .await
+                .unwrap()
+        });
+        let stream = TcpStream::connect(address).await.unwrap();
+        let client = SecureConnection::initiate(stream, "12345678")
+            .await
+            .unwrap();
+        assert_ne!(seen[0], client.remote_static_key().unwrap());
+        server.await.unwrap();
     }
 
     #[tokio::test]

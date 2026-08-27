@@ -8,7 +8,9 @@
 use crate::remote_files::{RemoteDirectory, RemoteFileTransfer, RemoteFilesClient};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use lattice_remote::relay::{dial, format_device_id, parse_relay_address, RelayError};
+use lattice_remote::relay::{
+    dial, format_device_id, normalize_device_id, parse_relay_address, RelayError,
+};
 use lattice_remote::{
     normalize_pairing_code, FrameAssembler, PointerButton, RemoteInput, RemoteMessage,
     SecureConnection, MAX_WHEEL_UNITS, PROTOCOL_VERSION,
@@ -18,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 use tokio::time::timeout;
@@ -234,7 +236,15 @@ pub async fn connect(
     registry: Arc<RemoteRegistry>,
     request: RemoteConnectRequest,
 ) -> RemoteConnectOutcome {
-    let via_relay = !request.device_id.trim().is_empty();
+    let device_id = if request.device_id.trim().is_empty() {
+        None
+    } else {
+        match normalize_device_id(&request.device_id) {
+            Ok(device_id) => Some(device_id),
+            Err(error) => return failed("connect", error.to_string()),
+        }
+    };
+    let via_relay = device_id.is_some();
     if request.profile_id.trim().is_empty() || (!via_relay && request.hostname.trim().is_empty()) {
         return failed("connect", "The connection target is incomplete.");
     }
@@ -243,14 +253,14 @@ pub async fn connect(
         Err(error) => return failed("pairing", error.to_string()),
     };
 
-    let mut connection = if via_relay {
+    let mut connection = if let Some(device_id) = &device_id {
         let (relay_host, relay_port) = match parse_relay_address(&request.relay_address) {
             Ok(address) => address,
             Err(error) => return failed("connect", error.to_string()),
         };
         let stream = match timeout(
             Duration::from_secs(15),
-            dial(&relay_host, relay_port, &request.device_id),
+            dial(&relay_host, relay_port, device_id),
         )
         .await
         {
@@ -282,6 +292,26 @@ pub async fn connect(
         }
     };
 
+    // A relay device must present the same identity key it pinned on first
+    // use, before anything else is trusted about the session.
+    if let Some(device_id) = &device_id {
+        let Some(static_key) = connection.remote_static_key() else {
+            return failed("pinning", "The Agent did not present an identity key.");
+        };
+        let pins_path = match app.path().app_data_dir() {
+            Ok(base) => base.join(crate::remote_pins::PINS_FILE),
+            Err(error) => {
+                return failed(
+                    "pinning",
+                    format!("Cannot locate the app data folder: {error}"),
+                )
+            }
+        };
+        if let Err(detail) = crate::remote_pins::verify_or_pin(&pins_path, device_id, &static_key) {
+            return failed("pinning", detail);
+        }
+    }
+
     // Waiting for the encrypted Hello proves the responder accepted the PSK.
     let hello = match timeout(Duration::from_secs(30), connection.receive()).await {
         Ok(Ok(RemoteMessage::Hello(hello))) => hello,
@@ -301,10 +331,9 @@ pub async fn connect(
     let session = RemoteSessionSummary {
         session_id: session_id(),
         profile_id: request.profile_id,
-        host: if via_relay {
-            format_device_id(request.device_id.trim())
-        } else {
-            request.hostname
+        host: match &device_id {
+            Some(device_id) => format_device_id(device_id),
+            None => request.hostname,
         },
         port: request.port,
         via_relay,
