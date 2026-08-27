@@ -4,6 +4,34 @@
 
 ---
 
+## [0.27.0](https://github.com/NickYCLin/lattice-term/compare/v0.26.1...v0.27.0) (2026-08-27)
+
+
+### 🚀 新增功能
+
+* **remote:** 日常連線不再顯示中繼位址 ([0d0fd75](https://github.com/NickYCLin/lattice-term/commit/0d0fd75314e044d0a21b0f2a08648554b63a63e7))
+* **remote:** 純文字主機支援終端分享模式 ([b9116bd](https://github.com/NickYCLin/lattice-term/commit/b9116bd4aaafc64dedcf8b430145fee8e68206ef))
+* **terminal:** 終端支援右鍵複製與貼上 ([8e5b381](https://github.com/NickYCLin/lattice-term/commit/8e5b3817476059780269e26d7f17f886f17e6ced))
+* **workspace:** 標題列同時顯示工作階段與目前 CLI ([8250492](https://github.com/NickYCLin/lattice-term/commit/825049225761d2ece7071598c6f9f094c525b13b))
+* **workspace:** 顯示各 CLI 即時狀態並支援快速對話 ([cbabb7e](https://github.com/NickYCLin/lattice-term/commit/cbabb7e1b4f4ee29ce07513ce7baaff2c58b2735))
+
+
+### 🛠️ 問題修正
+
+* **agent:** 偵測到的執行檔路徑去除 \\?\ 前綴 ([bfef6a4](https://github.com/NickYCLin/lattice-term/commit/bfef6a42cfac2ab3f268d895fe708678f1bfde35))
+* **agent:** 模型切換即時更新、工作目錄去除 \\?\ 前綴 ([687aa06](https://github.com/NickYCLin/lattice-term/commit/687aa06c1903d57d444f217a21859fae103134fd))
+* **deploy:** 部署腳本處理改綁 localhost 的舊環境 ([2ab64fd](https://github.com/NickYCLin/lattice-term/commit/2ab64fd7d13114655433f3ab15704d7e09491005))
+* **relay:** 握手前先限流並豁免 loopback ([22e5ba1](https://github.com/NickYCLin/lattice-term/commit/22e5ba1308a581a03533ba54f9da1ee2301500c2))
+* **remote:** 保護裝置身分與固定配對碼 ([e2e5ccf](https://github.com/NickYCLin/lattice-term/commit/e2e5ccfd65dd8f2b6031bff68e88d3d8c576fbce))
+* **workspace:** SSH 分頁自動顯示檔案側欄與主機資源 ([ecc6d3c](https://github.com/NickYCLin/lattice-term/commit/ecc6d3c07cddf1c1b135c638a5c011446f6aa9e7))
+* **workspace:** 側欄拖曳改用指標事件 ([525fa1e](https://github.com/NickYCLin/lattice-term/commit/525fa1e8f9f9d32d936397f24a437de639c903de))
+
+
+### 🧹 架構優化
+
+* **remote:** 直連改回共用 SecureConnection::connect ([fd235c5](https://github.com/NickYCLin/lattice-term/commit/fd235c50b75d141629f3801f309ba67e2bff91e4))
+* **workspace:** 移除專案列的加號按鈕 ([0525fad](https://github.com/NickYCLin/lattice-term/commit/0525fad68ed44c3151b09b427f4502411b5954d4))
+
 ## [0.26.1](https://github.com/NickYCLin/lattice-term/compare/v0.26.0...v0.26.1) (2026-08-27)
 
 
