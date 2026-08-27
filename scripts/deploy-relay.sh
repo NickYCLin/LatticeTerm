@@ -55,9 +55,24 @@ $SUDO install -m 0755 "$BUILD_DIR/crates/lattice-remote/target/release/lattice-r
 if ! id lattice-relay >/dev/null 2>&1; then
   $SUDO useradd --system --home-dir /var/lib/lattice-relay --shell /usr/sbin/nologin lattice-relay
 fi
+# Deployments made before the HTTPS/WSS ingress switch listened publicly on
+# 0.0.0.0:44910; the unit now binds 127.0.0.1 only. Surface the change and
+# drop the firewall rule the old script opened, so no stale allow lingers.
+if $SUDO grep -q -- '--bind 0.0.0.0:44910' /etc/systemd/system/lattice-relay.service 2>/dev/null; then
+  echo "--> NOTE: the relay now listens on 127.0.0.1:44910 (was 0.0.0.0)."
+  echo "    Clients that dialed this host's port 44910 directly must switch"
+  echo "    to the HTTPS/WSS ingress in front of the relay."
+fi
+if command -v ufw >/dev/null 2>&1 && $SUDO ufw status 2>/dev/null | grep -q '44910'; then
+  echo "--> Removing the stale ufw rule for the old public 44910 listener"
+  $SUDO ufw delete allow 44910/tcp || true
+fi
 $SUDO install -m 0644 "$BUILD_DIR/deploy/lattice-relay.service" /etc/systemd/system/lattice-relay.service
 $SUDO systemctl daemon-reload
-$SUDO systemctl enable --now lattice-relay
+$SUDO systemctl enable lattice-relay
+# enable --now leaves an already-running relay on the old unit; restart makes
+# the new binary and bind address take effect deterministically.
+$SUDO systemctl restart lattice-relay
 rm -rf "$BUILD_DIR"
 
 sleep 1
