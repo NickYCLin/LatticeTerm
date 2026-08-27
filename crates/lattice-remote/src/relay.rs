@@ -13,6 +13,7 @@ use crate::Transport;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use snow::{params::NoiseParams, Builder};
+use std::io::Write as _;
 use std::path::Path;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -303,13 +304,46 @@ impl DeviceIdentity {
         }
         let json = serde_json::to_vec_pretty(self)
             .map_err(|error| RelayError::Identity(error.to_string()))?;
-        std::fs::write(path, json).map_err(|error| RelayError::Identity(error.to_string()))
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(path)
+            .map_err(|error| RelayError::Identity(error.to_string()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|error| RelayError::Identity(error.to_string()))?;
+        }
+        file.write_all(&json)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| RelayError::Identity(error.to_string()))
+    }
+
+    fn protect_file(path: &Path) -> Result<(), RelayError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|error| RelayError::Identity(error.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Loads the identity file, creating it on first use so the device keeps
     /// the same ID across restarts. Files from builds without a Noise key
     /// gain one here, keeping their device ID and token.
     pub fn load_or_create(path: &Path) -> Result<Self, RelayError> {
+        match std::fs::metadata(path) {
+            Ok(_) => Self::protect_file(path)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(RelayError::Identity(error.to_string())),
+        }
         match std::fs::read(path) {
             Ok(bytes) => {
                 let mut identity: Self = serde_json::from_slice(&bytes)
@@ -388,6 +422,14 @@ mod tests {
         // The upgrade is persisted, and the key stays put afterwards.
         let reloaded = DeviceIdentity::load_or_create(&path).unwrap();
         assert_eq!(reloaded.noise_private, upgraded.noise_private);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -400,10 +442,23 @@ mod tests {
         ));
         let path = directory.join("identity.json");
         let first = DeviceIdentity::load_or_create(&path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
         let second = DeviceIdentity::load_or_create(&path).unwrap();
         assert_eq!(first.device_id, second.device_id);
         assert_eq!(first.auth_token, second.auth_token);
         assert_eq!(first.device_id.len(), 9);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
         let _ = std::fs::remove_dir_all(&directory);
     }
 
