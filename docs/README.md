@@ -10,7 +10,7 @@
 | 本機 AI CLI、Agent Fleet、PTY 與狀態回報 | `src/views/AgentsView.tsx`、`src/app/useAgentSessions.ts`、`src/components/agents/` | `src-tauri/src/agent.rs`、`src-tauri/src/agent_plans.rs` | [Agent Fleet 架構](AGENT_FLEET_ARCHITECTURE.zh-TW.md) |
 | 工作階段、專案與自訂資料夾 | `src/views/SessionsView.tsx`、`src/components/sessions/`、`src/app/sessionSidebarLayout.ts` | 各工作階段後端模組 | [介面設計摘要](UI_UX_DESIGN_BRIEF.zh-TW.md) |
 | SSH 終端、SFTP 與 Tunnel | `src/components/terminal/`、`src/components/sftp/`、`src/views/TunnelsView.tsx` | `src-tauri/src/ssh.rs`、`sftp.rs`、`sftp_transfers.rs`、`tunnel.rs` | [儲存與安全決策](STORAGE_SECURITY_DECISION.zh-TW.md) |
-| Lattice Remote 畫面、控制與檔案傳輸 | `src/components/remote/` | `src-tauri/src/remote.rs`、`remote_files.rs`、`crates/lattice-remote/` | [介面實作現況](UI_IMPLEMENTATION.zh-TW.md) |
+| Lattice Remote 畫面／純終端、控制、檔案傳輸與中繼 | `src/components/remote/` | `src-tauri/src/remote.rs`、`remote_host.rs`、`remote_files.rs`、`crates/lattice-remote/` | [中繼部署與安全](RELAY_SERVER.zh-TW.md)、[介面實作現況](UI_IMPLEMENTATION.zh-TW.md) |
 | RDP 與 VNC | `src/components/rdp/`、`src/components/vnc/` | `src-tauri/src/rdp.rs`、`vnc.rs`、`crates/lattice-rdp/`、`crates/lattice-vnc/` | [介面實作現況](UI_IMPLEMENTATION.zh-TW.md) |
 | 保管庫、認證資料、備份與本機儲存 | `src/components/vault/`、`src/components/settings/` | `src-tauri/src/vault.rs`、`backup.rs`、`storage.rs` | [儲存與安全決策](STORAGE_SECURITY_DECISION.zh-TW.md) |
 | 自動更新、版本與發行檔 | `src/app/useAppUpdater.ts`、`src/app/version.ts`、`src/views/SettingsView.tsx` | `src-tauri/tauri.conf.json`、`.github/workflows/release.yml` | [Release 自動化](RELEASE_AUTOMATION.zh-TW.md)、[更新紀錄](../CHANGELOG.md) |
@@ -27,7 +27,7 @@
 
 - LatticeTerm 會啟動本機 AI CLI，但不接管它們的 API key、登入 token 或雲端帳號。
 - SSH、SFTP、RDP、VNC 與 Lattice Remote 都是真實工作階段，不以假資料模擬已完成能力。
-- Lattice Remote 支援兩種模式：區網一次性加密直連，或透過自架 lattice-relay 以九位數裝置 ID 跨網路連線（見 RELAY_SERVER.zh-TW.md）；NAT 直連穿透仍是後續階段。
+- Lattice Remote 支援兩種模式：區網一次性加密直連，或透過自架 `lattice-relay` 以九位數裝置 ID 跨網路連線；可分享主螢幕或純終端，輸入與單一檔案根目錄分開授權。中繼位址只在首次／修改時展開，並非安全機密；多人租戶服務與 NAT 直連穿透仍是後續階段（見 [中繼部署與安全](RELAY_SERVER.zh-TW.md)）。
 - 桌面版是主要完成範圍；需要 sidecar 或本機 PTY 的功能不會假裝可在瀏覽器或 Android 使用。
 
 安全問題請依 [SECURITY.md](../SECURITY.md) 私下回報；一般修改流程與提交規則請見 [CONTRIBUTING.md](../CONTRIBUTING.md)。

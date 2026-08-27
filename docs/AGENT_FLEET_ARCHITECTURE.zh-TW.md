@@ -123,7 +123,7 @@ Reporter 傳輸與狀態模型已完成。舊工作區相容層仍保留 Adapter
 
 ### 3. 自建遠端 Fleet
 
-遠端操作不直接混進螢幕分享資料流。重用 Lattice Remote 的一次性配對、Noise 加密與未來 Relay/NAT traversal 基礎，但建立獨立的 `terminal-control` capability、金鑰與授權畫面：
+Lattice Remote 現已能透過自架 Relay 端對端加密分享單一 shell PTY，但這只是通用純終端工作階段：它不認識 Agent Fleet 工作區、既有 CLI 程序、Reporter 或多 pane 狀態，不能宣稱為遠端 Fleet。真正的遠端 Fleet 仍須在目前裝置身分與 Relay transport 上建立獨立的 `terminal-control` capability、金鑰與授權畫面：
 
 1. 被控端 Lattice Agent 預設只監聽 loopback。
 2. 使用者明確啟用遠端 Agent Fleet，選擇可存取的工作目錄與操作範圍。
@@ -131,7 +131,7 @@ Reporter 傳輸與狀態模型已完成。舊工作區相容層仍保留 Adapter
 4. 每個 PTY 使用獨立 multiplexed stream，控制訊息與終端資料有版本及大小上限。
 5. Relay 只轉送密文；無人值守、檔案寫入與高風險指令要分開授權。
 
-第一個遠端版本宜先支援 SSH transport，因為主機信任、認證與 Tunnel 架構較成熟；Lattice Remote transport 則作為自建 Relay 與 NAT 環境的第二條路。
+Fleet 整合仍宜先支援 SSH transport，因為主機信任、認證與 Tunnel 架構較成熟；已完成的 Lattice Remote 純終端 transport 可作為自建 Relay 與 NAT 環境的第二條路，但必須先補上工作區能力授權與多 PTY multiplexing。
 
 ### 4. 編排與可觀測性
 
@@ -142,4 +142,4 @@ Reporter 傳輸與狀態模型已完成。舊工作區相容層仍保留 Adapter
 - UI 顯示「可用」的能力必須有真實後端與測試。
 - 各平台必須通過原生 PTY 啟動、輸入輸出、resize、停止與應用程式退出清理。
 - 未安裝、立即退出、無權限、錯誤工作目錄與異常大量輸入都要回傳明確錯誤。
-- 遠端版本在加入無人值守前，必須先完成裝置身分、能力授權、重放防護與 Relay 威脅模型。
+- 通用 Lattice Remote 已有固定配對碼無人值守；遠端 Agent Fleet 若要沿用，仍必須另行完成工作區／能力授權、撤銷、重放防護、稽核與 Relay 威脅模型，不得直接把固定碼視為完整團隊權限系統。
