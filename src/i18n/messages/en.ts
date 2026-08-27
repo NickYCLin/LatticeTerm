@@ -857,6 +857,38 @@ export const en: Messages = {
   "agents.broadcast.confirmBody":
     "The same prompt will be sent immediately to {count} selected agents and Enter will be pressed in every PTY. Confirm that each one is currently ready to accept a prompt.",
   "agents.broadcast.confirmAction": "Send to {count} agents",
+  "agents.delivery.eyebrow": "Encrypted file delivery",
+  "agents.delivery.title": "Send agent output through Lattice Remote",
+  "agents.delivery.body":
+    "Choose a local file produced by an agent and deliver it to another device through a currently paired, encrypted Remote session.",
+  "agents.delivery.securityTitle": "Only the file you explicitly choose is sent",
+  "agents.delivery.securityBody":
+    "Agents cannot select or upload files in the background. You confirm the destination device and path before sending, and the receiving side can only write inside the root authorised by the sharing host for this session.",
+  "agents.delivery.noSession":
+    "No Lattice Remote session currently has file access. Connect to a Remote first and have the sharing side enable file transfer with a shared root.",
+  "agents.delivery.target": "Destination Remote",
+  "agents.delivery.targetOption": "{name} · {host} · shares {root}",
+  "agents.delivery.targetHint":
+    "Only sessions whose sharing side explicitly enabled file access are listed.",
+  "agents.delivery.folder": "Destination folder",
+  "agents.delivery.folderHint":
+    "Paths start at the shared root. The folder and any name conflict are checked before anything is sent.",
+  "agents.delivery.file": "Local output file",
+  "agents.delivery.choose": "Choose file",
+  "agents.delivery.noFile": "No file selected",
+  "agents.delivery.selected": "{name} · {size}",
+  "agents.delivery.review": "Check and prepare transfer",
+  "agents.delivery.checking": "Checking destination…",
+  "agents.delivery.sending": "Sending securely…",
+  "agents.delivery.failedTitle": "File delivery failed",
+  "agents.delivery.successTitle": "File delivered securely",
+  "agents.delivery.successBody": "{name} was uploaded to {destination}.",
+  "agents.delivery.confirmTitle": "Send “{name}”?",
+  "agents.delivery.confirmBody":
+    "The file will travel through the current encrypted session to {name} and be written to {destination} inside the shared root “{root}”.",
+  "agents.delivery.confirmOverwriteBody":
+    "A file already exists at {destination}. Confirm to send through the current encrypted session to {name} and overwrite it inside the shared root “{root}”.",
+  "agents.delivery.confirmAction": "Send encrypted file",
   "agents.running.eyebrow": "Live state",
   "agents.running.title": "Running agents",
   "agents.running.empty": "No agent is running. Choose a CLI above to begin.",

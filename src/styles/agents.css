@@ -83,6 +83,7 @@
 .agents-directory,
 .agents-workspace,
 .agents-orchestration,
+.agents-delivery,
 .agents-running {
   display: grid;
   gap: var(--space-5);
@@ -452,6 +453,37 @@
   overflow-wrap: anywhere;
 }
 
+.agents-delivery__form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.agents-delivery__file,
+.agents-delivery__submit {
+  grid-column: 1 / -1;
+}
+
+.agents-delivery__file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.agents-delivery__selection {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font: var(--text-xs) / var(--leading) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-delivery__submit {
+  justify-self: end;
+}
+
 .agents-running__empty {
   margin: 0;
   padding: var(--space-5);
@@ -551,6 +583,7 @@
   .agents-directory,
   .agents-workspace,
   .agents-orchestration,
+  .agents-delivery,
   .agents-running {
     padding: var(--space-5);
   }
@@ -599,6 +632,14 @@
   .agents-broadcast__compose > .button {
     justify-self: start;
     margin-bottom: 0;
+  }
+
+  .agents-delivery__form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agents-delivery__submit {
+    justify-self: start;
   }
 
   .agent-session-row {

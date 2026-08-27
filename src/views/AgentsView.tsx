@@ -6,11 +6,13 @@ import type {
   AgentLaunchPlan,
   AgentSessionSummary,
 } from "../app/useAgentSessions";
+import type { RemoteApi } from "../app/useRemoteSessions";
 import {
   MAX_AGENT_BROADCAST_TARGETS,
   MAX_SAVED_AGENT_PLANS,
   moveAgentLaunchPlan,
 } from "../app/useAgentSessions";
+import { AgentRemoteDelivery } from "../components/agents/AgentRemoteDelivery";
 import { Callout } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import {
@@ -74,9 +76,11 @@ function accountKey(definition: AgentDefinition): MessageKey {
 
 export function AgentsView({
   agents,
+  remote,
   onOpen,
 }: {
   agents: AgentApi;
+  remote: RemoteApi;
   onOpen: (sessionId: string) => void;
 }) {
   const { t } = useI18n();
@@ -1066,6 +1070,8 @@ export function AgentsView({
           </button>
         </div>
       </section>
+
+      <AgentRemoteDelivery remote={remote} />
 
       <section className="agents-running">
         <div className="agents-section-heading">

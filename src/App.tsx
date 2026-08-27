@@ -778,6 +778,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
             {view === "agents" && (
               <AgentsView
                 agents={agents}
+                remote={remote}
                 onOpen={(sessionId) => {
                   setActiveSessionId(sessionId);
                   setView("terminal");
