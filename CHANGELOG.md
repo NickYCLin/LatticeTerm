@@ -4,6 +4,13 @@
 
 ---
 
+## [0.26.1](https://github.com/NickYCLin/lattice-term/compare/v0.26.0...v0.26.1) (2026-08-27)
+
+
+### 🛠️ 問題修正
+
+* **remote:** 限制中繼登錄檔權限 ([#79](https://github.com/NickYCLin/lattice-term/issues/79)) ([61dd840](https://github.com/NickYCLin/lattice-term/commit/61dd840a62421c4fb74f356f3759f8b5b252d033))
+
 ## [0.26.0](https://github.com/NickYCLin/lattice-term/compare/v0.25.0...v0.26.0) (2026-08-27)
 
 
