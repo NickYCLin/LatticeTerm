@@ -118,8 +118,26 @@ impl RelayState {
         match serde_json::to_vec_pretty(tokens) {
             Ok(json) => {
                 let staging = path.with_extension("tmp");
-                let result =
-                    std::fs::write(&staging, json).and_then(|()| std::fs::rename(&staging, path));
+                let mut options = std::fs::OpenOptions::new();
+                options.create(true).truncate(true).write(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let result = (|| -> std::io::Result<()> {
+                    let mut file = options.open(&staging)?;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+                    }
+                    std::io::Write::write_all(&mut file, &json)?;
+                    file.sync_all()?;
+                    drop(file);
+                    std::fs::rename(&staging, path)?;
+                    Ok(())
+                })();
                 if let Err(error) = result {
                     eprintln!("warning: could not persist device registry: {error}");
                 }
@@ -601,6 +619,43 @@ mod tests {
         assert!(!state.allow_connection(ip));
         // Another address is unaffected.
         assert!(state.allow_connection("203.0.113.10".parse().unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_device_registry_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "lattice-relay-registry-{}-{}",
+            std::process::id(),
+            random_channel_id().unwrap()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("devices.json");
+        let state = RelayState::new(Some(path.clone()));
+
+        let first = DeviceIdentity::generate().unwrap();
+        state
+            .verify_or_claim(&first.device_id, &first.auth_token)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let second = DeviceIdentity::generate().unwrap();
+        state
+            .verify_or_claim(&second.device_id, &second.auth_token)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[tokio::test]
