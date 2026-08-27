@@ -57,10 +57,16 @@ jobs:
       # GitHub Release. They also stay endpoint-agnostic: the user enters the
       # current wss:// relay URL in the app, so a Quick Tunnel restart does not
       # require rebuilding or reinstalling LatticeTerm.
+      # Inline JSON does not survive pwsh -> npx.cmd argument re-quoting on
+      # Windows (the quotes get stripped and Tauri rejects the config), so the
+      # override is handed over as a file instead.
       - name: Build unsigned NSIS installer
-        run: >-
-          npx tauri build --bundles nsis --no-sign --ci
-          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        shell: pwsh
+        run: |
+          $config = Join-Path $env:RUNNER_TEMP "tauri-test-installer.json"
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Out-File $config -Encoding ascii
+          npx tauri build --bundles nsis --no-sign --ci --config $config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify installer output
         shell: pwsh
