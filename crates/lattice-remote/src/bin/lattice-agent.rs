@@ -14,7 +14,7 @@ use std::collections::{hash_map::Entry, HashMap};
 use std::env;
 use std::io::{Cursor, Read as _, Write as _};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -106,7 +106,8 @@ fn emit_event(json: bool, event: &AgentEvent<'_>) {
 fn help() -> &'static str {
     "Lattice Remote agent\n\n\
 Usage: lattice-agent [--bind ADDRESS:PORT] [--relay HOST[:PORT]|WSS_URL] [--identity FILE]\n\
-                     [--pair-code 1234-5678] [--fps 1-10] [--allow-input]\n\
+                     [--pair-code CODE|--pair-code-file FILE|--pair-code-stdin]\n\
+                     [--fps 1-10] [--allow-input]\n\
                      [--file-root PATH] [--terminal] [--json]\n\n\
 Direct mode (default): the safe default listens on 127.0.0.1 only. To receive\n\
 a LAN connection, pass the machine's LAN address explicitly, for example\n\
@@ -126,11 +127,62 @@ one folder; every remote path is then confined to that folder.\n\n\
 Terminal mode: --terminal shares an encrypted shell session instead of the\n\
 display, so a headless host (no desktop) works too. --allow-input lets the\n\
 viewer type; without it the terminal is watch-only. --fps is ignored.\n\n\
-Unattended access: --pair-code fixes the eight-digit code so a trusted viewer\n\
-can reconnect any time (all modes). Without it a fresh code is generated per\n\
-run. Five failed pairings in a row stop the agent. Typical headless setup:\n\
+Unattended access: a fixed eight-digit code lets a trusted viewer reconnect\n\
+any time (all modes). Prefer --pair-code-file with an owner-only file, or pipe\n\
+the code to --pair-code-stdin, so it does not appear in the process list.\n\
+--pair-code remains available for interactive use. Without any of these a\n\
+fresh code is generated per run. Five failed pairings in a row stop the agent.\n\
+Typical headless setup:\n\
   lattice-agent --relay wss://relay.example.com --terminal --allow-input \\\n\
-                --pair-code 12345678\n"
+                --pair-code-file /secure/path/pair-code\n"
+}
+
+fn set_pairing_code(slot: &mut Option<String>, input: &str) -> Result<(), String> {
+    if slot.is_some() {
+        return Err("choose only one pairing-code source".to_string());
+    }
+    *slot = Some(normalize_pairing_code(input).map_err(|error| error.to_string())?);
+    Ok(())
+}
+
+fn read_pairing_code_file(path: &Path) -> Result<String, String> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("cannot read --pair-code-file: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("cannot inspect --pair-code-file: {error}"))?;
+    if metadata.len() > 64 {
+        return Err("--pair-code-file must be at most 64 bytes".to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(
+                "--pair-code-file must not be accessible by group or other users".to_string(),
+            );
+        }
+    }
+    let mut input = String::new();
+    file.take(65)
+        .read_to_string(&mut input)
+        .map_err(|error| format!("cannot read --pair-code-file: {error}"))?;
+    if input.len() > 64 {
+        return Err("--pair-code-file must be at most 64 bytes".to_string());
+    }
+    Ok(input)
+}
+
+fn read_pairing_code_stdin() -> Result<String, String> {
+    let mut input = String::new();
+    std::io::stdin()
+        .take(65)
+        .read_to_string(&mut input)
+        .map_err(|error| format!("cannot read --pair-code-stdin: {error}"))?;
+    if input.len() > 64 {
+        return Err("--pair-code-stdin must be at most 64 bytes".to_string());
+    }
+    Ok(input)
 }
 
 fn parse_options() -> Result<Options, String> {
@@ -171,14 +223,23 @@ fn parse_options() -> Result<Options, String> {
                     .map_err(|_| "--bind must be a valid IP_ADDRESS:PORT".to_string())?;
             }
             "--pair-code" => {
-                pairing_code = Some(
-                    normalize_pairing_code(
-                        &arguments
-                            .next()
-                            .ok_or_else(|| "--pair-code needs eight digits".to_string())?,
-                    )
-                    .map_err(|error| error.to_string())?,
+                let input = arguments
+                    .next()
+                    .ok_or_else(|| "--pair-code needs eight digits".to_string())?;
+                set_pairing_code(&mut pairing_code, &input)?;
+            }
+            "--pair-code-file" => {
+                let path = PathBuf::from(
+                    arguments
+                        .next()
+                        .ok_or_else(|| "--pair-code-file needs a path".to_string())?,
                 );
+                let input = read_pairing_code_file(&path)?;
+                set_pairing_code(&mut pairing_code, &input)?;
+            }
+            "--pair-code-stdin" => {
+                let input = read_pairing_code_stdin()?;
+                set_pairing_code(&mut pairing_code, &input)?;
             }
             "--fps" => {
                 fps = arguments
@@ -1406,5 +1467,29 @@ mod tests {
         assert_eq!(json["pairingCode"], "1234-5678");
         assert_eq!(json["deviceId"], "123456789");
         assert_eq!(json["persistent"], true);
+    }
+
+    #[test]
+    fn pairing_code_sources_cannot_override_each_other() {
+        let mut code = None;
+        set_pairing_code(&mut code, "1234-5678").unwrap();
+        assert_eq!(code.as_deref(), Some("12345678"));
+        assert!(set_pairing_code(&mut code, "87654321").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pairing_code_file_requires_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path =
+            std::env::temp_dir().join(format!("lattice-agent-pair-code-{}", std::process::id()));
+        std::fs::write(&path, "12345678\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(read_pairing_code_file(&path).unwrap(), "12345678\n");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_pairing_code_file(&path).is_err());
+        let _ = std::fs::remove_file(path);
     }
 }

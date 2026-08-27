@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt as _, BufReader};
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::timeout;
@@ -266,7 +266,7 @@ enum AgentTarget<'a> {
     },
 }
 
-fn spawn_agent(
+async fn spawn_agent(
     target: AgentTarget<'_>,
     fps: u32,
     allow_input: bool,
@@ -274,6 +274,7 @@ fn spawn_agent(
 ) -> Result<(Child, tokio::process::ChildStdout), String> {
     let mut command = Command::new(agent_path()?);
     command.arg("--json");
+    let mut pairing_code_input = None;
     match target {
         AgentTarget::Direct(address) => {
             command.arg("--bind").arg(address.to_string());
@@ -286,7 +287,8 @@ fn spawn_agent(
             command.arg("--relay").arg(address);
             command.arg("--identity").arg(identity);
             if let Some(code) = pairing_code {
-                command.arg("--pair-code").arg(code);
+                command.arg("--pair-code-stdin");
+                pairing_code_input = Some(code);
             }
         }
     }
@@ -298,12 +300,34 @@ fn spawn_agent(
         command.arg("--file-root").arg(file_root);
     }
     let mut child = command
-        .stdin(Stdio::null())
+        .stdin(if pairing_code_input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
         .map_err(|error| error.to_string())?;
+    if let Some(code) = pairing_code_input {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "The Lattice Agent secret pipe is unavailable.".to_string())?;
+        stdin
+            .write_all(code.as_bytes())
+            .await
+            .map_err(|error| format!("Cannot send the pairing code to the Agent: {error}"))?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|error| format!("Cannot finish the Agent pairing code: {error}"))?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|error| format!("Cannot close the Agent secret pipe: {error}"))?;
+    }
     let stdout = child
         .stdout
         .take()
@@ -391,7 +415,8 @@ pub async fn start(
         request.fps,
         request.allow_input,
         file_root.as_deref(),
-    )?;
+    )
+    .await?;
     let mut lines = BufReader::new(stdout).lines();
     let first = match timeout(Duration::from_secs(12), lines.next_line()).await {
         Ok(Ok(Some(line))) => parse_event(&line),
