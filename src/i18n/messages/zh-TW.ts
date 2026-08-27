@@ -679,6 +679,11 @@ export const zhTW = {
   "terminal.model.pending": "CLI 預設模型",
   "terminal.addCli": "加開 CLI",
   "terminal.addCli.none": "沒有偵測到已安裝的 CLI",
+  "terminal.quickChat": "快速對話",
+  "terminal.quickChat.hint": "不選資料夾，直接在使用者目錄開啟 CLI",
+  "terminal.projects.generalChat": "一般對話",
+  "terminal.cliOthersRunning": "（另 {count} 個執行中）",
+  "terminal.empty.quickChat": "或不選資料夾，直接開始對話：",
   "terminal.handoff.carry": "帶入目前對話（讓新 CLI 接續脈絡）",
   "terminal.handoff.unsupported": "目前這個 CLI 無法匯出對話",
   "terminal.handoff.frame":

@@ -711,6 +711,11 @@ export const en: Messages = {
   "terminal.model.pending": "CLI default model",
   "terminal.addCli": "Add CLI",
   "terminal.addCli.none": "No installed CLI detected",
+  "terminal.quickChat": "Quick chat",
+  "terminal.quickChat.hint": "Open a CLI in your home folder, no project needed",
+  "terminal.projects.generalChat": "General chats",
+  "terminal.cliOthersRunning": "({count} more running)",
+  "terminal.empty.quickChat": "Or start chatting without picking a folder:",
   "terminal.handoff.carry": "Carry the current conversation (let the new CLI continue)",
   "terminal.handoff.unsupported": "This CLI's conversation can't be exported",
   "terminal.handoff.frame":

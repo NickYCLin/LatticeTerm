@@ -64,6 +64,8 @@ const TREE_DRAG_THRESHOLD = 5;
 // Sentinel target id for the "move to top level" zone; real node ids always
 // carry a folder:/session:/project prefix so this can never collide.
 const TREE_ROOT_DROP = "__tree-root__";
+// Sentinel launch-menu anchor for quick chats, which have no project row.
+const QUICK_LAUNCH_NODE = "__quick-chat__";
 
 const statusKeys: Record<Exclude<SessionSidebarStatus, "connected">, MessageKey> = {
   working: "terminal.projects.status.working",
@@ -95,6 +97,7 @@ export function SessionProjectSidebar({
   onSelect,
   onRemove,
   onLaunch,
+  onQuickLaunch,
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
@@ -115,6 +118,7 @@ export function SessionProjectSidebar({
     project: SessionSidebarProjectItem,
     definition: AgentDefinition,
   ) => void;
+  onQuickLaunch: (definition: AgentDefinition) => void;
   onCreateFolder: (parentId: string | null) => void;
   onRenameFolder: (folder: SessionSidebarFolder) => void;
   onDeleteFolder: (folder: SessionSidebarFolder) => void;
@@ -586,6 +590,7 @@ export function SessionProjectSidebar({
   const launchProject = launchMenu
     ? projectByNode.get(launchMenu.projectNodeId)
     : null;
+  const quickLaunchOpen = launchMenu?.projectNodeId === QUICK_LAUNCH_NODE;
   const menuWidth = Math.min(240, Math.max(200, window.innerWidth - 24));
   const menuLeft = launchMenu
     ? launchMenu.anchor.right + 8 + menuWidth <= window.innerWidth
@@ -624,6 +629,17 @@ export function SessionProjectSidebar({
         <button
           type="button"
           className="icon-button icon-button--sm"
+          onClick={(event) => openLaunchMenu(event, QUICK_LAUNCH_NODE)}
+          aria-label={t("terminal.quickChat")}
+          aria-haspopup="menu"
+          aria-expanded={launchMenu?.projectNodeId === QUICK_LAUNCH_NODE}
+          title={t("terminal.quickChat")}
+        >
+          <AgentIcon size={12} />
+        </button>
+        <button
+          type="button"
+          className="icon-button icon-button--sm"
           disabled={choosingProject}
           onClick={onChooseProject}
           aria-label={t("terminal.projects.add")}
@@ -652,18 +668,31 @@ export function SessionProjectSidebar({
         </div>
       </div>
 
-      {launchMenu && launchProject && launchProject.workingDirectory &&
+      {launchMenu &&
+        (quickLaunchOpen || (launchProject && launchProject.workingDirectory)) &&
         createPortal(
           <section
             ref={launchMenuRef}
             className="session-launch-menu"
             style={{ left: menuLeft, top: menuTop, width: menuWidth }}
             role="menu"
-            aria-label={t("terminal.projects.newSession")}
+            aria-label={
+              quickLaunchOpen
+                ? t("terminal.quickChat")
+                : t("terminal.projects.newSession")
+            }
           >
             <header>
-              <span className="eyebrow">{t("terminal.projects.newSession")}</span>
-              <strong className="truncate">{launchProject.label}</strong>
+              <span className="eyebrow">
+                {quickLaunchOpen
+                  ? t("terminal.quickChat")
+                  : t("terminal.projects.newSession")}
+              </span>
+              <strong className="truncate">
+                {quickLaunchOpen
+                  ? t("terminal.quickChat.hint")
+                  : launchProject?.label}
+              </strong>
             </header>
             <div className="session-launch-menu__list">
               {installedAgents.map((definition) => (
@@ -674,7 +703,8 @@ export function SessionProjectSidebar({
                   key={definition.id}
                   onClick={() => {
                     setLaunchMenu(null);
-                    onLaunch(launchProject, definition);
+                    if (quickLaunchOpen) onQuickLaunch(definition);
+                    else if (launchProject) onLaunch(launchProject, definition);
                   }}
                 >
                   <AgentIcon size={11} />

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { homeDir } from "@tauri-apps/api/path";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
 import type { VncApi } from "../app/useVncSessions";
@@ -94,6 +95,14 @@ function localProjectId(workingDirectory: string): string {
   return `local:${workingDirectory.replace(/^\\\\\?\\/, "").toLocaleLowerCase()}`;
 }
 
+/** Comparable form for "is this the same folder" checks across separators. */
+function normalizeDirectory(path: string): string {
+  return path
+    .replace(/^\\\\\?\\/, "")
+    .replace(/[\\/]+$/, "")
+    .toLocaleLowerCase();
+}
+
 function localProjectLabel(workingDirectory: string): string {
   const plain = workingDirectory.replace(/^\\\\\?\\/, "").replace(/[\\/]+$/, "");
   const segments = plain.split(/[\\/]/).filter(Boolean);
@@ -144,6 +153,18 @@ export function SessionsView({
   sessionRestoreComplete: boolean;
 }) {
   const { t } = useI18n();
+
+  // Quick chats launch in the user's home folder and group under a fixed
+  // "general chats" project, so asking a CLI something never requires
+  // picking a project directory first.
+  const [homeDirectory, setHomeDirectory] = useState<string | null>(null);
+  useEffect(() => {
+    homeDir()
+      .then(setHomeDirectory)
+      .catch(() => {
+        // Browser preview has no Tauri path API; quick chat stays hidden.
+      });
+  }, []);
 
   // MobaXterm-style pairing: each SSH tab can reveal a file browser docked
   // beside its terminal, served by an SFTP channel opened on that very SSH
@@ -634,10 +655,16 @@ export function SessionsView({
       session.kind === "agent"
         ? session.members[0]?.workingDirectory ?? null
         : null;
+    const isGeneralChat =
+      !!workingDirectory &&
+      !!homeDirectory &&
+      normalizeDirectory(workingDirectory) === normalizeDirectory(homeDirectory);
     projectMap.set(id, {
       id,
       label: workingDirectory
-        ? localProjectLabel(workingDirectory)
+        ? isGeneralChat
+          ? t("terminal.projects.generalChat")
+          : localProjectLabel(workingDirectory)
         : t("terminal.projects.remote"),
       workingDirectory,
       sessions: [session],
@@ -813,19 +840,42 @@ export function SessionsView({
           title={t("terminal.empty.title")}
           description={t("terminal.empty.body")}
           actions={
-            <button
-              type="button"
-              className="button button--primary"
-              disabled={choosingProject}
-              onClick={() => void chooseProjectDirectory()}
-            >
-              <FolderIcon size={14} />
-              {t(
-                choosingProject
-                  ? "terminal.projects.choosing"
-                  : "terminal.projects.add",
-              )}
-            </button>
+            <>
+              <button
+                type="button"
+                className="button button--primary"
+                disabled={choosingProject}
+                onClick={() => void chooseProjectDirectory()}
+              >
+                <FolderIcon size={14} />
+                {t(
+                  choosingProject
+                    ? "terminal.projects.choosing"
+                    : "terminal.projects.add",
+                )}
+              </button>
+              {homeDirectory &&
+                agents.catalog.some((definition) => definition.installed) && (
+                  <div className="terminal-empty-quick">
+                    <small>{t("terminal.empty.quickChat")}</small>
+                    <div className="terminal-empty-quick__list">
+                      {agents.catalog
+                        .filter((definition) => definition.installed)
+                        .map((definition) => (
+                          <button
+                            type="button"
+                            className="button button--ghost button--sm"
+                            key={definition.id}
+                            onClick={() => void launchQuickChat(definition)}
+                          >
+                            <AgentIcon size={12} />
+                            {definition.label}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                )}
+            </>
           }
         />
         {newProjectDialog}
@@ -856,6 +906,27 @@ export function SessionsView({
     } catch {
       // Full diagnostics remain available in the Agent Fleet view. A failed
       // quick launch leaves the current project/session untouched.
+    }
+  }
+
+  async function launchQuickChat(definition: AgentDefinition) {
+    try {
+      const home = homeDirectory ?? (await homeDir());
+      const launched = await agents.launch({
+        definitionId: definition.id,
+        label: "",
+        executable: "",
+        arguments: [],
+        resumeSessionId: null,
+        groupId: null,
+        seedInput: null,
+        workingDirectory: home,
+        cols: 120,
+        rows: 32,
+      });
+      onSelect(launched.sessionId);
+    } catch {
+      // A failed quick chat leaves the workspace untouched.
     }
   }
 
@@ -938,6 +1009,10 @@ export function SessionsView({
             setMobileTreeOpen(false);
             void launchInProject(project, definition);
           }}
+          onQuickLaunch={(definition) => {
+            setMobileTreeOpen(false);
+            void launchQuickChat(definition);
+          }}
           onCreateFolder={(parentId) => openFolderEditor(parentId)}
           onRenameFolder={(folder) =>
             openFolderEditor(
@@ -985,6 +1060,14 @@ export function SessionsView({
               activeMember && activeMember.label !== active.label
                 ? activeMember.label
                 : null;
+            const othersRunning =
+              active.kind === "agent"
+                ? active.members.filter(
+                    (member) =>
+                      member.sessionId !== active.sessionId &&
+                      member.state === "working",
+                  ).length
+                : 0;
             return (
               <header className="session-header">
                 <button
@@ -1038,6 +1121,13 @@ export function SessionsView({
                       {memberLabel && (
                         <span className="session-header__member truncate">
                           · {memberLabel}
+                        </span>
+                      )}
+                      {othersRunning > 0 && (
+                        <span className="session-header__member session-header__member--running">
+                          {t("terminal.cliOthersRunning", {
+                            count: othersRunning,
+                          })}
                         </span>
                       )}
                     </span>
@@ -1105,6 +1195,17 @@ export function SessionsView({
               >
                 {group.members.map((member) => {
                   const selected = member.sessionId === memberId;
+                  const memberStatus = agentGroupSidebarStatus([member]);
+                  const memberStatusLabel =
+                    memberStatus === "working"
+                      ? t("terminal.projects.status.working")
+                      : memberStatus === "attention"
+                        ? t("terminal.projects.status.attention")
+                        : memberStatus === "done"
+                          ? t("terminal.projects.status.done")
+                          : memberStatus === "idle"
+                            ? t("terminal.projects.status.idle")
+                            : null;
                   return (
                     <span
                       key={member.sessionId}
@@ -1119,6 +1220,13 @@ export function SessionsView({
                           selectMember(group.groupId, member.sessionId)
                         }
                       >
+                        {memberStatusLabel && (
+                          <span
+                            className={`cli-switch__status status-${memberStatus}`}
+                            title={memberStatusLabel}
+                            aria-label={memberStatusLabel}
+                          />
+                        )}
                         <AgentIcon size={12} />
                         <span className="cli-switch__identity">
                           <span className="truncate">{member.label}</span>

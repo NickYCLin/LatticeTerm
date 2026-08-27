@@ -1511,6 +1511,31 @@
   font-weight: 500;
 }
 
+.session-header__member--running {
+  flex: none;
+  white-space: nowrap;
+  color: var(--info);
+}
+
+/* Quick-chat launcher on the empty workspace screen. */
+.terminal-empty-quick {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: center;
+  margin-top: var(--space-3);
+}
+
+.terminal-empty-quick > small {
+  color: var(--text-faint);
+}
+
+.terminal-empty-quick__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
 .session-header__rename {
   width: 10rem;
   min-width: 0;
@@ -1738,6 +1763,32 @@
   color: inherit;
   font: inherit;
   cursor: pointer;
+}
+
+/* Live state of each CLI in the pill row, matching the sidebar tree tones. */
+.cli-switch__status {
+  flex: none;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.cli-switch__status.status-working {
+  color: var(--info);
+}
+
+.cli-switch__status.status-attention {
+  color: var(--warn);
+}
+
+.cli-switch__status.status-done {
+  color: var(--ok);
+}
+
+.cli-switch__status.status-idle {
+  color: var(--text-faint);
 }
 
 .cli-switch__select svg {
