@@ -4,8 +4,8 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type DragEvent,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -59,6 +59,11 @@ interface FloatingLaunchMenu {
   projectNodeId: string;
   anchor: DOMRect;
 }
+
+const TREE_DRAG_THRESHOLD = 5;
+// Sentinel target id for the "move to top level" zone; real node ids always
+// carry a folder:/session:/project prefix so this can never collide.
+const TREE_ROOT_DROP = "__tree-root__";
 
 const statusKeys: Record<Exclude<SessionSidebarStatus, "connected">, MessageKey> = {
   working: "terminal.projects.status.working",
@@ -219,71 +224,141 @@ export function SessionProjectSidebar({
     return null;
   }
 
-  function startDrag(event: DragEvent<HTMLElement>, nodeId: string) {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/x-latticeterm-session-node", nodeId);
-    // WebView2 reliably exposes text/plain during the whole drag lifecycle;
-    // keep the custom type too so other browser engines stay unambiguous.
-    event.dataTransfer.setData("text/plain", nodeId);
-    setDraggedNodeId(nodeId);
-  }
+  // HTML5 drag-and-drop never fires inside the Tauri webview on Windows while
+  // the native drag handler (needed by the SFTP file drop) is enabled, so the
+  // tree implements its own pointer-based drag. A small movement threshold
+  // keeps plain clicks working.
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const nodeKindRef = useRef(nodeKind);
+  nodeKindRef.current = nodeKind;
+  const dropRef = useRef<{ nodeId: string; after: boolean } | null>(null);
+  const suppressClickRef = useRef(false);
 
-  function dragged(event: DragEvent<HTMLElement>): string | null {
-    return (
-      event.dataTransfer.getData("text/x-latticeterm-session-node") ||
-      event.dataTransfer.getData("text/plain") ||
-      draggedNodeId
-    );
-  }
+  function pressNode(event: ReactPointerEvent<HTMLElement>, nodeId: string) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if ((event.target as HTMLElement | null)?.closest("[data-tree-action]")) {
+      return;
+    }
+    const press = {
+      nodeId,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
 
-  function dragOverNode(event: DragEvent<HTMLElement>, targetNodeId: string) {
-    const sourceNodeId = dragged(event);
-    if (!sourceNodeId || sourceNodeId === targetNodeId) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    setDropTargetNodeId(targetNodeId);
-  }
+    const resetVisual = () => {
+      dropRef.current = null;
+      setDraggedNodeId(null);
+      setDropTargetNodeId(null);
+    };
+    const teardown = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", cancel);
+      document.removeEventListener("keydown", key, true);
+    };
+    const armClickSuppression = (untilNextPointerUp = false) => {
+      suppressClickRef.current = true;
+      const clear = () =>
+        window.setTimeout(() => {
+          suppressClickRef.current = false;
+        }, 0);
+      if (untilNextPointerUp) {
+        document.addEventListener("pointerup", clear, { once: true });
+      } else {
+        clear();
+      }
+    };
 
-  function dragLeaveNode(event: DragEvent<HTMLElement>, targetNodeId: string) {
-    const next = event.relatedTarget as Node | null;
-    if (next && event.currentTarget.contains(next)) return;
-    setDropTargetNodeId((current) =>
-      current === targetNodeId ? null : current,
-    );
-  }
+    const move = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== press.pointerId) return;
+      if (!press.active) {
+        const distance = Math.hypot(
+          moveEvent.clientX - press.startX,
+          moveEvent.clientY - press.startY,
+        );
+        if (distance < TREE_DRAG_THRESHOLD) return;
+        press.active = true;
+        setDraggedNodeId(press.nodeId);
+      }
+      moveEvent.preventDefault();
+      const hit = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+      if (hit?.closest("[data-tree-root-drop]")) {
+        dropRef.current = { nodeId: TREE_ROOT_DROP, after: false };
+        setDropTargetNodeId(TREE_ROOT_DROP);
+        return;
+      }
+      const row = hit?.closest<HTMLElement>("[data-tree-node]");
+      const targetNodeId = row?.dataset.treeNode;
+      if (!row || !targetNodeId || targetNodeId === press.nodeId) {
+        dropRef.current = null;
+        setDropTargetNodeId(null);
+        return;
+      }
+      const bounds = row.getBoundingClientRect();
+      dropRef.current = {
+        nodeId: targetNodeId,
+        after: moveEvent.clientY > bounds.top + bounds.height / 2,
+      };
+      setDropTargetNodeId(targetNodeId);
+    };
 
-  function dropOnNode(event: DragEvent<HTMLElement>, targetNodeId: string) {
-    event.preventDefault();
-    event.stopPropagation();
-    const sourceNodeId = dragged(event);
-    if (!sourceNodeId || sourceNodeId === targetNodeId) return;
-    const targetKind = nodeKind(targetNodeId);
-    const sourceKind = nodeKind(sourceNodeId);
-    setDropTargetNodeId(null);
-    // A folder/project row is an explicit container target. Requiring the
-    // pointer to hit only its lower half made ordinary drops look ignored.
-    const targetIsContainer =
-      targetKind === "folder" ||
-      (targetKind === "project" && sourceKind === "session");
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const placement = sessionSidebarDropPlacement(
-      layout,
-      sourceNodeId,
-      targetNodeId,
-      targetIsContainer,
-      event.clientY > bounds.top + bounds.height / 2,
-    );
-    if (!placement) return;
-    onMove(sourceNodeId, placement.parentId, placement.beforeNodeId);
-    if (targetIsContainer) {
+    const finish = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== press.pointerId) return;
+      const drop = dropRef.current;
+      teardown();
+      resetVisual();
+      if (!press.active) return;
+      armClickSuppression();
+      if (!drop) return;
+      if (drop.nodeId === TREE_ROOT_DROP) {
+        onMove(press.nodeId, null);
+        return;
+      }
+      const targetKind = nodeKindRef.current(drop.nodeId);
+      const sourceKind = nodeKindRef.current(press.nodeId);
+      // A folder/project row is an explicit container target. Requiring the
+      // pointer to hit only its lower half made ordinary drops look ignored.
+      const targetIsContainer =
+        targetKind === "folder" ||
+        (targetKind === "project" && sourceKind === "session");
+      const placement = sessionSidebarDropPlacement(
+        layoutRef.current,
+        press.nodeId,
+        drop.nodeId,
+        targetIsContainer,
+        drop.after,
+      );
+      if (!placement) return;
+      onMove(press.nodeId, placement.parentId, placement.beforeNodeId);
       if (
         targetKind === "folder" &&
-        layout.collapsedFolderIds.includes(targetNodeId)
+        layoutRef.current.collapsedFolderIds.includes(drop.nodeId)
       ) {
-        onToggleFolder(targetNodeId);
+        onToggleFolder(drop.nodeId);
       }
-    }
-    setDraggedNodeId(null);
+    };
+
+    const cancel = (cancelEvent: PointerEvent) => {
+      if (cancelEvent.pointerId !== press.pointerId) return;
+      teardown();
+      if (press.active) armClickSuppression(true);
+      resetVisual();
+    };
+
+    const key = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key !== "Escape") return;
+      teardown();
+      if (press.active) armClickSuppression(true);
+      resetVisual();
+    };
+
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", finish);
+    document.addEventListener("pointercancel", cancel);
+    document.addEventListener("keydown", key, true);
   }
 
   function openLaunchMenu(
@@ -322,26 +397,20 @@ export function SessionProjectSidebar({
         role="treeitem"
         className={`session-tree__session${
           session.sessionId === activeSessionId ? " is-active" : ""
-        }${dropTargetNodeId === session.nodeId ? " is-drop-target" : ""}`}
+        }${dropTargetNodeId === session.nodeId ? " is-drop-target" : ""}${
+          draggedNodeId === session.nodeId ? " is-dragging" : ""
+        }`}
         style={treeStyle(depth)}
         key={session.nodeId}
-        draggable
+        data-tree-node={session.nodeId}
         aria-grabbed={draggedNodeId === session.nodeId}
-        onDragStart={(event) => startDrag(event, session.nodeId)}
-        onDragEnd={() => {
-          setDraggedNodeId(null);
-          setDropTargetNodeId(null);
-        }}
-        onDragOver={(event) => dragOverNode(event, session.nodeId)}
-        onDragLeave={(event) => dragLeaveNode(event, session.nodeId)}
-        onDrop={(event) => dropOnNode(event, session.nodeId)}
+        onPointerDown={(event) => pressNode(event, session.nodeId)}
       >
         <button
           type="button"
           className="session-tree__session-select"
           onClick={() => onSelect(session.sessionId)}
           title={`${session.label} · ${t("terminal.projects.dragHint")}`}
-          draggable={false}
         >
           <Glyph size={12} />
           <span className="truncate">{session.label}</span>
@@ -361,7 +430,7 @@ export function SessionProjectSidebar({
               name: session.label,
             })}
             title={t("terminal.projects.sessionMove")}
-            draggable={false}
+            data-tree-action="true"
           >
             <FolderIcon size={11} />
           </button>
@@ -377,7 +446,7 @@ export function SessionProjectSidebar({
               name: session.label,
             })}
             title={t("terminal.projects.sessionRemove")}
-            draggable={false}
+            data-tree-action="true"
           >
             <TrashIcon size={11} />
           </button>
@@ -396,19 +465,12 @@ export function SessionProjectSidebar({
         role="treeitem"
         className={`session-tree__project${selected ? " is-active" : ""}${
           dropTargetNodeId === project.nodeId ? " is-drop-target" : ""
-        }`}
+        }${draggedNodeId === project.nodeId ? " is-dragging" : ""}`}
         style={treeStyle(depth)}
         key={project.nodeId}
-        draggable
+        data-tree-node={project.nodeId}
         aria-grabbed={draggedNodeId === project.nodeId}
-        onDragStart={(event) => startDrag(event, project.nodeId)}
-        onDragEnd={() => {
-          setDraggedNodeId(null);
-          setDropTargetNodeId(null);
-        }}
-        onDragOver={(event) => dragOverNode(event, project.nodeId)}
-        onDragLeave={(event) => dragLeaveNode(event, project.nodeId)}
-        onDrop={(event) => dropOnNode(event, project.nodeId)}
+        onPointerDown={(event) => pressNode(event, project.nodeId)}
       >
         <button
           type="button"
@@ -428,7 +490,7 @@ export function SessionProjectSidebar({
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             title={t("terminal.projects.newSession")}
-            draggable={false}
+            data-tree-action="true"
           >
             <PlusIcon size={12} />
           </button>
@@ -444,18 +506,11 @@ export function SessionProjectSidebar({
         <div
           className={`session-tree__folder-row${
             dropTargetNodeId === folder.id ? " is-drop-target" : ""
-          }`}
+          }${draggedNodeId === folder.id ? " is-dragging" : ""}`}
           style={treeStyle(depth)}
-          draggable
+          data-tree-node={folder.id}
           aria-grabbed={draggedNodeId === folder.id}
-          onDragStart={(event) => startDrag(event, folder.id)}
-          onDragEnd={() => {
-            setDraggedNodeId(null);
-            setDropTargetNodeId(null);
-          }}
-          onDragOver={(event) => dragOverNode(event, folder.id)}
-          onDragLeave={(event) => dragLeaveNode(event, folder.id)}
-          onDrop={(event) => dropOnNode(event, folder.id)}
+          onPointerDown={(event) => pressNode(event, folder.id)}
         >
           <button
             type="button"
@@ -472,7 +527,7 @@ export function SessionProjectSidebar({
             onClick={() => onToggleFolder(folder.id)}
             aria-label={t("terminal.projects.toggle")}
             title={t("terminal.projects.toggle")}
-            draggable={false}
+            data-tree-action="true"
           >
             <ChevronDownIcon size={12} className={collapsed ? "is-collapsed" : undefined} />
           </button>
@@ -483,7 +538,7 @@ export function SessionProjectSidebar({
               onClick={() => onCreateFolder(folder.id)}
               aria-label={t("terminal.projects.addSubfolder")}
               title={t("terminal.projects.addSubfolder")}
-              draggable={false}
+              data-tree-action="true"
             >
               <PlusIcon size={11} />
             </button>
@@ -493,7 +548,7 @@ export function SessionProjectSidebar({
               onClick={() => onRenameFolder(folder)}
               aria-label={t("terminal.projects.folderRename")}
               title={t("terminal.projects.folderRename")}
-              draggable={false}
+              data-tree-action="true"
             >
               <EditIcon size={11} />
             </button>
@@ -503,7 +558,7 @@ export function SessionProjectSidebar({
               onClick={() => onDeleteFolder(folder)}
               aria-label={t("terminal.projects.folderDelete")}
               title={t("terminal.projects.folderDelete")}
-              draggable={false}
+              data-tree-action="true"
             >
               <TrashIcon size={11} />
             </button>
@@ -545,6 +600,13 @@ export function SessionProjectSidebar({
     <aside
       className={`session-projects${mobileOpen ? " is-mobile-open" : ""}`}
       aria-label={t("terminal.projects")}
+      onClickCapture={(event) => {
+        // Swallow the click the browser synthesizes right after a drag ends.
+        if (!suppressClickRef.current) return;
+        suppressClickRef.current = false;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
     >
       <div className="session-projects__title">
         <FolderIcon size={14} />
@@ -575,18 +637,16 @@ export function SessionProjectSidebar({
           {t("terminal.projects.chooseFailed")}
         </div>
       )}
-      <div className="session-tree" role="tree">
+      <div
+        className={`session-tree${draggedNodeId ? " is-dragging" : ""}`}
+        role="tree"
+      >
         {sessionSidebarChildren(layout, null).map((id) => renderNode(id, 0))}
         <div
-          className={`session-tree__root-drop${draggedNodeId ? " is-visible" : ""}`}
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => {
-            event.preventDefault();
-            const sourceNodeId = dragged(event);
-            if (sourceNodeId) onMove(sourceNodeId, null);
-            setDraggedNodeId(null);
-            setDropTargetNodeId(null);
-          }}
+          className={`session-tree__root-drop${draggedNodeId ? " is-visible" : ""}${
+            dropTargetNodeId === TREE_ROOT_DROP ? " is-drop-target" : ""
+          }`}
+          data-tree-root-drop="true"
         >
           {t("terminal.projects.moveToRoot")}
         </div>

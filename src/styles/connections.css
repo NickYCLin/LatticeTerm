@@ -1140,8 +1140,8 @@
   pointer-events: auto;
 }
 
-.session-tree__folder-row[draggable="true"],
-.session-tree__project[draggable="true"] {
+.session-tree__folder-row,
+.session-tree__project {
   cursor: grab;
 }
 
@@ -1149,6 +1149,18 @@
 .session-tree__folder-row:active,
 .session-tree__project:active {
   cursor: grabbing;
+}
+
+/* Pointer-driven drag: freeze selection and dim the row being moved. */
+.session-tree.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.session-tree__session.is-dragging,
+.session-tree__folder-row.is-dragging,
+.session-tree__project.is-dragging {
+  opacity: 0.55;
 }
 
 .session-tree__session:hover,
@@ -1219,6 +1231,12 @@
 
 .session-tree__root-drop.is-visible {
   display: block;
+}
+
+.session-tree__root-drop.is-drop-target {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
 }
 
 /* Compact popover for launching a CLI in a project, anchored to the
