@@ -69,7 +69,16 @@ impl RelayState {
     }
 
     /// Sliding-window limit on how often one IP may open connections.
+    ///
+    /// Loopback is exempt: behind the recommended HTTPS/WSS ingress every
+    /// public client reaches the relay as 127.0.0.1, so one busy peer would
+    /// exhaust the shared bucket for everyone. Rate limiting public traffic
+    /// is the ingress's job there; the per-IP budget applies when the relay
+    /// port is exposed directly.
     fn allow_connection(&self, ip: IpAddr) -> bool {
+        if ip.is_loopback() {
+            return true;
+        }
         let now = Instant::now();
         let mut rates = self.rates.lock().expect("rate lock");
         let recent = rates.entry(ip).or_default();
@@ -349,15 +358,6 @@ async fn run_dial(
 }
 
 async fn run_connection(state: Arc<RelayState>, mut stream: Transport, peer: SocketAddr) {
-    if !state.allow_connection(peer.ip()) {
-        send_error(
-            &mut stream,
-            "rateLimited",
-            "Too many connections from this address; wait a minute.",
-        )
-        .await;
-        return;
-    }
     let first = match timeout(FIRST_MESSAGE_LIMIT, read_client_message(&mut stream)).await {
         Ok(Ok(message)) => message,
         Ok(Err(_)) | Err(_) => return,
@@ -431,6 +431,13 @@ pub async fn run(listener: TcpListener, state: Arc<RelayState>) {
             Ok((stream, peer)) => {
                 let state = Arc::clone(&state);
                 tokio::spawn(async move {
+                    // The budget is spent before the WebSocket handshake so a
+                    // flood cannot buy HTTP parsing work with rejected
+                    // connections.
+                    if !state.allow_connection(peer.ip()) {
+                        let _ = timeout(FIRST_MESSAGE_LIMIT, reject_rate_limited(stream)).await;
+                        return;
+                    }
                     let negotiated = timeout(FIRST_MESSAGE_LIMIT, negotiate_carrier(stream)).await;
                     if let Ok(Ok(transport)) = negotiated {
                         run_connection(state, transport, peer).await;
@@ -442,6 +449,25 @@ pub async fn run(listener: TcpListener, state: Arc<RelayState>) {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
         }
+    }
+}
+
+/// Native relay TCP costs nothing extra to answer, so an over-budget peer
+/// still hears the rateLimited error; a WebSocket peer would first need the
+/// very handshake the limiter exists to avoid, so it is dropped silently.
+async fn reject_rate_limited(stream: TcpStream) {
+    let mut first = [0_u8; 1];
+    if stream.set_nodelay(true).is_ok()
+        && matches!(stream.peek(&mut first).await, Ok(1))
+        && first[0] == 0
+    {
+        let mut transport = Transport::Tcp(stream);
+        send_error(
+            &mut transport,
+            "rateLimited",
+            "Too many connections from this address; wait a minute.",
+        )
+        .await;
     }
 }
 
@@ -619,6 +645,17 @@ mod tests {
         assert!(!state.allow_connection(ip));
         // Another address is unaffected.
         assert!(state.allow_connection("203.0.113.10".parse().unwrap()));
+    }
+
+    #[test]
+    fn loopback_shares_no_budget_behind_the_ingress() {
+        let state = RelayState::default();
+        let v4: IpAddr = "127.0.0.1".parse().unwrap();
+        let v6: IpAddr = "::1".parse().unwrap();
+        for _ in 0..(CONNECTIONS_PER_WINDOW * 2) {
+            assert!(state.allow_connection(v4));
+            assert!(state.allow_connection(v6));
+        }
     }
 
     #[cfg(unix)]

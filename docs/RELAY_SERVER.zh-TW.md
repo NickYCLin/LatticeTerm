@@ -18,8 +18,11 @@
   （trust-on-first-use）；之後金鑰不符會直接拒連，即使中繼站被
   掉包或有人搶到同號也冒充不了。裝置重灌後需在檢視端的
   `remote-device-pins.json` 移除該筆再連。
-- 每個來源 IP 每分鐘最多 30 條新連線，阻擋透過中繼站暴力嘗試
-  配對碼或掃描裝置 ID。
+- 每個來源 IP 每分鐘最多 30 條新連線，且在 WebSocket 握手前就先檢查，
+  阻擋透過中繼站暴力嘗試配對碼或掃描裝置 ID。來自 loopback 的連線
+  不受此限——經 HTTPS/WSS ingress 轉送時所有公網流量的來源都是
+  127.0.0.1，共用同一個額度反而會互相卡死；公網的速率限制請交給
+  ingress（Cloudflare 內建，nginx/Caddy 可用 limit_req 等模組）。
 
 ## 部署
 
