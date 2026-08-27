@@ -8,6 +8,7 @@ import {
   findDuplicateTarget,
   isProtocolAvailable,
   parseTags,
+  protocolUsesUsername,
   validateConnectionDraft,
 } from "./connection";
 
@@ -66,7 +67,7 @@ describe("connection profiles", () => {
     expect(emptyDraft().protocol).toBe("ssh");
   });
 
-  it("does not retain a username on Lattice Remote profiles", () => {
+  it("retains usernames only for account-based protocols", () => {
     const profile = createConnectionProfile(
       {
         name: "Remote screen",
@@ -80,6 +81,23 @@ describe("connection profiles", () => {
 
     expect(profile.username).toBe("");
     expect(connectionTarget(profile)).toBe("192.0.2.42:44900");
+
+    const vnc = createConnectionProfile(
+      {
+        name: "Shared screen",
+        protocol: "vnc",
+        hostname: "192.0.2.87",
+        username: "stale-account",
+        port: 5900,
+      },
+      "profile-vnc",
+    );
+    expect(vnc.username).toBe("");
+    expect(protocolUsesUsername("ssh")).toBe(true);
+    expect(protocolUsesUsername("sftp")).toBe(true);
+    expect(protocolUsesUsername("rdp")).toBe(true);
+    expect(protocolUsesUsername("vnc")).toBe(false);
+    expect(protocolUsesUsername("lattice")).toBe(false);
   });
 
   it("reports only protocols with working session engines as available", () => {
@@ -154,6 +172,7 @@ describe("draft validation", () => {
     ).toEqual({
       name: { key: "validation.nameRequired" },
       hostname: { key: "validation.hostSpaces" },
+      username: { key: "validation.usernameRequired" },
       port: {
         key: "validation.portRange",
         values: { min: 1, max: 65535 },
@@ -230,6 +249,28 @@ describe("draft validation", () => {
         tags: ["edge"],
       }),
     ).toEqual({});
+  });
+
+  it("requires usernames only for account-based protocols", () => {
+    for (const protocol of ["ssh", "sftp", "rdp"] as const) {
+      expect(
+        validateConnectionDraft({
+          ...emptyDraft(protocol),
+          name: "Remote host",
+          hostname: "host.example.com",
+        }).username,
+      ).toEqual({ key: "validation.usernameRequired" });
+    }
+
+    for (const protocol of ["vnc", "lattice"] as const) {
+      expect(
+        validateConnectionDraft({
+          ...emptyDraft(protocol),
+          name: "Remote host",
+          hostname: "host.example.com",
+        }).username,
+      ).toBeUndefined();
+    }
   });
 });
 

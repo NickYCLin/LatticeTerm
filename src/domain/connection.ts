@@ -135,6 +135,11 @@ export function protocolSummaryKey(protocol: Protocol): MessageKey {
   return `protocol.${protocol}.summary` as MessageKey;
 }
 
+/** Protocols whose remote login identifies a user account. */
+export function protocolUsesUsername(protocol: Protocol): boolean {
+  return protocol === "ssh" || protocol === "sftp" || protocol === "rdp";
+}
+
 export function environmentLabelKey(environment: Environment): MessageKey {
   return `environment.${environment}` as MessageKey;
 }
@@ -229,7 +234,9 @@ export function validateConnectionDraft(
     };
   }
 
-  if (/\s/.test(username)) {
+  if (protocolUsesUsername(draft.protocol) && !username) {
+    errors.username = { key: "validation.usernameRequired" };
+  } else if (/\s/.test(username)) {
     errors.username = { key: "validation.usernameSpaces" };
   } else if (username.length > limits.usernameLength) {
     errors.username = {
@@ -280,9 +287,9 @@ export function createConnectionProfile(
     name: draft.name.trim(),
     protocol: draft.protocol,
     hostname: draft.hostname.trim(),
-    // Lattice Remote authenticates with its one-time pairing code. Usernames
-    // belong to host-login protocols and must not leak into Remote profiles.
-    username: draft.protocol === "lattice" ? "" : draft.username.trim(),
+    // Lattice Remote authenticates with a pairing code and VNC authenticates
+    // the shared display. Neither has a username that belongs in the profile.
+    username: protocolUsesUsername(draft.protocol) ? draft.username.trim() : "",
     port: draft.port,
     environment: draft.environment ?? "unassigned",
     group: group || UNGROUPED,

@@ -98,12 +98,14 @@ describe("export & import", () => {
           name: "",
           protocol: "ssh",
           hostname: "no-name.example.com",
+          username: "admin",
           port: 22,
         },
         {
           name: "Bad Host",
           protocol: "ssh",
           hostname: "spaces in host",
+          username: "admin",
           port: 22,
         },
         {

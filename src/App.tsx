@@ -472,10 +472,12 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   }, [update]);
 
   const saveDraft = useCallback(
-    (draft: ConnectionDraft) => {
-      if (drawer.profileId) updateProfile(drawer.profileId, draft);
-      else addProfile(draft);
+    (draft: ConnectionDraft, connectAfterSave: boolean) => {
+      const saved = drawer.profileId
+        ? updateProfile(drawer.profileId, draft)
+        : addProfile(draft);
       setDrawer({ open: false, profileId: null });
+      if (connectAfterSave) setConnectTarget(saved);
     },
     [drawer.profileId, addProfile, updateProfile],
   );

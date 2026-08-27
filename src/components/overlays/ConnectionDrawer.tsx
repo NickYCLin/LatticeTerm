@@ -1,17 +1,14 @@
 /**
  * Add and edit connection drawer.
  *
- * Five short sections instead of one long form: how to connect, where the host
- * is, how to organise it, sign-in, and a review. Errors appear next to their
- * field and never clear what was typed. Closing a dirty form asks first.
- *
- * The sign-in section holds no inputs on purpose. Until the credential store
- * exists there is nowhere safe to put a secret, so the section explains that
- * rather than offering a field that would quietly keep a password in memory.
+ * Keeps the primary task compact: choose a protocol, enter its actual target
+ * fields, then save or save-and-connect. Organisation metadata is optional and
+ * stays collapsed until requested. Secrets remain in the protocol's connect
+ * flow and OS-backed Vault, never in this profile form.
  */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { FormEvent } from "react";
 import {
   connectionTarget,
   createConnectionProfile,
@@ -27,6 +24,7 @@ import {
   protocolCatalog,
   protocolLabelKey,
   protocolSummaryKey,
+  protocolUsesUsername,
   validateConnectionDraft,
   type ConnectionDraft,
   type ConnectionProfile,
@@ -34,8 +32,8 @@ import {
   type Protocol,
   type ValidationErrors,
 } from "../../domain/connection";
-import { useI18n } from "../../i18n/context";
-import { Chip, EnvironmentBadge, ProtocolTile } from "../common/Badge";
+import { useI18n, type MessageKey } from "../../i18n/context";
+import { ProtocolTile } from "../common/Badge";
 import { Callout } from "../common/Callout";
 import { AlertIcon, CheckIcon, CloseIcon } from "../icons";
 import { clearValidationError } from "./connectionValidation";
@@ -55,33 +53,18 @@ function sameDraft(a: ConnectionDraft, b: ConnectionDraft): boolean {
 }
 
 function protocolDraft(draft: ConnectionDraft): ConnectionDraft {
-  return draft.protocol === "lattice" ? { ...draft, username: "" } : draft;
+  return protocolUsesUsername(draft.protocol)
+    ? draft
+    : { ...draft, username: "" };
 }
 
-function Section({
-  step,
-  title,
-  hint,
-  children,
-}: {
-  step: number;
-  title: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="form-section">
-      <h3 className="form-section__title">
-        <span className="form-section__step" aria-hidden="true">
-          {step}
-        </span>
-        {title}
-      </h3>
-      {hint && <p className="form-section__hint">{hint}</p>}
-      {children}
-    </section>
-  );
-}
+const hostnamePlaceholderKeys: Record<Protocol, MessageKey> = {
+  ssh: "form.hostnamePlaceholder.ssh",
+  sftp: "form.hostnamePlaceholder.sftp",
+  rdp: "form.hostnamePlaceholder.rdp",
+  vnc: "form.hostnamePlaceholder.vnc",
+  lattice: "form.hostnamePlaceholder.lattice",
+};
 
 export function ConnectionDrawer({
   profile,
@@ -92,7 +75,7 @@ export function ConnectionDrawer({
   /** `null` opens an empty draft; a profile opens it for editing. */
   profile: ConnectionProfile | null;
   profiles: ConnectionProfile[];
-  onSave: (draft: ConnectionDraft) => void;
+  onSave: (draft: ConnectionDraft, connectAfterSave: boolean) => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -106,8 +89,12 @@ export function ConnectionDrawer({
   const [tagInput, setTagInput] = useState((initial.tags ?? []).join(", "));
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const [checkResult, setCheckResult] = useState<"valid" | "invalid" | null>(
-    null,
+  const [advancedOpen, setAdvancedOpen] = useState(
+    () =>
+      (initial.environment ?? "unassigned") !== "unassigned" ||
+      Boolean(initial.group) ||
+      (initial.tags?.length ?? 0) > 0 ||
+      Boolean(initial.favorite),
   );
 
   const formId = useId();
@@ -173,7 +160,6 @@ export function ConnectionDrawer({
     if (changedField) {
       setErrors((current) => clearValidationError(current, changedField));
     }
-    setCheckResult(null);
   }
 
   function selectProtocol(protocol: Protocol) {
@@ -183,7 +169,7 @@ export function ConnectionDrawer({
     patch({
       protocol,
       port: draft.port === previousDefault ? nextDefault : draft.port,
-      ...(protocol === "lattice" ? { username: "" } : {}),
+      ...(!protocolUsesUsername(protocol) ? { username: "" } : {}),
     });
   }
 
@@ -201,7 +187,7 @@ export function ConnectionDrawer({
     [profiles, candidate],
   );
 
-  /** Shared by submit and the settings check: validate, then focus the first problem. */
+  /** Validates and opens optional fields when one of them needs attention. */
   function validateNow(): ValidationErrors {
     const next = protocolDraft({ ...draft, tags: parseTags(tagInput) });
     const found = validateConnectionDraft(next);
@@ -209,18 +195,32 @@ export function ConnectionDrawer({
 
     const firstField = Object.keys(found)[0];
     if (firstField) {
-      panelRef.current
-        ?.querySelector<HTMLElement>(`[data-field="${firstField}"]`)
-        ?.focus();
+      const focus = () =>
+        panelRef.current
+          ?.querySelector<HTMLElement>(`[data-field="${firstField}"]`)
+          ?.focus();
+      if (firstField === "group" || firstField === "tags") {
+        setAdvancedOpen(true);
+        window.setTimeout(focus, 0);
+      } else {
+        focus();
+      }
     }
 
     return found;
   }
 
+  function save(connectAfterSave: boolean) {
+    if (Object.keys(validateNow()).length > 0) return;
+    onSave(
+      protocolDraft({ ...draft, tags: parseTags(tagInput) }),
+      connectAfterSave,
+    );
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (Object.keys(validateNow()).length > 0) return;
-    onSave(protocolDraft({ ...draft, tags: parseTags(tagInput) }));
+    save(true);
   }
 
   const title = profile ? t("form.editTitle") : t("form.addTitle");
@@ -257,13 +257,19 @@ export function ConnectionDrawer({
         </header>
 
         <form className="drawer__body" id={formId} onSubmit={submit} noValidate>
-          <Section
-            step={1}
-            title={t("form.step.protocol")}
-            hint={t("form.protocolHint")}
-          >
+          <section className="form-section">
+            <div className="form-section__heading">
+              <h3 className="form-section__title">
+                {t("form.step.protocol")}
+              </h3>
+              <span className="form-section__hint">
+                {t(protocolSummaryKey(draft.protocol))} · {t("form.defaultPort", {
+                  port: findProtocol(draft.protocol).defaultPort,
+                })}
+              </span>
+            </div>
             <div
-              className="protocol-picker"
+              className="protocol-picker protocol-picker--compact"
               role="radiogroup"
               aria-label={t("form.step.protocol")}
             >
@@ -279,95 +285,91 @@ export function ConnectionDrawer({
                     onClick={() => selectProtocol(entry.id)}
                   >
                     <ProtocolTile protocol={entry.id} />
-                    <span className="protocol-option__text">
-                      <strong>{t(protocolLabelKey(entry.id))}</strong>
-                      <small>{t(protocolSummaryKey(entry.id))}</small>
-                    </span>
-                    <span className="protocol-option__port mono">
-                      :{entry.defaultPort}
+                    <strong className="protocol-option__acronym">
+                      {entry.acronym}
+                    </strong>
+                    <span className="protocol-option__label">
+                      {t(protocolLabelKey(entry.id))}
                     </span>
                   </button>
                 );
               })}
             </div>
-          </Section>
+          </section>
 
-          <Section step={2} title={t("form.step.target")}>
-            <div className="field">
-              <label className="field__label" htmlFor={`${formId}-name`}>
-                {t("form.name")}
-              </label>
-              <input
-                id={`${formId}-name`}
-                data-field="name"
-                ref={nameRef}
-                className={`input${errors.name ? " is-invalid" : ""}`}
-                value={draft.name}
-                maxLength={limits.nameLength}
-                onChange={(event) =>
-                  patch({ name: event.currentTarget.value }, "name")
-                }
-                placeholder={t("form.namePlaceholder")}
-                aria-invalid={Boolean(errors.name)}
-                aria-describedby={
-                  errors.name ? `${formId}-name-error` : undefined
-                }
-              />
-              {error("name") && (
-                <p className="field__error" id={`${formId}-name-error`}>
-                  <AlertIcon size={12} />
-                  {error("name")}
-                </p>
-              )}
-            </div>
-
-            <div className="field">
-              <label className="field__label" htmlFor={`${formId}-host`}>
-                {t(
-                  draft.protocol === "lattice"
-                    ? "form.remoteAddress"
-                    : "form.hostname",
+          <section className="form-section">
+            <h3 className="form-section__title">{t("form.step.target")}</h3>
+            <div className="field-grid field-grid--even">
+              <div className="field">
+                <label className="field__label" htmlFor={`${formId}-name`}>
+                  {t("form.name")}
+                </label>
+                <input
+                  id={`${formId}-name`}
+                  data-field="name"
+                  ref={nameRef}
+                  className={`input${errors.name ? " is-invalid" : ""}`}
+                  value={draft.name}
+                  maxLength={limits.nameLength}
+                  onChange={(event) =>
+                    patch({ name: event.currentTarget.value }, "name")
+                  }
+                  placeholder={t("form.namePlaceholder")}
+                  aria-invalid={Boolean(errors.name)}
+                  aria-describedby={
+                    errors.name ? `${formId}-name-error` : undefined
+                  }
+                />
+                {error("name") && (
+                  <p className="field__error" id={`${formId}-name-error`}>
+                    <AlertIcon size={12} />
+                    {error("name")}
+                  </p>
                 )}
-              </label>
-              <input
-                id={`${formId}-host`}
-                data-field="hostname"
-                className={`input mono${errors.hostname ? " is-invalid" : ""}`}
-                value={draft.hostname}
-                onChange={(event) =>
-                  patch({ hostname: event.currentTarget.value }, "hostname")
-                }
-                placeholder={t("form.hostnamePlaceholder")}
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                aria-invalid={Boolean(errors.hostname)}
-              />
-              {error("hostname") && (
-                <p className="field__error">
-                  <AlertIcon size={12} />
-                  {error("hostname")}
-                </p>
-              )}
-              {draft.protocol === "lattice" && (
-                <Callout tone="info" title={t("form.remoteDirect.title")}>
-                  {t("form.remoteDirect.body")}
-                </Callout>
-              )}
+              </div>
+
+              <div className="field">
+                <label className="field__label" htmlFor={`${formId}-host`}>
+                  {t(
+                    draft.protocol === "lattice"
+                      ? "form.remoteAddress"
+                      : "form.hostname",
+                  )}
+                </label>
+                <input
+                  id={`${formId}-host`}
+                  data-field="hostname"
+                  className={`input mono${errors.hostname ? " is-invalid" : ""}`}
+                  value={draft.hostname}
+                  onChange={(event) =>
+                    patch({ hostname: event.currentTarget.value }, "hostname")
+                  }
+                  placeholder={t(hostnamePlaceholderKeys[draft.protocol])}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  aria-invalid={Boolean(errors.hostname)}
+                />
+                {error("hostname") && (
+                  <p className="field__error">
+                    <AlertIcon size={12} />
+                    {error("hostname")}
+                  </p>
+                )}
+              </div>
             </div>
 
             <div
               className={`field-grid${
-                draft.protocol === "lattice" ? " field-grid--port-only" : ""
+                !protocolUsesUsername(draft.protocol)
+                  ? " field-grid--port-only"
+                  : ""
               }`}
             >
-              {draft.protocol !== "lattice" && (
+              {protocolUsesUsername(draft.protocol) && (
                 <div className="field">
                   <label className="field__label" htmlFor={`${formId}-user`}>
                     {t("form.username")}
-                    <span className="field__optional">
-                      {t("common.optional")}
-                    </span>
                   </label>
                   <input
                     id={`${formId}-user`}
@@ -418,182 +420,16 @@ export function ConnectionDrawer({
                 )}
               </div>
             </div>
-          </Section>
 
-          <Section
-            step={3}
-            title={t("form.step.organise")}
-            hint={t("form.organiseHint")}
-          >
-            <div className="field">
-              <span className="field__label" id={`${formId}-env-label`}>
-                {t("form.environment")}
-              </span>
-              <div
-                className="segmented"
-                role="radiogroup"
-                aria-labelledby={`${formId}-env-label`}
-              >
-                {environmentCatalog.map((entry) => {
-                  const active = (draft.environment ?? "unassigned") === entry;
-                  return (
-                    <button
-                      type="button"
-                      key={entry}
-                      role="radio"
-                      aria-checked={active}
-                      title={t(environmentHintKey(entry))}
-                      className={`segmented__option env-${entry}${
-                        active ? " is-selected" : ""
-                      }`}
-                      onClick={() =>
-                        patch({ environment: entry as Environment })
-                      }
-                    >
-                      <span className="badge__dot" aria-hidden="true" />
-                      {t(environmentLabelKey(entry))}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="field-grid field-grid--even">
-              <div className="field">
-                <label className="field__label" htmlFor={`${formId}-group`}>
-                  {t("form.group")}
-                  <span className="field__optional">{t("common.optional")}</span>
-                </label>
-                <input
-                  id={`${formId}-group`}
-                  data-field="group"
-                  className={`input${errors.group ? " is-invalid" : ""}`}
-                  value={draft.group ?? ""}
-                  maxLength={limits.groupLength}
-                  onChange={(event) =>
-                    patch({ group: event.currentTarget.value }, "group")
-                  }
-                  placeholder={t("form.groupPlaceholder")}
-                  list={`${formId}-groups`}
-                  aria-invalid={Boolean(errors.group)}
-                />
-                <datalist id={`${formId}-groups`}>
-                  {[...new Set(profiles.map((entry) => entry.group))].map(
-                    (group) => (
-                      <option key={group} value={group} />
-                    ),
-                  )}
-                </datalist>
-                {error("group") && (
-                  <p className="field__error">
-                    <AlertIcon size={12} />
-                    {error("group")}
-                  </p>
-                )}
-              </div>
-
-              <div className="field">
-                <label className="field__label" htmlFor={`${formId}-tags`}>
-                  {t("form.tags")}
-                  <span className="field__optional">{t("form.tagsHint")}</span>
-                </label>
-                <input
-                  id={`${formId}-tags`}
-                  data-field="tags"
-                  className={`input${errors.tags ? " is-invalid" : ""}`}
-                  value={tagInput}
-                  onChange={(event) => {
-                    setTagInput(event.currentTarget.value);
-                    setErrors((current) =>
-                      clearValidationError(current, "tags"),
-                    );
-                    setCheckResult(null);
-                  }}
-                  placeholder={t("form.tagsPlaceholder")}
-                  aria-invalid={Boolean(errors.tags)}
-                />
-                {error("tags") && (
-                  <p className="field__error">
-                    <AlertIcon size={12} />
-                    {error("tags")}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={draft.favorite ?? false}
-                onChange={(event) =>
-                  patch({ favorite: event.currentTarget.checked })
-                }
-              />
-              <span className="checkbox__box" aria-hidden="true">
-                <CheckIcon size={11} />
-              </span>
-              {t("form.favorite")}
-            </label>
-          </Section>
-
-          <Section step={4} title={t("form.step.auth")}>
-            <Callout tone="security" title={t("form.auth.title")}>
-              {t("form.auth.body")}
-            </Callout>
-          </Section>
-
-          <Section step={5} title={t("form.step.review")}>
-            <div className="review-card">
-              <div className="review-card__head">
-                <ProtocolTile protocol={candidate.protocol} size="lg" />
-                <div className="review-card__identity">
-                  <strong className="truncate">
-                    {candidate.name || t("form.review.unnamed")}
-                  </strong>
-                  <span className="mono truncate">
-                    {candidate.hostname
-                      ? connectionTarget(candidate)
-                      : t("form.review.noHost")}
-                  </span>
-                </div>
-              </div>
-              <div className="review-card__badges">
-                <EnvironmentBadge environment={candidate.environment} />
-                <Chip tone="neutral">
-                  {findProtocol(candidate.protocol).acronym}
-                </Chip>
-                {candidate.favorite && (
-                  <Chip tone="accent">{t("connections.favorites")}</Chip>
-                )}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              className="button button--secondary button--sm"
-              onClick={() =>
-                setCheckResult(
-                  Object.keys(validateNow()).length > 0 ? "invalid" : "valid",
-                )
-              }
-            >
-              {t("form.test.button")}
-            </button>
-
-            {checkResult === "valid" && (
-              <Callout tone="info" title={t("form.test.valid.title")}>
-                {t("form.test.valid.body", {
-                  port: candidate.port,
-                  protocol: findProtocol(candidate.protocol).acronym,
-                })}
+            {draft.protocol === "lattice" && (
+              <Callout tone="info" title={t("form.remoteDirect.title")}>
+                {t("form.remoteDirect.body")}
               </Callout>
             )}
 
-            {checkResult === "invalid" && (
-              <Callout tone="warn" title={t("form.test.invalid.title")}>
-                {t("form.test.invalid.body")}
-              </Callout>
-            )}
+            <p className="connection-form__credential-note">
+              {t("form.credentialsHint")}
+            </p>
 
             {duplicate && (
               <Callout tone="warn" title={t("form.duplicate.title")}>
@@ -604,7 +440,135 @@ export function ConnectionDrawer({
                 })}
               </Callout>
             )}
-          </Section>
+          </section>
+
+          <details
+            className="connection-advanced"
+            open={advancedOpen}
+            onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+          >
+            <summary className="connection-advanced__summary">
+              <span>
+                <strong>{t("form.advanced")}</strong>
+                <small>{t("form.advancedHint")}</small>
+              </span>
+            </summary>
+            <div className="connection-advanced__body">
+              <div className="field">
+                <span className="field__label" id={`${formId}-env-label`}>
+                  {t("form.environment")}
+                </span>
+                <div
+                  className="segmented"
+                  role="radiogroup"
+                  aria-labelledby={`${formId}-env-label`}
+                >
+                  {environmentCatalog.map((entry) => {
+                    const active =
+                      (draft.environment ?? "unassigned") === entry;
+                    return (
+                      <button
+                        type="button"
+                        key={entry}
+                        role="radio"
+                        aria-checked={active}
+                        title={t(environmentHintKey(entry))}
+                        className={`segmented__option env-${entry}${
+                          active ? " is-selected" : ""
+                        }`}
+                        onClick={() =>
+                          patch({ environment: entry as Environment })
+                        }
+                      >
+                        <span className="badge__dot" aria-hidden="true" />
+                        {t(environmentLabelKey(entry))}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="field-grid field-grid--even">
+                <div className="field">
+                  <label className="field__label" htmlFor={`${formId}-group`}>
+                    {t("form.group")}
+                    <span className="field__optional">
+                      {t("common.optional")}
+                    </span>
+                  </label>
+                  <input
+                    id={`${formId}-group`}
+                    data-field="group"
+                    className={`input${errors.group ? " is-invalid" : ""}`}
+                    value={draft.group ?? ""}
+                    maxLength={limits.groupLength}
+                    onChange={(event) =>
+                      patch({ group: event.currentTarget.value }, "group")
+                    }
+                    placeholder={t("form.groupPlaceholder")}
+                    list={`${formId}-groups`}
+                    aria-invalid={Boolean(errors.group)}
+                  />
+                  <datalist id={`${formId}-groups`}>
+                    {[...new Set(profiles.map((entry) => entry.group))].map(
+                      (group) => (
+                        <option key={group} value={group} />
+                      ),
+                    )}
+                  </datalist>
+                  {error("group") && (
+                    <p className="field__error">
+                      <AlertIcon size={12} />
+                      {error("group")}
+                    </p>
+                  )}
+                </div>
+
+                <div className="field">
+                  <label className="field__label" htmlFor={`${formId}-tags`}>
+                    {t("form.tags")}
+                    <span className="field__optional">
+                      {t("form.tagsHint")}
+                    </span>
+                  </label>
+                  <input
+                    id={`${formId}-tags`}
+                    data-field="tags"
+                    className={`input${errors.tags ? " is-invalid" : ""}`}
+                    value={tagInput}
+                    onChange={(event) => {
+                      setTagInput(event.currentTarget.value);
+                      setErrors((current) =>
+                        clearValidationError(current, "tags"),
+                      );
+                    }}
+                    placeholder={t("form.tagsPlaceholder")}
+                    aria-invalid={Boolean(errors.tags)}
+                  />
+                  {error("tags") && (
+                    <p className="field__error">
+                      <AlertIcon size={12} />
+                      {error("tags")}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.favorite ?? false}
+                  onChange={(event) =>
+                    patch({ favorite: event.currentTarget.checked })
+                  }
+                />
+                <span className="checkbox__box" aria-hidden="true">
+                  <CheckIcon size={11} />
+                </span>
+                {t("form.favorite")}
+              </label>
+            </div>
+          </details>
         </form>
 
         {confirmDiscard ? (
@@ -644,11 +608,18 @@ export function ConnectionDrawer({
                 {t("common.cancel")}
               </button>
               <button
+                type="button"
+                className="button button--secondary"
+                onClick={() => save(false)}
+              >
+                {t("form.submit.saveOnly")}
+              </button>
+              <button
                 type="submit"
                 form={formId}
                 className="button button--primary"
               >
-                {profile ? t("form.submit.save") : t("form.submit.add")}
+                {t("form.submit.saveAndConnect")}
               </button>
             </div>
           </div>
