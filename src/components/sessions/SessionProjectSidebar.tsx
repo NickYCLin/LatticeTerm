@@ -10,7 +10,11 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { AgentDefinition } from "../../app/useAgentSessions";
-import type { SessionSidebarStatus } from "../../app/sessionStatus";
+import {
+  aggregateSessionSidebarStatus,
+  type SessionSidebarStatus,
+} from "../../app/sessionStatus";
+import { fuzzySearch } from "../../app/fuzzySearch";
 import {
   sessionSidebarDropPlacement,
   sessionSidebarChildren,
@@ -22,6 +26,7 @@ import type { MessageKey } from "../../i18n/messages/zh-TW";
 import {
   AgentIcon,
   ChevronDownIcon,
+  CloseIcon,
   EditIcon,
   ExportIcon,
   FolderIcon,
@@ -29,6 +34,7 @@ import {
   MoreIcon,
   PlusIcon,
   ScreenShareIcon,
+  SearchIcon,
   TerminalIcon,
   TransferIcon,
   TrashIcon,
@@ -48,6 +54,7 @@ export interface SessionSidebarSessionItem {
   label: string;
   kind: SessionSidebarKind;
   status: SessionSidebarStatus;
+  searchText?: string;
 }
 
 export interface SessionSidebarProjectItem {
@@ -61,6 +68,16 @@ export interface SessionSidebarProjectItem {
 interface FloatingLaunchMenu {
   projectNodeId: string;
   anchor: DOMRect;
+}
+
+interface SidebarSearchResult {
+  id: string;
+  kind: "project" | "session";
+  label: string;
+  hint: string;
+  nodeId: string;
+  sessionId: string;
+  sessionKind?: SessionSidebarKind;
 }
 
 const TREE_DRAG_THRESHOLD = 5;
@@ -156,8 +173,72 @@ export function SessionProjectSidebar({
   const [launchMenu, setLaunchMenu] = useState<FloatingLaunchMenu | null>(null);
   const [movingSession, setMovingSession] =
     useState<SessionSidebarSessionItem | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [activeSearchResult, setActiveSearchResult] = useState(0);
   const launchMenuRef = useRef<HTMLElement>(null);
   const menuAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const searchCandidates = useMemo(
+    () =>
+      projects.flatMap((project) => {
+        const firstSession = project.sessions[0];
+        const projectResult: SidebarSearchResult[] = firstSession
+          ? [
+              {
+                id: `project:${project.projectId}`,
+                kind: "project",
+                label: project.label,
+                hint: project.workingDirectory ?? project.label,
+                nodeId: firstSession.nodeId,
+                sessionId: firstSession.sessionId,
+              },
+            ]
+          : [];
+        const sessionResults = project.sessions.map<SidebarSearchResult>(
+          (session) => ({
+            id: `session:${session.sessionId}`,
+            kind: "session",
+            label: session.label,
+            hint: project.label,
+            nodeId: session.nodeId,
+            sessionId: session.sessionId,
+            sessionKind: session.kind,
+          }),
+        );
+        return [
+          ...projectResult.map((result) => ({
+            value: result,
+            texts: [project.label, project.workingDirectory ?? ""],
+          })),
+          ...sessionResults.map((result, index) => ({
+            value: result,
+            texts: [
+              result.label,
+              project.sessions[index]?.searchText ?? "",
+              project.label,
+              project.workingDirectory ?? "",
+            ],
+          })),
+        ];
+      }),
+    [projects],
+  );
+  const searchResults = useMemo(
+    () => fuzzySearch(searchQuery, searchCandidates, 10),
+    [searchCandidates, searchQuery],
+  );
+
+  useEffect(() => {
+    setActiveSearchResult(0);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setActiveSearchResult((current) =>
+      Math.min(current, Math.max(0, searchResults.length - 1)),
+    );
+  }, [searchResults.length]);
 
   useEffect(() => {
     if (!launchMenu) return;
@@ -231,6 +312,34 @@ export function SessionProjectSidebar({
     if (projectByNode.has(nodeId)) return "project";
     if (sessionByNode.has(nodeId)) return "session";
     return null;
+  }
+
+  function projectStatus(
+    project: SessionSidebarProjectItem,
+  ): SessionSidebarStatus {
+    return aggregateSessionSidebarStatus(
+      project.sessions.map((session) => session.status),
+    );
+  }
+
+  function nodeStatus(
+    nodeId: string,
+    visited = new Set<string>(),
+  ): SessionSidebarStatus {
+    if (visited.has(nodeId)) return "connected";
+    const nextVisited = new Set(visited).add(nodeId);
+    const session = sessionByNode.get(nodeId);
+    if (session) return session.status;
+    const project = projectByNode.get(nodeId);
+    if (project) return projectStatus(project);
+    if (folders.has(nodeId)) {
+      return aggregateSessionSidebarStatus(
+        sessionSidebarChildren(layout, nodeId).map((childId) =>
+          nodeStatus(childId, nextVisited),
+        ),
+      );
+    }
+    return "connected";
   }
 
   // HTML5 drag-and-drop never fires inside the Tauri webview on Windows while
@@ -384,19 +493,67 @@ export function SessionProjectSidebar({
     );
   }
 
-  function statusMark(session: SessionSidebarSessionItem) {
-    if (session.status === "connected") return null;
-    const label = t(statusKeys[session.status]);
+  function statusMark(status: SessionSidebarStatus, compact = false) {
+    if (status === "connected") return null;
+    const label = t(statusKeys[status]);
     return (
       <span
-        className={`session-tree__status status-${session.status}`}
+        className={`session-tree__status status-${status}`}
         title={label}
         aria-label={label}
       >
         <span aria-hidden="true" />
-        {(session.status === "done" || session.status === "attention") && label}
+        {!compact && (status === "done" || status === "attention") && label}
       </span>
     );
+  }
+
+  function selectSearchResult(result: SidebarSearchResult) {
+    let parentId = layout.placements[result.nodeId]?.parentId ?? null;
+    const visited = new Set<string>();
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      if (
+        folders.has(parentId) &&
+        layout.collapsedFolderIds.includes(parentId)
+      ) {
+        onToggleFolder(parentId);
+      }
+      parentId = layout.placements[parentId]?.parentId ?? null;
+    }
+    setSearchQuery("");
+    setSearchOpen(false);
+    onSelect(result.sessionId);
+  }
+
+  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setSearchOpen(true);
+      setActiveSearchResult((current) =>
+        searchResults.length ? (current + 1) % searchResults.length : 0,
+      );
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setSearchOpen(true);
+      setActiveSearchResult((current) =>
+        searchResults.length
+          ? (current - 1 + searchResults.length) % searchResults.length
+          : 0,
+      );
+    } else if (event.key === "Enter") {
+      if (!searchOpen) {
+        setSearchOpen(true);
+        return;
+      }
+      const result = searchResults[activeSearchResult];
+      if (!result) return;
+      event.preventDefault();
+      selectSearchResult(result);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setSearchOpen(false);
+    }
   }
 
   function renderSession(session: SessionSidebarSessionItem, depth: number) {
@@ -408,7 +565,7 @@ export function SessionProjectSidebar({
           session.sessionId === activeSessionId ? " is-active" : ""
         }${dropTargetNodeId === session.nodeId ? " is-drop-target" : ""}${
           draggedNodeId === session.nodeId ? " is-dragging" : ""
-        }`}
+        }${session.status === "connected" ? "" : ` status-${session.status}`}`}
         style={treeStyle(depth)}
         key={session.nodeId}
         data-tree-node={session.nodeId}
@@ -423,7 +580,7 @@ export function SessionProjectSidebar({
         >
           <Glyph size={12} />
           <span className="truncate">{session.label}</span>
-          {statusMark(session)}
+          {statusMark(session.status)}
         </button>
         <span className="session-tree__session-actions">
           <button
@@ -472,12 +629,15 @@ export function SessionProjectSidebar({
     // the same way a folder nests its children. Without this the sessions of a
     // project have nowhere to render, which also hides their remove button.
     const children = sessionSidebarChildren(layout, project.nodeId);
+    const status = projectStatus(project);
     return (
       <div className="session-tree__project-branch" key={project.nodeId} role="treeitem">
         <div
           className={`session-tree__project${selected ? " is-active" : ""}${
             dropTargetNodeId === project.nodeId ? " is-drop-target" : ""
-          }${draggedNodeId === project.nodeId ? " is-dragging" : ""}`}
+          }${draggedNodeId === project.nodeId ? " is-dragging" : ""}${
+            status === "connected" ? "" : ` status-${status}`
+          }`}
           style={treeStyle(depth)}
           data-tree-node={project.nodeId}
           aria-grabbed={draggedNodeId === project.nodeId}
@@ -491,6 +651,7 @@ export function SessionProjectSidebar({
           >
             <FolderIcon size={13} />
             <span className="truncate">{project.label}</span>
+            {statusMark(status)}
           </button>
         </div>
         {children.length > 0 && (
@@ -504,12 +665,15 @@ export function SessionProjectSidebar({
 
   function renderFolder(folder: SessionSidebarFolder, depth: number) {
     const collapsed = layout.collapsedFolderIds.includes(folder.id);
+    const status = nodeStatus(folder.id);
     return (
       <div className="session-tree__folder" key={folder.id} role="treeitem" aria-expanded={!collapsed}>
         <div
           className={`session-tree__folder-row${
             dropTargetNodeId === folder.id ? " is-drop-target" : ""
-          }${draggedNodeId === folder.id ? " is-dragging" : ""}`}
+          }${draggedNodeId === folder.id ? " is-dragging" : ""}${
+            status === "connected" ? "" : ` status-${status}`
+          }`}
           style={treeStyle(depth)}
           data-tree-node={folder.id}
           aria-grabbed={draggedNodeId === folder.id}
@@ -523,6 +687,7 @@ export function SessionProjectSidebar({
           >
             <FolderIcon size={13} />
             <span className="truncate">{folder.name}</span>
+            {statusMark(status, true)}
           </button>
           <button
             type="button"
@@ -662,6 +827,102 @@ export function SessionProjectSidebar({
           {t("terminal.projects.chooseFailed")}
         </div>
       )}
+      <div
+        className="session-projects__search"
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) {
+            setSearchOpen(false);
+          }
+        }}
+      >
+        <div className="session-projects__search-input">
+          <SearchIcon size={13} aria-hidden="true" />
+          <input
+            ref={searchInputRef}
+            type="search"
+            role="combobox"
+            value={searchQuery}
+            placeholder={t("terminal.projects.searchPlaceholder")}
+            aria-label={t("terminal.projects.searchPlaceholder")}
+            aria-autocomplete="list"
+            aria-expanded={searchOpen && searchQuery.trim().length > 0}
+            aria-controls="session-project-search-results"
+            aria-activedescendant={
+              searchOpen && searchResults[activeSearchResult]
+                ? `session-project-search-result-${activeSearchResult}`
+                : undefined
+            }
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            onFocus={() => {
+              if (searchQuery.trim()) setSearchOpen(true);
+            }}
+            onChange={(event) => {
+              setSearchQuery(event.currentTarget.value);
+              setSearchOpen(true);
+            }}
+            onKeyDown={handleSearchKeyDown}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              className="session-projects__search-clear"
+              aria-label={t("terminal.projects.searchClear")}
+              onClick={() => {
+                setSearchQuery("");
+                setSearchOpen(false);
+                searchInputRef.current?.focus();
+              }}
+            >
+              <CloseIcon size={10} />
+            </button>
+          )}
+        </div>
+        {searchOpen && searchQuery.trim() && (
+          <div
+            className="session-projects__search-results"
+            id="session-project-search-results"
+            role="listbox"
+          >
+            {searchResults.length === 0 ? (
+              <p>{t("terminal.projects.searchEmpty", { query: searchQuery })}</p>
+            ) : (
+              searchResults.map((result, index) => {
+                const Glyph =
+                  result.kind === "project"
+                    ? FolderIcon
+                    : glyphFor(result.sessionKind ?? "agent");
+                return (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeSearchResult}
+                    id={`session-project-search-result-${index}`}
+                    className={index === activeSearchResult ? "is-active" : ""}
+                    key={result.id}
+                    onMouseEnter={() => setActiveSearchResult(index)}
+                    onClick={() => selectSearchResult(result)}
+                  >
+                    <Glyph size={12} />
+                    <span>
+                      <strong className="truncate">{result.label}</strong>
+                      <small className="truncate">{result.hint}</small>
+                    </span>
+                    <em>
+                      {t(
+                        result.kind === "project"
+                          ? "terminal.projects.searchKindProject"
+                          : "terminal.projects.searchKindSession",
+                      )}
+                    </em>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
       <div
         className={`session-tree${draggedNodeId ? " is-dragging" : ""}`}
         role="tree"

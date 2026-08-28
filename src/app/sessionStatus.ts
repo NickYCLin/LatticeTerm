@@ -7,6 +7,18 @@ export type SessionSidebarStatus =
   | "done"
   | "connected";
 
+export function aggregateSessionSidebarStatus(
+  statuses: readonly SessionSidebarStatus[],
+): SessionSidebarStatus {
+  if (statuses.some((status) => status === "attention")) return "attention";
+  if (statuses.some((status) => status === "working")) return "working";
+  if (statuses.length > 0 && statuses.every((status) => status === "done")) {
+    return "done";
+  }
+  if (statuses.some((status) => status === "idle")) return "idle";
+  return "connected";
+}
+
 export function agentGroupSidebarStatus(
   members: readonly Pick<AgentSessionSummary, "state">[],
 ): SessionSidebarStatus {

@@ -9,6 +9,7 @@ import { displayPath } from "../../app/displayPath";
 import { formatBytes } from "../../domain/metrics";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
+import { FileEntryIcon } from "../files/FileEntryIcon";
 import {
   CloseIcon,
   ExportIcon,
@@ -213,11 +214,11 @@ export function RemoteFilesPane({
                               : undefined
                         }
                       >
-                        {entry.kind === "directory" ? (
-                          <FolderIcon size={14} />
-                        ) : (
-                          <ExportIcon size={14} />
-                        )}
+                        <FileEntryIcon
+                          name={entry.name}
+                          kind={entry.kind}
+                          size={14}
+                        />
                         <span>{entry.name}</span>
                       </button>
                     </td>

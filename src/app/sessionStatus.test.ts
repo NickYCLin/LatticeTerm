@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  aggregateSessionSidebarStatus,
   agentGroupSidebarStatus,
   anyAgentSessionJustCompleted,
 } from "./sessionStatus";
 
 describe("agent group sidebar status", () => {
+  it("aggregates visible project and folder status by urgency", () => {
+    expect(aggregateSessionSidebarStatus(["done", "working"])).toBe("working");
+    expect(aggregateSessionSidebarStatus(["done", "attention"])).toBe(
+      "attention",
+    );
+    expect(aggregateSessionSidebarStatus(["done", "done"])).toBe("done");
+    expect(aggregateSessionSidebarStatus(["connected"])).toBe("connected");
+  });
+
   it("prioritizes attention and only marks the whole group done when all members finish", () => {
     expect(agentGroupSidebarStatus([{ state: "working" }, { state: "done" }])).toBe(
       "working",

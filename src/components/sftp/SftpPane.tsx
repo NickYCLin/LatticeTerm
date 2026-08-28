@@ -13,6 +13,7 @@ import type {
 import { useI18n } from "../../i18n/context";
 import { formatBytes } from "../../domain/metrics";
 import { Callout } from "../common/Callout";
+import { FileEntryIcon } from "../files/FileEntryIcon";
 import {
   CloseIcon,
   EditIcon,
@@ -398,11 +399,11 @@ export function SftpPane({
                           : void download(entry)
                       }
                     >
-                      {entry.kind === "directory" ? (
-                        <FolderIcon size={15} />
-                      ) : (
-                        <ExportIcon size={15} />
-                      )}
+                      <FileEntryIcon
+                        name={entry.name}
+                        kind={entry.kind}
+                        size={15}
+                      />
                       <span>{entry.name}</span>
                     </button>
                   </td>

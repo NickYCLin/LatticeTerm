@@ -256,6 +256,49 @@ export const FolderIcon: Glyph = (props) => (
   </Icon>
 );
 
+export const FileIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M4 1.75h5l3 3v9.5H4z" />
+    <path d="M9 1.75v3h3" />
+  </Icon>
+);
+
+export const CodeFileIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M4 1.75h5l3 3v9.5H4z" />
+    <path d="M9 1.75v3h3M7 7 5.5 8.5 7 10M9 7l1.5 1.5L9 10" />
+  </Icon>
+);
+
+export const ImageFileIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M3 2.25h10v11.5H3z" />
+    <circle cx="6" cy="5.5" r="1" />
+    <path d="m4.5 12 2.4-2.6 1.5 1.4 1.4-1.6 1.7 2.8" />
+  </Icon>
+);
+
+export const ArchiveFileIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M4 1.75h5l3 3v9.5H4z" />
+    <path d="M9 1.75v3h3M7.1 4h1.8M7.1 6h1.8M7.1 8h1.8M7.1 10h1.8M7.25 12h1.5" />
+  </Icon>
+);
+
+export const DocumentFileIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M4 1.75h5l3 3v9.5H4z" />
+    <path d="M9 1.75v3h3M6 7h4M6 9h4M6 11h3" />
+  </Icon>
+);
+
+export const LinkFileIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="m6.5 10.5-1 1a2.1 2.1 0 0 1-3-3l2-2a2.1 2.1 0 0 1 3 0" />
+    <path d="m9.5 5.5 1-1a2.1 2.1 0 0 1 3 3l-2 2a2.1 2.1 0 0 1-3 0M6 8h4" />
+  </Icon>
+);
+
 export const DesktopIcon: Glyph = (props) => (
   <Icon {...props}>
     <rect x="2" y="2.5" width="12" height="8.5" rx="1.5" />

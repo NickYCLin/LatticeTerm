@@ -64,7 +64,9 @@ describe("session project sidebar", () => {
 
     expect(markup).toContain("LatticeTerm");
     expect(markup).toContain("Codex");
-    expect(markup).toContain('class="session-tree__project-branch"');
+    expect(markup).toContain('class="session-tree__project is-active status-working"');
     expect(markup).toContain("移除「Codex」工作階段");
+    expect(markup).toContain('placeholder="搜尋專案或工作階段"');
+    expect(markup).toContain('role="combobox"');
   });
 });

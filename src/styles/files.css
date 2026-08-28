@@ -1,0 +1,49 @@
+.file-entry-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  overflow: visible;
+  color: var(--text-muted);
+  white-space: normal;
+}
+
+.sftp-entry .file-entry-icon svg,
+.remote-files-entry .file-entry-icon svg {
+  color: currentColor;
+}
+
+.file-entry-icon--folder {
+  color: var(--accent);
+}
+
+.file-entry-icon--code {
+  color: var(--info);
+}
+
+.file-entry-icon--image {
+  color: var(--ok);
+}
+
+.file-entry-icon--archive {
+  color: var(--warn);
+}
+
+.file-entry-icon--document {
+  color: var(--info);
+}
+
+.file-entry-icon--database {
+  color: var(--accent-strong);
+}
+
+.file-entry-icon--terminal {
+  color: var(--text);
+}
+
+.file-entry-icon--link {
+  color: var(--text-subtle);
+}
+
+.file-entry-icon.is-hidden {
+  opacity: 0.38;
+  filter: saturate(0.55);
+}

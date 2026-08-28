@@ -1049,6 +1049,16 @@ export function SessionsView({
       sessionId: session.sessionId,
       label: session.label,
       kind: session.kind,
+      searchText:
+        session.kind === "agent"
+          ? session.members
+              .flatMap((member) => [
+                member.label,
+                member.definitionId,
+                member.model ?? "",
+              ])
+              .join(" ")
+          : session.label,
       status:
         session.kind === "agent"
           ? agentGroupSidebarStatus(session.members)
@@ -1828,8 +1838,10 @@ export function SessionsView({
                     />
                     {isActive && (
                       <div className="ssh-split__metrics">
-                        <span className="eyebrow">{t("metrics.title")}</span>
-                        <HostMetricsPanel state={sshHostMetrics} />
+                        <HostMetricsPanel
+                          state={sshHostMetrics}
+                          variant="compact"
+                        />
                       </div>
                     )}
                   </aside>
