@@ -773,7 +773,7 @@ export const zhTW = {
   "agents.startupInstructions.saved": "已儲存；之後新開的 CLI 都會先讀取。",
   "agents.startupInstructions.useCommitTemplate": "套用繁中 Commit 範本",
   "agents.startupInstructions.save": "儲存啟動指示",
-  "agents.installed": "可使用",
+  "agents.installed": "已安裝",
   "agents.notInstalled": "未偵測",
   "agents.path.missing": "PATH 中找不到可直接啟動的程式",
   "agents.account.current": "偵測到登入資料",

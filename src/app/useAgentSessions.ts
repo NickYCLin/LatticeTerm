@@ -28,15 +28,17 @@ export interface AgentDefinition {
 }
 
 /**
- * Presents Google's current consumer CLI as one item while keeping legacy
- * Gemini data in the backend for existing sessions and non-consumer setups.
+ * Presents Google's personal-account CLI as one Antigravity item while
+ * keeping Gemini visible for API-key, Vertex, and enterprise setups.
  */
 export function agentCatalogForDisplay(
   catalog: readonly AgentDefinition[],
 ): AgentDefinition[] {
   const antigravity = catalog.find((definition) => definition.id === "antigravity");
   const gemini = catalog.find((definition) => definition.id === "gemini");
-  if (!antigravity || !gemini) return [...catalog];
+  if (!antigravity || !gemini || !gemini.consumerOauthDeprecated) {
+    return [...catalog];
+  }
 
   return catalog
     .filter((definition) => definition.id !== "gemini")

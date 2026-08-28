@@ -65,6 +65,15 @@ describe("agent session transport", () => {
       },
       consumerOauthDeprecated: true,
     });
+
+    const apiKeyCatalog = catalog.map((definition) =>
+      definition.id === "gemini"
+        ? { ...definition, consumerOauthDeprecated: false }
+        : definition,
+    );
+    expect(
+      agentCatalogForDisplay(apiKeyCatalog).map((definition) => definition.id),
+    ).toEqual(["gemini", "antigravity"]);
   });
 
   it("round-trips arbitrary PTY bytes", () => {

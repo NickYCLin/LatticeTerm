@@ -814,7 +814,7 @@ export const en: Messages = {
     "Saved; every new CLI will receive it first.",
   "agents.startupInstructions.useCommitTemplate": "Use zh-TW commit template",
   "agents.startupInstructions.save": "Save startup instructions",
-  "agents.installed": "Available",
+  "agents.installed": "Installed",
   "agents.notInstalled": "Not detected",
   "agents.path.missing": "No directly executable program was found on PATH",
   "agents.account.current": "Login data detected",

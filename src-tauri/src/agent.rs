@@ -193,9 +193,10 @@ pub struct AgentDefinition {
     pub transcript_supported: bool,
     pub installed: bool,
     pub installed_path: Option<String>,
-    /// Consumer Google OAuth stopped serving Gemini CLI on 2026-06-18.
-    /// Enterprise, API-key and Vertex authentication remain valid, so the CLI
-    /// is not disabled; the UI instead explains the migration boundary.
+    /// Whether this installation selected Gemini's retired personal Google
+    /// OAuth client. Enterprise, API-key and Vertex authentication remain
+    /// valid, so the warning must follow the configured auth mode, not merely
+    /// the executable name.
     pub consumer_oauth_deprecated: bool,
     /// Non-secret identity metadata read from each CLI's own local account
     /// file. Tokens and credential values never cross the Tauri boundary.
@@ -1458,7 +1459,8 @@ pub fn catalog() -> Vec<AgentDefinition> {
                     .is_some(),
                 installed: path.is_some(),
                 installed_path: path.map(|path| path.display().to_string()),
-                consumer_oauth_deprecated: agent.id == "gemini",
+                consumer_oauth_deprecated: agent.id == "gemini"
+                    && gemini_consumer_oauth_deprecated(),
                 account: detect_agent_account(agent.id),
                 install: install_definition(agent.id),
             }
@@ -1500,6 +1502,49 @@ fn read_account_file(relative: &[&str]) -> Option<String> {
         path.push(component);
     }
     std::fs::read_to_string(path).ok()
+}
+
+fn gemini_auth_type_from_json(raw: &str) -> Option<String> {
+    let document = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    document
+        .pointer("/security/auth/selectedType")
+        .or_else(|| document.get("selectedAuthType"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 80)
+        .map(str::to_string)
+}
+
+fn environment_value_is_present(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| !value.is_empty())
+}
+
+fn environment_flag_is_true(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| {
+        matches!(
+            value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn gemini_consumer_oauth_deprecated() -> bool {
+    if [
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_PROJECT_ID",
+    ]
+    .iter()
+    .any(|name| environment_value_is_present(name))
+        || environment_flag_is_true("GOOGLE_GENAI_USE_VERTEXAI")
+    {
+        return false;
+    }
+    read_account_file(&[".gemini", "settings.json"])
+        .and_then(|raw| gemini_auth_type_from_json(&raw))
+        .is_some_and(|auth_type| auth_type.eq_ignore_ascii_case("oauth-personal"))
 }
 
 fn codex_account_from_json(raw: &str) -> AgentAccountInfo {
@@ -2261,6 +2306,36 @@ fn resolve_launch(
     ))
 }
 
+fn migrate_deprecated_google_consumer_request(
+    request: &AgentLaunchRequest,
+    deprecated: bool,
+) -> Result<AgentLaunchRequest, String> {
+    if request.definition_id != "gemini" || !deprecated {
+        return Ok(request.clone());
+    }
+    if (!request.arguments.is_empty() || request.resume_session_id.is_some())
+        && !request.restore_existing_session
+    {
+        return Err(
+            "Gemini CLI personal OAuth moved to Google Antigravity CLI, but Gemini-specific arguments or session IDs cannot be migrated safely. Start a new Antigravity session instead."
+                .to_string(),
+        );
+    }
+
+    let mut migrated = request.clone();
+    migrated.definition_id = "antigravity".to_string();
+    migrated.executable = "agy".to_string();
+    if migrated.label.trim().is_empty() || migrated.label.trim() == "Gemini CLI" {
+        migrated.label = "Google Antigravity CLI".to_string();
+    }
+    // Gemini and Antigravity use different native conversation identifiers
+    // and flags. Reopening the project is safe; pretending the old identifier
+    // can be resumed is not.
+    migrated.arguments.clear();
+    migrated.resume_session_id = None;
+    Ok(migrated)
+}
+
 fn encode(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
@@ -2545,6 +2620,8 @@ pub fn launch_with_replay(
     request: AgentLaunchRequest,
     restored_output: Option<Vec<u8>>,
 ) -> Result<AgentSessionSummary, String> {
+    let request =
+        migrate_deprecated_google_consumer_request(&request, gemini_consumer_oauth_deprecated())?;
     let launched_at = Instant::now();
     let size = validated_size(request.cols, request.rows)?;
     let launch_arguments = request.arguments.clone();
@@ -3062,6 +3139,75 @@ session id: 0199aa11-"
             gemini_account_from_json(r#"{"active":"gemini@example.com","oauth":"secret"}"#);
         assert_eq!(gemini.label.as_deref(), Some("gemini@example.com"));
         assert_eq!(gemini.method.as_deref(), Some("Google"));
+    }
+
+    #[test]
+    fn gemini_auth_parser_distinguishes_personal_oauth_from_other_modes() {
+        assert_eq!(
+            gemini_auth_type_from_json(
+                r#"{"security":{"auth":{"selectedType":"oauth-personal"}}}"#,
+            )
+            .as_deref(),
+            Some("oauth-personal")
+        );
+        assert_eq!(
+            gemini_auth_type_from_json(r#"{"selectedAuthType":"gemini-api-key"}"#).as_deref(),
+            Some("gemini-api-key")
+        );
+        assert!(gemini_auth_type_from_json(r#"{"security":{"auth":{}}}"#).is_none());
+    }
+
+    #[test]
+    fn deprecated_personal_gemini_launches_migrate_without_reusing_native_ids() {
+        let request = AgentLaunchRequest {
+            definition_id: "gemini".to_string(),
+            label: "Gemini CLI".to_string(),
+            executable: "gemini".to_string(),
+            arguments: vec!["--resume".to_string(), "legacy-session".to_string()],
+            resume_session_id: Some("legacy-session".to_string()),
+            group_id: Some("google-project".to_string()),
+            seed_input: None,
+            restore_existing_session: true,
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 120,
+            rows: 32,
+        };
+
+        let migrated = migrate_deprecated_google_consumer_request(&request, true).unwrap();
+        assert_eq!(migrated.definition_id, "antigravity");
+        assert_eq!(migrated.label, "Google Antigravity CLI");
+        assert_eq!(migrated.executable, "agy");
+        assert!(migrated.arguments.is_empty());
+        assert!(migrated.resume_session_id.is_none());
+        assert_eq!(migrated.group_id.as_deref(), Some("google-project"));
+
+        let unchanged = migrate_deprecated_google_consumer_request(&request, false).unwrap();
+        assert_eq!(unchanged.definition_id, "gemini");
+        assert_eq!(
+            unchanged.resume_session_id.as_deref(),
+            Some("legacy-session")
+        );
+    }
+
+    #[test]
+    fn explicit_gemini_arguments_require_a_manual_antigravity_restart() {
+        let request = AgentLaunchRequest {
+            definition_id: "gemini".to_string(),
+            label: String::new(),
+            executable: String::new(),
+            arguments: vec!["--model".to_string(), "gemini-2.5-pro".to_string()],
+            resume_session_id: None,
+            group_id: None,
+            seed_input: None,
+            restore_existing_session: false,
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 120,
+            rows: 32,
+        };
+
+        assert!(migrate_deprecated_google_consumer_request(&request, true)
+            .unwrap_err()
+            .contains("cannot be migrated safely"));
     }
 
     #[test]
