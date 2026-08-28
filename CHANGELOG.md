@@ -4,6 +4,25 @@
 
 ---
 
+## [0.28.0](https://github.com/NickYCLin/lattice-term/compare/v0.27.0...v0.28.0) (2026-08-28)
+
+
+### 🚀 新增功能
+
+* **agents:** 支援透過 Remote 交付檔案 ([dfc06aa](https://github.com/NickYCLin/lattice-term/commit/dfc06aaf144ac820514df2c797e367856563c063))
+* **agents:** 顯示 Remote 檔案傳送進度 ([ba37426](https://github.com/NickYCLin/lattice-term/commit/ba3742692586fecd38cb24ec0152ae96abddd972))
+* **connections:** 改版新增連結流程 ([0dd7246](https://github.com/NickYCLin/lattice-term/commit/0dd72460837d484c3c96dd92d26d0c4416a91ceb))
+* **workspace:** 加入搜尋與精簡狀態提示 ([87ad71b](https://github.com/NickYCLin/lattice-term/commit/87ad71b3e4e05397f41a0f5cd4637504cb72b2cb))
+* **workspace:** 補齊工作階段整理、移轉與完成通知 ([08b35a2](https://github.com/NickYCLin/lattice-term/commit/08b35a2e68d5b5091a1e65c4702a4ae3afc446bd))
+
+
+### 🛠️ 問題修正
+
+* **agents:** 修正 Gemini 個人帳號啟動流程 ([648ee6e](https://github.com/NickYCLin/lattice-term/commit/648ee6e7690ad101a140ef00e78cd666b322d993))
+* **notifications:** 避免漏掉 CLI 完成提示音 ([ffd5737](https://github.com/NickYCLin/lattice-term/commit/ffd5737a5b522b95d20cbca2da6c82b4e2a0d717))
+* **sessions:** 支援從側欄移除工作階段 ([77d5b26](https://github.com/NickYCLin/lattice-term/commit/77d5b261699918889427b4122b5b0adc67e972e9))
+* **terminal:** 支援 Linux CLI 貼上剪貼簿圖片 ([f118de2](https://github.com/NickYCLin/lattice-term/commit/f118de26be34af60c312329be312dba9f1ae7aa1))
+
 ## [0.27.0](https://github.com/NickYCLin/lattice-term/compare/v0.26.1...v0.27.0) (2026-08-27)
 
 
