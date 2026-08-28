@@ -65,7 +65,11 @@ import {
   snapshotLiveWorkspaceSessions,
 } from "./app/workspaceSessionPersistence";
 import { loadAuthPref } from "./app/authPreferences";
-import { prepareNotificationAudio } from "./app/notificationSounds";
+import {
+  playNotificationSound,
+  prepareNotificationAudio,
+} from "./app/notificationSounds";
+import { anyAgentSessionJustCompleted } from "./app/sessionStatus";
 import { PlusIcon, ScreenShareIcon } from "./components/icons";
 import "./styles/index.css";
 
@@ -186,6 +190,31 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const rdp = useRdpSessions();
   const vnc = useVncSessions();
   const vault = useVault();
+
+  // Completion notifications belong to the application shell, not the lazy
+  // terminal view. This keeps the listener alive when a CLI is launched from
+  // Agent Fleet and finishes before the terminal workspace has loaded.
+  const completionStates = agents.sessions
+    .map((session) => `${session.sessionId}:${session.state}`)
+    .join("|");
+  const previousCompletionStatesRef = useRef<
+    Map<string, (typeof agents.sessions)[number]["state"]> | null
+  >(null);
+  useEffect(() => {
+    if (agents.mode !== "ready") {
+      previousCompletionStatesRef.current = null;
+      return;
+    }
+
+    const current = new Map(
+      agents.sessions.map((session) => [session.sessionId, session.state]),
+    );
+    const previous = previousCompletionStatesRef.current;
+    if (anyAgentSessionJustCompleted(previous, agents.sessions)) {
+      void playNotificationSound(preferences.agentCompletionSound);
+    }
+    previousCompletionStatesRef.current = current;
+  }, [agents.mode, completionStates, preferences.agentCompletionSound]);
 
   useEffect(() => {
     let unlocked = false;
@@ -768,7 +797,6 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                     activeSessionId={activeSessionId}
                     onSelect={setActiveSessionId}
                     theme={activeTheme}
-                    completionSound={preferences.agentCompletionSound}
                     sessionRestoreComplete={sessionRestoreComplete}
                   />
                 </div>

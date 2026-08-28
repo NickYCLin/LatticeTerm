@@ -19,14 +19,7 @@ import { agentCatalogForDisplay } from "../app/useAgentSessions";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
-import {
-  playNotificationSound,
-  type NotificationSoundChoice,
-} from "../app/notificationSounds";
-import {
-  agentGroupSidebarStatus,
-  anyAgentSessionJustCompleted,
-} from "../app/sessionStatus";
+import { agentGroupSidebarStatus } from "../app/sessionStatus";
 import { disconnectAgentSessionMembers } from "../app/agentSessionRemoval";
 import {
   relocateAgentSessionGroup,
@@ -199,7 +192,6 @@ export function SessionsView({
   activeSessionId,
   onSelect,
   theme,
-  completionSound,
   sessionRestoreComplete,
 }: {
   agents: AgentApi;
@@ -211,7 +203,6 @@ export function SessionsView({
   activeSessionId: string | null;
   onSelect: (sessionId: string | null) => void;
   theme: ThemeId;
-  completionSound: NotificationSoundChoice;
   sessionRestoreComplete: boolean;
 }) {
   const { t } = useI18n();
@@ -815,23 +806,6 @@ export function SessionsView({
       label: `${session.host}:${session.port}`,
     })),
   ];
-
-  const completionStates = agents.sessions
-    .map((session) => `${session.sessionId}:${session.state}`)
-    .join("|");
-  const previousCompletionStatesRef = useRef<
-    Map<string, AgentSessionSummary["state"]> | null
-  >(null);
-  useEffect(() => {
-    const current = new Map(
-      agents.sessions.map((session) => [session.sessionId, session.state]),
-    );
-    const previous = previousCompletionStatesRef.current;
-    if (anyAgentSessionJustCompleted(previous, agents.sessions)) {
-      void playNotificationSound(completionSound);
-    }
-    previousCompletionStatesRef.current = current;
-  }, [completionStates, completionSound]);
 
   const closedNotices: ClosedNoticeSource[] = [];
   if (agents.lastClosed) {
