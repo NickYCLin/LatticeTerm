@@ -8,6 +8,7 @@ import {
 } from "../../app/remoteRelay";
 import { copySensitiveText } from "../../app/sensitiveClipboard";
 import type { RemoteHostApi } from "../../app/useRemoteHost";
+import { displayPath } from "../../app/displayPath";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { CloseIcon, CopyIcon, ScreenShareIcon, ShieldIcon } from "../icons";
@@ -254,7 +255,7 @@ export function RemoteHostDialog({
                 {host.status.fileTransfer && host.status.fileRoot && (
                   <div className="remote-host-value">
                     <span>{t("remote.host.fileRoot")}</span>
-                    <code>{host.status.fileRoot}</code>
+                    <code>{displayPath(host.status.fileRoot)}</code>
                   </div>
                 )}
               </div>

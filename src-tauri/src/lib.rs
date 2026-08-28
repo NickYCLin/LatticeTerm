@@ -9,6 +9,7 @@ pub mod hostkeys;
 #[cfg(target_os = "linux")]
 pub mod linux_webkit;
 pub mod metrics;
+pub mod notification_sound;
 pub mod rdp;
 pub mod remote;
 pub mod remote_files;
@@ -80,6 +81,13 @@ fn now_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
+}
+
+#[tauri::command]
+async fn play_notification_sound(sound: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || notification_sound::play(&sound))
+        .await
+        .map_err(|error| format!("Notification sound did not complete: {error}"))?
 }
 
 async fn credential_call<T, F>(operation: F) -> Result<T, String>
@@ -1722,6 +1730,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             runtime_summary,
+            play_notification_sound,
             encrypted_backup_export,
             encrypted_backup_restore,
             agent_catalog,

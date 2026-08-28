@@ -1,4 +1,6 @@
-/** Short, original Web Audio cues for Agent completion notifications. */
+import { invoke } from "@tauri-apps/api/core";
+
+/** Short, original cues for Agent completion notifications. */
 
 export type NotificationSoundChoice =
   | "off"
@@ -22,6 +24,12 @@ interface NotificationTone {
   gain: number;
   type: OscillatorType;
 }
+
+export type NotificationPlaybackResult =
+  | "disabled"
+  | "native"
+  | "webAudio"
+  | "unavailable";
 
 export function notificationToneSequence(
   sound: NotificationSoundChoice,
@@ -83,14 +91,14 @@ export async function prepareNotificationAudio(): Promise<boolean> {
 }
 
 /** Plays one short cue. Browser autoplay rejection is intentionally silent. */
-export async function playNotificationSound(sound: NotificationSoundChoice) {
-  const tones = notificationToneSequence(sound);
-  if (tones.length === 0) return;
+async function playWebAudioSound(
+  tones: readonly NotificationTone[],
+): Promise<boolean> {
   const context = audioContext();
-  if (!context) return;
+  if (!context) return false;
 
   try {
-    if (!(await prepareNotificationAudio())) return;
+    if (!(await prepareNotificationAudio())) return false;
     const start = context.currentTime + 0.015;
     for (const tone of tones) {
       const oscillator = context.createOscillator();
@@ -107,8 +115,30 @@ export async function playNotificationSound(sound: NotificationSoundChoice) {
       oscillator.start(toneStart);
       oscillator.stop(toneEnd + 0.01);
     }
+    return true;
   } catch {
-    // A platform may block audio until a user gesture. Notifications remain
-    // visible in the sidebar even when the cue cannot play.
+    return false;
   }
+}
+
+export async function playNotificationSound(
+  sound: NotificationSoundChoice,
+): Promise<NotificationPlaybackResult> {
+  const tones = notificationToneSequence(sound);
+  if (tones.length === 0) return "disabled";
+
+  if (
+    typeof window !== "undefined" &&
+    "__TAURI_INTERNALS__" in window
+  ) {
+    try {
+      if (await invoke<boolean>("play_notification_sound", { sound })) {
+        return "native";
+      }
+    } catch {
+      // Non-Windows desktop builds and older backends fall through to Web Audio.
+    }
+  }
+
+  return (await playWebAudioSound(tones)) ? "webAudio" : "unavailable";
 }

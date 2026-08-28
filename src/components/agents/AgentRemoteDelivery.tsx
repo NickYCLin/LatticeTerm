@@ -5,6 +5,7 @@ import type {
   RemoteFileTransfer,
   RemoteSessionSummary,
 } from "../../app/useRemoteSessions";
+import { displayPath } from "../../app/displayPath";
 import { formatBytes } from "../../domain/metrics";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
@@ -229,7 +230,7 @@ export function AgentRemoteDelivery({ remote }: { remote: DeliveryRemoteApi }) {
                   {t("agents.delivery.targetOption", {
                     host: session.host,
                     name: session.agentName,
-                    root: session.fileRootLabel,
+                    root: displayPath(session.fileRootLabel),
                   })}
                 </option>
               ))}
@@ -382,7 +383,7 @@ export function AgentRemoteDelivery({ remote }: { remote: DeliveryRemoteApi }) {
                 pending.file.name,
               ),
               name: pending.session.agentName,
-              root: pending.session.fileRootLabel,
+              root: displayPath(pending.session.fileRootLabel),
             },
           )}
           confirmLabel={t("agents.delivery.confirmAction")}

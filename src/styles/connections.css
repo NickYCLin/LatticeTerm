@@ -595,6 +595,24 @@
   max-width: 32rem;
 }
 
+.setting-notification-preview {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: 0 0 var(--space-4);
+  flex-wrap: wrap;
+}
+
+.setting-notification-preview small {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.setting-notification-preview small.is-danger {
+  color: var(--danger);
+}
+
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
@@ -1515,18 +1533,6 @@
   font-weight: 700;
 }
 
-/* The CLI currently on screen inside a multi-CLI tab. */
-.session-header__member {
-  color: var(--text-muted);
-  font-weight: 500;
-}
-
-.session-header__member--running {
-  flex: none;
-  white-space: nowrap;
-  color: var(--info);
-}
-
 /* Quick-chat launcher on the empty workspace screen. */
 .terminal-empty-quick {
   display: grid;
@@ -1562,6 +1568,54 @@
   align-items: center;
   gap: var(--space-1);
   margin-left: auto;
+}
+
+.session-relocation__paths {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-4);
+}
+
+.session-relocation__paths > div {
+  min-width: 0;
+}
+
+.workspace-import__list {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 15rem;
+  padding-right: var(--space-1);
+  overflow-y: auto;
+}
+
+.workspace-import__item {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.8fr) minmax(10rem, 1.4fr);
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.workspace-import__item > span {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.workspace-import__item > small {
+  grid-column: 1 / -1;
+  color: var(--text-faint);
+}
+
+@media (max-width: 42rem) {
+  .workspace-import__item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace-import__item > small {
+    grid-column: auto;
+  }
 }
 
 .session-header__files-button.is-active {
@@ -1841,6 +1895,13 @@
 .cli-switch__add-wrap {
   position: relative;
   display: inline-flex;
+}
+
+.cli-switch__summary {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
 .cli-switch__add {

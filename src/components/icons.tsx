@@ -325,6 +325,14 @@ export const ExportIcon: Glyph = (props) => (
   </Icon>
 );
 
+export const MoreIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <circle cx="3.25" cy="8" r="0.9" fill="currentColor" stroke="none" />
+    <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
+    <circle cx="12.75" cy="8" r="0.9" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
 export const CopyIcon: Glyph = (props) => (
   <Icon {...props}>
     <rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.5" />

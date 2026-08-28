@@ -20,7 +20,7 @@ import { localeCatalog, type Locale } from "../i18n/catalog";
 import type { MessageKey } from "../i18n/context";
 import { Chip } from "../components/common/Badge";
 import { Callout } from "../components/common/Callout";
-import { CheckIcon } from "../components/icons";
+import { CheckIcon, PlayIcon } from "../components/icons";
 import { useAppUpdater, type AppUpdater } from "../app/useAppUpdater";
 import { APP_VERSION } from "../app/version";
 import type { EncryptedBackupRestore } from "../app/encryptedBackup";
@@ -161,6 +161,9 @@ export function SettingsView({
   const [clipboardBusy, setClipboardBusy] = useState(false);
   const [clipboardNotice, setClipboardNotice] =
     useState<MessageKey | null>(null);
+  const [notificationPreview, setNotificationPreview] = useState<
+    "idle" | "playing" | "unavailable"
+  >("idle");
   const [systemPrefersReducedMotion, setSystemPrefersReducedMotion] = useState(
     () =>
       typeof window !== "undefined" &&
@@ -284,9 +287,50 @@ export function SettingsView({
             value={preferences.agentCompletionSound}
             onChange={(agentCompletionSound) => {
               onChange({ agentCompletionSound });
-              void playNotificationSound(agentCompletionSound);
+              if (agentCompletionSound === "off") {
+                setNotificationPreview("idle");
+                return;
+              }
+              setNotificationPreview("playing");
+              void playNotificationSound(agentCompletionSound).then((result) => {
+                setNotificationPreview(
+                  result === "unavailable" ? "unavailable" : "idle",
+                );
+              });
             }}
           />
+          <div className="setting-notification-preview">
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              disabled={
+                preferences.agentCompletionSound === "off" ||
+                notificationPreview === "playing"
+              }
+              onClick={() => {
+                setNotificationPreview("playing");
+                void playNotificationSound(
+                  preferences.agentCompletionSound,
+                ).then((result) => {
+                  setNotificationPreview(
+                    result === "unavailable" ? "unavailable" : "idle",
+                  );
+                });
+              }}
+            >
+              <PlayIcon size={13} />
+              {t(
+                notificationPreview === "playing"
+                  ? "settings.notifications.previewing"
+                  : "settings.notifications.preview",
+              )}
+            </button>
+            {notificationPreview === "unavailable" && (
+              <small className="is-danger" role="status">
+                {t("settings.notifications.previewUnavailable")}
+              </small>
+            )}
+          </div>
         </div>
       </section>
 

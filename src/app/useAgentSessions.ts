@@ -27,6 +27,37 @@ export interface AgentDefinition {
   install: AgentInstallDefinition;
 }
 
+/**
+ * Presents Google's current consumer CLI as one item while keeping legacy
+ * Gemini data in the backend for existing sessions and non-consumer setups.
+ */
+export function agentCatalogForDisplay(
+  catalog: readonly AgentDefinition[],
+): AgentDefinition[] {
+  const antigravity = catalog.find((definition) => definition.id === "antigravity");
+  const gemini = catalog.find((definition) => definition.id === "gemini");
+  if (!antigravity || !gemini) return [...catalog];
+
+  return catalog
+    .filter((definition) => definition.id !== "gemini")
+    .map((definition) => {
+      if (definition.id !== "antigravity") return definition;
+      const detectedGeminiAccount =
+        definition.account.state !== "signedIn" &&
+        gemini.account.state === "signedIn"
+          ? {
+              ...gemini.account,
+              method: `${gemini.account.method ?? "Google"} · Gemini CLI`,
+            }
+          : definition.account;
+      return {
+        ...definition,
+        account: detectedGeminiAccount,
+        consumerOauthDeprecated: true,
+      };
+    });
+}
+
 export interface AgentAccountInfo {
   state: "signedIn" | "signedOut" | "unknown" | "unsupported";
   /** Email/account label only. Authentication tokens never enter the WebView. */
@@ -54,6 +85,8 @@ export interface AgentSessionSummary {
   /** Model announced by the CLI or explicitly supplied through --model. */
   model: string | null;
   executable: string;
+  /** Original CLI arguments, retained so a safe relaunch can preserve options. */
+  launchArguments: string[];
   workingDirectory: string;
   state: AgentLifecycle;
   stateSource: AgentStateSource;

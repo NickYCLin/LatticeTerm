@@ -27,6 +27,7 @@ function agent(overrides: Record<string, unknown> = {}) {
     label: "OpenAI Codex",
     model: null,
     executable: "C:\\tools\\codex.cmd",
+    launchArguments: [],
     workingDirectory: "D:\\project\\LatticeTerm",
     state: "working" as const,
     stateSource: "heuristic" as const,
@@ -57,6 +58,7 @@ describe("workspace session persistence", () => {
       expect.objectContaining({
         kind: "agent",
         groupLabel: "LatticeTerm",
+        launchArguments: [],
         resumeSessionId: "native-chat-1",
       }),
       { kind: "ssh", profileId: "profile-1" },
@@ -114,5 +116,23 @@ describe("workspace session persistence", () => {
     expect(
       antigravity.kind === "agent" && agentRestoreArguments(antigravity),
     ).toEqual(["--continue"]);
+  });
+
+  it("preserves explicit CLI arguments when no native session id exists", () => {
+    const saved = snapshotLiveWorkspaceSessions(
+      [
+        agent({
+          capturedSessionId: null,
+          launchArguments: ["--model", "gpt-5.6-sol"],
+        }),
+      ],
+      [],
+      null,
+    ).sessions[0];
+
+    expect(saved.kind === "agent" && agentRestoreArguments(saved)).toEqual([
+      "--model",
+      "gpt-5.6-sol",
+    ]);
   });
 });

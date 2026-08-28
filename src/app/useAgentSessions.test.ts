@@ -1,15 +1,72 @@
 import { describe, expect, it } from "vitest";
 import {
   applyAgentStateEvent,
+  agentCatalogForDisplay,
   buildAgentBroadcastPayload,
   decodeAgentPayload,
   encodeAgentPayload,
   moveAgentLaunchPlan,
   reconcileAgentOutputSnapshot,
   splitAgentArguments,
+  type AgentDefinition,
 } from "./useAgentSessions";
 
 describe("agent session transport", () => {
+  it("shows Antigravity as Google's single consumer item with Gemini login data", () => {
+    const base = {
+      adapterVersion: 1,
+      resumeSupported: false,
+      resumeLatestSupported: false,
+      transcriptSupported: false,
+      installed: true,
+      installedPath: "C:\\bin\\agent.exe",
+      consumerOauthDeprecated: false,
+      account: { state: "unsupported" as const, label: null, method: null },
+      install: {
+        executable: null,
+        arguments: [],
+        displayCommand: "",
+        sourceUrl: "",
+        available: false,
+      },
+    };
+    const catalog: AgentDefinition[] = [
+      {
+        ...base,
+        id: "gemini",
+        label: "Gemini CLI",
+        executable: "gemini",
+        consumerOauthDeprecated: true,
+        account: {
+          state: "signedIn",
+          label: "user@example.com",
+          method: "Google",
+        },
+      },
+      {
+        ...base,
+        id: "antigravity",
+        label: "Google Antigravity CLI",
+        executable: "agy",
+      },
+    ];
+
+    const displayed = agentCatalogForDisplay(catalog);
+
+    expect(displayed.map((definition) => definition.id)).toEqual([
+      "antigravity",
+    ]);
+    expect(displayed[0]).toMatchObject({
+      label: "Google Antigravity CLI",
+      account: {
+        state: "signedIn",
+        label: "user@example.com",
+        method: "Google · Gemini CLI",
+      },
+      consumerOauthDeprecated: true,
+    });
+  });
+
   it("round-trips arbitrary PTY bytes", () => {
     const bytes = new Uint8Array([0, 10, 27, 128, 200, 255]);
     expect(decodeAgentPayload(encodeAgentPayload(bytes))).toEqual(bytes);
@@ -90,6 +147,7 @@ describe("agent session transport", () => {
         label: "Codex",
         model: "gpt-5",
         executable: "/usr/bin/codex",
+        launchArguments: [],
         workingDirectory: "/work",
         state: "working" as const,
         stateSource: "heuristic" as const,

@@ -15,6 +15,7 @@ import type {
   AgentDefinition,
   AgentSessionSummary,
 } from "../app/useAgentSessions";
+import { agentCatalogForDisplay } from "../app/useAgentSessions";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
@@ -28,8 +29,14 @@ import {
 } from "../app/sessionStatus";
 import { disconnectAgentSessionMembers } from "../app/agentSessionRemoval";
 import {
+  relocateAgentSessionGroup,
+  summarizeAgentRelocation,
+} from "../app/agentSessionRelocation";
+import {
   createSessionSidebarFolder,
+  emptySessionSidebarLayout,
   loadSessionSidebarLayout,
+  mergeSessionSidebarLayouts,
   moveSessionSidebarNode,
   reconcileSessionSidebarLayout,
   removeSessionSidebarFolder,
@@ -40,6 +47,13 @@ import {
   type LiveSessionSidebarNode,
   type SessionSidebarFolder,
 } from "../app/sessionSidebarLayout";
+import {
+  MAX_WORKSPACE_TRANSFER_BYTES,
+  parseWorkspaceTransfer,
+  serializeWorkspaceTransfer,
+  type PortableWorkspaceItem,
+  type WorkspaceTransferFile,
+} from "../app/workspaceTransfer";
 import { useI18n } from "../i18n/context";
 import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
@@ -47,11 +61,14 @@ import {
   SessionProjectSidebar,
   type SessionSidebarProjectItem,
 } from "../components/sessions/SessionProjectSidebar";
+import { AgentSessionRelocationDialog } from "../components/sessions/AgentSessionRelocationDialog";
+import { WorkspaceImportDialog } from "../components/sessions/WorkspaceImportDialog";
 import {
   AgentIcon,
   CloseIcon,
   EditIcon,
   FolderIcon,
+  ImportIcon,
   PlusIcon,
   ScreenShareIcon,
   TerminalIcon,
@@ -79,6 +96,50 @@ type SessionRef =
   | { kind: "remote"; sessionId: string; profileId: string; label: string }
   | { kind: "rdp"; sessionId: string; profileId: string; label: string }
   | { kind: "vnc"; sessionId: string; profileId: string; label: string };
+
+type AgentSessionRef = Extract<SessionRef, { kind: "agent" }>;
+
+interface SessionRelocationDraft {
+  session: AgentSessionRef;
+  activeMemberId: string;
+  fromDirectory: string;
+  toDirectory: string;
+}
+
+interface WorkspaceTransferNotice {
+  tone: "info" | "warn" | "danger";
+  title: string;
+  body: string;
+}
+
+function workspaceItemSignature(
+  item: Pick<
+    PortableWorkspaceItem,
+    | "groupKey"
+    | "definitionId"
+    | "label"
+    | "launchArguments"
+    | "workingDirectory"
+  >,
+): string {
+  return JSON.stringify([
+    item.groupKey,
+    item.definitionId,
+    item.label,
+    item.launchArguments,
+    normalizeDirectory(item.workingDirectory),
+  ]);
+}
+
+function downloadWorkspaceFile(content: string) {
+  const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `latticeterm-workspace-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 interface ClosedNoticeSource {
   notice: SessionClosedNotice;
@@ -267,6 +328,24 @@ export function SessionsView({
     null,
   );
   const [newProjectError, setNewProjectError] = useState<string | null>(null);
+  const [relocation, setRelocation] = useState<SessionRelocationDraft | null>(
+    null,
+  );
+  const [choosingRelocation, setChoosingRelocation] = useState(false);
+  const [relocating, setRelocating] = useState(false);
+  const [relocationError, setRelocationError] = useState<string | null>(null);
+  const [relocationNotice, setRelocationNotice] = useState<string | null>(null);
+  const workspaceImportInputRef = useRef<HTMLInputElement>(null);
+  const [workspaceImport, setWorkspaceImport] =
+    useState<WorkspaceTransferFile | null>(null);
+  const [workspaceImportError, setWorkspaceImportError] = useState<string | null>(
+    null,
+  );
+  const [importingWorkspace, setImportingWorkspace] = useState(false);
+  const [pendingClearWorkspace, setPendingClearWorkspace] = useState(false);
+  const [clearingWorkspace, setClearingWorkspace] = useState(false);
+  const [workspaceTransferNotice, setWorkspaceTransferNotice] =
+    useState<WorkspaceTransferNotice | null>(null);
   // Mobile hides the sidebar; this opens it as an overlay drawer, the only
   // way to switch sessions there now that the tab strip is gone.
   const [mobileTreeOpen, setMobileTreeOpen] = useState(false);
@@ -289,7 +368,8 @@ export function SessionsView({
     return () => document.removeEventListener("keydown", close, true);
   }, [folderEditor]);
 
-  const installedAgents = agents.catalog.filter(
+  const displayAgentCatalog = agentCatalogForDisplay(agents.catalog);
+  const installedAgents = displayAgentCatalog.filter(
     (definition) => definition.installed,
   );
 
@@ -307,6 +387,273 @@ export function SessionsView({
       setNewProjectError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setChoosingProject(false);
+    }
+  }
+
+  async function chooseRelocationDirectory(session: AgentSessionRef) {
+    setChoosingRelocation(true);
+    setRelocationError(null);
+    setRelocationNotice(null);
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: t("terminal.directory.choose"),
+      });
+      const fromDirectory = session.members[0]?.workingDirectory ?? "";
+      if (
+        typeof selected !== "string" ||
+        normalizeDirectory(selected) === normalizeDirectory(fromDirectory)
+      ) {
+        return;
+      }
+      setRelocation({
+        session,
+        activeMemberId: activeMemberId(session),
+        fromDirectory,
+        toDirectory: selected,
+      });
+    } catch (reason) {
+      setRelocationError(
+        t("terminal.directory.chooseFailed", {
+          detail: reason instanceof Error ? reason.message : String(reason),
+        }),
+      );
+    } finally {
+      setChoosingRelocation(false);
+    }
+  }
+
+  async function confirmRelocation() {
+    const request = relocation;
+    if (!request) return;
+    setRelocating(true);
+    setRelocationError(null);
+    try {
+      const outcome = await relocateAgentSessionGroup({
+        sessions: request.session.members,
+        definitions: agents.catalog,
+        activeSessionId: request.activeMemberId,
+        workingDirectory: request.toDirectory,
+        formatHandoff: (transcript) =>
+          t("terminal.handoff.frame", { transcript }),
+        api: agents,
+      });
+      setActiveMemberByGroup((current) => ({
+        ...current,
+        [request.session.groupId]: outcome.selectedSessionId,
+      }));
+      onSelect(outcome.selectedSessionId);
+      setRelocation(null);
+      if (outcome.closeFailures.length > 0) {
+        setRelocationNotice(
+          t("terminal.directory.partialClose", {
+            count: outcome.closeFailures.length,
+          }),
+        );
+      }
+    } catch (reason) {
+      setRelocationError(
+        t("terminal.directory.failed", {
+          detail: reason instanceof Error ? reason.message : String(reason),
+        }),
+      );
+    } finally {
+      setRelocating(false);
+    }
+  }
+
+  function classifyWorkspaceImport(transfer: WorkspaceTransferFile) {
+    const existingCounts = new Map<string, number>();
+    for (const session of agents.sessions) {
+      const signature = workspaceItemSignature({
+        groupKey: session.groupId || session.sessionId,
+        definitionId: session.definitionId,
+        label: session.label,
+        launchArguments: session.launchArguments,
+        workingDirectory: session.workingDirectory,
+      });
+      existingCounts.set(signature, (existingCounts.get(signature) ?? 0) + 1);
+    }
+
+    const pending: PortableWorkspaceItem[] = [];
+    let unavailableCount = 0;
+    let existingCount = 0;
+    for (const item of transfer.items) {
+      const definition = agents.catalog.find(
+        (candidate) => candidate.id === item.definitionId,
+      );
+      if (item.definitionId === "custom" || !definition?.installed) {
+        unavailableCount += 1;
+        continue;
+      }
+      const signature = workspaceItemSignature(item);
+      const count = existingCounts.get(signature) ?? 0;
+      if (count > 0) {
+        existingCount += 1;
+        existingCounts.set(signature, count - 1);
+        continue;
+      }
+      pending.push(item);
+    }
+    return { pending, unavailableCount, existingCount };
+  }
+
+  function exportWorkspaceItems() {
+    setWorkspaceTransferNotice(null);
+    if (agents.sessions.length === 0 && reconciledSidebarLayout.folders.length === 0) {
+      setWorkspaceTransferNotice({
+        tone: "warn",
+        title: t("terminal.projects.export"),
+        body: t("terminal.projects.exportEmpty"),
+      });
+      return;
+    }
+    downloadWorkspaceFile(
+      serializeWorkspaceTransfer(agents.sessions, reconciledSidebarLayout),
+    );
+    setWorkspaceTransferNotice({
+      tone: "info",
+      title: t("terminal.projects.exportedTitle"),
+      body: t("terminal.projects.exported", {
+        projects: new Set(
+          agents.sessions.map((session) =>
+            normalizeDirectory(session.workingDirectory),
+          ),
+        ).size,
+        sessions: agents.sessions.length,
+        folders: reconciledSidebarLayout.folders.length,
+      }),
+    });
+  }
+
+  async function readWorkspaceImport(file: File) {
+    setWorkspaceTransferNotice(null);
+    setWorkspaceImportError(null);
+    try {
+      if (file.size > MAX_WORKSPACE_TRANSFER_BYTES) {
+        throw new Error(t("terminal.projects.importInvalid"));
+      }
+      const transfer = parseWorkspaceTransfer(await file.text());
+      if (!transfer) throw new Error(t("terminal.projects.importInvalid"));
+      setWorkspaceImport(transfer);
+    } catch (reason) {
+      setWorkspaceTransferNotice({
+        tone: "danger",
+        title: t("terminal.projects.importFailedTitle"),
+        body:
+          reason instanceof Error
+            ? reason.message
+            : t("terminal.projects.importReadFailed", {
+                detail: String(reason),
+              }),
+      });
+    }
+  }
+
+  async function confirmWorkspaceImport() {
+    const transfer = workspaceImport;
+    if (!transfer) return;
+    const classification = classifyWorkspaceImport(transfer);
+    setImportingWorkspace(true);
+    setWorkspaceImportError(null);
+    const renamedGroups = new Set<string>();
+    const failures: string[] = [];
+    const launched: AgentSessionSummary[] = [];
+    try {
+      for (const item of classification.pending) {
+        try {
+          const session = await agents.launch({
+            definitionId: item.definitionId,
+            label: item.label,
+            executable: item.executable,
+            arguments: item.launchArguments,
+            resumeSessionId: null,
+            groupId: item.groupKey,
+            seedInput: null,
+            restoreExistingSession: false,
+            workingDirectory: item.workingDirectory,
+            cols: 120,
+            rows: 32,
+          });
+          launched.push(session);
+          if (!renamedGroups.has(item.groupKey)) {
+            renamedGroups.add(item.groupKey);
+            try {
+              await agents.rename(session.sessionId, item.groupLabel);
+            } catch {
+              // The imported CLI is usable even if its display name stays local.
+            }
+          }
+        } catch (reason) {
+          failures.push(
+            `${item.groupLabel}: ${
+              reason instanceof Error ? reason.message : String(reason)
+            }`,
+          );
+        }
+      }
+      setSidebarLayout(
+        mergeSessionSidebarLayouts(reconciledSidebarLayout, transfer.sidebar),
+      );
+      setWorkspaceImport(null);
+      const skipped =
+        classification.unavailableCount + classification.existingCount;
+      setWorkspaceTransferNotice({
+        tone: failures.length > 0 ? "warn" : "info",
+        title: t("terminal.projects.importedTitle"),
+        body: `${t("terminal.projects.imported", {
+          imported: launched.length,
+          skipped,
+          failed: failures.length,
+        })}${failures.length > 0 ? ` ${failures.slice(0, 3).join("；")}` : ""}`,
+      });
+      if (launched[0]) onSelect(launched[0].sessionId);
+    } catch (reason) {
+      setWorkspaceImportError(
+        reason instanceof Error ? reason.message : String(reason),
+      );
+    } finally {
+      setImportingWorkspace(false);
+    }
+  }
+
+  async function clearWorkspaceItems() {
+    setClearingWorkspace(true);
+    setWorkspaceTransferNotice(null);
+    try {
+      await disconnectAgentSessionMembers(
+        agents.sessions.map((session) => session.sessionId),
+        agents.disconnect,
+      );
+      if (
+        agents.sessions.some((session) => session.sessionId === activeSessionId)
+      ) {
+        onSelect(null);
+      }
+      setSidebarLayout({
+        ...emptySessionSidebarLayout,
+        folders: [],
+        placements: {},
+        collapsedFolderIds: [],
+      });
+      setPendingClearWorkspace(false);
+      setWorkspaceTransferNotice({
+        tone: "info",
+        title: t("terminal.projects.clearedTitle"),
+        body: t("terminal.projects.cleared"),
+      });
+    } catch (reason) {
+      setPendingClearWorkspace(false);
+      setWorkspaceTransferNotice({
+        tone: "danger",
+        title: t("terminal.projects.clearFailedTitle"),
+        body: t("terminal.projects.clearFailed", {
+          detail: reason instanceof Error ? reason.message : String(reason),
+        }),
+      });
+    } finally {
+      setClearingWorkspace(false);
     }
   }
 
@@ -633,6 +980,23 @@ export function SessionsView({
     </div>
   ) : null;
 
+  const relocationSummary = relocation
+    ? summarizeAgentRelocation(relocation.session.members, agents.catalog)
+    : null;
+  const relocationDialog = relocation && relocationSummary ? (
+    <AgentSessionRelocationDialog
+      name={relocation.session.label}
+      sessionCount={relocation.session.members.length}
+      fromDirectory={relocation.fromDirectory}
+      toDirectory={relocation.toDirectory}
+      summary={relocationSummary}
+      busy={relocating}
+      error={relocationError}
+      onConfirm={() => void confirmRelocation()}
+      onCancel={() => setRelocation(null)}
+    />
+  ) : null;
+
   const active =
     sessions.find((session) => session.sessionId === activeSessionId) ??
     sessions[0] ??
@@ -825,10 +1189,86 @@ export function SessionsView({
     </div>
   ) : null;
 
+  const workspaceImportClassification = workspaceImport
+    ? classifyWorkspaceImport(workspaceImport)
+    : null;
+  const workspaceImportDialog =
+    workspaceImport && workspaceImportClassification ? (
+      <WorkspaceImportDialog
+        transfer={workspaceImport}
+        unavailableCount={workspaceImportClassification.unavailableCount}
+        existingCount={workspaceImportClassification.existingCount}
+        busy={importingWorkspace}
+        error={workspaceImportError}
+        onConfirm={() => void confirmWorkspaceImport()}
+        onCancel={() => {
+          if (importingWorkspace) return;
+          setWorkspaceImport(null);
+          setWorkspaceImportError(null);
+        }}
+      />
+    ) : null;
+  const workspaceFilePicker = (
+    <input
+      ref={workspaceImportInputRef}
+      type="file"
+      accept=".json,application/json"
+      className="visually-hidden"
+      tabIndex={-1}
+      onChange={(event) => {
+        const file = event.currentTarget.files?.[0];
+        event.currentTarget.value = "";
+        if (file) void readWorkspaceImport(file);
+      }}
+    />
+  );
+  const workspaceTransferCallout = workspaceTransferNotice ? (
+    <div className="session-notice">
+      <Callout
+        tone={workspaceTransferNotice.tone}
+        title={workspaceTransferNotice.title}
+        actions={
+          <button
+            type="button"
+            className="button button--ghost button--sm"
+            onClick={() => setWorkspaceTransferNotice(null)}
+          >
+            {t("common.close")}
+          </button>
+        }
+      >
+        {workspaceTransferNotice.body}
+      </Callout>
+    </div>
+  ) : null;
+  const clearWorkspaceDialog = pendingClearWorkspace ? (
+    <ConfirmDialog
+      title={t("terminal.projects.clearTitle")}
+      body={t("terminal.projects.clearBody", {
+        sessions: agents.sessions.length,
+      })}
+      confirmLabel={t(
+        clearingWorkspace
+          ? "terminal.projects.clearing"
+          : "terminal.projects.clearAction",
+      )}
+      cancelLabel={t("common.cancel")}
+      confirmDisabled={clearingWorkspace}
+      onCancel={() => {
+        if (!clearingWorkspace) setPendingClearWorkspace(false);
+      }}
+      onConfirm={() => {
+        if (!clearingWorkspace) void clearWorkspaceItems();
+      }}
+    />
+  ) : null;
+
   if (!active || !activeProject) {
     return (
       <div className="terminal-workspace">
+        {workspaceFilePicker}
         {closedCallout}
+        {workspaceTransferCallout}
         {newProjectError && !newProjectDialog && (
           <div className="session-notice">
             <Callout tone="danger" title={t("terminal.projects.chooseFailed")}>
@@ -855,14 +1295,19 @@ export function SessionsView({
                     : "terminal.projects.add",
                 )}
               </button>
-              {homeDirectory &&
-                agents.catalog.some((definition) => definition.installed) && (
+              <button
+                type="button"
+                className="button button--ghost"
+                onClick={() => workspaceImportInputRef.current?.click()}
+              >
+                <ImportIcon size={14} />
+                {t("terminal.projects.import")}
+              </button>
+              {homeDirectory && installedAgents.length > 0 && (
                   <div className="terminal-empty-quick">
                     <small>{t("terminal.empty.quickChat")}</small>
                     <div className="terminal-empty-quick__list">
-                      {agents.catalog
-                        .filter((definition) => definition.installed)
-                        .map((definition) => (
+                      {installedAgents.map((definition) => (
                           <button
                             type="button"
                             className="button button--ghost button--sm"
@@ -881,6 +1326,8 @@ export function SessionsView({
         />
         {newProjectDialog}
         {folderDialog}
+        {workspaceImportDialog}
+        {clearWorkspaceDialog}
       </div>
     );
   }
@@ -949,7 +1396,47 @@ export function SessionsView({
 
   return (
     <div className="terminal-workspace">
+      {workspaceFilePicker}
       {closedCallout}
+      {workspaceTransferCallout}
+      {relocationNotice && (
+        <div className="session-notice">
+          <Callout
+            tone="warn"
+            title={t("terminal.directory.partialCloseTitle")}
+            actions={
+              <button
+                type="button"
+                className="button button--ghost button--sm"
+                onClick={() => setRelocationNotice(null)}
+              >
+                {t("common.close")}
+              </button>
+            }
+          >
+            {relocationNotice}
+          </Callout>
+        </div>
+      )}
+      {relocationError && !relocation && (
+        <div className="session-notice">
+          <Callout
+            tone="danger"
+            title={t("terminal.directory.failedTitle")}
+            actions={
+              <button
+                type="button"
+                className="button button--ghost button--sm"
+                onClick={() => setRelocationError(null)}
+              >
+                {t("common.close")}
+              </button>
+            }
+          >
+            <span className="mono">{relocationError}</span>
+          </Callout>
+        </div>
+      )}
       <div className="terminal-workspace__body">
         {mobileTreeOpen && (
           <div
@@ -983,6 +1470,18 @@ export function SessionsView({
           onQuickLaunch={(definition) => {
             setMobileTreeOpen(false);
             void launchQuickChat(definition);
+          }}
+          onExportWorkspace={() => {
+            setMobileTreeOpen(false);
+            exportWorkspaceItems();
+          }}
+          onImportWorkspace={() => {
+            setMobileTreeOpen(false);
+            workspaceImportInputRef.current?.click();
+          }}
+          onClearWorkspace={() => {
+            setMobileTreeOpen(false);
+            setPendingClearWorkspace(true);
           }}
           onCreateFolder={(parentId) => openFolderEditor(parentId)}
           onRenameFolder={(folder) =>
@@ -1019,26 +1518,6 @@ export function SessionsView({
                   : active.kind === "sftp"
                     ? TransferIcon
                     : ScreenShareIcon;
-            // The tab keeps its own name; a multi-CLI tab also shows which
-            // CLI is on screen right now so the crumb never misleads.
-            const activeMember =
-              active.kind === "agent"
-                ? active.members.find(
-                    (member) => member.sessionId === active.sessionId,
-                  )
-                : undefined;
-            const memberLabel =
-              activeMember && activeMember.label !== active.label
-                ? activeMember.label
-                : null;
-            const othersRunning =
-              active.kind === "agent"
-                ? active.members.filter(
-                    (member) =>
-                      member.sessionId !== active.sessionId &&
-                      member.state === "working",
-                  ).length
-                : 0;
             return (
               <header className="session-header">
                 <button
@@ -1089,32 +1568,32 @@ export function SessionsView({
                     >
                       <ActiveGlyph size={13} />
                       <span className="truncate">{active.label}</span>
-                      {memberLabel && (
-                        <span className="session-header__member truncate">
-                          · {memberLabel}
-                        </span>
-                      )}
-                      {othersRunning > 0 && (
-                        <span className="session-header__member session-header__member--running">
-                          {t("terminal.cliOthersRunning", {
-                            count: othersRunning,
-                          })}
-                        </span>
-                      )}
                     </span>
                   )}
                 </div>
                 <div className="session-header__actions">
                   {active.kind === "agent" && editingTab !== active.sessionId && (
-                    <button
-                      type="button"
-                      className="icon-button icon-button--sm"
-                      onClick={() => beginRename(active.sessionId, active.label)}
-                      aria-label={t("terminal.rename")}
-                      data-tooltip={t("terminal.rename")}
-                    >
-                      <EditIcon size={12} />
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="icon-button icon-button--sm"
+                        disabled={choosingRelocation}
+                        onClick={() => void chooseRelocationDirectory(active)}
+                        aria-label={t("terminal.directory.change")}
+                        data-tooltip={t("terminal.directory.change")}
+                      >
+                        <FolderIcon size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button icon-button--sm"
+                        onClick={() => beginRename(active.sessionId, active.label)}
+                        aria-label={t("terminal.rename")}
+                        data-tooltip={t("terminal.rename")}
+                      >
+                        <EditIcon size={12} />
+                      </button>
+                    </>
                   )}
                   {active.kind === "ssh" && (
                     <button
@@ -1147,12 +1626,13 @@ export function SessionsView({
           <div className="terminal-stack">
         {agentGroups.map((group) => {
           const memberId = activeMemberId(group);
+          const runningCount = group.members.filter(
+            (member) => member.state === "working",
+          ).length;
           const groupActive = group.members.some(
             (member) => member.sessionId === active.sessionId,
           );
-          const installed = agents.catalog.filter(
-            (definition) => definition.installed,
-          );
+          const installed = installedAgents;
           return (
             <div
               className="terminal-slot terminal-slot--cli"
@@ -1286,6 +1766,14 @@ export function SessionsView({
                       );
                     })()}
                 </div>
+                {group.members.length > 1 && (
+                  <span className="cli-switch__summary">
+                    {t("terminal.cliSummary", {
+                      count: group.members.length,
+                      running: runningCount,
+                    })}
+                  </span>
+                )}
               </div>
               <div className="cli-panes">
                 {group.members.map((member) => (
@@ -1414,6 +1902,9 @@ export function SessionsView({
       </div>
       {newProjectDialog}
       {folderDialog}
+      {relocationDialog}
+      {workspaceImportDialog}
+      {clearWorkspaceDialog}
       {pendingDeleteFolder && (
         <ConfirmDialog
           title={t("terminal.projects.folderDeleteTitle", {

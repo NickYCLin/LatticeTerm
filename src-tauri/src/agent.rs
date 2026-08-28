@@ -33,6 +33,8 @@ pub const MAX_AGENT_SESSIONS: usize = 32;
 pub const MAX_SAVED_AGENT_PLANS: usize = 32;
 const MAX_OUTPUT_SNAPSHOT_BYTES: usize = 256 * 1024;
 const MAX_REPORT_BYTES: u64 = 4096;
+const MAX_NOTIFY_FORWARD_ARGUMENTS: usize = 16;
+const MAX_NOTIFY_FORWARD_BYTES: usize = 8192;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REPORT_RETRIES: usize = 5;
 const STARTUP_SEED_PROMPT_SETTLE: Duration = Duration::from_millis(120);
@@ -260,6 +262,8 @@ pub struct AgentSessionSummary {
     /// Model announced by the CLI or explicitly supplied through `--model`.
     pub model: Option<String>,
     pub executable: String,
+    /// Original requested arguments, retained for a safe relaunch elsewhere.
+    pub launch_arguments: Vec<String>,
     pub working_directory: String,
     pub state: AgentLifecycle,
     pub state_source: AgentStateSource,
@@ -561,10 +565,13 @@ impl CompletionReadiness {
             return false;
         }
         self.control_window.extend_from_slice(bytes);
-        let prompt_ready = self
-            .control_window
-            .windows(b"\x1b[?2004h".len())
-            .any(|window| window == b"\x1b[?2004h");
+        let prompt_ready = [b"\x1b[?2004h".as_slice(), b"\x1b[?25h".as_slice()]
+            .iter()
+            .any(|marker| {
+                self.control_window
+                    .windows(marker.len())
+                    .any(|window| window == *marker)
+            });
         if prompt_ready {
             self.submitted = false;
             self.control_window.clear();
@@ -917,6 +924,25 @@ impl AgentRegistry {
         true
     }
 
+    /// User input starts a new lifecycle turn, even when the previous turn was
+    /// completed by an authoritative integration event.
+    fn mark_working_from_input(&self, session_id: &str) -> bool {
+        let Ok(entry) = self.get(session_id) else {
+            return false;
+        };
+        let Ok(mut summary) = entry.summary.lock() else {
+            return false;
+        };
+        if summary.state == AgentLifecycle::Working
+            && summary.state_source == AgentStateSource::Heuristic
+        {
+            return false;
+        }
+        summary.state = AgentLifecycle::Working;
+        summary.state_source = AgentStateSource::Heuristic;
+        true
+    }
+
     /// Feeds one output chunk into the session's capture window and returns
     /// a newly seen native session id, if any. The window spans chunks, so an
     /// id split across two reads is still found.
@@ -1255,6 +1281,114 @@ fn lifecycle_from_report_arg(value: &str) -> Option<AgentLifecycle> {
     }
 }
 
+fn codex_notify_command_from_config(raw: &str) -> Option<Vec<String>> {
+    let value = toml::from_str::<toml::Table>(raw).ok()?;
+    let command = value
+        .get("notify")?
+        .as_array()?
+        .iter()
+        .map(|value| value.as_str().map(str::to_string))
+        .collect::<Option<Vec<_>>>()?;
+    let total_bytes = command.iter().map(String::len).sum::<usize>();
+    (!command.is_empty()
+        && command.len() <= MAX_NOTIFY_FORWARD_ARGUMENTS
+        && total_bytes <= MAX_NOTIFY_FORWARD_BYTES
+        && command
+            .iter()
+            .all(|argument| !argument.chars().any(char::is_control)))
+    .then_some(command)
+}
+
+fn configured_codex_notify_command() -> Option<Vec<String>> {
+    read_account_file(&[".codex", "config.toml"])
+        .and_then(|raw| codex_notify_command_from_config(&raw))
+}
+
+fn codex_reporter_arguments_with_forward(
+    mut arguments: Vec<String>,
+    reporter_executable: &Path,
+    forward_command: Option<Vec<String>>,
+) -> Vec<String> {
+    let explicitly_overridden = arguments.windows(2).any(|pair| {
+        pair[0] == "-c"
+            && pair[1]
+                .trim_start()
+                .strip_prefix("notify")
+                .is_some_and(|value| value.trim_start().starts_with('='))
+    });
+    if explicitly_overridden {
+        return arguments;
+    }
+
+    let forwarded = forward_command
+        .and_then(|command| serde_json::to_vec(&command).ok())
+        .map(|encoded| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(encoded))
+        .unwrap_or_default();
+    let command = vec![
+        reporter_executable.display().to_string(),
+        "agent-notify".to_string(),
+        forwarded,
+    ];
+    let Ok(command) = serde_json::to_string(&command) else {
+        return arguments;
+    };
+    arguments.insert(0, format!("notify={command}"));
+    arguments.insert(0, "-c".to_string());
+    arguments
+}
+
+fn codex_reporter_arguments(arguments: Vec<String>, reporter_executable: &Path) -> Vec<String> {
+    codex_reporter_arguments_with_forward(
+        arguments,
+        reporter_executable,
+        configured_codex_notify_command(),
+    )
+}
+
+fn report_from_environment(state: AgentLifecycle) -> Result<(), String> {
+    let address: SocketAddr = std::env::var("LATTICETERM_AGENT_REPORT_ADDR")
+        .map_err(|_| "Agent reporter environment is unavailable.".to_string())?
+        .parse()
+        .map_err(|_| "Agent reporter address is invalid.".to_string())?;
+    let session_id = std::env::var("LATTICETERM_AGENT_SESSION")
+        .map_err(|_| "Agent reporter session is unavailable.".to_string())?;
+    let token = std::env::var("LATTICETERM_AGENT_REPORT_TOKEN")
+        .map_err(|_| "Agent reporter token is unavailable.".to_string())?;
+    send_report(address, &session_id, &token, state)
+}
+
+fn decode_forward_notify(value: &str) -> Option<Vec<String>> {
+    if value.is_empty() || value.len() > MAX_NOTIFY_FORWARD_BYTES * 2 {
+        return None;
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(value)
+        .ok()?;
+    let command: Vec<String> = serde_json::from_slice(&decoded).ok()?;
+    let total_bytes = command.iter().map(String::len).sum::<usize>();
+    (!command.is_empty()
+        && command.len() <= MAX_NOTIFY_FORWARD_ARGUMENTS
+        && total_bytes <= MAX_NOTIFY_FORWARD_BYTES
+        && command
+            .iter()
+            .all(|argument| !argument.chars().any(char::is_control)))
+    .then_some(command)
+}
+
+fn forward_codex_notification(encoded: &str, payload: &OsStr) {
+    let Some(command) = decode_forward_notify(encoded) else {
+        return;
+    };
+    let mut child = std::process::Command::new(&command[0]);
+    child.args(&command[1..]).arg(payload);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        child.creation_flags(0x08000000);
+    }
+    let _ = child.spawn();
+}
+
 /// Handle the tiny reporter subcommand before Tauri starts.
 ///
 /// Adapter hooks can run `$LATTICETERM_AGENT_REPORTER agent-report done` and
@@ -1265,31 +1399,40 @@ where
     S: AsRef<OsStr>,
 {
     let mut args = args.into_iter();
-    if args.next()?.as_ref() != OsStr::new("agent-report") {
+    let command = args.next()?;
+    let result = if command.as_ref() == OsStr::new("agent-report") {
+        let Some(state) = args
+            .next()
+            .and_then(|value| value.as_ref().to_str().and_then(lifecycle_from_report_arg))
+        else {
+            eprintln!("usage: latticeterm agent-report <working|needs-attention|idle|done>");
+            return Some(2);
+        };
+        if args.next().is_some() {
+            eprintln!("agent-report accepts exactly one state");
+            return Some(2);
+        }
+        report_from_environment(state)
+    } else if command.as_ref() == OsStr::new("agent-notify") {
+        let encoded = args
+            .next()
+            .and_then(|value| value.as_ref().to_str().map(str::to_string));
+        let payload = args.next();
+        if args.next().is_some() {
+            eprintln!("agent-notify accepts one forwarded command and one payload");
+            return Some(2);
+        }
+        let Some(encoded) = encoded else {
+            eprintln!("agent-notify is missing its forwarded command");
+            return Some(2);
+        };
+        if let Some(payload) = payload.as_ref() {
+            forward_codex_notification(&encoded, payload.as_ref());
+        }
+        report_from_environment(AgentLifecycle::Done)
+    } else {
         return None;
-    }
-    let Some(state) = args
-        .next()
-        .and_then(|value| value.as_ref().to_str().and_then(lifecycle_from_report_arg))
-    else {
-        eprintln!("usage: latticeterm agent-report <working|needs-attention|idle|done>");
-        return Some(2);
     };
-    if args.next().is_some() {
-        eprintln!("agent-report accepts exactly one state");
-        return Some(2);
-    }
-    let result = (|| {
-        let address: SocketAddr = std::env::var("LATTICETERM_AGENT_REPORT_ADDR")
-            .map_err(|_| "Agent reporter environment is unavailable.".to_string())?
-            .parse()
-            .map_err(|_| "Agent reporter address is invalid.".to_string())?;
-        let session_id = std::env::var("LATTICETERM_AGENT_SESSION")
-            .map_err(|_| "Agent reporter session is unavailable.".to_string())?;
-        let token = std::env::var("LATTICETERM_AGENT_REPORT_TOKEN")
-            .map_err(|_| "Agent reporter token is unavailable.".to_string())?;
-        send_report(address, &session_id, &token, state)
-    })();
     match result {
         Ok(()) => Some(0),
         Err(error) => {
@@ -2404,7 +2547,8 @@ pub fn launch_with_replay(
 ) -> Result<AgentSessionSummary, String> {
     let launched_at = Instant::now();
     let size = validated_size(request.cols, request.rows)?;
-    let (definition_id, label, executable, arguments, working_directory) =
+    let launch_arguments = request.arguments.clone();
+    let (definition_id, label, executable, mut arguments, working_directory) =
         resolve_launch(&request)?;
     let launch_model =
         model_from_arguments(&arguments).or_else(|| configured_agent_model(&definition_id));
@@ -2414,6 +2558,11 @@ pub fn launch_with_replay(
         .as_ref()
         .map(|_| random_report_token())
         .transpose()?;
+    if definition_id == "codex" {
+        if let Some(endpoint) = reporter.as_ref() {
+            arguments = codex_reporter_arguments(arguments, &endpoint.executable);
+        }
+    }
 
     let pair = native_pty_system()
         .openpty(size)
@@ -2476,6 +2625,7 @@ pub fn launch_with_replay(
         label,
         model: launch_model,
         executable: executable.display().to_string(),
+        launch_arguments,
         working_directory: working_directory.display().to_string(),
         state: AgentLifecycle::Working,
         state_source: AgentStateSource::Heuristic,
@@ -2639,11 +2789,8 @@ fn send_bytes(
     if let Ok(mut completion) = entry.completion_gate.lock() {
         completion.observe_input(bytes);
     }
-    if registry.update_state(
-        session_id,
-        AgentLifecycle::Working,
-        AgentStateSource::Heuristic,
-    ) {
+    let submitted = bytes.iter().any(|byte| matches!(byte, b'\r' | b'\n'));
+    if submitted && registry.mark_working_from_input(session_id) {
         sink.state(
             session_id,
             AgentLifecycle::Working,
@@ -3008,6 +3155,17 @@ session id: 0199aa11-"
         assert!(!readiness.observe_output(b"answer\x1b[?20"));
         assert!(readiness.observe_output(b"04h"));
         assert!(!readiness.observe_output(b"\x1b[?2004h"));
+    }
+
+    #[test]
+    fn completion_recognizes_a_restored_cursor_across_output_chunks() {
+        let mut readiness = CompletionReadiness::default();
+
+        assert!(!readiness.observe_output(b"\x1b[?25h"));
+        readiness.observe_input(b"review this\r");
+        assert!(!readiness.observe_output(b"answer\x1b[?2"));
+        assert!(readiness.observe_output(b"5h"));
+        assert!(!readiness.observe_output(b"\x1b[?25h"));
     }
 
     #[test]
@@ -3600,6 +3758,56 @@ model = "gpt-5.3-codex"
     }
 
     #[test]
+    fn codex_notify_config_is_parsed_with_conservative_limits() {
+        assert_eq!(
+            codex_notify_command_from_config(
+                r#"model = "gpt-5"
+notify = ["notify.exe", "turn-ended"]"#,
+            ),
+            Some(vec!["notify.exe".to_string(), "turn-ended".to_string()])
+        );
+        assert_eq!(codex_notify_command_from_config("notify = []"), None);
+        assert_eq!(
+            codex_notify_command_from_config("notify = [\"ok\", 1]"),
+            None
+        );
+        assert_eq!(
+            codex_notify_command_from_config("notify = [\"bad\\ncommand\"]"),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_reporter_preserves_the_existing_notify_command() {
+        let original = vec!["notify.exe".to_string(), "turn-ended".to_string()];
+        let arguments = codex_reporter_arguments_with_forward(
+            vec!["--model".to_string(), "gpt-5".to_string()],
+            Path::new(r"C:\Program Files\LatticeTerm\lattice-term.exe"),
+            Some(original.clone()),
+        );
+
+        assert_eq!(arguments[0], "-c");
+        let encoded_command = arguments[1].strip_prefix("notify=").unwrap();
+        let command: Vec<String> = serde_json::from_str(encoded_command).unwrap();
+        assert_eq!(command[1], "agent-notify");
+        assert_eq!(decode_forward_notify(&command[2]), Some(original));
+        assert_eq!(&arguments[2..], &["--model", "gpt-5"]);
+    }
+
+    #[test]
+    fn codex_reporter_respects_an_explicit_launch_override() {
+        let arguments = vec!["-c".to_string(), "notify=[\"custom.exe\"]".to_string()];
+        assert_eq!(
+            codex_reporter_arguments_with_forward(
+                arguments.clone(),
+                Path::new("lattice-term"),
+                None,
+            ),
+            arguments
+        );
+    }
+
+    #[test]
     fn semantic_reporter_authenticates_and_overrides_heuristics() {
         let collector = Arc::new(TestSink::default());
         let sink: Arc<dyn AgentSink> = collector.clone();
@@ -3645,6 +3853,24 @@ model = "gpt-5.3-codex"
             AgentStateSource::Heuristic,
         ));
         assert_eq!(registry.list()[0].state, AgentLifecycle::Done);
+
+        send_bytes(sink.as_ref(), &registry, &session.session_id, b"\x1b[1;1R").unwrap();
+        assert_eq!(registry.list()[0].state, AgentLifecycle::Done);
+
+        send_bytes(
+            sink.as_ref(),
+            &registry,
+            &session.session_id,
+            b"next turn\r",
+        )
+        .unwrap();
+        let summary = &registry.list()[0];
+        assert_eq!(summary.state, AgentLifecycle::Working);
+        assert_eq!(summary.state_source, AgentStateSource::Heuristic);
+        send_report(address, &session.session_id, &token, AgentLifecycle::Done).unwrap();
+        let summary = &registry.list()[0];
+        assert_eq!(summary.state, AgentLifecycle::Done);
+        assert_eq!(summary.state_source, AgentStateSource::Integration);
         assert!(collector
             .states
             .lock()

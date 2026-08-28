@@ -6,6 +6,7 @@ import type {
   AgentLaunchPlan,
   AgentSessionSummary,
 } from "../app/useAgentSessions";
+import { agentCatalogForDisplay } from "../app/useAgentSessions";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import {
   MAX_AGENT_BROADCAST_TARGETS,
@@ -184,9 +185,13 @@ export function AgentsView({
     });
   }, [agents.sessions]);
 
-  const installedCount = useMemo(
-    () => agents.catalog.filter((definition) => definition.installed).length,
+  const displayCatalog = useMemo(
+    () => agentCatalogForDisplay(agents.catalog),
     [agents.catalog],
+  );
+  const installedCount = useMemo(
+    () => displayCatalog.filter((definition) => definition.installed).length,
+    [displayCatalog],
   );
   const attentionCount = useMemo(
     () =>
@@ -582,7 +587,7 @@ export function AgentsView({
         </section>
 
         <div className="agent-grid">
-          {agents.catalog.map((definition) => (
+          {displayCatalog.map((definition) => (
             <article
               className={`agent-card${definition.installed ? "" : " is-missing"}${
                 definition.consumerOauthDeprecated ? " has-notice" : ""

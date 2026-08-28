@@ -23,7 +23,10 @@ import {
   AgentIcon,
   ChevronDownIcon,
   EditIcon,
+  ExportIcon,
   FolderIcon,
+  ImportIcon,
+  MoreIcon,
   PlusIcon,
   ScreenShareIcon,
   TerminalIcon,
@@ -66,6 +69,7 @@ const TREE_DRAG_THRESHOLD = 5;
 const TREE_ROOT_DROP = "__tree-root__";
 // Sentinel launch-menu anchor for quick chats, which have no project row.
 const QUICK_LAUNCH_NODE = "__quick-chat__";
+const WORKSPACE_MANAGE_NODE = "__workspace-manage__";
 
 const statusKeys: Record<Exclude<SessionSidebarStatus, "connected">, MessageKey> = {
   working: "terminal.projects.status.working",
@@ -97,6 +101,9 @@ export function SessionProjectSidebar({
   onSelect,
   onRemove,
   onQuickLaunch,
+  onExportWorkspace,
+  onImportWorkspace,
+  onClearWorkspace,
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
@@ -114,6 +121,9 @@ export function SessionProjectSidebar({
   onSelect: (sessionId: string) => void;
   onRemove: (session: SessionSidebarSessionItem) => void;
   onQuickLaunch: (definition: AgentDefinition) => void;
+  onExportWorkspace: () => void;
+  onImportWorkspace: () => void;
+  onClearWorkspace: () => void;
   onCreateFolder: (parentId: string | null) => void;
   onRenameFolder: (folder: SessionSidebarFolder) => void;
   onDeleteFolder: (folder: SessionSidebarFolder) => void;
@@ -577,6 +587,8 @@ export function SessionProjectSidebar({
   }
 
   const quickLaunchOpen = launchMenu?.projectNodeId === QUICK_LAUNCH_NODE;
+  const workspaceManageOpen =
+    launchMenu?.projectNodeId === WORKSPACE_MANAGE_NODE;
   const menuWidth = Math.min(240, Math.max(200, window.innerWidth - 24));
   const menuLeft = launchMenu
     ? launchMenu.anchor.right + 8 + menuWidth <= window.innerWidth
@@ -611,6 +623,17 @@ export function SessionProjectSidebar({
         >
           <FolderIcon size={11} />
           <PlusIcon size={8} />
+        </button>
+        <button
+          type="button"
+          className="icon-button icon-button--sm"
+          onClick={(event) => openLaunchMenu(event, WORKSPACE_MANAGE_NODE)}
+          aria-label={t("terminal.projects.manage")}
+          aria-haspopup="menu"
+          aria-expanded={workspaceManageOpen}
+          title={t("terminal.projects.manage")}
+        >
+          <MoreIcon size={12} />
         </button>
         <button
           type="button"
@@ -686,6 +709,60 @@ export function SessionProjectSidebar({
               {installedAgents.length === 0 && (
                 <small>{t("terminal.addCli.none")}</small>
               )}
+            </div>
+          </section>,
+          document.body,
+        )}
+      {workspaceManageOpen &&
+        createPortal(
+          <section
+            ref={launchMenuRef}
+            className="session-launch-menu"
+            style={{ left: menuLeft, top: menuTop, width: menuWidth }}
+            role="menu"
+            aria-label={t("terminal.projects.manage")}
+          >
+            <header>
+              <span className="eyebrow">{t("terminal.projects")}</span>
+              <strong>{t("terminal.projects.manage")}</strong>
+            </header>
+            <div className="session-launch-menu__list">
+              <button
+                type="button"
+                role="menuitem"
+                className="button button--ghost button--sm"
+                onClick={() => {
+                  setLaunchMenu(null);
+                  onExportWorkspace();
+                }}
+              >
+                <ExportIcon size={12} />
+                {t("terminal.projects.export")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="button button--ghost button--sm"
+                onClick={() => {
+                  setLaunchMenu(null);
+                  onImportWorkspace();
+                }}
+              >
+                <ImportIcon size={12} />
+                {t("terminal.projects.import")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="button button--ghost button--sm button--danger"
+                onClick={() => {
+                  setLaunchMenu(null);
+                  onClearWorkspace();
+                }}
+              >
+                <TrashIcon size={12} />
+                {t("terminal.projects.clear")}
+              </button>
             </div>
           </section>,
           document.body,

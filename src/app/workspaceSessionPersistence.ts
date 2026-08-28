@@ -11,6 +11,7 @@ export interface SavedAgentSession {
   definitionId: string;
   label: string;
   executable: string;
+  launchArguments: string[];
   workingDirectory: string;
   resumeSessionId: string | null;
 }
@@ -56,6 +57,17 @@ function optionalResumeId(value: unknown): string | null | undefined {
   return safeText(value, 512) ?? undefined;
 }
 
+function safeArgument(value: unknown): string | null {
+  if (
+    typeof value !== "string" ||
+    new TextEncoder().encode(value).length > 4096 ||
+    Array.from(value).some((character) => /[\u0000-\u001f\u007f]/.test(character))
+  ) {
+    return null;
+  }
+  return value;
+}
+
 export function sanitizeWorkspaceSessionSnapshot(
   value: unknown,
 ): WorkspaceSessionSnapshot | null {
@@ -82,6 +94,9 @@ export function sanitizeWorkspaceSessionSnapshot(
     const definitionId = safeText(entry.definitionId, 64);
     const label = safeText(entry.label, 80);
     const executable = safeText(entry.executable, 4096);
+    const launchArguments = Array.isArray(entry.launchArguments)
+      ? entry.launchArguments.map(safeArgument)
+      : [];
     const workingDirectory = safeText(entry.workingDirectory, 4096);
     const resumeSessionId = optionalResumeId(entry.resumeSessionId);
     if (
@@ -90,6 +105,8 @@ export function sanitizeWorkspaceSessionSnapshot(
       !definitionId ||
       !label ||
       !executable ||
+      launchArguments.some((argument) => argument === null) ||
+      launchArguments.length > 64 ||
       !workingDirectory ||
       resumeSessionId === undefined
     ) {
@@ -102,6 +119,7 @@ export function sanitizeWorkspaceSessionSnapshot(
       definitionId,
       label,
       executable,
+      launchArguments: launchArguments as string[],
       workingDirectory,
       resumeSessionId,
     });
@@ -166,6 +184,7 @@ export function snapshotLiveWorkspaceSessions(
     definitionId: session.definitionId,
     label: session.label,
     executable: session.executable,
+    launchArguments: session.launchArguments,
     workingDirectory: session.workingDirectory,
     resumeSessionId: session.capturedSessionId,
   }));
@@ -191,6 +210,7 @@ export function snapshotLiveWorkspaceSessions(
 
 export function agentRestoreArguments(session: SavedAgentSession): string[] {
   if (session.resumeSessionId) return [];
+  if (session.launchArguments.length > 0) return session.launchArguments;
   if (session.definitionId === "codex") return ["resume", "--last"];
   if (session.definitionId === "antigravity") return ["--continue"];
   return [];

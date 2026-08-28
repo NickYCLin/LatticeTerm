@@ -5,6 +5,7 @@ import type {
   RemoteFileEntry,
   RemoteSessionSummary,
 } from "../../app/useRemoteSessions";
+import { displayPath } from "../../app/displayPath";
 import { formatBytes } from "../../domain/metrics";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
@@ -166,7 +167,9 @@ export function RemoteFilesPane({
       </header>
 
       <div className="remote-files-root mono">
-        {t("remote.files.sharedRoot", { name: session.fileRootLabel })}
+        {t("remote.files.sharedRoot", {
+          name: displayPath(session.fileRootLabel),
+        })}
       </div>
 
       {problem && (

@@ -414,3 +414,45 @@ export function toggleSessionSidebarFolder(
   else collapsed.add(folderId);
   return { ...layout, collapsedFolderIds: [...collapsed] };
 }
+
+/**
+ * Adds portable folders and placements without rearranging anything already
+ * organized on this computer. Imported node ids fill only missing positions.
+ */
+export function mergeSessionSidebarLayouts(
+  current: SessionSidebarLayout,
+  incoming: SessionSidebarLayout,
+): SessionSidebarLayout {
+  const folders = [...current.folders];
+  const folderIds = new Set(folders.map((folder) => folder.id));
+  for (const folder of incoming.folders) {
+    if (folderIds.has(folder.id) || folders.length >= MAX_FOLDERS) continue;
+    folders.push(folder);
+    folderIds.add(folder.id);
+  }
+
+  const placements = Object.fromEntries(
+    Object.entries(current.placements).map(([id, placement]) => [
+      id,
+      { ...placement },
+    ]),
+  );
+  for (const [id, placement] of Object.entries(incoming.placements)) {
+    if (Object.keys(placements).length >= MAX_NODES) break;
+    if (placements[id] || (id.startsWith("folder:") && !folderIds.has(id))) {
+      continue;
+    }
+    placements[id] = { ...placement };
+  }
+
+  const merged = sanitizeSessionSidebarLayout({
+    version: 1,
+    folders,
+    placements,
+    collapsedFolderIds: [
+      ...current.collapsedFolderIds,
+      ...incoming.collapsedFolderIds,
+    ],
+  });
+  return merged ?? current;
+}
