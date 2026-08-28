@@ -2,17 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   RemoteApi,
   RemoteDirectory,
+  RemoteFileTransfer,
   RemoteSessionSummary,
 } from "../../app/useRemoteSessions";
 import { formatBytes } from "../../domain/metrics";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
-import { FolderIcon, ImportIcon, TransferIcon } from "../icons";
+import { CloseIcon, FolderIcon, ImportIcon, TransferIcon } from "../icons";
 import { ConfirmDialog } from "../overlays/ConfirmDialog";
 
 type DeliveryRemoteApi = Pick<
   RemoteApi,
-  "sessions" | "listFiles" | "uploadFile"
+  "sessions" | "transfers" | "listFiles" | "uploadFile" | "cancelFileTransfer"
 >;
 
 interface PendingDelivery {
@@ -20,6 +21,12 @@ interface PendingDelivery {
   session: RemoteSessionSummary;
   parent: string;
   overwrite: boolean;
+}
+
+interface ActiveDelivery {
+  sessionId: string;
+  destination: string;
+  initialTransfer: RemoteFileTransfer;
 }
 
 export function remoteFileSessions(
@@ -43,6 +50,24 @@ export function remoteDeliveryPath(parent: string, fileName: string): string {
   return `${parent === "/" ? "" : parent.replace(/\/+$/, "")}/${fileName}`;
 }
 
+export function remoteDeliveryPercent(transfer: RemoteFileTransfer): number {
+  if (transfer.totalBytes === null || transfer.totalBytes <= 0) {
+    return transfer.state === "done" ? 100 : 0;
+  }
+  return Math.max(
+    0,
+    Math.min(100, Math.round((transfer.bytesDone / transfer.totalBytes) * 100)),
+  );
+}
+
+export function cancelRemoteDelivery(
+  remote: Pick<RemoteApi, "cancelFileTransfer">,
+  sessionId: string,
+  transferId: string,
+): Promise<void> {
+  return remote.cancelFileTransfer(sessionId, transferId);
+}
+
 export function AgentRemoteDelivery({ remote }: { remote: DeliveryRemoteApi }) {
   const { t } = useI18n();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -57,12 +82,21 @@ export function AgentRemoteDelivery({ remote }: { remote: DeliveryRemoteApi }) {
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState<PendingDelivery | null>(null);
   const [phase, setPhase] = useState<"checking" | "sending" | null>(null);
+  const [active, setActive] = useState<ActiveDelivery | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const cancelRequestedRef = useRef(false);
   const [delivered, setDelivered] = useState<{
     name: string;
     destination: string;
   } | null>(null);
   const busy = phase !== null;
+  const activeTransfer = active
+    ? remote.transfers[active.initialTransfer.transferId] ?? active.initialTransfer
+    : null;
+  const activePercent = activeTransfer
+    ? remoteDeliveryPercent(activeTransfer)
+    : 0;
 
   useEffect(() => {
     if (sessions.some((session) => session.sessionId === sessionId)) return;
@@ -104,6 +138,9 @@ export function AgentRemoteDelivery({ remote }: { remote: DeliveryRemoteApi }) {
     if (!request) return;
     setPending(null);
     setPhase("sending");
+    setActive(null);
+    setCancelling(false);
+    cancelRequestedRef.current = false;
     setProblem(null);
     try {
       await remote.uploadFile(
@@ -111,7 +148,14 @@ export function AgentRemoteDelivery({ remote }: { remote: DeliveryRemoteApi }) {
         request.parent,
         request.file,
         request.overwrite,
+        (transfer) =>
+          setActive({
+            sessionId: request.session.sessionId,
+            destination: remoteDeliveryPath(request.parent, request.file.name),
+            initialTransfer: transfer,
+          }),
       );
+      setProblem(null);
       setDelivered({
         name: request.file.name,
         destination: remoteDeliveryPath(request.parent, request.file.name),
@@ -119,9 +163,32 @@ export function AgentRemoteDelivery({ remote }: { remote: DeliveryRemoteApi }) {
       setFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (reason) {
-      setProblem(reason instanceof Error ? reason.message : String(reason));
+      if (!cancelRequestedRef.current) {
+        setProblem(reason instanceof Error ? reason.message : String(reason));
+      }
     } finally {
+      cancelRequestedRef.current = false;
+      setCancelling(false);
+      setActive(null);
       setPhase(null);
+    }
+  }
+
+  async function cancelDelivery() {
+    if (!active || !activeTransfer || activeTransfer.state !== "running") return;
+    cancelRequestedRef.current = true;
+    setCancelling(true);
+    setProblem(null);
+    try {
+      await cancelRemoteDelivery(
+        remote,
+        active.sessionId,
+        active.initialTransfer.transferId,
+      );
+    } catch (reason) {
+      cancelRequestedRef.current = false;
+      setCancelling(false);
+      setProblem(reason instanceof Error ? reason.message : String(reason));
     }
   }
 
@@ -247,6 +314,51 @@ export function AgentRemoteDelivery({ remote }: { remote: DeliveryRemoteApi }) {
         <Callout tone="danger" title={t("agents.delivery.failedTitle")}>
           <span className="mono">{problem}</span>
         </Callout>
+      )}
+
+      {active && activeTransfer && (
+        <div className="agents-delivery__progress" aria-live="polite">
+          <div className="agents-delivery__progress-heading">
+            <div>
+              <strong>{activeTransfer.name}</strong>
+              <span className="mono">{active.destination}</span>
+            </div>
+            <button
+              type="button"
+              className="button button--secondary"
+              disabled={cancelling || activeTransfer.state !== "running"}
+              onClick={() => void cancelDelivery()}
+            >
+              <CloseIcon size={12} />
+              {cancelling
+                ? t("agents.delivery.cancelling")
+                : t("agents.delivery.cancel")}
+            </button>
+          </div>
+          <div
+            className="agents-delivery__progress-track"
+            role="progressbar"
+            aria-label={t("agents.delivery.progressLabel", {
+              name: activeTransfer.name,
+            })}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={activePercent}
+          >
+            <span style={{ width: `${activePercent}%` }} />
+          </div>
+          <span className="agents-delivery__progress-detail">
+            {activeTransfer.totalBytes === null
+              ? t("agents.delivery.progressUnknown", {
+                  done: formatBytes(activeTransfer.bytesDone),
+                })
+              : t("agents.delivery.progress", {
+                  done: formatBytes(activeTransfer.bytesDone),
+                  total: formatBytes(activeTransfer.totalBytes),
+                  percent: activePercent,
+                })}
+          </span>
+        </div>
       )}
 
       {delivered && (

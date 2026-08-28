@@ -7,8 +7,10 @@ import type {
 import { I18nProvider } from "../../i18n";
 import {
   AgentRemoteDelivery,
+  cancelRemoteDelivery,
   inspectRemoteDeliveryTarget,
   remoteDeliveryPath,
+  remoteDeliveryPercent,
   remoteFileSessions,
 } from "./AgentRemoteDelivery";
 
@@ -84,14 +86,61 @@ describe("Agent Remote delivery", () => {
     );
   });
 
+  it("bounds transfer progress for the Agent delivery status", () => {
+    const transfer = {
+      transferId: "remote-file-1",
+      sessionId: "remote-1",
+      kind: "upload" as const,
+      name: "report.pdf",
+      remotePath: "/reports/report.pdf",
+      localPath: null,
+      bytesDone: 75,
+      totalBytes: 100,
+      state: "running" as const,
+      detail: null,
+    };
+
+    expect(remoteDeliveryPercent(transfer)).toBe(75);
+    expect(remoteDeliveryPercent({ ...transfer, bytesDone: 120 })).toBe(100);
+    expect(
+      remoteDeliveryPercent({
+        ...transfer,
+        bytesDone: 0,
+        totalBytes: null,
+        state: "done",
+      }),
+    ).toBe(100);
+    expect(
+      remoteDeliveryPercent({ ...transfer, bytesDone: -10, totalBytes: 100 }),
+    ).toBe(0);
+  });
+
+  it("cancels the transfer created for the selected Remote session", async () => {
+    const cancelFileTransfer = vi.fn().mockResolvedValue(undefined);
+
+    await cancelRemoteDelivery(
+      { cancelFileTransfer },
+      "remote-1",
+      "remote-file-1",
+    );
+
+    expect(cancelFileTransfer).toHaveBeenCalledOnce();
+    expect(cancelFileTransfer).toHaveBeenCalledWith(
+      "remote-1",
+      "remote-file-1",
+    );
+  });
+
   it("explains the explicit-selection boundary when no Remote is ready", () => {
     const markup = renderToStaticMarkup(
       <I18nProvider locale="zh-TW">
         <AgentRemoteDelivery
           remote={{
             sessions: [],
+            transfers: {},
             listFiles: vi.fn(),
             uploadFile: vi.fn(),
+            cancelFileTransfer: vi.fn(),
           }}
         />
       </I18nProvider>,
@@ -108,8 +157,10 @@ describe("Agent Remote delivery", () => {
         <AgentRemoteDelivery
           remote={{
             sessions: [session()],
+            transfers: {},
             listFiles: vi.fn(),
             uploadFile: vi.fn(),
+            cancelFileTransfer: vi.fn(),
           }}
         />
       </I18nProvider>,

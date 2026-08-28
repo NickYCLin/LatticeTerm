@@ -109,6 +109,7 @@ export interface RemoteApi {
     parent: string,
     file: File,
     overwrite: boolean,
+    onStarted?: (transfer: RemoteFileTransfer) => void,
   ) => Promise<void>;
   cancelFileTransfer: (sessionId: string, transferId: string) => Promise<void>;
   dismissFileTransfer: (sessionId: string, transferId: string) => Promise<void>;
@@ -429,6 +430,7 @@ export function useRemoteSessions(): RemoteApi {
       parent: string,
       file: File,
       overwrite: boolean,
+      onStarted?: (transfer: RemoteFileTransfer) => void,
     ) => {
       const { invoke } = await core();
       const transfer = await invoke<RemoteFileTransfer>(
@@ -448,6 +450,7 @@ export function useRemoteSessions(): RemoteApi {
           transfer,
         ),
       }));
+      onStarted?.(transfer);
       await streamRemoteFileUpload(
         file,
         sessionId,

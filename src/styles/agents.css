@@ -484,6 +484,61 @@
   justify-self: end;
 }
 
+.agents-delivery__progress {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.agents-delivery__progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.agents-delivery__progress-heading > div {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.agents-delivery__progress-heading strong,
+.agents-delivery__progress-heading span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-delivery__progress-heading span,
+.agents-delivery__progress-detail {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.agents-delivery__progress-track {
+  height: 0.45rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+}
+
+.agents-delivery__progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--duration-fast) var(--ease);
+}
+
+.agents-delivery__progress-detail {
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
 .agents-running__empty {
   margin: 0;
   padding: var(--space-5);
@@ -640,6 +695,15 @@
 
   .agents-delivery__submit {
     justify-self: start;
+  }
+
+  .agents-delivery__progress-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agents-delivery__progress-heading > .button {
+    align-self: start;
   }
 
   .agent-session-row {
