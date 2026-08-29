@@ -133,7 +133,7 @@ Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示
 
 若要讓另一個 CLI 接手，請在執行中的工作階段分頁選擇「加開 CLI」；來源為 Codex 或 Claude 時，可勾選「帶入目前對話」。新 CLI 會收到整理過的對話交接內容，但不會搬移模型內部狀態、登入資料或憑證。
 
-「保存啟動項目」會記錄內建 CLI 類型、標籤、工作目錄與選填備註，最多 32 個；工作區名稱與項目順序也會保存。密碼、Token、API Key、Passphrase、Secret 參數與 Reporter 權杖都不會寫入工作區 JSON。下次開啟應用程式時，使用者可逐項或依保存順序整批確認並啟動 CLI 程序；沒有額外參數或舊版明確 Session ID 的 Codex 項目會執行 `codex resume --last`，由 Codex 在該工作目錄內續接最近的對話，不需讓 LatticeTerm 保存或讀取 Session ID。既有 `agent-workspaces.json` 若包含舊版自訂 CLI 或原生 Session 續接項目，Rust 核心仍會重新驗證後相容還原，避免升級後破壞原有資料；新介面不再提供這兩種設定。Rust 核心會為每個活躍 PTY 保留最近 256 KiB 輸出，供同一桌面程序內的 WebView 重新 attach；正常關閉時，這段輸出以 XChaCha20-Poly1305 加密寫入裝置本機，隨機金鑰只留在 OS 安全儲存區，不進入 WebView、工作區 JSON 或備份。若安全儲存區不可用，輸出仍只存於記憶體。停止工作階段或關閉應用程式仍會終止 CLI 程序，但重開同一項目時可先重播加密保存的畫面尾端，再由 Codex 自己的 `resume --last` 續接對話。
+「保存啟動項目」會記錄內建 CLI 類型、標籤、工作目錄與選填備註，最多 32 個；工作區名稱與項目順序也會保存。密碼、Token、API Key、Passphrase、Secret 參數與 Reporter 權杖都不會寫入工作區 JSON。下次開啟應用程式時，使用者可逐項或依保存順序整批確認並啟動 CLI 程序；沒有額外參數或舊版明確 Session ID 的 Codex 項目會執行 `codex resume --last`，由 Codex 在該工作目錄內續接最近的對話；Cursor 項目會執行官方的 `agent --continue` 續接最近對話，不需讓 LatticeTerm 保存或讀取 Session ID。既有 `agent-workspaces.json` 若包含舊版自訂 CLI 或原生 Session 續接項目，Rust 核心仍會重新驗證後相容還原，避免升級後破壞原有資料；新介面不再提供這兩種設定。Rust 核心會為每個活躍 PTY 保留最近 256 KiB 輸出，供同一桌面程序內的 WebView 重新 attach；正常關閉時，這段輸出以 XChaCha20-Poly1305 加密寫入裝置本機，隨機金鑰只留在 OS 安全儲存區，不進入 WebView、工作區 JSON 或備份。若安全儲存區不可用，輸出仍只存於記憶體。停止工作階段或關閉應用程式仍會終止 CLI 程序，但重開同一項目時可先重播加密保存的畫面尾端，再由對應 CLI 的原生續接功能恢復對話。
 
 每個 CLI 都會收到本機 Reporter 環境變數。工具 hook 可執行 `"$LATTICETERM_AGENT_REPORTER" agent-report done`，並以 `working`、`needs-attention`、`idle` 或 `done` 回報狀態；Windows PowerShell 使用 `& $env:LATTICETERM_AGENT_REPORTER agent-report done`。Reporter 只接受該工作階段的隨機權杖，且只能更新狀態。完整協定與安全邊界請見架構文件。
 

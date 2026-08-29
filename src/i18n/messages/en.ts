@@ -858,7 +858,7 @@ export const en: Messages = {
   "agents.workspace.restoreAll": "Restore all {count}",
   "agents.workspace.securityTitle": "Only launch metadata you explicitly choose is saved",
   "agents.workspace.securityBody":
-    "Save up to {count} launch items. A saved Codex item continues the latest chat from the same working directory through Codex itself; LatticeTerm still does not store native session IDs, prompts, terminal output, process IDs, reporter tokens, or model credentials.",
+    "Save up to {count} launch items. Saved Codex items continue the latest chat from the same working directory, and saved Cursor items use Cursor's latest-conversation resume; LatticeTerm still does not store native session IDs, prompts, terminal output, process IDs, reporter tokens, or model credentials.",
   "agents.workspace.recoveryTitle": "The previous launch workspace could not be read",
   "agents.workspace.recoveryBody":
     "The original file was preserved at {path} instead of being overwritten. Reason: {detail}",
@@ -880,7 +880,7 @@ export const en: Messages = {
   "agents.workspace.delete": "Delete launch item",
   "agents.workspace.confirmTitle": "Restore this launch workspace?",
   "agents.workspace.confirmBody":
-    "This immediately starts {count} local CLI processes. Saved Codex items resume the latest chat from their working directory; legacy items with a native session identifier resume that exact context. Previous processes and terminal screens are not restored.",
+    "This immediately starts {count} local CLI processes. Saved Codex items resume the latest chat from their working directory, and saved Cursor items resume Cursor's latest conversation; legacy items with a native session identifier resume that exact context. Previous processes and terminal screens are not restored.",
   "agents.workspace.confirmAction": "Launch {count} agents",
   "agents.workspace.deleteTitle": "Delete “{name}”?",
   "agents.workspace.deleteBody":
