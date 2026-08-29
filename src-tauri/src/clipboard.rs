@@ -1,9 +1,9 @@
-//! Sensitive clipboard lifecycle.
+//! Clipboard boundaries used by the desktop shell.
 //!
-//! The WebView may ask this module to copy one sensitive value or clear the
-//! last one it copied, but it never receives arbitrary clipboard read access.
-//! Only a SHA-256 digest is retained. Clearing compares the live clipboard
-//! first, preserving anything the user copied afterwards.
+//! Sensitive values are write-only to the WebView: only a SHA-256 digest is
+//! retained and clearing compares the live clipboard first. Terminal text has
+//! a separate, size-limited bridge because Linux WebKitGTK denies the browser
+//! clipboard API even during explicit copy/paste keyboard gestures.
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -14,7 +14,34 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use zeroize::Zeroizing;
 
 const MAX_SENSITIVE_VALUE_BYTES: usize = 4 * 1024;
+const MAX_TERMINAL_TEXT_BYTES: usize = 1024 * 1024;
 const ALLOWED_CLEAR_DELAYS: [u64; 4] = [15, 30, 60, 120];
+
+fn checked_terminal_text(value: String) -> Result<Option<String>, String> {
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > MAX_TERMINAL_TEXT_BYTES {
+        return Err("Terminal clipboard text is too long.".to_string());
+    }
+    Ok(Some(value))
+}
+
+pub fn read_terminal_text(app: &AppHandle) -> Result<Option<String>, String> {
+    let value = app
+        .clipboard()
+        .read_text()
+        .map_err(|error| format!("Cannot read terminal clipboard text: {error}"))?;
+    checked_terminal_text(value)
+}
+
+pub fn write_terminal_text(app: &AppHandle, text: String) -> Result<(), String> {
+    let text = checked_terminal_text(text)?
+        .ok_or_else(|| "Terminal clipboard text is empty.".to_string())?;
+    app.clipboard()
+        .write_text(text)
+        .map_err(|error| format!("Cannot write terminal clipboard text: {error}"))
+}
 
 #[derive(Debug, Clone, Copy)]
 struct ClipboardRecord {
@@ -177,6 +204,16 @@ mod tests {
         assert!(validate_clear_delay(None).is_ok());
         assert!(validate_clear_delay(Some(0)).is_err());
         assert!(validate_clear_delay(Some(31)).is_err());
+    }
+
+    #[test]
+    fn terminal_text_bridge_rejects_empty_writes_and_oversized_values() {
+        assert_eq!(checked_terminal_text(String::new()).unwrap(), None);
+        assert_eq!(
+            checked_terminal_text("paste me".to_string()).unwrap(),
+            Some("paste me".to_string())
+        );
+        assert!(checked_terminal_text("x".repeat(MAX_TERMINAL_TEXT_BYTES + 1)).is_err());
     }
 
     #[test]

@@ -13,6 +13,7 @@ import {
   terminalTheme,
 } from "../terminal/terminalTheme";
 import { attachTerminalClipboard } from "../terminal/terminalClipboard";
+import { nativeTerminalClipboard } from "../terminal/nativeTerminalClipboard";
 
 export function AgentTerminalPane({
   sessionId,
@@ -89,6 +90,7 @@ export function AgentTerminalPane({
     fitAndReport();
 
     attachTerminalClipboard(terminal, {
+      ...nativeTerminalClipboard,
       shouldProcessKeyEvent: () =>
         imePresentation.shouldProcessTerminalKeyEvent(),
       // The agent runs locally, so an image on the clipboard can be written to

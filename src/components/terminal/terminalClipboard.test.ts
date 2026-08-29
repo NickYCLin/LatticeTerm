@@ -44,6 +44,18 @@ function fakePasteKeyEvent(): KeyboardEvent {
   } as unknown as KeyboardEvent;
 }
 
+function fakeCopyKeyEvent(): KeyboardEvent {
+  return {
+    type: "keydown",
+    key: "C",
+    ctrlKey: true,
+    shiftKey: true,
+    altKey: false,
+    metaKey: false,
+    preventDefault: vi.fn(),
+  } as unknown as KeyboardEvent;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -62,6 +74,20 @@ describe("terminal right-click", () => {
     expect(writeText).toHaveBeenCalledWith("cli answer");
     expect(mock.clearSelection).toHaveBeenCalled();
     expect(mock.paste).not.toHaveBeenCalled();
+  });
+
+  it("uses the native writer when WebKitGTK denies clipboard writes", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+    const writeTextFallback = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const { terminal, listeners } = fakeTerminal("native copy");
+    attachTerminalClipboard(terminal, { writeTextFallback });
+
+    listeners.contextmenu(fakeContextMenuEvent());
+
+    await vi.waitFor(() =>
+      expect(writeTextFallback).toHaveBeenCalledWith("native copy"),
+    );
   });
 
   it("asks for a clipboard image when the webview exposes text only", async () => {
@@ -89,6 +115,22 @@ describe("terminal right-click", () => {
     await vi.waitFor(() => expect(mock.paste).toHaveBeenCalledWith("pasted text"));
     expect(onImagePaste).not.toHaveBeenCalled();
   });
+
+  it("uses native text when WebKitGTK reports an empty clipboard", async () => {
+    const readText = vi.fn().mockResolvedValue("");
+    const readTextFallback = vi.fn().mockResolvedValue("native pasted text");
+    vi.stubGlobal("navigator", { clipboard: { readText } });
+    const onImagePaste = vi.fn();
+    const { terminal, mock, listeners } = fakeTerminal(null);
+    attachTerminalClipboard(terminal, { readTextFallback, onImagePaste });
+
+    listeners.contextmenu(fakeContextMenuEvent());
+
+    await vi.waitFor(() =>
+      expect(mock.paste).toHaveBeenCalledWith("native pasted text"),
+    );
+    expect(onImagePaste).not.toHaveBeenCalled();
+  });
 });
 
 describe("terminal Ctrl+V", () => {
@@ -104,5 +146,20 @@ describe("terminal Ctrl+V", () => {
     expect(event.preventDefault).toHaveBeenCalled();
     await vi.waitFor(() => expect(onImagePaste).toHaveBeenCalledOnce());
     expect(mock.paste).not.toHaveBeenCalled();
+  });
+
+  it("supports the conventional Linux Ctrl+Shift+C shortcut", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+    const writeTextFallback = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const { terminal, keyEventHandler } = fakeTerminal("selected output");
+    attachTerminalClipboard(terminal, { writeTextFallback });
+
+    const event = fakeCopyKeyEvent();
+    expect(keyEventHandler()?.(event)).toBe(false);
+    expect(event.preventDefault).toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(writeTextFallback).toHaveBeenCalledWith("selected output"),
+    );
   });
 });

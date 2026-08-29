@@ -32,7 +32,9 @@ use crate::agent::{
 use crate::agent_history::AgentTerminalHistoryStore;
 use crate::agent_plans::{AgentPlanSnapshot, FileAgentPlanStore};
 use crate::backup::{DecryptedBackup, ValidatedAppData};
-use crate::clipboard::{SensitiveClipboard, SensitiveClipboardClearOutcome};
+use crate::clipboard::{
+    read_terminal_text, write_terminal_text, SensitiveClipboard, SensitiveClipboardClearOutcome,
+};
 use crate::credentials::{CredentialKind, CredentialStoreStatus};
 use crate::domain::{ConnectionProfile, Protocol};
 use crate::hostkeys::{HostKeyRecord, HostTrustStore};
@@ -778,6 +780,16 @@ fn sensitive_clipboard_clear(
     clipboard: State<'_, Arc<SensitiveClipboard>>,
 ) -> SensitiveClipboardClearOutcome {
     clipboard.clear_current(&app)
+}
+
+#[tauri::command]
+fn terminal_clipboard_read_text(app: AppHandle) -> Result<Option<String>, String> {
+    read_terminal_text(&app)
+}
+
+#[tauri::command]
+fn terminal_clipboard_write_text(app: AppHandle, text: String) -> Result<(), String> {
+    write_terminal_text(&app, text)
 }
 
 #[tauri::command]
@@ -1762,6 +1774,8 @@ pub fn run() {
             vault_change_password,
             sensitive_clipboard_copy,
             sensitive_clipboard_clear,
+            terminal_clipboard_read_text,
+            terminal_clipboard_write_text,
             credential_exists,
             credential_delete,
             storage_status,

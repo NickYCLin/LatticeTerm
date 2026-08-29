@@ -22,6 +22,7 @@ import {
   terminalTheme,
 } from "./terminalTheme";
 import { attachTerminalClipboard } from "./terminalClipboard";
+import { nativeTerminalClipboard } from "./nativeTerminalClipboard";
 
 export function TerminalPane({
   sessionId,
@@ -112,6 +113,7 @@ export function TerminalPane({
     fitAndReport();
 
     attachTerminalClipboard(terminal, {
+      ...nativeTerminalClipboard,
       shouldProcessKeyEvent: () =>
         imePresentation.shouldProcessTerminalKeyEvent(),
     });

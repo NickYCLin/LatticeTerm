@@ -26,6 +26,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 - **現代化桌面工作空間**：整合全域導覽列、資源側欄、工作區與即時狀態列。
 - **安全的連線管理**：連線設定檔不含密碼與私鑰；SSH/SFTP/RDP/VNC 驗證成功後可由使用者選擇保存密碼，交給 Windows Credential Manager、macOS Keychain、Linux Secret Service，或以主密碼保護的本機加密保管庫隔離保存。保管庫預設閒置 15 分鐘或視窗進入背景時自動鎖定，也可由使用者調整策略。
 - **敏感剪貼簿保護**：Lattice Remote 一次性配對碼預設在複製 30 秒後清除，可調整為 15／60／120 秒或關閉；清除前會比對內容，使用者後來複製的文字不會被覆蓋，亦可從設定立即清除。
+- **終端機文字剪貼簿**：SSH 與本機 Agent CLI 支援 `Ctrl+C`／`Ctrl+V`、Linux 常用的 `Ctrl+Shift+C`／`Ctrl+Shift+V`，以及右鍵複製／貼上；有選取內容時 `Ctrl+C` 才會複製，否則仍送出中斷。Linux WebKitGTK 拒絕瀏覽器剪貼簿 API 時會走限制為 1 MiB 文字的 Rust 原生橋接，不必開放整個 clipboard plugin 給 WebView。
 - **真實主機信任管理**：Key Vault 直接讀寫桌面核心的 `known_hosts.json`，可搜尋、複製、新增及移除已驗證的 SHA-256 指紋。
 - **分層備份與移轉**：連線清單可用標準 JSON 安全匯出並自動過濾機密；完整本機工作區則可匯出成密碼保護的 `.latticeterm-backup`，以 Argon2id 與 XChaCha20-Poly1305 加密後再交給介面下載，還原前會完整驗證並可失敗回滾。
 - **強大的組織與檢索**：支援全域關鍵字搜尋、多層群組、環境標籤（Production / Staging / Development）與常用釘選。
