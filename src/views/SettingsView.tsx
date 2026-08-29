@@ -35,6 +35,7 @@ import {
   playNotificationSound,
   type NotificationSoundChoice,
 } from "../app/notificationSounds";
+import { moveRadioGroupFocus } from "../components/overlays/radioNavigation";
 
 interface Choice<T> {
   value: T;
@@ -111,16 +112,22 @@ function SegmentedSetting<T extends string>({
         <p className="setting__description">{description}</p>
       </div>
       <div className="segmented" role="radiogroup" aria-label={title}>
-        {choices.map((choice) => (
+        {choices.map((choice, index) => (
           <button
             type="button"
             key={choice.value}
             role="radio"
             aria-checked={value === choice.value}
+            tabIndex={value === choice.value ? 0 : -1}
             className={`segmented__option${
               value === choice.value ? " is-selected" : ""
             }`}
             onClick={() => onChange(choice.value)}
+            onKeyDown={(event) =>
+              moveRadioGroupFocus(event, index, (nextIndex) =>
+                onChange(choices[nextIndex].value),
+              )
+            }
           >
             {choice.label}
           </button>
@@ -205,7 +212,7 @@ export function SettingsView({
         </div>
 
         <div className="theme-grid" role="radiogroup" aria-label={t("settings.theme")}>
-          {themeCatalog.map((theme) => {
+          {themeCatalog.map((theme, index) => {
             const selected = preferences.theme === theme.id;
             return (
               <button
@@ -213,8 +220,14 @@ export function SettingsView({
                 key={theme.id}
                 role="radio"
                 aria-checked={selected}
+                tabIndex={selected ? 0 : -1}
                 className={`theme-option${selected ? " is-selected" : ""}`}
                 onClick={() => onChange({ theme: theme.id })}
+                onKeyDown={(event) =>
+                  moveRadioGroupFocus(event, index, (nextIndex) =>
+                    onChange({ theme: themeCatalog[nextIndex].id }),
+                  )
+                }
               >
                 <span className="theme-option__preview" aria-hidden="true">
                   <span style={{ background: theme.swatch[0] }} />

@@ -20,6 +20,12 @@ import { useI18n } from "../i18n/context";
 import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import { ActivityIcon, ExportIcon, SearchIcon, TrashIcon } from "../components/icons";
+import { moveRadioGroupFocus } from "../components/overlays/radioNavigation";
+
+const activityFilterChoices: readonly (ActivityKind | "all")[] = [
+  "all",
+  ...activityKindList,
+];
 
 export function ActivityView({ workspace }: { workspace: Workspace }) {
   const { t, tag } = useI18n();
@@ -136,25 +142,24 @@ export function ActivityView({ workspace }: { workspace: Workspace }) {
             role="radiogroup"
             aria-label={t("activity.title")}
           >
-            <button
-              type="button"
-              role="radio"
-              aria-checked={kind === "all"}
-              className={`segmented__option${kind === "all" ? " is-selected" : ""}`}
-              onClick={() => setKind("all")}
-            >
-              {t("activity.filter.all")}
-            </button>
-            {activityKindList.map((value) => (
+            {activityFilterChoices.map((value, index) => (
               <button
                 type="button"
                 key={value}
                 role="radio"
                 aria-checked={kind === value}
+                tabIndex={kind === value ? 0 : -1}
                 className={`segmented__option${kind === value ? " is-selected" : ""}`}
                 onClick={() => setKind(value)}
+                onKeyDown={(event) =>
+                  moveRadioGroupFocus(event, index, (nextIndex) =>
+                    setKind(activityFilterChoices[nextIndex]),
+                  )
+                }
               >
-                {t(activityKindLabelKey(value))}
+                {value === "all"
+                  ? t("activity.filter.all")
+                  : t(activityKindLabelKey(value))}
               </button>
             ))}
           </div>

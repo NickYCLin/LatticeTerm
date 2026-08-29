@@ -3,7 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createConnectionProfile, emptyDraft } from "../../domain/connection";
 import { I18nProvider } from "../../i18n";
 import { ConnectionDrawer } from "./ConnectionDrawer";
-import { radioNavigationIndex } from "./radioNavigation";
+import {
+  radioNavigationIndex,
+  radioNavigationTargetIndex,
+} from "./radioNavigation";
 
 function renderDrawer(
   profile: Parameters<typeof ConnectionDrawer>[0]["profile"] = null,
@@ -46,6 +49,15 @@ describe("connection drawer", () => {
     expect(radioNavigationIndex("End", 1, 5)).toBe(4);
     expect(radioNavigationIndex("Tab", 1, 5)).toBeNull();
     expect(radioNavigationIndex("ArrowRight", -1, 5)).toBeNull();
+    expect(
+      radioNavigationTargetIndex("ArrowRight", 0, [false, true, false]),
+    ).toBe(2);
+    expect(
+      radioNavigationTargetIndex("ArrowLeft", 0, [false, true, false]),
+    ).toBe(2);
+    expect(
+      radioNavigationTargetIndex("ArrowRight", 0, [true, true, true]),
+    ).toBeNull();
   });
 
   it("does not show an irrelevant username for VNC", () => {

@@ -32,6 +32,9 @@ import {
   saveAuthPref,
   type AuthMethodChoice,
 } from "../../app/authPreferences";
+import { moveRadioGroupFocus } from "../overlays/radioNavigation";
+
+const authMethodChoices = ["password", "privateKey"] as const;
 
 /**
  * The dialogs describe a stored vault entry, while a live connection only has
@@ -345,12 +348,13 @@ export function ConnectFlow({
               aria-label={t("connect.method")}
               style={{ display: "flex", gap: "var(--space-2)" }}
             >
-              {(["password", "privateKey"] as const).map((choice) => (
+              {authMethodChoices.map((choice, index) => (
                 <button
                   key={choice}
                   type="button"
                   role="radio"
                   aria-checked={method === choice}
+                  tabIndex={method === choice ? 0 : -1}
                   className={`button ${method === choice ? "button--secondary" : "button--ghost"}`}
                   style={{ flex: 1 }}
                   disabled={busy}
@@ -358,6 +362,12 @@ export function ConnectFlow({
                     setMethod(choice);
                     setProblem(null);
                   }}
+                  onKeyDown={(event) =>
+                    moveRadioGroupFocus(event, index, (nextIndex) => {
+                      setMethod(authMethodChoices[nextIndex]);
+                      setProblem(null);
+                    })
+                  }
                 >
                   {t(
                     choice === "password"

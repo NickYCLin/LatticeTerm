@@ -8,10 +8,7 @@
  */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type {
-  FormEvent,
-  KeyboardEvent as ReactKeyboardEvent,
-} from "react";
+import type { FormEvent } from "react";
 import {
   connectionTarget,
   createConnectionProfile,
@@ -40,7 +37,7 @@ import { ProtocolTile } from "../common/Badge";
 import { Callout } from "../common/Callout";
 import { AlertIcon, CheckIcon, CloseIcon } from "../icons";
 import { clearValidationError } from "./connectionValidation";
-import { radioNavigationIndex } from "./radioNavigation";
+import { moveRadioGroupFocus } from "./radioNavigation";
 
 function sameDraft(a: ConnectionDraft, b: ConnectionDraft): boolean {
   return (
@@ -69,26 +66,6 @@ const hostnamePlaceholderKeys: Record<Protocol, MessageKey> = {
   vnc: "form.hostnamePlaceholder.vnc",
   lattice: "form.hostnamePlaceholder.lattice",
 };
-
-function moveRadioFocus(
-  event: ReactKeyboardEvent<HTMLButtonElement>,
-  currentIndex: number,
-  itemCount: number,
-  selectAt: (index: number) => void,
-) {
-  const nextIndex = radioNavigationIndex(event.key, currentIndex, itemCount);
-  if (nextIndex === null) return;
-
-  event.preventDefault();
-  selectAt(nextIndex);
-  const group = event.currentTarget.closest<HTMLElement>(
-    '[role="radiogroup"]',
-  );
-  group
-    ?.querySelectorAll<HTMLButtonElement>('button[role="radio"]')
-    .item(nextIndex)
-    .focus();
-}
 
 export function ConnectionDrawer({
   profile,
@@ -309,10 +286,9 @@ export function ConnectionDrawer({
                     className={`protocol-option${active ? " is-selected" : ""}`}
                     onClick={() => selectProtocol(entry.id)}
                     onKeyDown={(event) =>
-                      moveRadioFocus(
+                      moveRadioGroupFocus(
                         event,
                         index,
-                        protocolCatalog.length,
                         (nextIndex) =>
                           selectProtocol(protocolCatalog[nextIndex].id),
                       )
@@ -515,10 +491,9 @@ export function ConnectionDrawer({
                           patch({ environment: entry as Environment })
                         }
                         onKeyDown={(event) =>
-                          moveRadioFocus(
+                          moveRadioGroupFocus(
                             event,
                             index,
-                            environmentCatalog.length,
                             (nextIndex) =>
                               patch({
                                 environment: environmentCatalog[

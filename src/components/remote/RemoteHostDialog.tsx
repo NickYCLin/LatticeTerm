@@ -13,6 +13,7 @@ import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { CloseIcon, CopyIcon, ScreenShareIcon, ShieldIcon } from "../icons";
 import { RelayAddressField } from "./RelayAddressField";
+import { moveRadioGroupFocus } from "../overlays/radioNavigation";
 
 export function RemoteHostDialog({
   host,
@@ -316,11 +317,17 @@ export function RemoteHostDialog({
                   type="button"
                   role="radio"
                   aria-checked={mode === "relay"}
+                  tabIndex={mode === "relay" ? 0 : -1}
                   className={`remote-host-mode__option${
                     mode === "relay" ? " is-active" : ""
                   }`}
                   disabled={busy}
                   onClick={() => setMode("relay")}
+                  onKeyDown={(event) =>
+                    moveRadioGroupFocus(event, 0, (nextIndex) =>
+                      setMode(nextIndex === 0 ? "relay" : "direct"),
+                    )
+                  }
                 >
                   <strong>{t("remote.host.modeRelay")}</strong>
                   <small>{t("remote.host.modeRelayHint")}</small>
@@ -329,11 +336,17 @@ export function RemoteHostDialog({
                   type="button"
                   role="radio"
                   aria-checked={mode === "direct"}
+                  tabIndex={mode === "direct" ? 0 : -1}
                   className={`remote-host-mode__option${
                     mode === "direct" ? " is-active" : ""
                   }`}
                   disabled={busy}
                   onClick={() => setMode("direct")}
+                  onKeyDown={(event) =>
+                    moveRadioGroupFocus(event, 1, (nextIndex) =>
+                      setMode(nextIndex === 0 ? "relay" : "direct"),
+                    )
+                  }
                 >
                   <strong>{t("remote.host.modeDirect")}</strong>
                   <small>{t("remote.host.modeDirectHint")}</small>

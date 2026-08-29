@@ -13,6 +13,7 @@ import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { Chip } from "../common/Badge";
 import { LockIcon, ShieldIcon, UnlockIcon } from "../icons";
+import { moveRadioGroupFocus } from "../overlays/radioNavigation";
 
 export function EncryptedVaultPanel({ vault }: { vault: VaultApi }) {
   const { t } = useI18n();
@@ -249,9 +250,15 @@ export function EncryptedVaultPanel({ vault }: { vault: VaultApi }) {
             type="button"
             role="radio"
             aria-checked={vault.backend === "osKeyring"}
+            tabIndex={vault.backend === "osKeyring" ? 0 : -1}
             className={`button ${vault.backend === "osKeyring" ? "button--secondary" : "button--ghost"}`}
             disabled={vault.busy}
             onClick={() => void vault.setBackend("osKeyring")}
+            onKeyDown={(event) =>
+              moveRadioGroupFocus(event, 0, (nextIndex) =>
+                void vault.setBackend(nextIndex === 0 ? "osKeyring" : "vault"),
+              )
+            }
           >
             {t("vault.encrypted.backend.osKeyring")}
           </button>
@@ -259,9 +266,15 @@ export function EncryptedVaultPanel({ vault }: { vault: VaultApi }) {
             type="button"
             role="radio"
             aria-checked={vault.backend === "vault"}
+            tabIndex={vault.backend === "vault" ? 0 : -1}
             className={`button ${vault.backend === "vault" ? "button--secondary" : "button--ghost"}`}
             disabled={vault.busy || status.state === "notCreated"}
             onClick={() => void vault.setBackend("vault")}
+            onKeyDown={(event) =>
+              moveRadioGroupFocus(event, 1, (nextIndex) =>
+                void vault.setBackend(nextIndex === 0 ? "osKeyring" : "vault"),
+              )
+            }
           >
             {t("vault.encrypted.backend.vault")}
           </button>
