@@ -17,6 +17,7 @@ import {
 } from "../icons";
 import { HostFingerprintDialog } from "../overlays/HostFingerprintDialog";
 import { HostKeyChangedDialog } from "../overlays/HostKeyChangedDialog";
+import { useModalFocus } from "../overlays/modalFocus";
 
 function presented(
   host: string,
@@ -87,6 +88,15 @@ export function SftpConnectFlow({
     null,
   );
   const passwordRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const busy = phase.step === "connecting";
+
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => passwordRef.current,
+    onEscape: onCancel,
+    escapeDisabled: busy,
+  });
 
   useEffect(() => {
     if (savedCredential.state.mode === "saved") {
@@ -101,15 +111,8 @@ export function SftpConnectFlow({
   }, [phase.step, useSavedPassword]);
 
   useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onCancel();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [onCancel]);
+    if (busy) dialogRef.current?.focus();
+  }, [busy]);
 
   async function attempt(secret: string) {
     setPhase({ step: "connecting" });
@@ -238,14 +241,19 @@ export function SftpConnectFlow({
     );
   }
 
-  const busy = phase.step === "connecting";
   return (
-    <div className="scrim scrim--center" role="presentation" onMouseDown={onCancel}>
+    <div
+      className="scrim scrim--center"
+      role="presentation"
+      onMouseDown={busy ? undefined : onCancel}
+    >
       <div
+        ref={dialogRef}
         className="dialog dialog--wide"
         role="dialog"
         aria-modal="true"
         aria-labelledby="sftp-connect-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">
@@ -259,6 +267,7 @@ export function SftpConnectFlow({
             type="button"
             className="icon-button icon-button--sm"
             onClick={onCancel}
+            disabled={busy}
             aria-label={t("common.close")}
             style={{ marginLeft: "auto" }}
           >
@@ -364,6 +373,7 @@ export function SftpConnectFlow({
               type="button"
               className="button button--ghost"
               onClick={onCancel}
+              disabled={busy}
             >
               {t("common.cancel")}
             </button>

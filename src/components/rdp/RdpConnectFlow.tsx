@@ -6,6 +6,7 @@ import { connectionTarget, type ConnectionProfile } from "../../domain/connectio
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { CheckIcon, CloseIcon, ScreenShareIcon, ShieldIcon, TrashIcon } from "../icons";
+import { useModalFocus } from "../overlays/modalFocus";
 
 export function RdpConnectFlow({
   profile,
@@ -32,6 +33,14 @@ export function RdpConnectFlow({
     detail: string;
   } | null>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => passwordRef.current,
+    onEscape: onCancel,
+    escapeDisabled: busy,
+  });
 
   useEffect(() => {
     if (savedCredential.state.mode === "saved") {
@@ -45,12 +54,8 @@ export function RdpConnectFlow({
     if (!useSavedPassword) passwordRef.current?.focus();
   }, [useSavedPassword]);
   useEffect(() => {
-    function close(event: KeyboardEvent) {
-      if (event.key === "Escape" && !busy) onCancel();
-    }
-    document.addEventListener("keydown", close, true);
-    return () => document.removeEventListener("keydown", close, true);
-  }, [busy, onCancel]);
+    if (busy) dialogRef.current?.focus();
+  }, [busy]);
 
   async function attempt(trustedCertificateSha256?: string) {
     if (!profile.username.trim()) {
@@ -117,12 +122,18 @@ export function RdpConnectFlow({
   }
 
   return (
-    <div className="scrim scrim--center" role="presentation" onMouseDown={onCancel}>
+    <div
+      className="scrim scrim--center"
+      role="presentation"
+      onMouseDown={busy ? undefined : onCancel}
+    >
       <div
+        ref={dialogRef}
         className="dialog dialog--wide"
         role="dialog"
         aria-modal="true"
         aria-labelledby="rdp-connect-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">

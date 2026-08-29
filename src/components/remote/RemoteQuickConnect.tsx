@@ -10,6 +10,7 @@ import type { RemoteApi } from "../../app/useRemoteSessions";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { CloseIcon, ScreenShareIcon, ShieldIcon } from "../icons";
+import { useModalFocus } from "../overlays/modalFocus";
 import { RelayAddressField } from "./RelayAddressField";
 
 /**
@@ -33,15 +34,18 @@ export function RemoteQuickConnect({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const idRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => idRef.current?.focus(), []);
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => idRef.current,
+    onEscape: onCancel,
+    escapeDisabled: busy,
+  });
+
   useEffect(() => {
-    function close(event: KeyboardEvent) {
-      if (event.key === "Escape" && !busy) onCancel();
-    }
-    document.addEventListener("keydown", close, true);
-    return () => document.removeEventListener("keydown", close, true);
-  }, [busy, onCancel]);
+    if (busy) dialogRef.current?.focus();
+  }, [busy]);
 
   const formattedCode =
     pairingCode.length > 4
@@ -90,12 +94,18 @@ export function RemoteQuickConnect({
   }
 
   return (
-    <div className="scrim scrim--center" role="presentation" onMouseDown={onCancel}>
+    <div
+      className="scrim scrim--center"
+      role="presentation"
+      onMouseDown={busy ? undefined : onCancel}
+    >
       <div
+        ref={dialogRef}
         className="dialog dialog--wide"
         role="dialog"
         aria-modal="true"
         aria-labelledby="remote-quick-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">

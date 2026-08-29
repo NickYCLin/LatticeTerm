@@ -5,6 +5,7 @@ import { connectionTarget, type ConnectionProfile } from "../../domain/connectio
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { CloseIcon, ScreenShareIcon, ShieldIcon } from "../icons";
+import { useModalFocus } from "../overlays/modalFocus";
 
 export function RemoteConnectFlow({
   profile,
@@ -22,15 +23,18 @@ export function RemoteConnectFlow({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const codeRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => codeRef.current?.focus(), []);
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => codeRef.current,
+    onEscape: onCancel,
+    escapeDisabled: busy,
+  });
+
   useEffect(() => {
-    function close(event: KeyboardEvent) {
-      if (event.key === "Escape" && !busy) onCancel();
-    }
-    document.addEventListener("keydown", close, true);
-    return () => document.removeEventListener("keydown", close, true);
-  }, [busy, onCancel]);
+    if (busy) dialogRef.current?.focus();
+  }, [busy]);
 
   const formatted =
     pairingCode.length > 4
@@ -67,12 +71,18 @@ export function RemoteConnectFlow({
   }
 
   return (
-    <div className="scrim scrim--center" role="presentation" onMouseDown={onCancel}>
+    <div
+      className="scrim scrim--center"
+      role="presentation"
+      onMouseDown={busy ? undefined : onCancel}
+    >
       <div
+        ref={dialogRef}
         className="dialog dialog--wide"
         role="dialog"
         aria-modal="true"
         aria-labelledby="remote-connect-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">

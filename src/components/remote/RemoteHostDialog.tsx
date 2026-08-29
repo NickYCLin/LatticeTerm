@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { SensitiveClipboardClearChoice } from "../../app/preferences";
 import {
@@ -14,6 +14,7 @@ import { Callout } from "../common/Callout";
 import { CloseIcon, CopyIcon, ScreenShareIcon, ShieldIcon } from "../icons";
 import { RelayAddressField } from "./RelayAddressField";
 import { moveRadioGroupFocus } from "../overlays/radioNavigation";
+import { useModalFocus } from "../overlays/modalFocus";
 
 export function RemoteHostDialog({
   host,
@@ -43,6 +44,15 @@ export function RemoteHostDialog({
     null,
   );
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1_000));
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => closeRef.current,
+    onEscape: onClose,
+    escapeDisabled: busy,
+  });
 
   useEffect(() => {
     if (!host.status) return;
@@ -54,12 +64,8 @@ export function RemoteHostDialog({
   }, [host.status]);
 
   useEffect(() => {
-    function close(event: KeyboardEvent) {
-      if (event.key === "Escape" && !busy) onClose();
-    }
-    document.addEventListener("keydown", close, true);
-    return () => document.removeEventListener("keydown", close, true);
-  }, [busy, onClose]);
+    if (busy) dialogRef.current?.focus();
+  }, [busy]);
 
   const secondsRemaining = Math.max(
     0,
@@ -141,10 +147,12 @@ export function RemoteHostDialog({
       }}
     >
       <div
+        ref={dialogRef}
         className="dialog dialog--wide remote-host-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="remote-host-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">
@@ -155,6 +163,7 @@ export function RemoteHostDialog({
             {t("remote.host.title")}
           </h2>
           <button
+            ref={closeRef}
             type="button"
             className="icon-button icon-button--sm"
             onClick={onClose}
