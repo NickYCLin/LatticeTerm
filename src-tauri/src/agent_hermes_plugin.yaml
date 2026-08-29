@@ -1,0 +1,13 @@
+name: latticeterm-session-status-bridge
+version: "1.0.0"
+kind: backend
+description: Process-scoped LatticeTerm lifecycle observer
+author: LatticeTerm
+hooks:
+  - on_session_start
+  - pre_llm_call
+  - on_session_end
+  - subagent_start
+  - subagent_stop
+  - pre_approval_request
+  - post_approval_response

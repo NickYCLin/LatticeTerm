@@ -483,6 +483,10 @@ struct AgentSessionEntry {
     /// emits Stop. Track them independently so Stop is not mistaken for the
     /// end of all work in the PTY.
     copilot_activity: Option<Mutex<CopilotActivity>>,
+    /// Hermes emits lifecycle events for both the main conversation and each
+    /// delegated child. Keep their identities separate so a child finishing
+    /// can never mark the main turn done.
+    hermes_activity: Option<Mutex<HermesActivity>>,
     /// Keeps per-session integration files alive only as long as their PTY.
     _integration_settings: Option<AgentIntegrationSettings>,
 }
@@ -490,6 +494,7 @@ struct AgentSessionEntry {
 enum AgentIntegrationSettings {
     Copilot(CopilotReporterPlugin),
     Gemini(tempfile::NamedTempFile),
+    Hermes(HermesReporterPlugin),
     Qwen(tempfile::NamedTempFile),
     OpenCode(OpenCodeReporterPlugin),
 }
@@ -499,6 +504,16 @@ struct CopilotReporterPlugin {
 }
 
 impl CopilotReporterPlugin {
+    fn path(&self) -> &Path {
+        self.directory.path()
+    }
+}
+
+struct HermesReporterPlugin {
+    directory: tempfile::TempDir,
+}
+
+impl HermesReporterPlugin {
     fn path(&self) -> &Path {
         self.directory.path()
     }
@@ -879,6 +894,8 @@ struct ReporterMessage {
     state: Option<AgentLifecycle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     copilot_event: Option<CopilotReporterEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hermes_event: Option<HermesReporterEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -910,6 +927,36 @@ enum CopilotReporterAction {
     },
     BackgroundCompleted,
     BackgroundIdle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HermesReporterEvent {
+    source_session_id: String,
+    #[serde(flatten)]
+    action: HermesReporterAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum HermesReporterAction {
+    SessionStarted,
+    TurnStarted,
+    TurnEnded {
+        completed: bool,
+        failed: bool,
+        interrupted: bool,
+    },
+    SubagentStarted {
+        #[serde(rename = "childSessionId")]
+        child_session_id: String,
+    },
+    SubagentStopped {
+        #[serde(rename = "childSessionId")]
+        child_session_id: String,
+    },
+    NeedsAttention,
+    ApprovalResolved,
 }
 
 #[derive(Debug, Default)]
@@ -1020,6 +1067,84 @@ impl CopilotActivity {
     }
 }
 
+#[derive(Debug, Default)]
+struct HermesActivity {
+    primary_session_id: Option<String>,
+    active_subagents: HashSet<String>,
+    main_outcome: Option<AgentLifecycle>,
+}
+
+impl HermesActivity {
+    fn is_primary(&self, source_session_id: &str) -> bool {
+        self.primary_session_id.as_deref() == Some(source_session_id)
+    }
+
+    fn is_child(&self, source_session_id: &str) -> bool {
+        self.active_subagents.contains(source_session_id)
+    }
+
+    fn begin_turn(&mut self) {
+        self.main_outcome = None;
+    }
+
+    fn current_or_working(&self) -> AgentLifecycle {
+        if self.active_subagents.is_empty() {
+            self.main_outcome.unwrap_or(AgentLifecycle::Working)
+        } else {
+            AgentLifecycle::Working
+        }
+    }
+
+    fn apply(&mut self, event: &HermesReporterEvent) -> Option<AgentLifecycle> {
+        match &event.action {
+            HermesReporterAction::SessionStarted | HermesReporterAction::TurnStarted => {
+                if self.is_child(&event.source_session_id) {
+                    return None;
+                }
+                self.primary_session_id
+                    .get_or_insert_with(|| event.source_session_id.clone());
+                if !self.is_primary(&event.source_session_id) {
+                    return None;
+                }
+                self.begin_turn();
+                Some(AgentLifecycle::Working)
+            }
+            HermesReporterAction::TurnEnded {
+                completed,
+                failed,
+                interrupted,
+            } => {
+                if !self.is_primary(&event.source_session_id) {
+                    return None;
+                }
+                let outcome = if *failed {
+                    AgentLifecycle::NeedsAttention
+                } else if *interrupted {
+                    AgentLifecycle::Idle
+                } else if *completed {
+                    AgentLifecycle::Done
+                } else {
+                    AgentLifecycle::NeedsAttention
+                };
+                self.main_outcome = Some(outcome);
+                Some(self.current_or_working())
+            }
+            HermesReporterAction::SubagentStarted { child_session_id } => {
+                self.primary_session_id
+                    .get_or_insert_with(|| event.source_session_id.clone());
+                self.active_subagents.insert(child_session_id.clone());
+                Some(AgentLifecycle::Working)
+            }
+            HermesReporterAction::SubagentStopped { child_session_id } => {
+                self.active_subagents.remove(child_session_id);
+                Some(self.current_or_working())
+            }
+            HermesReporterAction::NeedsAttention => Some(AgentLifecycle::NeedsAttention),
+            HermesReporterAction::ApprovalResolved => Some(self.current_or_working()),
+        }
+    }
+}
+
 fn agent_session_limit_reached(session_count: usize) -> bool {
     session_count >= MAX_AGENT_SESSIONS
 }
@@ -1037,13 +1162,20 @@ impl AgentRegistry {
     }
 
     pub fn with_local_reporter(sink: Arc<dyn AgentSink>) -> Result<Arc<Self>, String> {
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("Cannot locate the LatticeTerm executable: {error}"))?;
+        Self::with_local_reporter_executable(sink, executable)
+    }
+
+    fn with_local_reporter_executable(
+        sink: Arc<dyn AgentSink>,
+        executable: PathBuf,
+    ) -> Result<Arc<Self>, String> {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .map_err(|error| format!("Cannot start the local agent reporter: {error}"))?;
         let address = listener
             .local_addr()
             .map_err(|error| format!("Cannot read the local reporter address: {error}"))?;
-        let executable = std::env::current_exe()
-            .map_err(|error| format!("Cannot locate the LatticeTerm executable: {error}"))?;
         let registry = Arc::new(Self {
             reporter: Some(ReporterEndpoint {
                 address,
@@ -1128,6 +1260,11 @@ impl AgentRegistry {
             return false;
         };
         if let Some(activity) = &entry.copilot_activity {
+            if let Ok(mut activity) = activity.lock() {
+                activity.begin_turn();
+            }
+        }
+        if let Some(activity) = &entry.hermes_activity {
             if let Ok(mut activity) = activity.lock() {
                 activity.begin_turn();
             }
@@ -1223,6 +1360,33 @@ impl AgentRegistry {
             .copilot_activity
             .as_ref()
             .ok_or_else(|| "Copilot lifecycle tracking is unavailable.".to_string())?;
+        let next = activity
+            .lock()
+            .map_err(|error| error.to_string())?
+            .apply(event);
+        entry.integrated_completion.store(true, Ordering::Release);
+        Ok(next.map(|next| {
+            (
+                self.update_state(session_id, next, AgentStateSource::Integration),
+                next,
+            )
+        }))
+    }
+
+    fn update_hermes_event(
+        &self,
+        session_id: &str,
+        token: &str,
+        event: &HermesReporterEvent,
+    ) -> Result<Option<(bool, AgentLifecycle)>, String> {
+        let entry = self.get(session_id)?;
+        if entry.report_token.as_deref() != Some(token) {
+            return Err("Reporter authentication failed.".to_string());
+        }
+        let activity = entry
+            .hermes_activity
+            .as_ref()
+            .ok_or_else(|| "Hermes lifecycle tracking is unavailable.".to_string())?;
         let next = activity
             .lock()
             .map_err(|error| error.to_string())?
@@ -1427,14 +1591,21 @@ fn handle_report_connection(mut stream: TcpStream, registry: &AgentRegistry, sin
         write_report_response(&mut stream, false);
         return;
     };
-    let update = if let Some(event) = message.copilot_event.as_ref() {
-        registry.update_copilot_event(&message.session_id, &message.token, event)
-    } else if let Some(state) = message.state {
-        registry
+    let update = match (
+        message.state,
+        message.copilot_event.as_ref(),
+        message.hermes_event.as_ref(),
+    ) {
+        (Some(state), None, None) => registry
             .update_reported_state(&message.session_id, &message.token, state)
-            .map(|changed| Some((changed, state)))
-    } else {
-        Err("Reporter state is missing.".to_string())
+            .map(|changed| Some((changed, state))),
+        (None, Some(event), None) => {
+            registry.update_copilot_event(&message.session_id, &message.token, event)
+        }
+        (None, None, Some(event)) => {
+            registry.update_hermes_event(&message.session_id, &message.token, event)
+        }
+        _ => Err("Reporter message must contain exactly one update.".to_string()),
     };
     let accepted = match update {
         Ok(Some((changed, state))) => {
@@ -1455,6 +1626,7 @@ fn send_report_once(
     token: &str,
     state: Option<AgentLifecycle>,
     copilot_event: Option<&CopilotReporterEvent>,
+    hermes_event: Option<&HermesReporterEvent>,
 ) -> Result<(), String> {
     if !address.ip().is_loopback() {
         return Err("The agent reporter address must be loopback-only.".to_string());
@@ -1472,6 +1644,7 @@ fn send_report_once(
         token: token.to_string(),
         state,
         copilot_event: copilot_event.cloned(),
+        hermes_event: hermes_event.cloned(),
     })
     .map_err(|error| format!("Cannot encode the agent state: {error}"))?;
     if payload.len() as u64 > MAX_REPORT_BYTES {
@@ -1501,7 +1674,7 @@ fn send_report(
 ) -> Result<(), String> {
     let mut last_error = None;
     for attempt in 0..REPORT_RETRIES {
-        match send_report_once(address, session_id, token, Some(state), None) {
+        match send_report_once(address, session_id, token, Some(state), None, None) {
             Ok(()) => return Ok(()),
             Err(error) => last_error = Some(error),
         }
@@ -1520,7 +1693,7 @@ fn send_copilot_event(
 ) -> Result<(), String> {
     let mut last_error = None;
     for attempt in 0..REPORT_RETRIES {
-        match send_report_once(address, session_id, token, None, Some(event)) {
+        match send_report_once(address, session_id, token, None, Some(event), None) {
             Ok(()) => return Ok(()),
             Err(error) => last_error = Some(error),
         }
@@ -1529,6 +1702,25 @@ fn send_copilot_event(
         }
     }
     Err(last_error.unwrap_or_else(|| "The Copilot lifecycle report failed.".to_string()))
+}
+
+fn send_hermes_event(
+    address: SocketAddr,
+    session_id: &str,
+    token: &str,
+    event: &HermesReporterEvent,
+) -> Result<(), String> {
+    let mut last_error = None;
+    for attempt in 0..REPORT_RETRIES {
+        match send_report_once(address, session_id, token, None, None, Some(event)) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        if attempt + 1 < REPORT_RETRIES {
+            std::thread::sleep(Duration::from_millis(40));
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "The Hermes lifecycle report failed.".to_string()))
 }
 
 fn lifecycle_from_report_arg(value: &str) -> Option<AgentLifecycle> {
@@ -1816,6 +2008,158 @@ fn qwen_reporter_settings_file(
     Ok(Some(file))
 }
 
+const HERMES_REPORTER_PLUGIN: &str = include_str!("agent_hermes_plugin.py");
+const HERMES_REPORTER_MANIFEST: &str = include_str!("agent_hermes_plugin.yaml");
+const HERMES_REPORTER_PLUGIN_NAME: &str = "latticeterm-session-status-bridge";
+
+fn is_hermes_bundled_plugins_directory(path: &Path) -> bool {
+    path.is_dir() && path.join("model-providers").is_dir()
+}
+
+fn hermes_bundled_plugins_directory(executable: &Path) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("HERMES_BUNDLED_PLUGINS") {
+        candidates.push(PathBuf::from(path));
+    }
+
+    if let Some(home) = std::env::var_os("HERMES_HOME").map(PathBuf::from) {
+        candidates.push(home.join("hermes-agent").join("plugins"));
+        if home.parent().and_then(Path::file_name) == Some(OsStr::new("profiles")) {
+            if let Some(root) = home.parent().and_then(Path::parent) {
+                candidates.push(root.join("hermes-agent").join("plugins"));
+            }
+        }
+    }
+
+    if let Some(home) = user_home_directory() {
+        candidates.push(home.join(".hermes").join("hermes-agent").join("plugins"));
+    }
+    #[cfg(windows)]
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(
+            PathBuf::from(local_app_data)
+                .join("hermes")
+                .join("hermes-agent")
+                .join("plugins"),
+        );
+    }
+
+    for ancestor in executable.ancestors().skip(1) {
+        candidates.push(ancestor.join("plugins"));
+        candidates.push(ancestor.join("hermes-agent").join("plugins"));
+    }
+
+    candidates
+        .into_iter()
+        .find(|path| is_hermes_bundled_plugins_directory(path))
+}
+
+#[cfg(unix)]
+fn mirror_hermes_bundled_plugins(source: &Path, destination: &Path) -> Result<(), String> {
+    use std::os::unix::fs::symlink;
+
+    for entry in std::fs::read_dir(source)
+        .map_err(|error| format!("Cannot read Hermes bundled plugins: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Cannot inspect Hermes plugin: {error}"))?;
+        let target = std::fs::canonicalize(entry.path())
+            .map_err(|error| format!("Cannot resolve Hermes plugin: {error}"))?;
+        symlink(target, destination.join(entry.file_name()))
+            .map_err(|error| format!("Cannot mirror Hermes plugin: {error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn mirror_hermes_bundled_plugins(source: &Path, destination: &Path) -> Result<(), String> {
+    fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
+        std::fs::create_dir(destination)
+            .map_err(|error| format!("Cannot create Hermes plugin directory: {error}"))?;
+        for entry in std::fs::read_dir(source)
+            .map_err(|error| format!("Cannot read Hermes plugin directory: {error}"))?
+        {
+            let entry = entry.map_err(|error| format!("Cannot inspect Hermes plugin: {error}"))?;
+            let source = entry.path();
+            let destination = destination.join(entry.file_name());
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("Cannot inspect Hermes plugin type: {error}"))?;
+            if file_type.is_dir() {
+                copy_tree(&source, &destination)?;
+            } else if file_type.is_file() {
+                std::fs::copy(&source, &destination)
+                    .map_err(|error| format!("Cannot copy Hermes plugin: {error}"))?;
+            } else {
+                return Err("Hermes bundled plugins contain an unsupported link.".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    for entry in std::fs::read_dir(source)
+        .map_err(|error| format!("Cannot read Hermes bundled plugins: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Cannot inspect Hermes plugin: {error}"))?;
+        let source = entry.path();
+        let destination = destination.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Cannot inspect Hermes plugin type: {error}"))?;
+        if file_type.is_dir() {
+            copy_tree(&source, &destination)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&source, &destination)
+                .map_err(|error| format!("Cannot copy Hermes plugin: {error}"))?;
+        } else {
+            return Err("Hermes bundled plugins contain an unsupported link.".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn write_hermes_reporter_plugin_from_bundle(
+    bundled_plugins: &Path,
+) -> Result<HermesReporterPlugin, String> {
+    let directory = tempfile::Builder::new()
+        .prefix("latticeterm-hermes-status-")
+        .tempdir()
+        .map_err(|error| format!("Cannot create Hermes status plugin overlay: {error}"))?;
+    mirror_hermes_bundled_plugins(bundled_plugins, directory.path())?;
+
+    let plugin = directory.path().join(HERMES_REPORTER_PLUGIN_NAME);
+    std::fs::create_dir(&plugin)
+        .map_err(|error| format!("Cannot create Hermes status plugin: {error}"))?;
+    std::fs::write(plugin.join("plugin.yaml"), HERMES_REPORTER_MANIFEST)
+        .map_err(|error| format!("Cannot write Hermes status manifest: {error}"))?;
+    std::fs::write(plugin.join("__init__.py"), HERMES_REPORTER_PLUGIN)
+        .map_err(|error| format!("Cannot write Hermes status observer: {error}"))?;
+    Ok(HermesReporterPlugin { directory })
+}
+
+fn hermes_reporter_plugin(
+    executable: &Path,
+    arguments: &[String],
+) -> Result<Option<HermesReporterPlugin>, String> {
+    if environment_flag_is_true("HERMES_SAFE_MODE")
+        || arguments.iter().any(|argument| {
+            argument == "--safe-mode"
+                || argument == "--safe-mode=1"
+                || argument.eq_ignore_ascii_case("--safe-mode=true")
+        })
+    {
+        return Ok(None);
+    }
+    let Some(bundled_plugins) = hermes_bundled_plugins_directory(executable) else {
+        return Ok(None);
+    };
+    if bundled_plugins.join(HERMES_REPORTER_PLUGIN_NAME).exists() {
+        // A future Hermes release or administrator may already own this
+        // namespace. Never replace it merely to add status observability.
+        return Ok(None);
+    }
+    write_hermes_reporter_plugin_from_bundle(&bundled_plugins).map(Some)
+}
+
 fn copilot_reporter_command(event: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "command",
@@ -2078,6 +2422,94 @@ fn report_qwen_hook_from_stdin() -> Result<(), String> {
 }
 
 #[derive(Debug, Deserialize)]
+struct HermesHookPayload {
+    hook_event_name: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    parent_session_id: Option<String>,
+    #[serde(default)]
+    child_session_id: Option<String>,
+    #[serde(default)]
+    completed: bool,
+    #[serde(default)]
+    failed: bool,
+    #[serde(default)]
+    interrupted: bool,
+}
+
+fn valid_hermes_session_id(value: Option<String>, label: &str) -> Result<String, String> {
+    let value = value.ok_or_else(|| format!("Hermes {label} session id is missing."))?;
+    if value.is_empty()
+        || value.len() > MAX_RESUME_SESSION_ID_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(format!("Hermes {label} session id is invalid."));
+    }
+    Ok(value)
+}
+
+fn hermes_event_from_hook_payload(raw: &[u8]) -> Result<HermesReporterEvent, String> {
+    let payload: HermesHookPayload =
+        serde_json::from_slice(raw).map_err(|_| "Hermes hook payload is invalid.".to_string())?;
+    let (source_session_id, action) = match payload.hook_event_name.as_str() {
+        "on_session_start" => (
+            valid_hermes_session_id(payload.session_id, "source")?,
+            HermesReporterAction::SessionStarted,
+        ),
+        "pre_llm_call" => (
+            valid_hermes_session_id(payload.session_id, "source")?,
+            HermesReporterAction::TurnStarted,
+        ),
+        "on_session_end" => (
+            valid_hermes_session_id(payload.session_id, "source")?,
+            HermesReporterAction::TurnEnded {
+                completed: payload.completed,
+                failed: payload.failed,
+                interrupted: payload.interrupted,
+            },
+        ),
+        "subagent_start" => (
+            valid_hermes_session_id(payload.parent_session_id, "parent")?,
+            HermesReporterAction::SubagentStarted {
+                child_session_id: valid_hermes_session_id(payload.child_session_id, "child")?,
+            },
+        ),
+        "subagent_stop" => (
+            valid_hermes_session_id(payload.parent_session_id, "parent")?,
+            HermesReporterAction::SubagentStopped {
+                child_session_id: valid_hermes_session_id(payload.child_session_id, "child")?,
+            },
+        ),
+        "pre_approval_request" => (
+            payload.session_id.unwrap_or_default(),
+            HermesReporterAction::NeedsAttention,
+        ),
+        "post_approval_response" => (
+            payload.session_id.unwrap_or_default(),
+            HermesReporterAction::ApprovalResolved,
+        ),
+        _ => return Err("Hermes hook event is unknown.".to_string()),
+    };
+    Ok(HermesReporterEvent {
+        source_session_id,
+        action,
+    })
+}
+
+fn report_hermes_hook_from_stdin() -> Result<(), String> {
+    let mut payload = Vec::new();
+    std::io::stdin()
+        .take(MAX_LIFECYCLE_HOOK_BYTES + 1)
+        .read_to_end(&mut payload)
+        .map_err(|error| format!("Cannot read the Hermes hook payload: {error}"))?;
+    if payload.len() as u64 > MAX_LIFECYCLE_HOOK_BYTES {
+        return Err("Hermes hook payload is too large.".to_string());
+    }
+    report_hermes_event_from_environment(&hermes_event_from_hook_payload(&payload)?)
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CopilotHookPayload {
     #[serde(default)]
@@ -2199,6 +2631,18 @@ fn report_copilot_event_from_environment(event: &CopilotReporterEvent) -> Result
     let token = std::env::var("LATTICETERM_AGENT_REPORT_TOKEN")
         .map_err(|_| "Agent reporter token is unavailable.".to_string())?;
     send_copilot_event(address, &session_id, &token, event)
+}
+
+fn report_hermes_event_from_environment(event: &HermesReporterEvent) -> Result<(), String> {
+    let address: SocketAddr = std::env::var("LATTICETERM_AGENT_REPORT_ADDR")
+        .map_err(|_| "Agent reporter environment is unavailable.".to_string())?
+        .parse()
+        .map_err(|_| "Agent reporter address is invalid.".to_string())?;
+    let session_id = std::env::var("LATTICETERM_AGENT_SESSION")
+        .map_err(|_| "Agent reporter session is unavailable.".to_string())?;
+    let token = std::env::var("LATTICETERM_AGENT_REPORT_TOKEN")
+        .map_err(|_| "Agent reporter token is unavailable.".to_string())?;
+    send_hermes_event(address, &session_id, &token, event)
 }
 
 fn decode_forward_notify(value: &str) -> Option<Vec<String>> {
@@ -2324,6 +2768,12 @@ where
             return Some(2);
         };
         report_copilot_hook_from_stdin(&event)
+    } else if command.as_ref() == OsStr::new("agent-hermes-hook") {
+        if args.next().is_some() {
+            eprintln!("agent-hermes-hook accepts no arguments");
+            return Some(2);
+        }
+        report_hermes_hook_from_stdin()
     } else if command.as_ref() == OsStr::new("agent-qwen-hook") {
         if args.next().is_some() {
             eprintln!("agent-qwen-hook accepts no arguments");
@@ -3579,6 +4029,16 @@ pub fn launch_with_replay(
         }
         // Repository settings may intentionally disable all non-policy hooks.
         // Keep heuristics enabled until the first real hook event arrives.
+    } else if definition_id == "hermes" && reporter.is_some() {
+        // Hermes has no per-invocation hook flag. Build a temporary overlay of
+        // its official bundled plugin tree and add one observer backend there;
+        // HERMES_HOME, credentials, user config/plugins, and the workspace are
+        // untouched. Safe mode and an unrecognised package layout fall back to
+        // conservative terminal heuristics.
+        integration_settings = hermes_reporter_plugin(&executable, &arguments)
+            .ok()
+            .flatten()
+            .map(AgentIntegrationSettings::Hermes);
     } else if definition_id == "qwen" && reporter.is_some() {
         // Qwen's system settings override can be scoped to this child process.
         // Keep heuristics enabled until the first hook actually reports: user
@@ -3619,6 +4079,9 @@ pub fn launch_with_replay(
             }
             AgentIntegrationSettings::Gemini(file) => {
                 command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", file.path());
+            }
+            AgentIntegrationSettings::Hermes(plugin) => {
+                command.env("HERMES_BUNDLED_PLUGINS", plugin.path());
             }
             AgentIntegrationSettings::Qwen(file) => {
                 command.env("QWEN_CODE_SYSTEM_SETTINGS_PATH", file.path());
@@ -3682,6 +4145,11 @@ pub fn launch_with_replay(
         Some(AgentIntegrationSettings::Copilot(_))
     )
     .then(|| Mutex::new(CopilotActivity::default()));
+    let hermes_activity = matches!(
+        integration_settings.as_ref(),
+        Some(AgentIntegrationSettings::Hermes(_))
+    )
+    .then(|| Mutex::new(HermesActivity::default()));
     let entry = Arc::new(AgentSessionEntry {
         summary: Mutex::new(summary.clone()),
         report_token,
@@ -3707,6 +4175,7 @@ pub fn launch_with_replay(
         completion_gate: Mutex::new(CompletionReadiness::default()),
         integrated_completion: AtomicBool::new(integrated_completion),
         copilot_activity,
+        hermes_activity,
         _integration_settings: integration_settings,
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
@@ -4611,6 +5080,86 @@ model = "gpt-5.3-codex"
         );
     }
 
+    #[test]
+    #[ignore = "spawns the real Hermes CLI and uses the configured inference provider"]
+    fn hermes_official_hooks_report_a_real_oneshot_completion() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let test_executable = std::env::current_exe().unwrap();
+        let debug_directory = test_executable
+            .parent()
+            .and_then(Path::parent)
+            .expect("unit test binary should live under target/debug/deps");
+        #[cfg(windows)]
+        let reporter_executable = debug_directory.join("lattice-term.exe");
+        #[cfg(not(windows))]
+        let reporter_executable = debug_directory.join("lattice-term");
+        assert!(
+            reporter_executable.is_file(),
+            "build the real reporter first with `cargo build --bin lattice-term`"
+        );
+        let registry =
+            AgentRegistry::with_local_reporter_executable(sink.clone(), reporter_executable)
+                .unwrap();
+        let request = AgentLaunchRequest {
+            definition_id: "hermes".to_string(),
+            label: "Hermes lifecycle probe".to_string(),
+            executable: String::new(),
+            arguments: vec![
+                "--oneshot".to_string(),
+                "Reply with exactly LATTICETERM_HERMES_OK and no other text.".to_string(),
+                "--ignore-rules".to_string(),
+            ],
+            resume_session_id: None,
+            group_id: None,
+            seed_input: None,
+            restore_existing_session: false,
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 100,
+            rows: 30,
+        };
+        let session = launch(sink.clone(), registry.clone(), request).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(180);
+        while Instant::now() < deadline {
+            let done =
+                collector
+                    .states
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(session_id, state, source)| {
+                        session_id == &session.session_id
+                            && *state == AgentLifecycle::Done
+                            && *source == AgentStateSource::Integration
+                    });
+            let output = collector.data.lock().unwrap();
+            let answered = String::from_utf8_lossy(&output).contains("LATTICETERM_HERMES_OK");
+            drop(output);
+            let closed = !collector.closed.lock().unwrap().is_empty();
+            if (done && answered) || closed {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let states = collector.states.lock().unwrap();
+        let integrated_done = states.iter().any(|(session_id, state, source)| {
+            session_id == &session.session_id
+                && *state == AgentLifecycle::Done
+                && *source == AgentStateSource::Integration
+        });
+        let observed_states = states.clone();
+        drop(states);
+        let output = String::from_utf8_lossy(&collector.data.lock().unwrap()).to_string();
+        let closed = collector.closed.lock().unwrap().clone();
+        assert!(
+            integrated_done && output.contains("LATTICETERM_HERMES_OK"),
+            "states={observed_states:?} closed={closed:?} output={output:?}"
+        );
+        disconnect(sink.as_ref(), registry.as_ref(), &session.session_id).unwrap();
+    }
+
     #[cfg(windows)]
     #[test]
     fn detects_and_wraps_windows_script_shims() {
@@ -5120,6 +5669,161 @@ notify = ["notify.exe", "turn-ended"]"#,
             None
         );
         assert!(lifecycle_from_qwen_hook_payload(b"not-json").is_err());
+    }
+
+    #[test]
+    fn hermes_reporter_uses_a_process_scoped_bundled_plugin_overlay() {
+        let source = tempfile::tempdir().unwrap();
+        let provider = source.path().join("model-providers").join("mock");
+        std::fs::create_dir_all(&provider).unwrap();
+        std::fs::write(
+            provider.join("plugin.yaml"),
+            "name: mock\nkind: model-provider\n",
+        )
+        .unwrap();
+
+        let plugin = write_hermes_reporter_plugin_from_bundle(source.path()).unwrap();
+        assert!(plugin
+            .path()
+            .join("model-providers/mock/plugin.yaml")
+            .is_file());
+        let bridge = plugin.path().join(HERMES_REPORTER_PLUGIN_NAME);
+        let manifest = std::fs::read_to_string(bridge.join("plugin.yaml")).unwrap();
+        let observer = std::fs::read_to_string(bridge.join("__init__.py")).unwrap();
+        assert!(manifest.contains("kind: backend"));
+        assert!(manifest.contains("on_session_end"));
+        assert!(observer.contains("agent-hermes-hook"));
+        assert!(observer.contains("child_session_id"));
+        assert!(!observer.contains("user_message"));
+        assert!(!source.path().join(HERMES_REPORTER_PLUGIN_NAME).exists());
+    }
+
+    #[test]
+    fn hermes_hooks_forward_only_valid_lifecycle_events() {
+        let action = |payload: &str| {
+            hermes_event_from_hook_payload(payload.as_bytes())
+                .unwrap()
+                .action
+        };
+        assert_eq!(
+            action(r#"{"hook_event_name":"on_session_start","session_id":"main"}"#),
+            HermesReporterAction::SessionStarted
+        );
+        assert_eq!(
+            action(r#"{"hook_event_name":"pre_llm_call","session_id":"main"}"#),
+            HermesReporterAction::TurnStarted
+        );
+        assert_eq!(
+            action(
+                r#"{"hook_event_name":"on_session_end","session_id":"main","completed":true,"failed":false,"interrupted":false}"#
+            ),
+            HermesReporterAction::TurnEnded {
+                completed: true,
+                failed: false,
+                interrupted: false
+            }
+        );
+        assert_eq!(
+            action(
+                r#"{"hook_event_name":"subagent_start","parent_session_id":"main","child_session_id":"child"}"#
+            ),
+            HermesReporterAction::SubagentStarted {
+                child_session_id: "child".to_string()
+            }
+        );
+        assert_eq!(
+            action(r#"{"hook_event_name":"pre_approval_request"}"#),
+            HermesReporterAction::NeedsAttention
+        );
+        assert!(hermes_event_from_hook_payload(
+            br#"{"hook_event_name":"subagent_stop","parent_session_id":"main"}"#
+        )
+        .is_err());
+        assert!(hermes_event_from_hook_payload(
+            br#"{"hook_event_name":"pre_llm_call","session_id":"bad\nvalue"}"#
+        )
+        .is_err());
+        let oversized = serde_json::json!({
+            "hook_event_name": "pre_llm_call",
+            "session_id": "x".repeat(MAX_RESUME_SESSION_ID_BYTES + 1)
+        });
+        assert!(hermes_event_from_hook_payload(oversized.to_string().as_bytes()).is_err());
+        assert!(hermes_event_from_hook_payload(br#"{"hook_event_name":"unknown"}"#).is_err());
+        assert!(hermes_event_from_hook_payload(b"not-json").is_err());
+    }
+
+    #[test]
+    fn hermes_child_completion_never_finishes_the_main_turn() {
+        let mut activity = HermesActivity::default();
+        let event = |source: &str, action| HermesReporterEvent {
+            source_session_id: source.to_string(),
+            action,
+        };
+
+        assert_eq!(
+            activity.apply(&event("main", HermesReporterAction::SessionStarted)),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            activity.apply(&event(
+                "main",
+                HermesReporterAction::SubagentStarted {
+                    child_session_id: "child".to_string()
+                }
+            )),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            activity.apply(&event("child", HermesReporterAction::SessionStarted)),
+            None
+        );
+        assert_eq!(
+            activity.apply(&event(
+                "child",
+                HermesReporterAction::TurnEnded {
+                    completed: true,
+                    failed: false,
+                    interrupted: false
+                }
+            )),
+            None
+        );
+        assert_eq!(
+            activity.apply(&event(
+                "main",
+                HermesReporterAction::TurnEnded {
+                    completed: true,
+                    failed: false,
+                    interrupted: false
+                }
+            )),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            activity.apply(&event(
+                "main",
+                HermesReporterAction::SubagentStopped {
+                    child_session_id: "child".to_string()
+                }
+            )),
+            Some(AgentLifecycle::Done)
+        );
+
+        assert_eq!(
+            activity.apply(&event("main", HermesReporterAction::TurnStarted)),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            activity.apply(&event(
+                "main",
+                HermesReporterAction::TurnEnded {
+                    completed: false,
+                    failed: true,
+                    interrupted: false
+                }
+            )),
+            Some(AgentLifecycle::NeedsAttention)
+        );
     }
 
     #[test]
