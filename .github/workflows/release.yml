@@ -6,9 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: release-main
@@ -18,6 +16,10 @@ jobs:
   release-please:
     name: Plan or publish release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -26,7 +28,7 @@ jobs:
     steps:
       - name: Create or update the Release PR
         id: release
-        uses: googleapis/release-please-action@v5
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
@@ -34,7 +36,7 @@ jobs:
       - name: Resolve the generated Release PR branch
         if: steps.release.outputs.prs_created == 'true'
         id: release-pr
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           RELEASE_PR: ${{ steps.release.outputs.pr }}
         with:
@@ -47,7 +49,7 @@ jobs:
       # changelog. Normalize both files on the generated Release PR.
       - name: Check out the generated Release PR
         if: steps.release.outputs.prs_created == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ steps.release-pr.outputs.result }}
           fetch-depth: 0
@@ -77,6 +79,8 @@ jobs:
     name: Build & upload (${{ matrix.name }})
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -94,7 +98,7 @@ jobs:
 
     steps:
       - name: Check out released source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.release-please.outputs.sha }}
 
@@ -105,13 +109,13 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           cache: npm
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
       - name: Configure Linux bindgen
         if: startsWith(matrix.platform, 'ubuntu-')
@@ -119,7 +123,7 @@ jobs:
         run: echo "BINDGEN_EXTRA_CLANG_ARGS=-I$(gcc -print-file-name=include)" >> "$GITHUB_ENV"
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: |
             src-tauri -> target
@@ -146,7 +150,7 @@ jobs:
           echo "Updater signing key is present."
 
       - name: Build and upload signed installers
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -171,9 +175,11 @@ jobs:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Check out released source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.release-please.outputs.sha }}
 
@@ -197,14 +203,14 @@ jobs:
 
       - name: Set up Java
         if: steps.gate.outputs.enabled == 'true'
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android SDK
         if: steps.gate.outputs.enabled == 'true'
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
 
       - name: Install the Android NDK
         if: steps.gate.outputs.enabled == 'true'
@@ -214,14 +220,14 @@ jobs:
 
       - name: Set up Node.js
         if: steps.gate.outputs.enabled == 'true'
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           cache: npm
 
       - name: Set up Rust with Android targets
         if: steps.gate.outputs.enabled == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
@@ -268,9 +274,11 @@ jobs:
     needs: [release-please, build-release]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Check out released source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.release-please.outputs.sha }}
 
@@ -292,7 +300,7 @@ jobs:
           gh release upload "$TAG_NAME" "$RUNNER_TEMP/updater/latest.json" --clobber
 
       - name: Apply the release notes and flip the draft live
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
           RELEASE_METADATA_PATH: ${{ runner.temp }}/release-metadata.json
