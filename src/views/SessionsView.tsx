@@ -1293,6 +1293,7 @@ export function SessionsView({
       )}
       cancelLabel={t("common.cancel")}
       confirmDisabled={clearingWorkspace}
+      busy={clearingWorkspace}
       onCancel={() => {
         if (!clearingWorkspace) setPendingClearWorkspace(false);
       }}
@@ -2040,6 +2041,7 @@ export function SessionsView({
           confirmLabel={t("terminal.projects.sessionRemoveAction")}
           cancelLabel={t("common.cancel")}
           confirmDisabled={removingSession}
+          busy={removingSession}
           onCancel={() => {
             if (removingSession) return;
             setPendingRemoveSession(null);

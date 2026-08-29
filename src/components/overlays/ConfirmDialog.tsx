@@ -17,6 +17,7 @@ export function ConfirmDialog({
   cancelLabel = "Cancel",
   tone = "danger",
   confirmDisabled = false,
+  busy = false,
   onConfirm,
   onCancel,
 }: {
@@ -26,26 +27,32 @@ export function ConfirmDialog({
   cancelLabel?: string;
   tone?: "danger" | "default";
   confirmDisabled?: boolean;
+  busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const confirmRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useModalFocus({
     dialogRef,
-    getInitialFocus: () =>
-      (confirmDisabled ? cancelRef : confirmRef).current,
+    getInitialFocus: () => cancelRef.current,
     onEscape: onCancel,
+    escapeDisabled: busy,
   });
 
   useEffect(() => {
-    (confirmDisabled ? cancelRef : confirmRef).current?.focus();
-  }, [confirmDisabled]);
+    (busy ? dialogRef : cancelRef).current?.focus();
+  }, [busy]);
 
   return (
-    <div className="scrim scrim--center" role="presentation" onMouseDown={onCancel}>
+    <div
+      className="scrim scrim--center"
+      role="presentation"
+      onMouseDown={() => {
+        if (!busy) onCancel();
+      }}
+    >
       <div
         ref={dialogRef}
         className="dialog"
@@ -53,6 +60,7 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby="confirm-title"
         aria-describedby="confirm-body"
+        aria-busy={busy || undefined}
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
@@ -70,15 +78,15 @@ export function ConfirmDialog({
             type="button"
             ref={cancelRef}
             className="button button--ghost"
+            disabled={busy}
             onClick={onCancel}
           >
             {cancelLabel}
           </button>
           <button
             type="button"
-            ref={confirmRef}
             className={`button ${tone === "danger" ? "button--danger" : "button--primary"}`}
-            disabled={confirmDisabled}
+            disabled={busy || confirmDisabled}
             onClick={onConfirm}
           >
             {confirmLabel}

@@ -156,6 +156,7 @@ export function AgentsView({
     };
   }, [migrationNotice]);
   const [pendingStop, setPendingStop] = useState<AgentSessionSummary | null>(null);
+  const [stoppingSessionId, setStoppingSessionId] = useState<string | null>(null);
   const [selectedBroadcastIds, setSelectedBroadcastIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -1175,12 +1176,20 @@ export function AgentsView({
           confirmLabel={t("agents.stop.confirm.action")}
           cancelLabel={t("common.cancel")}
           tone="danger"
+          busy={stoppingSessionId === pendingStop.sessionId}
           onConfirm={() => {
+            if (stoppingSessionId) return;
+            setStoppingSessionId(pendingStop.sessionId);
             void agents
               .disconnect(pendingStop.sessionId)
-              .finally(() => setPendingStop(null));
+              .finally(() => {
+                setPendingStop(null);
+                setStoppingSessionId(null);
+              });
           }}
-          onCancel={() => setPendingStop(null)}
+          onCancel={() => {
+            if (!stoppingSessionId) setPendingStop(null);
+          }}
         />
       )}
 

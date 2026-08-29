@@ -281,6 +281,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     profileId: string | null;
   }>({ open: false, profileId: null });
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [removingProfile, setRemovingProfile] = useState(false);
   const [profileDeleteError, setProfileDeleteError] = useState<string | null>(
     null,
   );
@@ -940,22 +941,27 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           }
           tone={deleteGuard.mode === "saved" ? "default" : "danger"}
           cancelLabel={t("common.cancel")}
+          busy={removingProfile}
           onConfirm={() => {
+            if (removingProfile) return;
             if (deleteGuard.mode === "saved") {
               setView("vault");
               setProfileDeleteError(null);
               setPendingDelete(null);
               return;
             }
+            setRemovingProfile(true);
             void removeProfile(deleting.id)
               .then(() => setPendingDelete(null))
               .catch((reason: unknown) => {
                 setProfileDeleteError(
                   reason instanceof Error ? reason.message : String(reason),
                 );
-              });
+              })
+              .finally(() => setRemovingProfile(false));
           }}
           onCancel={() => {
+            if (removingProfile) return;
             setProfileDeleteError(null);
             setPendingDelete(null);
           }}

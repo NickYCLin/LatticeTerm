@@ -827,6 +827,7 @@ export function VaultView({
               : t("credential.remove")
           }
           cancelLabel={t("common.cancel")}
+          busy={removingCredential}
           onConfirm={() => void handleRemoveCredential()}
           onCancel={() => {
             if (!removingCredential) setPendingCredentialRemove(null);
@@ -844,6 +845,7 @@ export function VaultView({
             removing ? t("vault.removing") : t("vault.remove.confirm")
           }
           cancelLabel={t("common.cancel")}
+          busy={removing}
           onConfirm={() => void handleRemoveHost()}
           onCancel={() => {
             if (!removing) setPendingRemove(null);
