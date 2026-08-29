@@ -480,8 +480,17 @@ struct AgentSessionEntry {
     /// so prompt-rendering control codes must never guess that it is done.
     integrated_completion: bool,
     /// Keeps per-session integration files alive only as long as their PTY.
-    /// NamedTempFile removes the Gemini settings file when the entry is dropped.
-    _integration_settings: Option<tempfile::NamedTempFile>,
+    _integration_settings: Option<AgentIntegrationSettings>,
+}
+
+enum AgentIntegrationSettings {
+    Gemini(tempfile::NamedTempFile),
+    OpenCode(OpenCodeReporterPlugin),
+}
+
+struct OpenCodeReporterPlugin {
+    _file: tempfile::NamedTempFile,
+    config_content: String,
 }
 
 #[derive(Debug, Default)]
@@ -1492,6 +1501,63 @@ fn gemini_reporter_settings_file() -> Result<Option<tempfile::NamedTempFile>, St
     file.flush()
         .map_err(|error| format!("Cannot finish Gemini hook settings: {error}"))?;
     Ok(Some(file))
+}
+
+const OPENCODE_REPORTER_PLUGIN: &str = include_str!("agent_opencode_plugin.js");
+
+fn opencode_reporter_allowed(
+    arguments: &[String],
+    config_content_is_set: bool,
+    pure_environment: Option<&OsStr>,
+) -> bool {
+    if config_content_is_set {
+        return false;
+    }
+    let pure_environment = pure_environment
+        .and_then(OsStr::to_str)
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    if pure_environment {
+        return false;
+    }
+    !arguments.iter().any(|argument| {
+        argument == "--pure"
+            || argument == "--pure=1"
+            || argument.eq_ignore_ascii_case("--pure=true")
+    })
+}
+
+fn write_opencode_reporter_plugin() -> Result<OpenCodeReporterPlugin, String> {
+    let mut file = tempfile::Builder::new()
+        .prefix("latticeterm-opencode-status-")
+        .suffix(".js")
+        .tempfile()
+        .map_err(|error| format!("Cannot create OpenCode status plugin: {error}"))?;
+    file.write_all(OPENCODE_REPORTER_PLUGIN.as_bytes())
+        .map_err(|error| format!("Cannot write OpenCode status plugin: {error}"))?;
+    file.flush()
+        .map_err(|error| format!("Cannot finish OpenCode status plugin: {error}"))?;
+    let path = file
+        .path()
+        .to_str()
+        .ok_or_else(|| "OpenCode status plugin path is not valid UTF-8.".to_string())?;
+    let config_content = serde_json::json!({ "plugin": [path] }).to_string();
+    Ok(OpenCodeReporterPlugin {
+        _file: file,
+        config_content,
+    })
+}
+
+fn opencode_reporter_plugin(
+    arguments: &[String],
+) -> Result<Option<OpenCodeReporterPlugin>, String> {
+    if !opencode_reporter_allowed(
+        arguments,
+        std::env::var_os("OPENCODE_CONFIG_CONTENT").is_some(),
+        std::env::var_os("OPENCODE_PURE").as_deref(),
+    ) {
+        return Ok(None);
+    }
+    write_opencode_reporter_plugin().map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2927,10 +2993,22 @@ pub fn launch_with_replay(
         // Gemini has no one-shot --settings argument. Its documented system
         // settings path is process-scoped, so a temporary file adds hooks
         // without touching ~/.gemini or the selected workspace.
-        integration_settings = gemini_reporter_settings_file().ok().flatten();
+        integration_settings = gemini_reporter_settings_file()
+            .ok()
+            .flatten()
+            .map(AgentIntegrationSettings::Gemini);
         // Only disable prompt-control completion guesses when the settings
         // file was actually installed. Managed-policy fallbacks stay
         // heuristic, while an active official AfterAgent hook is authoritative.
+        integrated_completion = integration_settings.is_some();
+    } else if definition_id == "opencode" && reporter.is_some() {
+        // OpenCode merges runtime config with global/project/admin layers. A
+        // temporary local plugin observes only this process and never edits
+        // the user's files. Explicit inline config or pure mode wins.
+        integration_settings = opencode_reporter_plugin(&arguments)
+            .ok()
+            .flatten()
+            .map(AgentIntegrationSettings::OpenCode);
         integrated_completion = integration_settings.is_some();
     }
 
@@ -2956,7 +3034,14 @@ pub fn launch_with_replay(
         command.env("LATTICETERM_AGENT_REPORT_TOKEN", token);
     }
     if let Some(settings) = integration_settings.as_ref() {
-        command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", settings.path());
+        match settings {
+            AgentIntegrationSettings::Gemini(file) => {
+                command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", file.path());
+            }
+            AgentIntegrationSettings::OpenCode(plugin) => {
+                command.env("OPENCODE_CONFIG_CONTENT", &plugin.config_content);
+            }
+        }
     }
 
     let mut child = pair
@@ -4382,6 +4467,42 @@ notify = ["notify.exe", "turn-ended"]"#,
             None
         );
         assert!(lifecycle_from_gemini_hook_payload(b"not-json").is_err());
+    }
+
+    #[test]
+    fn opencode_plugin_respects_explicit_runtime_config_and_pure_mode() {
+        assert!(opencode_reporter_allowed(&[], false, None));
+        assert!(!opencode_reporter_allowed(&[], true, None));
+        assert!(!opencode_reporter_allowed(
+            &[],
+            false,
+            Some(OsStr::new("true"))
+        ));
+        assert!(!opencode_reporter_allowed(
+            &["--pure".to_string()],
+            false,
+            None
+        ));
+        assert!(opencode_reporter_allowed(
+            &["--pure=false".to_string()],
+            false,
+            None
+        ));
+    }
+
+    #[test]
+    fn opencode_plugin_is_process_scoped_without_editing_user_config() {
+        let plugin = write_opencode_reporter_plugin().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(plugin._file.path()).unwrap(),
+            OPENCODE_REPORTER_PLUGIN
+        );
+        let config: serde_json::Value = serde_json::from_str(&plugin.config_content).unwrap();
+        assert_eq!(
+            config["plugin"][0],
+            plugin._file.path().to_string_lossy().as_ref()
+        );
+        assert!(config.get("permission").is_none());
     }
 
     #[test]
