@@ -35,6 +35,7 @@ const MAX_OUTPUT_SNAPSHOT_BYTES: usize = 256 * 1024;
 const MAX_REPORT_BYTES: u64 = 4096;
 const MAX_NOTIFY_FORWARD_ARGUMENTS: usize = 16;
 const MAX_NOTIFY_FORWARD_BYTES: usize = 8192;
+const MAX_CLAUDE_HOOK_BYTES: u64 = 1024 * 1024;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REPORT_RETRIES: usize = 5;
 const STARTUP_SEED_PROMPT_SETTLE: Duration = Duration::from_millis(120);
@@ -475,6 +476,9 @@ struct AgentSessionEntry {
     output: Mutex<OutputBuffer>,
     startup_gate: StartupGate,
     completion_gate: Mutex<CompletionReadiness>,
+    /// An official CLI lifecycle hook will report completion for this session,
+    /// so prompt-rendering control codes must never guess that it is done.
+    integrated_completion: bool,
 }
 
 #[derive(Debug, Default)]
@@ -590,6 +594,22 @@ impl CompletionReadiness {
         self.submitted = false;
         self.control_window.clear();
     }
+}
+
+fn heuristic_state_from_output(
+    completion: &mut CompletionReadiness,
+    bytes: &[u8],
+    integrated_completion: bool,
+) -> Option<AgentLifecycle> {
+    let output_state = lifecycle_from_output(bytes);
+    if output_state == AgentLifecycle::NeedsAttention {
+        completion.cancel();
+        return Some(AgentLifecycle::NeedsAttention);
+    }
+    if !integrated_completion && completion.observe_output(bytes) {
+        return Some(AgentLifecycle::Done);
+    }
+    None
 }
 
 #[derive(Debug, Default)]
@@ -1347,6 +1367,107 @@ fn codex_reporter_arguments(arguments: Vec<String>, reporter_executable: &Path) 
     )
 }
 
+fn has_explicit_claude_settings(arguments: &[String]) -> bool {
+    arguments.iter().any(|argument| {
+        argument == "--settings" || argument.trim_start().starts_with("--settings=")
+    })
+}
+
+fn claude_reporter_arguments(
+    mut arguments: Vec<String>,
+    reporter_executable: &Path,
+) -> Vec<String> {
+    // A second --settings value has version-dependent precedence. Preserve an
+    // explicit caller override instead of risking replacement of its hooks.
+    if has_explicit_claude_settings(&arguments) {
+        return arguments;
+    }
+
+    let handler = serde_json::json!({
+        "type": "command",
+        "command": reporter_executable.display().to_string(),
+        "args": ["agent-claude-hook"],
+        "timeout": 5
+    });
+    let hook = |matcher: Option<&str>| {
+        let mut value = serde_json::json!({ "hooks": [handler.clone()] });
+        if let Some(matcher) = matcher {
+            value["matcher"] = serde_json::Value::String(matcher.to_string());
+        }
+        value
+    };
+    let settings = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [hook(None)],
+            "PermissionRequest": [hook(None)],
+            "Elicitation": [hook(None)],
+            "Stop": [hook(None)],
+            "StopFailure": [hook(None)],
+            "Notification": [hook(None)]
+        }
+    });
+    let Ok(settings) = serde_json::to_string(&settings) else {
+        return arguments;
+    };
+    arguments.insert(0, settings);
+    arguments.insert(0, "--settings".to_string());
+    arguments
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeHookPayload {
+    hook_event_name: String,
+    #[serde(default)]
+    notification_type: Option<String>,
+    #[serde(default)]
+    background_tasks: Vec<serde_json::Value>,
+    #[serde(default)]
+    session_crons: Vec<serde_json::Value>,
+}
+
+fn lifecycle_from_claude_hook_payload(raw: &[u8]) -> Result<Option<AgentLifecycle>, String> {
+    let payload: ClaudeHookPayload =
+        serde_json::from_slice(raw).map_err(|_| "Claude hook payload is invalid.".to_string())?;
+    let state = match payload.hook_event_name.as_str() {
+        "UserPromptSubmit" => Some(AgentLifecycle::Working),
+        "PermissionRequest" | "Elicitation" | "StopFailure" => Some(AgentLifecycle::NeedsAttention),
+        "Stop" if !payload.background_tasks.is_empty() => Some(AgentLifecycle::Working),
+        "Stop" if !payload.session_crons.is_empty() => Some(AgentLifecycle::Idle),
+        "Stop" => Some(AgentLifecycle::Done),
+        "Notification" => match payload.notification_type.as_deref() {
+            Some(
+                "permission_prompt"
+                | "elicitation_dialog"
+                | "elicitation_url_dialog"
+                | "agent_needs_input"
+                | "quota_auto_resume_stale"
+                | "quota_auto_resume_disabled",
+            ) => Some(AgentLifecycle::NeedsAttention),
+            Some("quota_auto_resume_fired" | "elicitation_response") => {
+                Some(AgentLifecycle::Working)
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    Ok(state)
+}
+
+fn report_claude_hook_from_stdin() -> Result<(), String> {
+    let mut payload = Vec::new();
+    std::io::stdin()
+        .take(MAX_CLAUDE_HOOK_BYTES + 1)
+        .read_to_end(&mut payload)
+        .map_err(|error| format!("Cannot read the Claude hook payload: {error}"))?;
+    if payload.len() as u64 > MAX_CLAUDE_HOOK_BYTES {
+        return Err("Claude hook payload is too large.".to_string());
+    }
+    if let Some(state) = lifecycle_from_claude_hook_payload(&payload)? {
+        report_from_environment(state)?;
+    }
+    Ok(())
+}
+
 fn report_from_environment(state: AgentLifecycle) -> Result<(), String> {
     let address: SocketAddr = std::env::var("LATTICETERM_AGENT_REPORT_ADDR")
         .map_err(|_| "Agent reporter environment is unavailable.".to_string())?
@@ -1451,6 +1572,12 @@ where
         } else {
             Ok(())
         }
+    } else if command.as_ref() == OsStr::new("agent-claude-hook") {
+        if args.next().is_some() {
+            eprintln!("agent-claude-hook accepts no arguments");
+            return Some(2);
+        }
+        report_claude_hook_from_stdin()
     } else {
         return None;
     };
@@ -2655,9 +2782,18 @@ pub fn launch_with_replay(
         .as_ref()
         .map(|_| random_report_token())
         .transpose()?;
+    let mut integrated_completion = false;
     if definition_id == "codex" {
         if let Some(endpoint) = reporter.as_ref() {
-            arguments = codex_reporter_arguments(arguments, &endpoint.executable);
+            let adapted = codex_reporter_arguments(arguments.clone(), &endpoint.executable);
+            integrated_completion = adapted != arguments;
+            arguments = adapted;
+        }
+    } else if definition_id == "claude" {
+        if let Some(endpoint) = reporter.as_ref() {
+            let adapted = claude_reporter_arguments(arguments.clone(), &endpoint.executable);
+            integrated_completion = adapted != arguments;
+            arguments = adapted;
         }
     }
 
@@ -2754,6 +2890,7 @@ pub fn launch_with_replay(
         )),
         startup_gate: StartupGate::default(),
         completion_gate: Mutex::new(CompletionReadiness::default()),
+        integrated_completion,
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
         let _ = terminate_agent_entry(entry.as_ref());
@@ -2781,18 +2918,14 @@ pub fn launch_with_replay(
                         break;
                     };
                     reader_sink.data(&reader_id, offset, bytes);
-                    let output_state = lifecycle_from_output(bytes);
                     let state = if let Ok(mut completion) = reader_entry.completion_gate.lock() {
-                        if output_state == AgentLifecycle::NeedsAttention {
-                            completion.cancel();
-                            Some(AgentLifecycle::NeedsAttention)
-                        } else if completion.observe_output(bytes) {
-                            Some(AgentLifecycle::Done)
-                        } else {
-                            None
-                        }
+                        heuristic_state_from_output(
+                            &mut completion,
+                            bytes,
+                            reader_entry.integrated_completion,
+                        )
                     } else {
-                        Some(output_state)
+                        Some(lifecycle_from_output(bytes))
                     };
                     if let Some(state) = state {
                         if reader_registry.update_state(
@@ -3332,6 +3465,21 @@ session id: 0199aa11-"
         assert!(!readiness.observe_output(b"answer\x1b[?2"));
         assert!(!readiness.observe_output(b"5hstill working"));
         assert!(readiness.observe_output(b"done\x1b[?2004h"));
+    }
+
+    #[test]
+    fn integrated_completion_never_falls_back_to_prompt_control_codes() {
+        let mut readiness = CompletionReadiness::default();
+        readiness.observe_input(b"review this\r");
+
+        assert_eq!(
+            heuristic_state_from_output(&mut readiness, b"answer\x1b[?2004h", true),
+            None
+        );
+        assert_eq!(
+            heuristic_state_from_output(&mut readiness, "是否允許執行？".as_bytes(), true),
+            Some(AgentLifecycle::NeedsAttention)
+        );
     }
 
     #[test]
@@ -3987,6 +4135,64 @@ notify = ["notify.exe", "turn-ended"]"#,
             ),
             arguments
         );
+    }
+
+    #[test]
+    fn claude_reporter_uses_exec_hooks_without_replacing_user_files() {
+        let arguments = claude_reporter_arguments(
+            vec!["--model".to_string(), "sonnet".to_string()],
+            Path::new(r"C:\Program Files\LatticeTerm\lattice-term.exe"),
+        );
+        assert_eq!(arguments[0], "--settings");
+        let settings: serde_json::Value = serde_json::from_str(&arguments[1]).unwrap();
+        let stop = &settings["hooks"]["Stop"][0]["hooks"][0];
+        assert_eq!(stop["type"], "command");
+        assert_eq!(
+            stop["command"],
+            r"C:\Program Files\LatticeTerm\lattice-term.exe"
+        );
+        assert_eq!(stop["args"], serde_json::json!(["agent-claude-hook"]));
+        assert_eq!(&arguments[2..], &["--model", "sonnet"]);
+
+        let explicit = vec!["--settings=/tmp/claude.json".to_string()];
+        assert_eq!(
+            claude_reporter_arguments(explicit.clone(), Path::new("lattice-term")),
+            explicit
+        );
+    }
+
+    #[test]
+    fn claude_hooks_distinguish_done_background_work_and_attention() {
+        let state = |payload: &str| lifecycle_from_claude_hook_payload(payload.as_bytes()).unwrap();
+        assert_eq!(
+            state(r#"{"hook_event_name":"UserPromptSubmit"}"#),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[]}"#),
+            Some(AgentLifecycle::Done)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Stop","background_tasks":[{"status":"running"}]}"#),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Stop","session_crons":[{"id":"cron-1"}]}"#),
+            Some(AgentLifecycle::Idle)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"StopFailure","error":"rate_limit"}"#),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Notification","notification_type":"permission_prompt"}"#),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#),
+            None
+        );
+        assert!(lifecycle_from_claude_hook_payload(b"not-json").is_err());
     }
 
     #[test]
