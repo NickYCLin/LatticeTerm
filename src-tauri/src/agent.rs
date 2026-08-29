@@ -12,7 +12,7 @@ use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -478,13 +478,14 @@ struct AgentSessionEntry {
     completion_gate: Mutex<CompletionReadiness>,
     /// An official CLI lifecycle hook will report completion for this session,
     /// so prompt-rendering control codes must never guess that it is done.
-    integrated_completion: bool,
+    integrated_completion: AtomicBool,
     /// Keeps per-session integration files alive only as long as their PTY.
     _integration_settings: Option<AgentIntegrationSettings>,
 }
 
 enum AgentIntegrationSettings {
     Gemini(tempfile::NamedTempFile),
+    Qwen(tempfile::NamedTempFile),
     OpenCode(OpenCodeReporterPlugin),
 }
 
@@ -1038,6 +1039,11 @@ impl AgentRegistry {
         if entry.report_token.as_deref() != Some(token) {
             return Err("Reporter authentication failed.".to_string());
         }
+        // A real authenticated report proves the child integration is active.
+        // From this point onward prompt-control rendering must not guess that
+        // the turn completed, even for integrations whose config can be
+        // disabled by a higher-precedence user mode.
+        entry.integrated_completion.store(true, Ordering::Release);
         Ok(self.update_state(session_id, next, AgentStateSource::Integration))
     }
 
@@ -1503,6 +1509,98 @@ fn gemini_reporter_settings_file() -> Result<Option<tempfile::NamedTempFile>, St
     Ok(Some(file))
 }
 
+#[cfg(windows)]
+const QWEN_REPORTER_COMMAND: &str = r#"& "$env:LATTICETERM_AGENT_REPORTER" agent-qwen-hook"#;
+#[cfg(not(windows))]
+const QWEN_REPORTER_COMMAND: &str = r#""$LATTICETERM_AGENT_REPORTER" agent-qwen-hook"#;
+
+fn qwen_reporter_settings_value() -> serde_json::Value {
+    let handler = serde_json::json!({
+        "name": "latticeterm-agent-status",
+        "type": "command",
+        "command": QWEN_REPORTER_COMMAND,
+        "timeout": 5000
+    });
+    let hook = |matcher: Option<&str>| {
+        let mut value = serde_json::json!({ "hooks": [handler.clone()] });
+        if let Some(matcher) = matcher {
+            value["matcher"] = serde_json::Value::String(matcher.to_string());
+        }
+        value
+    };
+    serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [hook(None)],
+            "PermissionRequest": [hook(None)],
+            "PermissionDenied": [hook(None)],
+            "PostToolUse": [hook(None)],
+            "PostToolUseFailure": [hook(None)],
+            "Stop": [hook(None)],
+            "StopFailure": [hook(None)],
+            "Notification": [hook(Some("permission_prompt"))]
+        }
+    })
+}
+
+fn qwen_reporter_allowed(arguments: &[String]) -> bool {
+    !arguments.iter().any(|argument| {
+        argument == "--bare"
+            || argument == "--bare=true"
+            || argument == "--bare=1"
+            || argument == "--safe-mode"
+            || argument == "--safe-mode=true"
+            || argument == "--safe-mode=1"
+    })
+}
+
+fn default_qwen_system_settings_paths() -> Option<(PathBuf, PathBuf)> {
+    #[cfg(target_os = "windows")]
+    let directory = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .map(|path| path.join("qwen-code"));
+    #[cfg(target_os = "macos")]
+    let directory = Some(PathBuf::from("/Library/Application Support/QwenCode"));
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let directory = Some(PathBuf::from("/etc/qwen-code"));
+
+    directory.map(|directory| {
+        (
+            directory.join("settings.json"),
+            directory.join("system-defaults.json"),
+        )
+    })
+}
+
+fn qwen_reporter_settings_file(
+    arguments: &[String],
+) -> Result<Option<tempfile::NamedTempFile>, String> {
+    // Bare and safe mode intentionally disable hooks. Existing administrator
+    // paths also win so a per-session status integration never bypasses policy.
+    if !qwen_reporter_allowed(arguments)
+        || std::env::var_os("QWEN_CODE_SYSTEM_SETTINGS_PATH").is_some()
+    {
+        return Ok(None);
+    }
+    if let Some((system, defaults)) = default_qwen_system_settings_paths() {
+        if system.exists()
+            || (std::env::var_os("QWEN_CODE_SYSTEM_DEFAULTS_PATH").is_none() && defaults.exists())
+        {
+            return Ok(None);
+        }
+    }
+
+    let mut file = tempfile::Builder::new()
+        .prefix("latticeterm-qwen-hooks-")
+        .suffix(".json")
+        .tempfile()
+        .map_err(|error| format!("Cannot create Qwen hook settings: {error}"))?;
+    serde_json::to_writer(&mut file, &qwen_reporter_settings_value())
+        .map_err(|error| format!("Cannot write Qwen hook settings: {error}"))?;
+    file.flush()
+        .map_err(|error| format!("Cannot finish Qwen hook settings: {error}"))?;
+    Ok(Some(file))
+}
+
 const OPENCODE_REPORTER_PLUGIN: &str = include_str!("agent_opencode_plugin.js");
 
 fn opencode_reporter_allowed(
@@ -1649,6 +1747,50 @@ fn report_gemini_hook_from_stdin() -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct QwenHookPayload {
+    hook_event_name: String,
+    #[serde(default)]
+    notification_type: Option<String>,
+    #[serde(default)]
+    background_tasks: Vec<serde_json::Value>,
+    #[serde(default)]
+    crons: Vec<serde_json::Value>,
+}
+
+fn lifecycle_from_qwen_hook_payload(raw: &[u8]) -> Result<Option<AgentLifecycle>, String> {
+    let payload: QwenHookPayload =
+        serde_json::from_slice(raw).map_err(|_| "Qwen hook payload is invalid.".to_string())?;
+    Ok(match payload.hook_event_name.as_str() {
+        "UserPromptSubmit" | "PermissionDenied" | "PostToolUse" | "PostToolUseFailure" => {
+            Some(AgentLifecycle::Working)
+        }
+        "Stop" if !payload.background_tasks.is_empty() => Some(AgentLifecycle::Working),
+        "Stop" if !payload.crons.is_empty() => Some(AgentLifecycle::Idle),
+        "Stop" => Some(AgentLifecycle::Done),
+        "StopFailure" | "PermissionRequest" => Some(AgentLifecycle::NeedsAttention),
+        "Notification" if payload.notification_type.as_deref() == Some("permission_prompt") => {
+            Some(AgentLifecycle::NeedsAttention)
+        }
+        _ => None,
+    })
+}
+
+fn report_qwen_hook_from_stdin() -> Result<(), String> {
+    let mut payload = Vec::new();
+    std::io::stdin()
+        .take(MAX_LIFECYCLE_HOOK_BYTES + 1)
+        .read_to_end(&mut payload)
+        .map_err(|error| format!("Cannot read the Qwen hook payload: {error}"))?;
+    if payload.len() as u64 > MAX_LIFECYCLE_HOOK_BYTES {
+        return Err("Qwen hook payload is too large.".to_string());
+    }
+    if let Some(state) = lifecycle_from_qwen_hook_payload(&payload)? {
+        report_from_environment(state)?;
+    }
+    Ok(())
+}
+
 fn report_from_environment(state: AgentLifecycle) -> Result<(), String> {
     let address: SocketAddr = std::env::var("LATTICETERM_AGENT_REPORT_ADDR")
         .map_err(|_| "Agent reporter environment is unavailable.".to_string())?
@@ -1771,6 +1913,12 @@ where
             println!(r#"{{"suppressOutput":true}}"#);
         }
         result
+    } else if command.as_ref() == OsStr::new("agent-qwen-hook") {
+        if args.next().is_some() {
+            eprintln!("agent-qwen-hook accepts no arguments");
+            return Some(2);
+        }
+        report_qwen_hook_from_stdin()
     } else {
         return None;
     };
@@ -3010,6 +3158,14 @@ pub fn launch_with_replay(
             .flatten()
             .map(AgentIntegrationSettings::OpenCode);
         integrated_completion = integration_settings.is_some();
+    } else if definition_id == "qwen" && reporter.is_some() {
+        // Qwen's system settings override can be scoped to this child process.
+        // Keep heuristics enabled until the first hook actually reports: user
+        // settings may intentionally disable hooks even when this file loads.
+        integration_settings = qwen_reporter_settings_file(&arguments)
+            .ok()
+            .flatten()
+            .map(AgentIntegrationSettings::Qwen);
     }
 
     let pair = native_pty_system()
@@ -3037,6 +3193,9 @@ pub fn launch_with_replay(
         match settings {
             AgentIntegrationSettings::Gemini(file) => {
                 command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", file.path());
+            }
+            AgentIntegrationSettings::Qwen(file) => {
+                command.env("QWEN_CODE_SYSTEM_SETTINGS_PATH", file.path());
             }
             AgentIntegrationSettings::OpenCode(plugin) => {
                 command.env("OPENCODE_CONFIG_CONTENT", &plugin.config_content);
@@ -3115,7 +3274,7 @@ pub fn launch_with_replay(
         )),
         startup_gate: StartupGate::default(),
         completion_gate: Mutex::new(CompletionReadiness::default()),
-        integrated_completion,
+        integrated_completion: AtomicBool::new(integrated_completion),
         _integration_settings: integration_settings,
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
@@ -3148,7 +3307,7 @@ pub fn launch_with_replay(
                         heuristic_state_from_output(
                             &mut completion,
                             bytes,
-                            reader_entry.integrated_completion,
+                            reader_entry.integrated_completion.load(Ordering::Acquire),
                         )
                     } else {
                         Some(lifecycle_from_output(bytes))
@@ -4470,6 +4629,68 @@ notify = ["notify.exe", "turn-ended"]"#,
     }
 
     #[test]
+    fn qwen_reporter_uses_process_scoped_lifecycle_hooks() {
+        let settings = qwen_reporter_settings_value();
+        let submitted = &settings["hooks"]["UserPromptSubmit"][0]["hooks"][0];
+        let stop = &settings["hooks"]["Stop"][0]["hooks"][0];
+        let permission = &settings["hooks"]["Notification"][0];
+
+        assert_eq!(submitted["name"], "latticeterm-agent-status");
+        assert_eq!(submitted["type"], "command");
+        assert_eq!(submitted["command"], QWEN_REPORTER_COMMAND);
+        assert_eq!(submitted, stop);
+        assert_eq!(permission["matcher"], "permission_prompt");
+        assert_eq!(permission["hooks"][0], *submitted);
+        assert!(settings.get("disableAllHooks").is_none());
+        assert!(qwen_reporter_allowed(&[]));
+        assert!(!qwen_reporter_allowed(&["--safe-mode".to_string()]));
+        assert!(!qwen_reporter_allowed(&["--bare=true".to_string()]));
+        assert!(qwen_reporter_allowed(&["--safe-mode=false".to_string()]));
+    }
+
+    #[test]
+    fn qwen_hooks_distinguish_work_done_failure_and_permission() {
+        let state = |payload: &str| lifecycle_from_qwen_hook_payload(payload.as_bytes()).unwrap();
+        assert_eq!(
+            state(r#"{"hook_event_name":"UserPromptSubmit"}"#),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Stop"}"#),
+            Some(AgentLifecycle::Done)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Stop","background_tasks":[{"status":"running"}]}"#),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Stop","crons":[{"id":"cron-1"}]}"#),
+            Some(AgentLifecycle::Idle)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"StopFailure","error":"rate_limit"}"#),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"PermissionRequest"}"#),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"PermissionDenied"}"#),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Notification","notification_type":"permission_prompt"}"#),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#),
+            None
+        );
+        assert!(lifecycle_from_qwen_hook_payload(b"not-json").is_err());
+    }
+
+    #[test]
     fn opencode_plugin_respects_explicit_runtime_config_and_pure_mode() {
         assert!(opencode_reporter_allowed(&[], false, None));
         assert!(!opencode_reporter_allowed(&[], true, None));
@@ -4531,6 +4752,8 @@ notify = ["notify.exe", "turn-ended"]"#,
         let (address, token) = registry
             .reporter_credentials(&session.session_id)
             .expect("reporter credentials");
+        let entry = registry.get(&session.session_id).unwrap();
+        assert!(!entry.integrated_completion.load(Ordering::Acquire));
 
         assert!(send_report(
             address,
@@ -4540,8 +4763,10 @@ notify = ["notify.exe", "turn-ended"]"#,
         )
         .is_err());
         assert_eq!(registry.list()[0].state, AgentLifecycle::Working);
+        assert!(!entry.integrated_completion.load(Ordering::Acquire));
 
         send_report(address, &session.session_id, &token, AgentLifecycle::Done).unwrap();
+        assert!(entry.integrated_completion.load(Ordering::Acquire));
         let summary = &registry.list()[0];
         assert_eq!(summary.state, AgentLifecycle::Done);
         assert_eq!(summary.state_source, AgentStateSource::Integration);
