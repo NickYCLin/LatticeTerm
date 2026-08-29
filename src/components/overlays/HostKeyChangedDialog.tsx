@@ -7,11 +7,12 @@
  * is never the default.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { HostFingerprint } from "../../domain/security";
 import { hostTargetKey } from "../../domain/security";
 import { useI18n } from "../../i18n/context";
 import { AlertIcon, CloseIcon } from "../icons";
+import { useModalFocus } from "./modalFocus";
 
 export function HostKeyChangedDialog({
   host,
@@ -30,14 +31,29 @@ export function HostKeyChangedDialog({
 }) {
   const { t } = useI18n();
   const [confirming, setConfirming] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<HTMLButtonElement>(null);
+  const confirmingCancelRef = useRef<HTMLButtonElement>(null);
+
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => abortRef.current,
+    onEscape: onAbort,
+  });
+
+  useEffect(() => {
+    (confirming ? confirmingCancelRef : abortRef).current?.focus();
+  }, [confirming]);
 
   return (
     <div className="scrim scrim--top" role="presentation" onMouseDown={onAbort}>
       <div
+        ref={dialogRef}
         className="dialog dialog--wide"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="key-changed-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">
@@ -92,6 +108,7 @@ export function HostKeyChangedDialog({
           {confirming ? (
             <>
               <button
+                ref={confirmingCancelRef}
                 type="button"
                 className="button button--secondary"
                 onClick={() => setConfirming(false)}
@@ -116,6 +133,7 @@ export function HostKeyChangedDialog({
                 {t("security.changed.override")}
               </button>
               <button
+                ref={abortRef}
                 type="button"
                 className="button button--primary"
                 onClick={onAbort}

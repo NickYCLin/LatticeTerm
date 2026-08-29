@@ -14,6 +14,7 @@ import { useI18n } from "../../i18n/context";
 import { ProtocolTile } from "../common/Badge";
 import { Kbd } from "../common/Callout";
 import { SearchIcon } from "../icons";
+import { useModalFocus } from "./modalFocus";
 
 export interface Command {
   id: string;
@@ -41,6 +42,13 @@ export function CommandPalette({
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => inputRef.current,
+    onEscape: onClose,
+  });
 
   const entries = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -73,10 +81,6 @@ export function CommandPalette({
   }, [query]);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
     listRef.current
       ?.querySelector('[data-active="true"]')
       ?.scrollIntoView({ block: "nearest" });
@@ -98,9 +102,6 @@ export function CommandPalette({
         entry.run();
         onClose();
       }
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
     }
   }
 
@@ -109,10 +110,12 @@ export function CommandPalette({
   return (
     <div className="scrim scrim--top" role="presentation" onMouseDown={onClose}>
       <div
+        ref={dialogRef}
         className="palette"
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={onKeyDown}
       >
@@ -155,6 +158,7 @@ export function CommandPalette({
                     type="button"
                     id={`palette-option-${index}`}
                     role="option"
+                    tabIndex={-1}
                     aria-selected={index === active}
                     data-active={index === active}
                     className={`palette__item${index === active ? " is-active" : ""}`}

@@ -10,6 +10,7 @@ import { useEffect, useRef } from "react";
 import { useI18n } from "../../i18n/context";
 import type { AppUpdater } from "../../app/useAppUpdater";
 import { RefreshIcon } from "../icons";
+import { useModalFocus } from "./modalFocus";
 
 export function UpdatePrompt({
   updater,
@@ -20,6 +21,7 @@ export function UpdatePrompt({
 }) {
   const { t } = useI18n();
   const primaryRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // While an install is running a dismissal would strand the flow, so the
   // scrim and Escape only close the prompt when it is safe to walk away.
@@ -27,20 +29,18 @@ export function UpdatePrompt({
     updater.status === "downloading" || updater.status === "installing";
   const dismissable = !busy;
 
-  useEffect(() => {
-    primaryRef.current?.focus();
-  }, [updater.status]);
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => primaryRef.current,
+    onEscape: onDismiss,
+    escapeDisabled: !dismissable,
+  });
 
   useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && dismissable) {
-        event.stopPropagation();
-        onDismiss();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [dismissable, onDismiss]);
+    const primary = primaryRef.current;
+    if (primary && !primary.disabled) primary.focus();
+    else dialogRef.current?.focus();
+  }, [updater.status]);
 
   return (
     <div
@@ -49,10 +49,12 @@ export function UpdatePrompt({
       onMouseDown={dismissable ? onDismiss : undefined}
     >
       <div
+        ref={dialogRef}
         className="dialog dialog--wide"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="update-prompt-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="dialog__icon dialog__icon--inline" aria-hidden="true">

@@ -26,7 +26,9 @@ describe("command palette accessibility", () => {
     expect(markup).toContain('role="combobox"');
     expect(markup).toContain('aria-controls="palette-list"');
     expect(markup).toContain('aria-activedescendant="palette-option-0"');
-    expect(markup).toContain('id="palette-option-0" role="option"');
+    expect(markup).toContain(
+      'id="palette-option-0" role="option" tabindex="-1"',
+    );
     expect(markup).toContain('<li role="presentation">');
   });
 });

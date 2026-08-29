@@ -8,6 +8,7 @@
 
 import { useEffect, useRef } from "react";
 import { AlertIcon } from "../icons";
+import { useModalFocus } from "./modalFocus";
 
 export function ConfirmDialog({
   title,
@@ -30,30 +31,29 @@ export function ConfirmDialog({
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () =>
+      (confirmDisabled ? cancelRef : confirmRef).current,
+    onEscape: onCancel,
+  });
 
   useEffect(() => {
     (confirmDisabled ? cancelRef : confirmRef).current?.focus();
   }, [confirmDisabled]);
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onCancel();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [onCancel]);
-
   return (
     <div className="scrim scrim--center" role="presentation" onMouseDown={onCancel}>
       <div
+        ref={dialogRef}
         className="dialog"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="confirm-title"
         aria-describedby="confirm-body"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className={`dialog__icon dialog__icon--${tone}`} aria-hidden="true">

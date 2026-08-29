@@ -6,11 +6,12 @@
  * what the host itself reports.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { HostFingerprint } from "../../domain/security";
 import { hostTargetKey } from "../../domain/security";
 import { useI18n } from "../../i18n/context";
 import { CheckIcon, CloseIcon, ShieldIcon } from "../icons";
+import { useModalFocus } from "./modalFocus";
 
 export function HostFingerprintDialog({
   fingerprint,
@@ -29,6 +30,14 @@ export function HostFingerprintDialog({
 }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => cancelRef.current,
+    onEscape: onCancel,
+  });
 
   async function copy() {
     try {
@@ -43,10 +52,12 @@ export function HostFingerprintDialog({
   return (
     <div className="scrim scrim--top" role="presentation" onMouseDown={onCancel}>
       <div
+        ref={dialogRef}
         className="dialog dialog--wide"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="fingerprint-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">
@@ -57,6 +68,7 @@ export function HostFingerprintDialog({
             {t("security.verify.title")}
           </h2>
           <button
+            ref={cancelRef}
             type="button"
             className="icon-button icon-button--sm"
             onClick={onCancel}
