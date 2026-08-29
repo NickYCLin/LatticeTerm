@@ -1,6 +1,6 @@
 /** Unified workspace for text terminals and graphical remote sessions. */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
 import type { RemoteApi } from "../app/useRemoteSessions";
@@ -75,6 +75,7 @@ import { RdpPane } from "../components/rdp/RdpPane";
 import { VncPane } from "../components/vnc/VncPane";
 import { SftpPane } from "../components/sftp/SftpPane";
 import { TerminalPane } from "../components/terminal/TerminalPane";
+import { moveTabGroupFocus } from "../components/overlays/tabNavigation";
 
 type SessionRef =
   | {
@@ -206,6 +207,7 @@ export function SessionsView({
   sessionRestoreComplete: boolean;
 }) {
   const { t, tag } = useI18n();
+  const sessionTabsId = useId();
   const tokenNumber = useMemo(() => new Intl.NumberFormat(tag), [tag]);
   const compactTokenNumber = useMemo(
     () =>
@@ -1617,7 +1619,7 @@ export function SessionsView({
           })()}
 
           <div className="terminal-stack">
-        {agentGroups.map((group) => {
+        {agentGroups.map((group, groupIndex) => {
           const memberId = activeMemberId(group);
           const runningCount = group.members.filter(
             (member) => member.state === "working",
@@ -1637,7 +1639,7 @@ export function SessionsView({
                 role="tablist"
                 aria-label={t("terminal.cliSwitch")}
               >
-                {group.members.map((member) => {
+                {group.members.map((member, memberIndex) => {
                   const selected = member.sessionId === memberId;
                   const memberStatus = agentGroupSidebarStatus([member]);
                   const memberStatusLabel =
@@ -1657,11 +1659,22 @@ export function SessionsView({
                     >
                       <button
                         type="button"
+                        id={`${sessionTabsId}-${groupIndex}-${memberIndex}-tab`}
                         role="tab"
                         aria-selected={selected}
+                        aria-controls={`${sessionTabsId}-${groupIndex}-${memberIndex}-panel`}
+                        tabIndex={selected ? 0 : -1}
                         className="cli-switch__select"
                         onClick={() =>
                           selectMember(group.groupId, member.sessionId)
+                        }
+                        onKeyDown={(event) =>
+                          moveTabGroupFocus(event, memberIndex, (nextIndex) =>
+                            selectMember(
+                              group.groupId,
+                              group.members[nextIndex].sessionId,
+                            ),
+                          )
                         }
                       >
                         {memberStatusLabel && (
@@ -1799,10 +1812,13 @@ export function SessionsView({
                 )}
               </div>
               <div className="cli-panes">
-                {group.members.map((member) => (
+                {group.members.map((member, memberIndex) => (
                   <div
                     className="cli-pane-slot"
                     key={member.sessionId}
+                    id={`${sessionTabsId}-${groupIndex}-${memberIndex}-panel`}
+                    role="tabpanel"
+                    aria-labelledby={`${sessionTabsId}-${groupIndex}-${memberIndex}-tab`}
                     hidden={member.sessionId !== memberId}
                   >
                     <AgentTerminalPane

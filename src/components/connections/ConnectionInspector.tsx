@@ -6,7 +6,7 @@
  * so it renders the honest unavailable state until then.
  */
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { ReactNode } from "react";
 import {
   UNGROUPED,
@@ -24,6 +24,9 @@ import { Chip, EnvironmentBadge, ProtocolTile, TagChip } from "../common/Badge";
 import { Callout } from "../common/Callout";
 import { CloseIcon, DuplicateIcon, EditIcon, TrashIcon } from "../icons";
 import { HostMetricsPanel } from "./HostMetricsPanel";
+import { moveTabGroupFocus } from "../overlays/tabNavigation";
+
+const inspectorTabs = ["info", "metrics"] as const;
 
 function Field({ label, value }: { label: string; value: ReactNode }) {
   return (
@@ -50,7 +53,8 @@ export function ConnectionInspector({
   onDelete: () => void;
 }) {
   const { t } = useI18n();
-  const [tab, setTab] = useState<"info" | "metrics">("info");
+  const [tab, setTab] = useState<(typeof inspectorTabs)[number]>("info");
+  const tabsId = useId();
   const protocol = findProtocol(profile.protocol);
 
   return (
@@ -73,28 +77,50 @@ export function ConnectionInspector({
         </button>
       </div>
 
-      <div className="inspector__tabs" role="tablist">
+      <div
+        className="inspector__tabs"
+        role="tablist"
+        aria-label={profile.name}
+      >
         <button
           type="button"
+          id={tabsId + "-info-tab"}
           role="tab"
           aria-selected={tab === "info"}
+          tabIndex={tab === "info" ? 0 : -1}
           className={`inspector__tab${tab === "info" ? " is-active" : ""}`}
           onClick={() => setTab("info")}
+          onKeyDown={(event) =>
+            moveTabGroupFocus(event, 0, (nextIndex) =>
+              setTab(inspectorTabs[nextIndex]),
+            )
+          }
         >
           {t("inspector.tab.info")}
         </button>
         <button
           type="button"
+          id={tabsId + "-metrics-tab"}
           role="tab"
           aria-selected={tab === "metrics"}
+          tabIndex={tab === "metrics" ? 0 : -1}
           className={`inspector__tab${tab === "metrics" ? " is-active" : ""}`}
           onClick={() => setTab("metrics")}
+          onKeyDown={(event) =>
+            moveTabGroupFocus(event, 1, (nextIndex) =>
+              setTab(inspectorTabs[nextIndex]),
+            )
+          }
         >
           {t("inspector.tab.metrics")}
         </button>
       </div>
 
-      <div className="inspector__scroll">
+      <div
+        className="inspector__scroll"
+        role="tabpanel"
+        aria-labelledby={tabsId + `-${tab}-tab`}
+      >
         {tab === "info" ? (
           <>
             <div className="inspector__badges">

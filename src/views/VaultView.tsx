@@ -35,6 +35,9 @@ import { EncryptedVaultPanel } from "../components/vault/EncryptedVaultPanel";
 import type { VaultApi } from "../app/useVault";
 import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
+import { moveTabGroupFocus } from "../components/overlays/tabNavigation";
+
+const vaultTabs = ["hosts", "credentials", "encrypted"] as const;
 
 const keyAlgorithms = [
   "ssh-ed25519",
@@ -61,7 +64,8 @@ export function VaultView({
   const credentials = useCredentialInventory(workspace.profiles);
   const formId = useId();
 
-  const [activeTab, setActiveTab] = useState<"hosts" | "credentials" | "encrypted">("hosts");
+  const [activeTab, setActiveTab] =
+    useState<(typeof vaultTabs)[number]>("hosts");
   useEffect(() => {
     void credentials.refresh();
   }, [credentials.refresh, vault.backend, vault.status?.state]);
@@ -305,19 +309,33 @@ export function VaultView({
         >
           <button
             type="button"
+            id={formId + "-hosts-tab"}
             className="segmented__btn"
             role="tab"
             aria-selected={activeTab === "hosts"}
+            tabIndex={activeTab === "hosts" ? 0 : -1}
             onClick={() => setActiveTab("hosts")}
+            onKeyDown={(event) =>
+              moveTabGroupFocus(event, 0, (nextIndex) =>
+                setActiveTab(vaultTabs[nextIndex]),
+              )
+            }
           >
             {t("vault.tabs.hosts", { count: trust.knownHosts.length })}
           </button>
           <button
             type="button"
+            id={formId + "-credentials-tab"}
             className="segmented__btn"
             role="tab"
             aria-selected={activeTab === "credentials"}
+            tabIndex={activeTab === "credentials" ? 0 : -1}
             onClick={() => setActiveTab("credentials")}
+            onKeyDown={(event) =>
+              moveTabGroupFocus(event, 1, (nextIndex) =>
+                setActiveTab(vaultTabs[nextIndex]),
+              )
+            }
           >
             {t("vault.tabs.credentials", {
               count: credentials.state.entries.length,
@@ -328,10 +346,17 @@ export function VaultView({
           </button>
           <button
             type="button"
+            id={formId + "-encrypted-tab"}
             className="segmented__btn"
             role="tab"
             aria-selected={activeTab === "encrypted"}
+            tabIndex={activeTab === "encrypted" ? 0 : -1}
             onClick={() => setActiveTab("encrypted")}
+            onKeyDown={(event) =>
+              moveTabGroupFocus(event, 2, (nextIndex) =>
+                setActiveTab(vaultTabs[nextIndex]),
+              )
+            }
           >
             {t("vault.tabs.encrypted")}
             {vault.status?.state === "unlocked" && (
@@ -365,13 +390,18 @@ export function VaultView({
         )}
       </div>
 
-      {actionError && (
-        <Callout tone="danger" title={t("vault.actionFailed.title")}>
-          {actionError}
-        </Callout>
-      )}
+      <div
+        className="vault-tabpanel"
+        role="tabpanel"
+        aria-labelledby={formId + `-${activeTab}-tab`}
+      >
+        {actionError && (
+          <Callout tone="danger" title={t("vault.actionFailed.title")}>
+            {actionError}
+          </Callout>
+        )}
 
-      {activeTab === "hosts" && (
+        {activeTab === "hosts" && (
         <>
           {trust.mode === "loading" && (
             <div className="panel glass">
@@ -505,11 +535,11 @@ export function VaultView({
             </div>
           )}
         </>
-      )}
+        )}
 
-      {activeTab === "encrypted" && <EncryptedVaultPanel vault={vault} />}
+        {activeTab === "encrypted" && <EncryptedVaultPanel vault={vault} />}
 
-      {activeTab === "credentials" && (
+        {activeTab === "credentials" && (
         <div className="stack">
           {credentials.state.mode === "loading" && (
             <div className="panel glass">
@@ -622,7 +652,8 @@ export function VaultView({
               </div>
             )}
         </div>
-      )}
+        )}
+      </div>
 
       {showAddHostModal && (
         <div
