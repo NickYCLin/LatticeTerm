@@ -8,7 +8,10 @@
  */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type {
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   connectionTarget,
   createConnectionProfile,
@@ -37,6 +40,7 @@ import { ProtocolTile } from "../common/Badge";
 import { Callout } from "../common/Callout";
 import { AlertIcon, CheckIcon, CloseIcon } from "../icons";
 import { clearValidationError } from "./connectionValidation";
+import { radioNavigationIndex } from "./radioNavigation";
 
 function sameDraft(a: ConnectionDraft, b: ConnectionDraft): boolean {
   return (
@@ -65,6 +69,26 @@ const hostnamePlaceholderKeys: Record<Protocol, MessageKey> = {
   vnc: "form.hostnamePlaceholder.vnc",
   lattice: "form.hostnamePlaceholder.lattice",
 };
+
+function moveRadioFocus(
+  event: ReactKeyboardEvent<HTMLButtonElement>,
+  currentIndex: number,
+  itemCount: number,
+  selectAt: (index: number) => void,
+) {
+  const nextIndex = radioNavigationIndex(event.key, currentIndex, itemCount);
+  if (nextIndex === null) return;
+
+  event.preventDefault();
+  selectAt(nextIndex);
+  const group = event.currentTarget.closest<HTMLElement>(
+    '[role="radiogroup"]',
+  );
+  group
+    ?.querySelectorAll<HTMLButtonElement>('button[role="radio"]')
+    .item(nextIndex)
+    .focus();
+}
 
 export function ConnectionDrawer({
   profile,
@@ -273,7 +297,7 @@ export function ConnectionDrawer({
               role="radiogroup"
               aria-label={t("form.step.protocol")}
             >
-              {protocolCatalog.map((entry) => {
+              {protocolCatalog.map((entry, index) => {
                 const active = draft.protocol === entry.id;
                 return (
                   <button
@@ -281,8 +305,18 @@ export function ConnectionDrawer({
                     key={entry.id}
                     role="radio"
                     aria-checked={active}
+                    tabIndex={active ? 0 : -1}
                     className={`protocol-option${active ? " is-selected" : ""}`}
                     onClick={() => selectProtocol(entry.id)}
+                    onKeyDown={(event) =>
+                      moveRadioFocus(
+                        event,
+                        index,
+                        protocolCatalog.length,
+                        (nextIndex) =>
+                          selectProtocol(protocolCatalog[nextIndex].id),
+                      )
+                    }
                   >
                     <ProtocolTile protocol={entry.id} />
                     <strong className="protocol-option__acronym">
@@ -463,7 +497,7 @@ export function ConnectionDrawer({
                   role="radiogroup"
                   aria-labelledby={`${formId}-env-label`}
                 >
-                  {environmentCatalog.map((entry) => {
+                  {environmentCatalog.map((entry, index) => {
                     const active =
                       (draft.environment ?? "unassigned") === entry;
                     return (
@@ -472,12 +506,26 @@ export function ConnectionDrawer({
                         key={entry}
                         role="radio"
                         aria-checked={active}
+                        tabIndex={active ? 0 : -1}
                         title={t(environmentHintKey(entry))}
                         className={`segmented__option env-${entry}${
                           active ? " is-selected" : ""
                         }`}
                         onClick={() =>
                           patch({ environment: entry as Environment })
+                        }
+                        onKeyDown={(event) =>
+                          moveRadioFocus(
+                            event,
+                            index,
+                            environmentCatalog.length,
+                            (nextIndex) =>
+                              patch({
+                                environment: environmentCatalog[
+                                  nextIndex
+                                ] as Environment,
+                              }),
+                          )
                         }
                       >
                         <span className="badge__dot" aria-hidden="true" />

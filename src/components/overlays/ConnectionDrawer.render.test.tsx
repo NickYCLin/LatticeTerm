@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createConnectionProfile, emptyDraft } from "../../domain/connection";
 import { I18nProvider } from "../../i18n";
 import { ConnectionDrawer } from "./ConnectionDrawer";
+import { radioNavigationIndex } from "./radioNavigation";
 
 function renderDrawer(
   profile: Parameters<typeof ConnectionDrawer>[0]["profile"] = null,
@@ -32,6 +33,19 @@ describe("connection drawer", () => {
     expect(markup).toContain("儲存並連線");
     expect(markup).not.toContain("登入資訊");
     expect(markup).not.toContain("檢查設定");
+    expect(markup.match(/role="radio"[^>]*tabindex="0"/g)).toHaveLength(2);
+    expect(markup.match(/role="radio"[^>]*tabindex="-1"/g)).toHaveLength(7);
+  });
+
+  it("uses the expected wrapping keyboard navigation for radio groups", () => {
+    expect(radioNavigationIndex("ArrowRight", 4, 5)).toBe(0);
+    expect(radioNavigationIndex("ArrowDown", 1, 5)).toBe(2);
+    expect(radioNavigationIndex("ArrowLeft", 0, 5)).toBe(4);
+    expect(radioNavigationIndex("ArrowUp", 3, 5)).toBe(2);
+    expect(radioNavigationIndex("Home", 3, 5)).toBe(0);
+    expect(radioNavigationIndex("End", 1, 5)).toBe(4);
+    expect(radioNavigationIndex("Tab", 1, 5)).toBeNull();
+    expect(radioNavigationIndex("ArrowRight", -1, 5)).toBeNull();
   });
 
   it("does not show an irrelevant username for VNC", () => {
