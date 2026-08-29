@@ -196,6 +196,11 @@ export function SessionProjectSidebar({
         menuAnchorRef.current?.focus();
         return;
       }
+      if (searchOpen) {
+        setSearchOpen(false);
+        searchInputRef.current?.focus();
+        return;
+      }
       onMobileClose();
     },
     active: mobileOpen,
