@@ -35,7 +35,7 @@ const MAX_OUTPUT_SNAPSHOT_BYTES: usize = 256 * 1024;
 const MAX_REPORT_BYTES: u64 = 4096;
 const MAX_NOTIFY_FORWARD_ARGUMENTS: usize = 16;
 const MAX_NOTIFY_FORWARD_BYTES: usize = 8192;
-const MAX_CLAUDE_HOOK_BYTES: u64 = 1024 * 1024;
+const MAX_LIFECYCLE_HOOK_BYTES: u64 = 1024 * 1024;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REPORT_RETRIES: usize = 5;
 const STARTUP_SEED_PROMPT_SETTLE: Duration = Duration::from_millis(120);
@@ -479,6 +479,9 @@ struct AgentSessionEntry {
     /// An official CLI lifecycle hook will report completion for this session,
     /// so prompt-rendering control codes must never guess that it is done.
     integrated_completion: bool,
+    /// Keeps per-session integration files alive only as long as their PTY.
+    /// NamedTempFile removes the Gemini settings file when the entry is dropped.
+    _integration_settings: Option<tempfile::NamedTempFile>,
 }
 
 #[derive(Debug, Default)]
@@ -1419,6 +1422,78 @@ fn claude_reporter_arguments(
     arguments
 }
 
+#[cfg(windows)]
+const GEMINI_REPORTER_COMMAND: &str = r#"& "$env:LATTICETERM_AGENT_REPORTER" agent-gemini-hook"#;
+#[cfg(not(windows))]
+const GEMINI_REPORTER_COMMAND: &str = r#""$LATTICETERM_AGENT_REPORTER" agent-gemini-hook"#;
+
+fn gemini_reporter_settings_value() -> serde_json::Value {
+    let handler = serde_json::json!({
+        "name": "latticeterm-agent-status",
+        "type": "command",
+        "command": GEMINI_REPORTER_COMMAND,
+        "timeout": 5000
+    });
+    let hook = |matcher: Option<&str>| {
+        let mut value = serde_json::json!({ "hooks": [handler.clone()] });
+        if let Some(matcher) = matcher {
+            value["matcher"] = serde_json::Value::String(matcher.to_string());
+        }
+        value
+    };
+    serde_json::json!({
+        "hooks": {
+            "BeforeAgent": [hook(None)],
+            "AfterAgent": [hook(None)],
+            "Notification": [hook(Some("ToolPermission"))]
+        }
+    })
+}
+
+fn default_gemini_system_settings_paths() -> Option<(PathBuf, PathBuf)> {
+    #[cfg(target_os = "windows")]
+    let directory = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .map(|path| path.join("gemini-cli"));
+    #[cfg(target_os = "macos")]
+    let directory = Some(PathBuf::from("/Library/Application Support/GeminiCli"));
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let directory = Some(PathBuf::from("/etc/gemini-cli"));
+
+    directory.map(|directory| {
+        (
+            directory.join("settings.json"),
+            directory.join("system-defaults.json"),
+        )
+    })
+}
+
+fn gemini_reporter_settings_file() -> Result<Option<tempfile::NamedTempFile>, String> {
+    // Never replace an administrator-selected settings layer. Pointing Gemini
+    // at our temporary file would otherwise bypass system policy for this PTY.
+    if std::env::var_os("GEMINI_CLI_SYSTEM_SETTINGS_PATH").is_some() {
+        return Ok(None);
+    }
+    if let Some((system, defaults)) = default_gemini_system_settings_paths() {
+        if system.exists()
+            || (std::env::var_os("GEMINI_CLI_SYSTEM_DEFAULTS_PATH").is_none() && defaults.exists())
+        {
+            return Ok(None);
+        }
+    }
+
+    let mut file = tempfile::Builder::new()
+        .prefix("latticeterm-gemini-hooks-")
+        .suffix(".json")
+        .tempfile()
+        .map_err(|error| format!("Cannot create Gemini hook settings: {error}"))?;
+    serde_json::to_writer(&mut file, &gemini_reporter_settings_value())
+        .map_err(|error| format!("Cannot write Gemini hook settings: {error}"))?;
+    file.flush()
+        .map_err(|error| format!("Cannot finish Gemini hook settings: {error}"))?;
+    Ok(Some(file))
+}
+
 #[derive(Debug, Deserialize)]
 struct ClaudeHookPayload {
     hook_event_name: String,
@@ -1461,13 +1536,48 @@ fn lifecycle_from_claude_hook_payload(raw: &[u8]) -> Result<Option<AgentLifecycl
 fn report_claude_hook_from_stdin() -> Result<(), String> {
     let mut payload = Vec::new();
     std::io::stdin()
-        .take(MAX_CLAUDE_HOOK_BYTES + 1)
+        .take(MAX_LIFECYCLE_HOOK_BYTES + 1)
         .read_to_end(&mut payload)
         .map_err(|error| format!("Cannot read the Claude hook payload: {error}"))?;
-    if payload.len() as u64 > MAX_CLAUDE_HOOK_BYTES {
+    if payload.len() as u64 > MAX_LIFECYCLE_HOOK_BYTES {
         return Err("Claude hook payload is too large.".to_string());
     }
     if let Some(state) = lifecycle_from_claude_hook_payload(&payload)? {
+        report_from_environment(state)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiHookPayload {
+    hook_event_name: String,
+    #[serde(default)]
+    notification_type: Option<String>,
+}
+
+fn lifecycle_from_gemini_hook_payload(raw: &[u8]) -> Result<Option<AgentLifecycle>, String> {
+    let payload: GeminiHookPayload =
+        serde_json::from_slice(raw).map_err(|_| "Gemini hook payload is invalid.".to_string())?;
+    Ok(match payload.hook_event_name.as_str() {
+        "BeforeAgent" => Some(AgentLifecycle::Working),
+        "AfterAgent" => Some(AgentLifecycle::Done),
+        "Notification" if payload.notification_type.as_deref() == Some("ToolPermission") => {
+            Some(AgentLifecycle::NeedsAttention)
+        }
+        _ => None,
+    })
+}
+
+fn report_gemini_hook_from_stdin() -> Result<(), String> {
+    let mut payload = Vec::new();
+    std::io::stdin()
+        .take(MAX_LIFECYCLE_HOOK_BYTES + 1)
+        .read_to_end(&mut payload)
+        .map_err(|error| format!("Cannot read the Gemini hook payload: {error}"))?;
+    if payload.len() as u64 > MAX_LIFECYCLE_HOOK_BYTES {
+        return Err("Gemini hook payload is too large.".to_string());
+    }
+    if let Some(state) = lifecycle_from_gemini_hook_payload(&payload)? {
         report_from_environment(state)?;
     }
     Ok(())
@@ -1583,6 +1693,18 @@ where
             return Some(2);
         }
         report_claude_hook_from_stdin()
+    } else if command.as_ref() == OsStr::new("agent-gemini-hook") {
+        if args.next().is_some() {
+            eprintln!("agent-gemini-hook accepts no arguments");
+            return Some(2);
+        }
+        let result = report_gemini_hook_from_stdin();
+        if result.is_ok() {
+            // Gemini parses successful hook stdout as JSON. Suppress its
+            // internal status hook from adding noise to the terminal UI.
+            println!(r#"{{"suppressOutput":true}}"#);
+        }
+        result
     } else {
         return None;
     };
@@ -2787,6 +2909,7 @@ pub fn launch_with_replay(
         .as_ref()
         .map(|_| random_report_token())
         .transpose()?;
+    let mut integration_settings = None;
     let mut integrated_completion = false;
     if definition_id == "codex" {
         if let Some(endpoint) = reporter.as_ref() {
@@ -2800,6 +2923,11 @@ pub fn launch_with_replay(
             integrated_completion = adapted != arguments;
             arguments = adapted;
         }
+    } else if definition_id == "gemini" && reporter.is_some() {
+        // Gemini has no one-shot --settings argument. Its documented system
+        // settings path is process-scoped, so a temporary file adds hooks
+        // without touching ~/.gemini or the selected workspace.
+        integration_settings = gemini_reporter_settings_file().ok().flatten();
     }
 
     let pair = native_pty_system()
@@ -2822,6 +2950,9 @@ pub fn launch_with_replay(
             endpoint.address.to_string(),
         );
         command.env("LATTICETERM_AGENT_REPORT_TOKEN", token);
+    }
+    if let Some(settings) = integration_settings.as_ref() {
+        command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", settings.path());
     }
 
     let mut child = pair
@@ -2896,6 +3027,7 @@ pub fn launch_with_replay(
         startup_gate: StartupGate::default(),
         completion_gate: Mutex::new(CompletionReadiness::default()),
         integrated_completion,
+        _integration_settings: integration_settings,
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
         let _ = terminate_agent_entry(entry.as_ref());
@@ -4208,6 +4340,44 @@ notify = ["notify.exe", "turn-ended"]"#,
             None
         );
         assert!(lifecycle_from_claude_hook_payload(b"not-json").is_err());
+    }
+
+    #[test]
+    fn gemini_reporter_uses_process_scoped_lifecycle_hooks() {
+        let settings = gemini_reporter_settings_value();
+        let before = &settings["hooks"]["BeforeAgent"][0]["hooks"][0];
+        let after = &settings["hooks"]["AfterAgent"][0]["hooks"][0];
+        let permission = &settings["hooks"]["Notification"][0];
+
+        assert_eq!(before["name"], "latticeterm-agent-status");
+        assert_eq!(before["type"], "command");
+        assert_eq!(before["command"], GEMINI_REPORTER_COMMAND);
+        assert_eq!(before, after);
+        assert_eq!(permission["matcher"], "ToolPermission");
+        assert_eq!(permission["hooks"][0], *before);
+        assert!(settings.get("hooksConfig").is_none());
+    }
+
+    #[test]
+    fn gemini_hooks_distinguish_work_done_and_permission() {
+        let state = |payload: &str| lifecycle_from_gemini_hook_payload(payload.as_bytes()).unwrap();
+        assert_eq!(
+            state(r#"{"hook_event_name":"BeforeAgent"}"#),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"AfterAgent"}"#),
+            Some(AgentLifecycle::Done)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Notification","notification_type":"ToolPermission"}"#),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"Notification","notification_type":"Info"}"#),
+            None
+        );
+        assert!(lifecycle_from_gemini_hook_payload(b"not-json").is_err());
     }
 
     #[test]
