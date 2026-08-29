@@ -116,6 +116,7 @@ export function SessionProjectSidebar({
   chooseError,
   installedAgents,
   mobileOpen = false,
+  onMobileClose,
   onChooseProject,
   onSelect,
   onRemove,
@@ -136,6 +137,7 @@ export function SessionProjectSidebar({
   chooseError: boolean;
   installedAgents: AgentDefinition[];
   mobileOpen?: boolean;
+  onMobileClose: () => void;
   onChooseProject: () => void;
   onSelect: (sessionId: string) => void;
   onRemove: (session: SessionSidebarSessionItem) => void;
@@ -181,9 +183,23 @@ export function SessionProjectSidebar({
   const launchMenuRef = useRef<HTMLElement>(null);
   const menuAnchorRef = useRef<HTMLButtonElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   const moveDialogRef = useRef<HTMLDivElement>(null);
   const moveCancelRef = useRef<HTMLButtonElement>(null);
 
+  useModalFocus({
+    dialogRef: sidebarRef,
+    getInitialFocus: () => searchInputRef.current,
+    onEscape: () => {
+      if (launchMenu) {
+        setLaunchMenu(null);
+        menuAnchorRef.current?.focus();
+        return;
+      }
+      onMobileClose();
+    },
+    active: mobileOpen,
+  });
   useModalFocus({
     dialogRef: moveDialogRef,
     getInitialFocus: () => moveCancelRef.current,
@@ -781,8 +797,13 @@ export function SessionProjectSidebar({
 
   return (
     <aside
+      ref={sidebarRef}
+      id="session-project-sidebar"
       className={`session-projects${mobileOpen ? " is-mobile-open" : ""}`}
       aria-label={t("terminal.projects")}
+      role={mobileOpen ? "dialog" : undefined}
+      aria-modal={mobileOpen || undefined}
+      tabIndex={mobileOpen ? -1 : undefined}
       onClickCapture={(event) => {
         // Swallow the click the browser synthesizes right after a drag ends.
         if (!suppressClickRef.current) return;

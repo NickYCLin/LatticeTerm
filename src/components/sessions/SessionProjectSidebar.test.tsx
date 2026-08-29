@@ -46,6 +46,8 @@ describe("session project sidebar", () => {
           choosingProject={false}
           chooseError={false}
           installedAgents={[]}
+          mobileOpen
+          onMobileClose={vi.fn()}
           onChooseProject={vi.fn()}
           onSelect={vi.fn()}
           onRemove={vi.fn()}
@@ -72,5 +74,9 @@ describe("session project sidebar", () => {
     expect(markup.match(/role="listitem"/g)).toHaveLength(2);
     expect(markup).not.toContain('role="tree"');
     expect(markup).not.toContain('role="treeitem"');
+    expect(markup).toContain('id="session-project-sidebar"');
+    expect(markup).toContain('role="dialog"');
+    expect(markup).toContain('aria-modal="true"');
+    expect(markup).toContain('tabindex="-1"');
   });
 });

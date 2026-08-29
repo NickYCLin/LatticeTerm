@@ -413,15 +413,6 @@ export function SessionsView({
   // way to switch sessions there now that the tab strip is gone.
   const [mobileTreeOpen, setMobileTreeOpen] = useState(false);
 
-  useEffect(() => {
-    if (!mobileTreeOpen) return;
-    function close(event: KeyboardEvent) {
-      if (event.key === "Escape") setMobileTreeOpen(false);
-    }
-    document.addEventListener("keydown", close, true);
-    return () => document.removeEventListener("keydown", close, true);
-  }, [mobileTreeOpen]);
-
   const displayAgentCatalog = agentCatalogForDisplay(agents.catalog);
   const installedAgents = displayAgentCatalog.filter(
     (definition) => definition.installed,
@@ -1493,6 +1484,7 @@ export function SessionsView({
           chooseError={Boolean(newProjectError && !newProjectDialog)}
           installedAgents={installedAgents}
           mobileOpen={mobileTreeOpen}
+          onMobileClose={() => setMobileTreeOpen(false)}
           onChooseProject={() => void chooseProjectDirectory()}
           onSelect={(sessionId) => {
             setMobileTreeOpen(false);
@@ -1565,6 +1557,9 @@ export function SessionsView({
                   className="icon-button icon-button--sm session-header__tree-toggle"
                   onClick={() => setMobileTreeOpen(true)}
                   aria-label={t("terminal.projects")}
+                  aria-haspopup="dialog"
+                  aria-expanded={mobileTreeOpen}
+                  aria-controls="session-project-sidebar"
                   title={t("terminal.projects")}
                 >
                   <FolderIcon size={14} />
