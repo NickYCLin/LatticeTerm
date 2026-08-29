@@ -82,6 +82,8 @@ jobs:
       - name: Test Rust
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml
+          # Exercises the optimized code path affected by RUSTSEC-2024-0429.
+          cargo test --manifest-path vendor/glib-0.18.5/Cargo.toml --release variant_iter::tests
           cargo test --manifest-path crates/lattice-remote/Cargo.toml --features "agent relay-server"
           cargo test --manifest-path crates/lattice-rdp/Cargo.toml
           cargo test --manifest-path crates/lattice-vnc/Cargo.toml

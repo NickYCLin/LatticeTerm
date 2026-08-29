@@ -51,3 +51,9 @@ tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
+
+# GTK3 permanently depends on glib 0.18, while the upstream safety fix for
+# RUSTSEC-2024-0429 was released only with glib 0.20. Keep the compatible crate
+# local and apply the upstream one-line fix until Tauri moves away from GTK3.
+[patch.crates-io]
+glib = { path = "../vendor/glib-0.18.5" }
