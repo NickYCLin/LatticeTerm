@@ -566,13 +566,14 @@ impl CompletionReadiness {
             return false;
         }
         self.control_window.extend_from_slice(bytes);
-        let prompt_ready = [b"\x1b[?2004h".as_slice(), b"\x1b[?25h".as_slice()]
-            .iter()
-            .any(|marker| {
-                self.control_window
-                    .windows(marker.len())
-                    .any(|window| window == *marker)
-            });
+        // Bracketed-paste mode is enabled when an interactive prompt is ready
+        // for the next command. Cursor visibility (`CSI ? 25 h`) is not a
+        // completion signal: spinners and full-screen CLIs toggle it while a
+        // response is still being generated.
+        let prompt_ready = self
+            .control_window
+            .windows(b"\x1b[?2004h".len())
+            .any(|window| window == b"\x1b[?2004h");
         if prompt_ready {
             self.submitted = false;
             self.control_window.clear();
@@ -1390,6 +1391,19 @@ fn forward_codex_notification(encoded: &str, payload: &OsStr) {
     let _ = child.spawn();
 }
 
+#[derive(Debug, Deserialize)]
+struct CodexNotificationKind {
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+fn is_codex_turn_complete_notification(payload: &OsStr) -> bool {
+    payload
+        .to_str()
+        .and_then(|raw| serde_json::from_str::<CodexNotificationKind>(raw).ok())
+        .is_some_and(|notification| notification.kind == "agent-turn-complete")
+}
+
 /// Handle the tiny reporter subcommand before Tauri starts.
 ///
 /// Adapter hooks can run `$LATTICETERM_AGENT_REPORTER agent-report done` and
@@ -1427,10 +1441,16 @@ where
             eprintln!("agent-notify is missing its forwarded command");
             return Some(2);
         };
-        if let Some(payload) = payload.as_ref() {
-            forward_codex_notification(&encoded, payload.as_ref());
+        let Some(payload) = payload.as_ref() else {
+            eprintln!("agent-notify is missing its notification payload");
+            return Some(2);
+        };
+        forward_codex_notification(&encoded, payload.as_ref());
+        if is_codex_turn_complete_notification(payload.as_ref()) {
+            report_from_environment(AgentLifecycle::Done)
+        } else {
+            Ok(())
         }
-        report_from_environment(AgentLifecycle::Done)
     } else {
         return None;
     };
@@ -3304,14 +3324,14 @@ session id: 0199aa11-"
     }
 
     #[test]
-    fn completion_recognizes_a_restored_cursor_across_output_chunks() {
+    fn completion_ignores_cursor_visibility_while_the_agent_is_working() {
         let mut readiness = CompletionReadiness::default();
 
         assert!(!readiness.observe_output(b"\x1b[?25h"));
         readiness.observe_input(b"review this\r");
         assert!(!readiness.observe_output(b"answer\x1b[?2"));
-        assert!(readiness.observe_output(b"5h"));
-        assert!(!readiness.observe_output(b"\x1b[?25h"));
+        assert!(!readiness.observe_output(b"5hstill working"));
+        assert!(readiness.observe_output(b"done\x1b[?2004h"));
     }
 
     #[test]
@@ -3901,6 +3921,22 @@ model = "gpt-5.3-codex"
         );
         assert_eq!(lifecycle_from_report_arg("arbitrary-command"), None);
         assert_eq!(run_reporter_cli(["different-command", "done"]), None);
+    }
+
+    #[test]
+    fn codex_completion_requires_the_documented_notification_type() {
+        assert!(is_codex_turn_complete_notification(OsStr::new(
+            r#"{"type":"agent-turn-complete","turn-id":"turn-1"}"#,
+        )));
+        assert!(!is_codex_turn_complete_notification(OsStr::new(
+            r#"{"type":"tool-complete"}"#,
+        )));
+        assert!(!is_codex_turn_complete_notification(OsStr::new("not-json")));
+        assert_eq!(
+            run_reporter_cli(["agent-notify", "", r#"{"type":"tool-complete"}"#]),
+            Some(0),
+        );
+        assert_eq!(run_reporter_cli(["agent-notify", ""]), Some(2));
     }
 
     #[test]
