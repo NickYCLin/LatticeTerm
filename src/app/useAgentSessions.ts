@@ -199,7 +199,7 @@ const FALLBACK_CATALOG_SOURCE: [string, string, string, boolean][] = [
   ["opencode", "OpenCode", "opencode", false],
   ["copilot", "GitHub Copilot CLI", "copilot", false],
   ["hermes", "Hermes Agent", "hermes", true],
-  ["cursor", "Cursor Agent", "agent", false],
+  ["cursor", "Cursor Agent", "agent", true],
   ["aider", "Aider", "aider", false],
   ["qwen", "Qwen Code", "qwen", false],
   ["kimi", "Kimi Code CLI", "kimi", false],
@@ -214,7 +214,8 @@ const FALLBACK_CATALOG: AgentDefinition[] = FALLBACK_CATALOG_SOURCE.map(
     executable,
     adapterVersion: 1,
     resumeSupported,
-    resumeLatestSupported: id === "codex" || id === "antigravity",
+    resumeLatestSupported:
+      id === "codex" || id === "antigravity" || id === "cursor",
     transcriptSupported: id === "codex" || id === "claude",
     installed: false,
     installedPath: null,

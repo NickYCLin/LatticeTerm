@@ -212,6 +212,11 @@ export function agentRestoreArguments(session: SavedAgentSession): string[] {
   if (session.resumeSessionId) return [];
   if (session.launchArguments.length > 0) return session.launchArguments;
   if (session.definitionId === "codex") return ["resume", "--last"];
-  if (session.definitionId === "antigravity") return ["--continue"];
+  if (
+    session.definitionId === "antigravity" ||
+    session.definitionId === "cursor"
+  ) {
+    return ["--continue"];
+  }
   return [];
 }

@@ -33,10 +33,10 @@ flowchart LR
 - 分頁名稱、CLI 名稱與模型欄位分開保存。模型只接受明確的 `--model` 參數或 CLI 啟動／狀態畫面中的保守格式；沒有可靠值就顯示「模型尚未回報」，不拿產品名稱代替模型。輸入一般提示後停止啟動掃描，只有 `/model` 會重新開啟一次掃描，避免把回答內容誤判成目前模型。
 - 支援 Adapter／hook 明確回報「工作中、等待輸入、閒置、完成」。Codex 以官方 `notify` 事件、Claude Code 以工作階段專屬的官方 lifecycle hooks 接上 Reporter；Gemini CLI 則以僅限該程序的暫存 system settings 接上 `BeforeAgent`、`AfterAgent` 與權限通知。OpenCode 透過程序級 inline config 載入暫存 local plugin，使用 `chat.message`、`session.status`、`session.error`、permission 與 question events；主工作階段會與子 Agent 分開追蹤，多個並行主工作階段全部 idle 才回報完成。GitHub Copilot CLI 以程序限定的 `--plugin-dir` 掛載暫存 plugin，追蹤 prompt、`agentStop`、permission、error 與 subagent events；主 Agent 已停止但背景 subagent 尚未全部結束時不回報完成。Hermes Agent 以程序限定的暫存 bundled-plugin overlay 保留原始 provider tree、`HERMES_HOME`、登入、使用者／專案 plugins 與設定，追蹤 session、turn、approval 與 subagent lifecycle；子 Agent 的 `on_session_end` 不會結束主工作。Qwen Code 也以程序限定的暫存 system settings 追蹤 `UserPromptSubmit`、`Stop`、`StopFailure`、permission 與 tool events。只有收到第一個真實 hook 後才停用完成猜測。這些整合不改動使用者或專案設定；已有不可安全合併的程序級設定、專案停用所有 hooks、無法辨識 Hermes 安裝結構，或 pure／safe／bare mode 時保留原設定，退回保守 heuristic。Claude 與 Qwen 的 `Stop` 尚有背景工作時維持工作中，有排程等待時標成閒置。具備完成事件的 CLI 不再用終端控制碼猜測完成；UI 會顯示狀態來源。
 - 支援使用者明確勾選執行中的 Agent，經二次確認後將同一段提示送進最多 32 個獨立 PTY；每個目標逐一回報成功或失敗，提示內容不會保存。
-- 支援最多 32 個安全啟動項目，也可命名工作區及調整持久化順序。應用程式重啟後，使用者可逐項或整批確認，LatticeTerm 會重新驗證磁碟資料並依保存順序啟動 CLI 程序；每項分別回報成功或失敗。沒有額外參數或舊版明確 Session ID 的 Codex 項目使用 `codex resume --last`，由 Codex 依該項目的工作目錄選出最近對話。
+- 支援最多 32 個安全啟動項目，也可命名工作區及調整持久化順序。應用程式重啟後，使用者可逐項或整批確認，LatticeTerm 會重新驗證磁碟資料並依保存順序啟動 CLI 程序；每項分別回報成功或失敗。沒有額外參數或舊版明確 Session ID 的 Codex 項目使用 `codex resume --last`，依工作目錄選出最近對話；Cursor 項目使用官方的 `agent --continue` 續接最近對話。
 - 可選擇保存一份工作區共用啟動指示；之後每個全新的非 `custom` CLI 進入互動提示後會先收到這段文字，若同時有跨 CLI handoff 則共用指示排在 handoff 前面。自動還原的舊工作階段、明確原生 Session 續接與 `resume --last`／`--continue` 不會重送共用指示。內建繁中 Commit 範本只是可套用的起始內容，預設留空停用，不會把個人規範強加給其他安裝者。
 - 目錄會從各 CLI 已存在的本機認證 metadata 讀取 Codex、Claude 與 Gemini 的帳號標籤及登入方式；Rust 只回傳非機密字串，access token、refresh token、API Key 與完整 JWT 都不會序列化到 WebView。
-- 版本化內建 Adapter v1 仍可驗證並還原舊工作區中 Codex、Claude Code、Gemini CLI 與 Hermes Agent 的原生 Session 項目；介面不再要求使用者手動設定 Session ID。Codex 的一般保存項目不寫入 Session ID，而是委由 Codex 自己續接同目錄最近的對話；執行中分頁的「加開 CLI／帶入目前對話」則處理跨 CLI 脈絡接手。
+- 版本化內建 Adapter v1 仍可驗證並還原舊工作區中 Codex、Claude Code、Gemini CLI、Hermes Agent 與 Cursor Agent 的原生 Session 項目；介面不再要求使用者手動設定 Session ID。Codex 與 Cursor 的一般保存項目不寫入 Session ID，而是委由各 CLI 自己續接同目錄最近的對話；執行中分頁的「加開 CLI／帶入目前對話」則處理跨 CLI 脈絡接手。
 
 ### 舊工作區相容層：原生 Session 續接 Adapter v1
 
@@ -46,6 +46,7 @@ flowchart LR
 | Claude Code | `claude --resume <SESSION_ID>` | [Anthropic CLI reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage) |
 | Gemini CLI | `gemini --resume <SESSION_UUID_OR_INDEX>` | [Gemini CLI session management](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/session-management.md) |
 | Hermes Agent | `hermes --resume <SESSION_ID_OR_TITLE>` | [Hermes session guide](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/sessions.md) |
+| Cursor Agent | `agent --resume <THREAD_ID>`；一般保存項目使用 `agent --continue` | [Cursor CLI using guide](https://cursor.com/docs/cli/using) |
 
 Adapter 會把舊工作區的識別值當成單一 argument，不經 shell；長度上限 512 bytes，拒絕控制字元、前導 `-` 與額外啟動參數。這層保留是為了避免既有 `agent-workspaces.json` 在升級後失效，不代表目前介面仍提供手動續接設定。
 
@@ -115,7 +116,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態訊息。Registry 必須�
 
 ### 1. 語意 adapter
 
-Reporter 傳輸與狀態模型已完成，Codex、Claude Code、Gemini CLI、OpenCode、GitHub Copilot CLI、Hermes Agent 與 Qwen Code 也已有工作階段限定的完成 hook／plugin event。舊工作區相容層仍保留 Adapter v1 的四種原生 restore recipe，以及白名單 CLI 的保守 session ID 擷取，但目前介面不再提供手動續接區塊。下一步擴充其他工具的 hook 安裝方式，再加入 token／cost 等可觀測事件；未整合 CLI 繼續使用保守 heuristic，也可由工具 hook 呼叫通用 Reporter。
+Reporter 傳輸與狀態模型已完成，Codex、Claude Code、Gemini CLI、OpenCode、GitHub Copilot CLI、Hermes Agent 與 Qwen Code 也已有工作階段限定的完成 hook／plugin event。舊工作區相容層仍保留 Adapter v1 的五種原生 restore recipe，以及白名單 CLI 的保守 session ID 擷取，但目前介面不再提供手動續接區塊。下一步擴充其他工具的 hook 安裝方式，再加入 token／cost 等可觀測事件；未整合 CLI 繼續使用保守 heuristic，也可由工具 hook 呼叫通用 Reporter。
 
 ### 2. Lattice Agent daemon
 

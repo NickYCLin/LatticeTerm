@@ -108,6 +108,11 @@ describe("workspace session persistence", () => {
       [],
       null,
     ).sessions[0];
+    const cursor = snapshotLiveWorkspaceSessions(
+      [agent({ definitionId: "cursor", capturedSessionId: null })],
+      [],
+      null,
+    ).sessions[0];
 
     expect(codex.kind === "agent" && agentRestoreArguments(codex)).toEqual([
       "resume",
@@ -116,6 +121,9 @@ describe("workspace session persistence", () => {
     expect(
       antigravity.kind === "agent" && agentRestoreArguments(antigravity),
     ).toEqual(["--continue"]);
+    expect(cursor.kind === "agent" && agentRestoreArguments(cursor)).toEqual([
+      "--continue",
+    ]);
   });
 
   it("preserves explicit CLI arguments when no native session id exists", () => {

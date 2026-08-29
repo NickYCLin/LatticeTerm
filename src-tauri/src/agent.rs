@@ -64,14 +64,14 @@ impl AgentResumeRecipe {
 #[derive(Debug, Clone, Copy)]
 enum AgentResumeLatestRecipe {
     Codex,
-    Antigravity,
+    Continue,
 }
 
 impl AgentResumeLatestRecipe {
     fn arguments(self) -> Vec<String> {
         match self {
             Self::Codex => vec!["resume".to_string(), "--last".to_string()],
-            Self::Antigravity => vec!["--continue".to_string()],
+            Self::Continue => vec!["--continue".to_string()],
         }
     }
 }
@@ -112,7 +112,7 @@ const AGENTS: [AgentSpec; 13] = [
         label: "Google Antigravity CLI",
         executable: "agy",
         resume_recipe: None,
-        resume_latest_recipe: Some(AgentResumeLatestRecipe::Antigravity),
+        resume_latest_recipe: Some(AgentResumeLatestRecipe::Continue),
     },
     AgentSpec {
         id: "opencode",
@@ -139,8 +139,8 @@ const AGENTS: [AgentSpec; 13] = [
         id: "cursor",
         label: "Cursor Agent",
         executable: "agent",
-        resume_recipe: None,
-        resume_latest_recipe: None,
+        resume_recipe: Some(AgentResumeRecipe::Flag),
+        resume_latest_recipe: Some(AgentResumeLatestRecipe::Continue),
     },
     AgentSpec {
         id: "aider",
@@ -4964,6 +4964,7 @@ model = "gpt-5.3-codex"
             ("claude", vec!["--resume", "session-42"]),
             ("gemini", vec!["--resume", "session-42"]),
             ("hermes", vec!["--resume", "session-42"]),
+            ("cursor", vec!["--resume", "session-42"]),
         ] {
             let spec = AGENTS
                 .iter()
@@ -4983,14 +4984,17 @@ model = "gpt-5.3-codex"
             .collect();
         assert_eq!(
             supported,
-            HashSet::from(["codex", "claude", "gemini", "hermes"])
+            HashSet::from(["codex", "claude", "gemini", "hermes", "cursor"])
         );
         let latest_supported: HashSet<_> = definitions
             .iter()
             .filter(|definition| definition.resume_latest_supported)
             .map(|definition| definition.id.as_str())
             .collect();
-        assert_eq!(latest_supported, HashSet::from(["codex", "antigravity"]));
+        assert_eq!(
+            latest_supported,
+            HashSet::from(["codex", "antigravity", "cursor"])
+        );
         assert_eq!(
             AGENTS[0].resume_latest_recipe.unwrap().arguments(),
             vec!["resume", "--last"]
@@ -5001,6 +5005,11 @@ model = "gpt-5.3-codex"
             .unwrap();
         assert_eq!(
             antigravity.resume_latest_recipe.unwrap().arguments(),
+            vec!["--continue"]
+        );
+        let cursor = AGENTS.iter().find(|agent| agent.id == "cursor").unwrap();
+        assert_eq!(
+            cursor.resume_latest_recipe.unwrap().arguments(),
             vec!["--continue"]
         );
         assert!(definitions
@@ -5390,6 +5399,23 @@ model = "gpt-5.3-codex"
         let antigravity_request = launch_request_from_plan(&antigravity, 80, 24).unwrap();
         assert_eq!(antigravity_request.arguments, vec!["--continue"]);
         assert!(antigravity_request.restore_existing_session);
+
+        let cursor = normalize_launch_plan(
+            "agent-plan-latest-cursor".to_string(),
+            AgentLaunchPlanDraft {
+                definition_id: "cursor".to_string(),
+                label: String::new(),
+                executable: String::new(),
+                arguments: Vec::new(),
+                resume_session_id: None,
+                note: String::new(),
+                working_directory: directory.display().to_string(),
+            },
+        )
+        .unwrap();
+        let cursor_request = launch_request_from_plan(&cursor, 80, 24).unwrap();
+        assert_eq!(cursor_request.arguments, vec!["--continue"]);
+        assert!(cursor_request.restore_existing_session);
 
         let hermes = normalize_launch_plan(
             "agent-plan-fresh-hermes".to_string(),
