@@ -2928,6 +2928,10 @@ pub fn launch_with_replay(
         // settings path is process-scoped, so a temporary file adds hooks
         // without touching ~/.gemini or the selected workspace.
         integration_settings = gemini_reporter_settings_file().ok().flatten();
+        // Only disable prompt-control completion guesses when the settings
+        // file was actually installed. Managed-policy fallbacks stay
+        // heuristic, while an active official AfterAgent hook is authoritative.
+        integrated_completion = integration_settings.is_some();
     }
 
     let pair = native_pty_system()
