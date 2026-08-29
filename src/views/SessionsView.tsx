@@ -305,6 +305,8 @@ export function SessionsView({
     Record<string, string>
   >({});
   const [addCliFor, setAddCliFor] = useState<string | null>(null);
+  const addCliDialogRef = useRef<HTMLDivElement>(null);
+  const addCliButtonRef = useRef<HTMLButtonElement>(null);
   const [carryContext, setCarryContext] = useState(true);
   const [sidebarLayout, setSidebarLayout] = useState(() =>
     loadSessionSidebarLayout(window.localStorage),
@@ -345,6 +347,42 @@ export function SessionsView({
   );
   const [importingWorkspace, setImportingWorkspace] = useState(false);
   const [pendingClearWorkspace, setPendingClearWorkspace] = useState(false);
+
+  useEffect(() => {
+    if (!addCliFor) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const dialog = addCliDialogRef.current;
+      const firstControl = dialog?.querySelector<HTMLElement>(
+        "input:not(:disabled), button:not(:disabled)",
+      );
+      (firstControl ?? dialog)?.focus();
+    });
+    function closeOnPointer(event: PointerEvent) {
+      const target = event.target as Node | null;
+      if (
+        target &&
+        (addCliDialogRef.current?.contains(target) ||
+          addCliButtonRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setAddCliFor(null);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setAddCliFor(null);
+      addCliButtonRef.current?.focus();
+    }
+    document.addEventListener("pointerdown", closeOnPointer, true);
+    document.addEventListener("keydown", closeOnEscape, true);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("pointerdown", closeOnPointer, true);
+      document.removeEventListener("keydown", closeOnEscape, true);
+    };
+  }, [addCliFor]);
   const [clearingWorkspace, setClearingWorkspace] = useState(false);
   const [workspaceTransferNotice, setWorkspaceTransferNotice] =
     useState<WorkspaceTransferNotice | null>(null);
@@ -1741,13 +1779,22 @@ export function SessionsView({
                   <button
                     type="button"
                     className="cli-switch__add"
-                    onClick={() =>
+                    ref={
+                      addCliFor === group.groupId ? addCliButtonRef : undefined
+                    }
+                    onClick={(event) => {
+                      addCliButtonRef.current = event.currentTarget;
                       setAddCliFor((current) =>
                         current === group.groupId ? null : group.groupId,
-                      )
-                    }
-                    aria-haspopup="menu"
+                      );
+                    }}
+                    aria-haspopup="dialog"
                     aria-expanded={addCliFor === group.groupId}
+                    aria-controls={
+                      addCliFor === group.groupId
+                        ? `${sessionTabsId}-${groupIndex}-add-cli-dialog`
+                        : undefined
+                    }
                   >
                     <PlusIcon size={12} />
                     <span>{t("terminal.addCli")}</span>
@@ -1764,7 +1811,14 @@ export function SessionsView({
                       );
                       const carry = canCarry && carryContext;
                       return (
-                        <div className="cli-switch__menu" role="menu">
+                        <div
+                          ref={addCliDialogRef}
+                          id={`${sessionTabsId}-${groupIndex}-add-cli-dialog`}
+                          className="cli-switch__menu"
+                          role="dialog"
+                          aria-label={t("terminal.addCli")}
+                          tabIndex={-1}
+                        >
                           {canCarry ? (
                             <label className="cli-switch__carry">
                               <input
@@ -1786,7 +1840,6 @@ export function SessionsView({
                             <button
                               key={definition.id}
                               type="button"
-                              role="menuitem"
                               className="cli-switch__menu-item"
                               onClick={() => void addCli(group, definition, carry)}
                             >

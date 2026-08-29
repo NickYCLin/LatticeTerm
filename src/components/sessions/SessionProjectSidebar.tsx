@@ -39,6 +39,7 @@ import {
   TransferIcon,
   TrashIcon,
 } from "../icons";
+import { handleMenuNavigation } from "../overlays/menuNavigation";
 
 export type SessionSidebarKind =
   | "agent"
@@ -242,6 +243,13 @@ export function SessionProjectSidebar({
 
   useEffect(() => {
     if (!launchMenu) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const menu = launchMenuRef.current;
+      const firstItem = menu?.querySelector<HTMLButtonElement>(
+        'button[role="menuitem"]:not(:disabled)',
+      );
+      (firstItem ?? menu)?.focus();
+    });
     function close(event: PointerEvent) {
       const target = event.target as Node | null;
       if (
@@ -251,9 +259,6 @@ export function SessionProjectSidebar({
         return;
       }
       setLaunchMenu(null);
-    }
-    function keydown(event: KeyboardEvent) {
-      if (event.key === "Escape") setLaunchMenu(null);
     }
     function reposition() {
       const anchor = menuAnchorRef.current;
@@ -267,12 +272,11 @@ export function SessionProjectSidebar({
       );
     }
     document.addEventListener("pointerdown", close, true);
-    document.addEventListener("keydown", keydown, true);
     window.addEventListener("resize", reposition);
     window.addEventListener("scroll", reposition, true);
     return () => {
+      window.cancelAnimationFrame(focusFrame);
       document.removeEventListener("pointerdown", close, true);
-      document.removeEventListener("keydown", keydown, true);
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
     };
@@ -946,6 +950,18 @@ export function SessionProjectSidebar({
             style={{ left: menuLeft, top: menuTop, width: menuWidth }}
             role="menu"
             aria-label={t("terminal.quickChat")}
+            tabIndex={-1}
+            onKeyDown={(event) =>
+              handleMenuNavigation(event, () => {
+                setLaunchMenu(null);
+                menuAnchorRef.current?.focus();
+              })
+            }
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                setLaunchMenu(null);
+              }
+            }}
           >
             <header>
               <span className="eyebrow">{t("terminal.quickChat")}</span>
@@ -982,6 +998,18 @@ export function SessionProjectSidebar({
             style={{ left: menuLeft, top: menuTop, width: menuWidth }}
             role="menu"
             aria-label={t("terminal.projects.manage")}
+            tabIndex={-1}
+            onKeyDown={(event) =>
+              handleMenuNavigation(event, () => {
+                setLaunchMenu(null);
+                menuAnchorRef.current?.focus();
+              })
+            }
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                setLaunchMenu(null);
+              }
+            }}
           >
             <header>
               <span className="eyebrow">{t("terminal.projects")}</span>
