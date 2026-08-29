@@ -84,7 +84,16 @@ export function AgentsView({
   remote: RemoteApi;
   onOpen: (sessionId: string) => void;
 }) {
-  const { t } = useI18n();
+  const { t, tag } = useI18n();
+  const tokenNumber = useMemo(() => new Intl.NumberFormat(tag), [tag]);
+  const compactTokenNumber = useMemo(
+    () =>
+      new Intl.NumberFormat(tag, {
+        notation: "compact",
+        maximumFractionDigits: 1,
+      }),
+    [tag],
+  );
   const [workingDirectory, setWorkingDirectory] = useState("");
   const [launchNote, setLaunchNote] = useState("");
   const [launching, setLaunching] = useState<string | null>(null);
@@ -1098,6 +1107,31 @@ export function AgentsView({
                 <div className="agent-session-row__main">
                   <strong>{session.label}</strong>
                   <span className="mono">{session.workingDirectory}</span>
+                  {session.tokenUsage && (
+                    <span
+                      className="agent-token-usage"
+                      title={t("agents.usage.breakdown", {
+                        input: tokenNumber.format(session.tokenUsage.inputTokens),
+                        output: tokenNumber.format(session.tokenUsage.outputTokens),
+                        cacheRead: tokenNumber.format(
+                          session.tokenUsage.cacheReadTokens,
+                        ),
+                        cacheWrite: tokenNumber.format(
+                          session.tokenUsage.cacheWriteTokens,
+                        ),
+                        reasoning: tokenNumber.format(
+                          session.tokenUsage.reasoningTokens,
+                        ),
+                      })}
+                    >
+                      {t("agents.usage.summary", {
+                        tokens: compactTokenNumber.format(
+                          session.tokenUsage.totalTokens,
+                        ),
+                        calls: tokenNumber.format(session.tokenUsage.apiCalls),
+                      })}
+                    </span>
+                  )}
                 </div>
                 <div className="agent-session-row__status">
                   <span className={`badge ${stateTone(session)}`}>

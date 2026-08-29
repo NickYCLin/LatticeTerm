@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyAgentStateEvent,
+  applyAgentUsageEvent,
   agentCatalogForDisplay,
   buildAgentBroadcastPayload,
   decodeAgentPayload,
@@ -161,6 +162,7 @@ describe("agent session transport", () => {
         state: "working" as const,
         stateSource: "heuristic" as const,
         processId: 42,
+        tokenUsage: null,
         capturedSessionId: null,
       },
     ];
@@ -172,6 +174,22 @@ describe("agent session transport", () => {
         source: "integration",
       })[0],
     ).toMatchObject({ state: "done", stateSource: "integration" });
+
+    const tokenUsage = {
+      inputTokens: 120,
+      outputTokens: 30,
+      cacheReadTokens: 40,
+      cacheWriteTokens: 5,
+      reasoningTokens: 12,
+      totalTokens: 195,
+      apiCalls: 1,
+    };
+    expect(
+      applyAgentUsageEvent(sessions, {
+        sessionId: "agent-session-1",
+        tokenUsage,
+      })[0].tokenUsage,
+    ).toEqual(tokenUsage);
   });
 
   it("moves saved launch plans by one position without mutating the source", () => {

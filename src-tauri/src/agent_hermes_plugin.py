@@ -15,9 +15,18 @@ from typing import Any
 
 
 _REPORTER = os.environ.get("LATTICETERM_AGENT_REPORTER", "")
+_MAX_TOKENS_PER_REQUEST = 1_000_000_000_000
+_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+)
 _FIELDS = {
     "on_session_start": ("session_id",),
     "pre_llm_call": ("session_id",),
+    "post_api_request": ("session_id", "api_request_id"),
     "on_session_end": ("session_id", "completed", "failed", "interrupted"),
     "subagent_start": ("parent_session_id", "child_session_id"),
     "subagent_stop": ("parent_session_id", "child_session_id"),
@@ -40,6 +49,17 @@ def _forward(event: str, **payload: Any) -> None:
             and not any(ord(character) < 32 or ord(character) == 127 for character in value)
         ):
             message[field] = value
+    if event == "post_api_request":
+        raw_usage = payload.get("usage")
+        if not isinstance(raw_usage, dict):
+            return
+        usage = {}
+        for field in _USAGE_FIELDS:
+            value = raw_usage.get(field, 0)
+            if type(value) is not int or not 0 <= value <= _MAX_TOKENS_PER_REQUEST:
+                return
+            usage[field] = value
+        message["usage"] = usage
     try:
         subprocess.run(
             [_REPORTER, "agent-hermes-hook"],

@@ -32,6 +32,7 @@ function agent(overrides: Record<string, unknown> = {}) {
     state: "working" as const,
     stateSource: "heuristic" as const,
     processId: 42,
+    tokenUsage: null,
     capturedSessionId: "native-chat-1",
     ...overrides,
   };

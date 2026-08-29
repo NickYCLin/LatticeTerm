@@ -75,6 +75,16 @@ export interface AgentInstallDefinition {
   available: boolean;
 }
 
+export interface AgentTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  apiCalls: number;
+}
+
 export interface AgentSessionSummary {
   sessionId: string;
   /** CLIs sharing one tab carry the same groupId; defaults to sessionId. */
@@ -93,6 +103,8 @@ export interface AgentSessionSummary {
   state: AgentLifecycle;
   stateSource: AgentStateSource;
   processId: number | null;
+  /** Trusted cumulative token buckets supplied by a semantic adapter. */
+  tokenUsage: AgentTokenUsage | null;
   /** The CLI's own session id, once its output announced one. */
   capturedSessionId: string | null;
 }
@@ -149,6 +161,11 @@ export interface AgentModelEvent {
   model: string;
 }
 
+export interface AgentUsageEvent {
+  sessionId: string;
+  tokenUsage: AgentTokenUsage;
+}
+
 export interface AgentOutputEvent {
   sessionId: string;
   offset: number;
@@ -187,6 +204,17 @@ export function applyAgentStateEvent(
   return sessions.map((session) =>
     session.sessionId === event.sessionId
       ? { ...session, state: event.state, stateSource: event.source }
+      : session,
+  );
+}
+
+export function applyAgentUsageEvent(
+  sessions: AgentSessionSummary[],
+  event: AgentUsageEvent,
+): AgentSessionSummary[] {
+  return sessions.map((session) =>
+    session.sessionId === event.sessionId
+      ? { ...session, tokenUsage: event.tokenUsage }
       : session,
   );
 }
@@ -417,6 +445,7 @@ export function useAgentSessions(): AgentApi {
     const stateDuringHydration = new Map<string, AgentStateEvent>();
     const captureDuringHydration = new Map<string, string>();
     const modelDuringHydration = new Map<string, string>();
+    const usageDuringHydration = new Map<string, AgentTokenUsage>();
 
     function keep(cleanup: () => void): boolean {
       if (disposed) {
@@ -573,6 +602,23 @@ export function useAgentSessions(): AgentApi {
         );
         if (!keep(stopModel)) return;
 
+        const stopUsage = await listen<AgentUsageEvent>(
+          "agent://usage",
+          (event) => {
+            if (hydrating) {
+              usageDuringHydration.set(
+                event.payload.sessionId,
+                event.payload.tokenUsage,
+              );
+              return;
+            }
+            setSessions((current) =>
+              applyAgentUsageEvent(current, event.payload),
+            );
+          },
+        );
+        if (!keep(stopUsage)) return;
+
         const [
           definitions,
           directory,
@@ -602,10 +648,12 @@ export function useAgentSessions(): AgentApi {
               session.sessionId,
             );
             const model = modelDuringHydration.get(session.sessionId);
+            const tokenUsage = usageDuringHydration.get(session.sessionId);
             return {
               ...session,
               ...(capturedSessionId ? { capturedSessionId } : {}),
               ...(model ? { model } : {}),
+              ...(tokenUsage ? { tokenUsage } : {}),
             };
           });
         });
@@ -640,6 +688,7 @@ export function useAgentSessions(): AgentApi {
         stateDuringHydration.clear();
         captureDuringHydration.clear();
         modelDuringHydration.clear();
+        usageDuringHydration.clear();
         setCatalog(definitions);
         setDefaultWorkingDirectory(directory);
         setWorkspaceName(planSnapshot.workspaceName);
@@ -655,6 +704,7 @@ export function useAgentSessions(): AgentApi {
         stateDuringHydration.clear();
         captureDuringHydration.clear();
         modelDuringHydration.clear();
+        usageDuringHydration.clear();
         setCatalog(FALLBACK_CATALOG);
         setError(reason instanceof Error ? reason.message : String(reason));
         setMode("unavailable");

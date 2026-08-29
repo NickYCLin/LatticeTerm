@@ -55,6 +55,7 @@ function session(
     state: "idle",
     stateSource: "heuristic",
     processId: 123,
+    tokenUsage: null,
     capturedSessionId: "native-session-1",
     ...overrides,
   };

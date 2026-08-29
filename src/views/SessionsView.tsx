@@ -1,6 +1,6 @@
 /** Unified workspace for text terminals and graphical remote sessions. */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
 import type { RemoteApi } from "../app/useRemoteSessions";
@@ -205,7 +205,16 @@ export function SessionsView({
   theme: ThemeId;
   sessionRestoreComplete: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, tag } = useI18n();
+  const tokenNumber = useMemo(() => new Intl.NumberFormat(tag), [tag]);
+  const compactTokenNumber = useMemo(
+    () =>
+      new Intl.NumberFormat(tag, {
+        notation: "compact",
+        maximumFractionDigits: 1,
+      }),
+    [tag],
+  );
 
   // Quick chats launch in the user's home folder and group under a fixed
   // "general chats" project, so asking a CLI something never requires
@@ -1665,8 +1674,38 @@ export function SessionsView({
                         <AgentIcon size={12} />
                         <span className="cli-switch__identity">
                           <span className="truncate">{member.label}</span>
-                          <span className="cli-switch__model truncate">
+                          <span
+                            className="cli-switch__model truncate"
+                            title={
+                              member.tokenUsage
+                                ? t("agents.usage.breakdown", {
+                                    input: tokenNumber.format(
+                                      member.tokenUsage.inputTokens,
+                                    ),
+                                    output: tokenNumber.format(
+                                      member.tokenUsage.outputTokens,
+                                    ),
+                                    cacheRead: tokenNumber.format(
+                                      member.tokenUsage.cacheReadTokens,
+                                    ),
+                                    cacheWrite: tokenNumber.format(
+                                      member.tokenUsage.cacheWriteTokens,
+                                    ),
+                                    reasoning: tokenNumber.format(
+                                      member.tokenUsage.reasoningTokens,
+                                    ),
+                                  })
+                                : undefined
+                            }
+                          >
                             {member.model ?? t("terminal.model.pending")}
+                            {member.tokenUsage
+                              ? ` · ${t("agents.usage.compact", {
+                                  tokens: compactTokenNumber.format(
+                                    member.tokenUsage.totalTokens,
+                                  ),
+                                })}`
+                              : ""}
                           </span>
                         </span>
                       </button>

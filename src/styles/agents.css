@@ -609,6 +609,11 @@
   white-space: nowrap;
 }
 
+.agent-session-row__main .agent-token-usage {
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
 .agent-terminal {
   padding: var(--space-3);
 }

@@ -22,6 +22,7 @@ pub const EVENT_CLOSED: &str = "agent://closed";
 pub const EVENT_STATE: &str = "agent://state";
 pub const EVENT_CAPTURE: &str = "agent://capture";
 pub const EVENT_MODEL: &str = "agent://model";
+pub const EVENT_USAGE: &str = "agent://usage";
 
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 64;
@@ -36,6 +37,9 @@ const MAX_REPORT_BYTES: u64 = 4096;
 const MAX_NOTIFY_FORWARD_ARGUMENTS: usize = 16;
 const MAX_NOTIFY_FORWARD_BYTES: usize = 8192;
 const MAX_LIFECYCLE_HOOK_BYTES: u64 = 1024 * 1024;
+const MAX_REPORTED_TOKENS_PER_REQUEST: u64 = 1_000_000_000_000;
+const MAX_REPORTED_USAGE_REQUESTS: usize = 4096;
+const MAX_SERIALIZED_USAGE_VALUE: u64 = (1_u64 << 53) - 1;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REPORT_RETRIES: usize = 5;
 const STARTUP_SEED_PROMPT_SETTLE: Duration = Duration::from_millis(120);
@@ -250,6 +254,35 @@ pub enum AgentStateSource {
     Integration,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub total_tokens: u64,
+    pub api_calls: u64,
+}
+
+impl AgentTokenUsage {
+    fn add_report(&mut self, report: &AgentUsageReport) {
+        let add = |current: u64, increment: u64| {
+            current
+                .saturating_add(increment)
+                .min(MAX_SERIALIZED_USAGE_VALUE)
+        };
+        self.input_tokens = add(self.input_tokens, report.input_tokens);
+        self.output_tokens = add(self.output_tokens, report.output_tokens);
+        self.cache_read_tokens = add(self.cache_read_tokens, report.cache_read_tokens);
+        self.cache_write_tokens = add(self.cache_write_tokens, report.cache_write_tokens);
+        self.reasoning_tokens = add(self.reasoning_tokens, report.reasoning_tokens);
+        self.total_tokens = add(self.total_tokens, report.total_tokens());
+        self.api_calls = add(self.api_calls, 1);
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionSummary {
@@ -270,6 +303,9 @@ pub struct AgentSessionSummary {
     pub state: AgentLifecycle,
     pub state_source: AgentStateSource,
     pub process_id: Option<u32>,
+    /// Token buckets reported by an authenticated semantic adapter. `None`
+    /// means this CLI has not supplied trustworthy usage data.
+    pub token_usage: Option<AgentTokenUsage>,
     /// The CLI's own session id, when its output announced one — the value
     /// native resume takes. Never guessed: absent until actually seen.
     pub captured_session_id: Option<String>,
@@ -394,12 +430,20 @@ struct AgentModelChanged {
     model: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentUsageChanged {
+    session_id: String,
+    token_usage: AgentTokenUsage,
+}
+
 pub trait AgentSink: Send + Sync + 'static {
     fn data(&self, session_id: &str, offset: u64, bytes: &[u8]);
     fn state(&self, session_id: &str, state: AgentLifecycle, source: AgentStateSource);
     fn closed(&self, session_id: &str, reason: &str);
     fn captured(&self, session_id: &str, native_session_id: &str);
     fn model(&self, session_id: &str, model: &str);
+    fn usage(&self, session_id: &str, token_usage: &AgentTokenUsage);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -463,6 +507,16 @@ impl AgentSink for EventSink {
             },
         );
     }
+
+    fn usage(&self, session_id: &str, token_usage: &AgentTokenUsage) {
+        let _ = self.0.emit(
+            EVENT_USAGE,
+            AgentUsageChanged {
+                session_id: session_id.to_string(),
+                token_usage: token_usage.clone(),
+            },
+        );
+    }
 }
 
 struct AgentSessionEntry {
@@ -487,6 +541,9 @@ struct AgentSessionEntry {
     /// delegated child. Keep their identities separate so a child finishing
     /// can never mark the main turn done.
     hermes_activity: Option<Mutex<HermesActivity>>,
+    /// Reporter retries must be idempotent: if the local acknowledgement is
+    /// lost, the same successful API request can be delivered more than once.
+    reported_usage_requests: Mutex<ReportedUsageRequests>,
     /// Keeps per-session integration files alive only as long as their PTY.
     _integration_settings: Option<AgentIntegrationSettings>,
 }
@@ -896,6 +953,77 @@ struct ReporterMessage {
     copilot_event: Option<CopilotReporterEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hermes_event: Option<HermesReporterEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usage: Option<AgentUsageReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentUsageReport {
+    source_session_id: String,
+    request_id: String,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
+    reasoning_tokens: u64,
+}
+
+impl AgentUsageReport {
+    fn total_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_write_tokens)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        for (label, value) in [
+            ("input", self.input_tokens),
+            ("output", self.output_tokens),
+            ("cache read", self.cache_read_tokens),
+            ("cache write", self.cache_write_tokens),
+            ("reasoning", self.reasoning_tokens),
+        ] {
+            if value > MAX_REPORTED_TOKENS_PER_REQUEST {
+                return Err(format!("Reported {label} token usage is too large."));
+            }
+        }
+        for (label, value) in [
+            ("source session", self.source_session_id.as_str()),
+            ("request", self.request_id.as_str()),
+        ] {
+            if value.is_empty()
+                || value.len() > MAX_RESUME_SESSION_ID_BYTES
+                || value.chars().any(char::is_control)
+            {
+                return Err(format!("Reported usage {label} id is invalid."));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+struct ReportedUsageRequests {
+    order: VecDeque<(String, String)>,
+    ids: HashSet<(String, String)>,
+}
+
+impl ReportedUsageRequests {
+    fn remember(&mut self, report: &AgentUsageReport) -> bool {
+        let key = (report.source_session_id.clone(), report.request_id.clone());
+        if !self.ids.insert(key.clone()) {
+            return false;
+        }
+        self.order.push_back(key);
+        if self.order.len() > MAX_REPORTED_USAGE_REQUESTS {
+            if let Some(expired) = self.order.pop_front() {
+                self.ids.remove(&expired);
+            }
+        }
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -1346,6 +1474,33 @@ impl AgentRegistry {
         Ok(self.update_state(session_id, next, AgentStateSource::Integration))
     }
 
+    fn update_reported_usage(
+        &self,
+        session_id: &str,
+        token: &str,
+        report: &AgentUsageReport,
+    ) -> Result<Option<AgentTokenUsage>, String> {
+        let entry = self.get(session_id)?;
+        if entry.report_token.as_deref() != Some(token) {
+            return Err("Reporter authentication failed.".to_string());
+        }
+        report.validate()?;
+        let is_new = entry
+            .reported_usage_requests
+            .lock()
+            .map_err(|error| error.to_string())?
+            .remember(report);
+        if !is_new {
+            return Ok(None);
+        }
+        let mut summary = entry.summary.lock().map_err(|error| error.to_string())?;
+        let usage = summary
+            .token_usage
+            .get_or_insert_with(AgentTokenUsage::default);
+        usage.add_report(report);
+        Ok(Some(usage.clone()))
+    }
+
     fn update_copilot_event(
         &self,
         session_id: &str,
@@ -1595,29 +1750,45 @@ fn handle_report_connection(mut stream: TcpStream, registry: &AgentRegistry, sin
         message.state,
         message.copilot_event.as_ref(),
         message.hermes_event.as_ref(),
+        message.usage.as_ref(),
     ) {
-        (Some(state), None, None) => registry
+        (Some(state), None, None, None) => registry
             .update_reported_state(&message.session_id, &message.token, state)
-            .map(|changed| Some((changed, state))),
-        (None, Some(event), None) => {
-            registry.update_copilot_event(&message.session_id, &message.token, event)
-        }
-        (None, None, Some(event)) => {
-            registry.update_hermes_event(&message.session_id, &message.token, event)
-        }
+            .map(|changed| Some(ReporterUpdate::State { changed, state })),
+        (None, Some(event), None, None) => registry
+            .update_copilot_event(&message.session_id, &message.token, event)
+            .map(|update| update.map(|(changed, state)| ReporterUpdate::State { changed, state })),
+        (None, None, Some(event), None) => registry
+            .update_hermes_event(&message.session_id, &message.token, event)
+            .map(|update| update.map(|(changed, state)| ReporterUpdate::State { changed, state })),
+        (None, None, None, Some(usage)) => registry
+            .update_reported_usage(&message.session_id, &message.token, usage)
+            .map(|usage| usage.map(ReporterUpdate::Usage)),
         _ => Err("Reporter message must contain exactly one update.".to_string()),
     };
     let accepted = match update {
-        Ok(Some((changed, state))) => {
+        Ok(Some(ReporterUpdate::State { changed, state })) => {
             if changed {
                 sink.state(&message.session_id, state, AgentStateSource::Integration);
             }
+            true
+        }
+        Ok(Some(ReporterUpdate::Usage(usage))) => {
+            sink.usage(&message.session_id, &usage);
             true
         }
         Ok(None) => true,
         Err(_) => false,
     };
     write_report_response(&mut stream, accepted);
+}
+
+enum ReporterUpdate {
+    State {
+        changed: bool,
+        state: AgentLifecycle,
+    },
+    Usage(AgentTokenUsage),
 }
 
 fn send_report_once(
@@ -1645,6 +1816,7 @@ fn send_report_once(
         state,
         copilot_event: copilot_event.cloned(),
         hermes_event: hermes_event.cloned(),
+        usage: None,
     })
     .map_err(|error| format!("Cannot encode the agent state: {error}"))?;
     if payload.len() as u64 > MAX_REPORT_BYTES {
@@ -1663,6 +1835,51 @@ fn send_report_once(
         Ok(())
     } else {
         Err("The agent reporter rejected the state update.".to_string())
+    }
+}
+
+fn send_usage_once(
+    address: SocketAddr,
+    session_id: &str,
+    token: &str,
+    usage: &AgentUsageReport,
+) -> Result<(), String> {
+    if !address.ip().is_loopback() {
+        return Err("The agent reporter address must be loopback-only.".to_string());
+    }
+    let mut stream = TcpStream::connect_timeout(&address, REPORT_TIMEOUT)
+        .map_err(|error| format!("Cannot reach the local agent reporter: {error}"))?;
+    stream
+        .set_read_timeout(Some(REPORT_TIMEOUT))
+        .map_err(|error| format!("Cannot configure the agent reporter: {error}"))?;
+    stream
+        .set_write_timeout(Some(REPORT_TIMEOUT))
+        .map_err(|error| format!("Cannot configure the agent reporter: {error}"))?;
+    let payload = serde_json::to_vec(&ReporterMessage {
+        session_id: session_id.to_string(),
+        token: token.to_string(),
+        state: None,
+        copilot_event: None,
+        hermes_event: None,
+        usage: Some(usage.clone()),
+    })
+    .map_err(|error| format!("Cannot encode the agent usage: {error}"))?;
+    if payload.len() as u64 > MAX_REPORT_BYTES {
+        return Err("The agent usage report is too large.".to_string());
+    }
+    stream
+        .write_all(&payload)
+        .and_then(|_| stream.shutdown(Shutdown::Write))
+        .map_err(|error| format!("Cannot send the agent usage: {error}"))?;
+    let mut response = String::new();
+    stream
+        .take(16)
+        .read_to_string(&mut response)
+        .map_err(|error| format!("Cannot read the agent reporter response: {error}"))?;
+    if response == "ok\n" {
+        Ok(())
+    } else {
+        Err("The agent reporter rejected the usage update.".to_string())
     }
 }
 
@@ -1721,6 +1938,25 @@ fn send_hermes_event(
         }
     }
     Err(last_error.unwrap_or_else(|| "The Hermes lifecycle report failed.".to_string()))
+}
+
+fn send_usage(
+    address: SocketAddr,
+    session_id: &str,
+    token: &str,
+    usage: &AgentUsageReport,
+) -> Result<(), String> {
+    let mut last_error = None;
+    for attempt in 0..REPORT_RETRIES {
+        match send_usage_once(address, session_id, token, usage) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        if attempt + 1 < REPORT_RETRIES {
+            std::thread::sleep(Duration::from_millis(40));
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "The agent usage report failed.".to_string()))
 }
 
 fn lifecycle_from_report_arg(value: &str) -> Option<AgentLifecycle> {
@@ -2431,11 +2667,29 @@ struct HermesHookPayload {
     #[serde(default)]
     child_session_id: Option<String>,
     #[serde(default)]
+    api_request_id: Option<String>,
+    #[serde(default)]
+    usage: Option<HermesHookUsage>,
+    #[serde(default)]
     completed: bool,
     #[serde(default)]
     failed: bool,
     #[serde(default)]
     interrupted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct HermesHookUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cache_read_tokens: u64,
+    #[serde(default)]
+    cache_write_tokens: u64,
+    #[serde(default)]
+    reasoning_tokens: u64,
 }
 
 fn valid_hermes_session_id(value: Option<String>, label: &str) -> Result<String, String> {
@@ -2497,6 +2751,28 @@ fn hermes_event_from_hook_payload(raw: &[u8]) -> Result<HermesReporterEvent, Str
     })
 }
 
+fn hermes_usage_from_hook_payload(raw: &[u8]) -> Result<AgentUsageReport, String> {
+    let payload: HermesHookPayload =
+        serde_json::from_slice(raw).map_err(|_| "Hermes hook payload is invalid.".to_string())?;
+    if payload.hook_event_name != "post_api_request" {
+        return Err("Hermes hook event is not a usage report.".to_string());
+    }
+    let usage = payload
+        .usage
+        .ok_or_else(|| "Hermes token usage is missing.".to_string())?;
+    let report = AgentUsageReport {
+        source_session_id: valid_hermes_session_id(payload.session_id, "source")?,
+        request_id: valid_hermes_session_id(payload.api_request_id, "request")?,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_write_tokens: usage.cache_write_tokens,
+        reasoning_tokens: usage.reasoning_tokens,
+    };
+    report.validate()?;
+    Ok(report)
+}
+
 fn report_hermes_hook_from_stdin() -> Result<(), String> {
     let mut payload = Vec::new();
     std::io::stdin()
@@ -2506,7 +2782,15 @@ fn report_hermes_hook_from_stdin() -> Result<(), String> {
     if payload.len() as u64 > MAX_LIFECYCLE_HOOK_BYTES {
         return Err("Hermes hook payload is too large.".to_string());
     }
-    report_hermes_event_from_environment(&hermes_event_from_hook_payload(&payload)?)
+    let hook_event_name = serde_json::from_slice::<serde_json::Value>(&payload)
+        .ok()
+        .and_then(|value| value.get("hook_event_name")?.as_str().map(str::to_string))
+        .ok_or_else(|| "Hermes hook payload is invalid.".to_string())?;
+    if hook_event_name == "post_api_request" {
+        report_usage_from_environment(&hermes_usage_from_hook_payload(&payload)?)
+    } else {
+        report_hermes_event_from_environment(&hermes_event_from_hook_payload(&payload)?)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2643,6 +2927,18 @@ fn report_hermes_event_from_environment(event: &HermesReporterEvent) -> Result<(
     let token = std::env::var("LATTICETERM_AGENT_REPORT_TOKEN")
         .map_err(|_| "Agent reporter token is unavailable.".to_string())?;
     send_hermes_event(address, &session_id, &token, event)
+}
+
+fn report_usage_from_environment(usage: &AgentUsageReport) -> Result<(), String> {
+    let address: SocketAddr = std::env::var("LATTICETERM_AGENT_REPORT_ADDR")
+        .map_err(|_| "Agent reporter environment is unavailable.".to_string())?
+        .parse()
+        .map_err(|_| "Agent reporter address is invalid.".to_string())?;
+    let session_id = std::env::var("LATTICETERM_AGENT_SESSION")
+        .map_err(|_| "Agent reporter session is unavailable.".to_string())?;
+    let token = std::env::var("LATTICETERM_AGENT_REPORT_TOKEN")
+        .map_err(|_| "Agent reporter token is unavailable.".to_string())?;
+    send_usage(address, &session_id, &token, usage)
 }
 
 fn decode_forward_notify(value: &str) -> Option<Vec<String>> {
@@ -4136,6 +4432,7 @@ pub fn launch_with_replay(
         state: AgentLifecycle::Working,
         state_source: AgentStateSource::Heuristic,
         process_id,
+        token_usage: None,
         // A session launched as a native resume already knows its id; a
         // fresh announcement in the output still overwrites it.
         captured_session_id: request.resume_session_id.clone(),
@@ -4176,6 +4473,7 @@ pub fn launch_with_replay(
         integrated_completion: AtomicBool::new(integrated_completion),
         copilot_activity,
         hermes_activity,
+        reported_usage_requests: Mutex::new(ReportedUsageRequests::default()),
         _integration_settings: integration_settings,
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
@@ -4417,6 +4715,7 @@ mod tests {
         closed: Mutex<Vec<String>>,
         captured: Mutex<Vec<(String, String)>>,
         models: Mutex<Vec<(String, String)>>,
+        usages: Mutex<Vec<(String, AgentTokenUsage)>>,
     }
 
     impl AgentSink for TestSink {
@@ -4457,6 +4756,13 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((session_id.to_string(), model.to_string()));
+        }
+
+        fn usage(&self, session_id: &str, token_usage: &AgentTokenUsage) {
+            self.usages
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), token_usage.clone()));
         }
     }
 
@@ -5146,7 +5452,8 @@ model = "gpt-5.3-codex"
             let answered = String::from_utf8_lossy(&output).contains("LATTICETERM_HERMES_OK");
             drop(output);
             let closed = !collector.closed.lock().unwrap().is_empty();
-            if (done && answered) || closed {
+            let usage_reported = !collector.usages.lock().unwrap().is_empty();
+            if (done && answered && usage_reported) || closed {
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -5162,9 +5469,15 @@ model = "gpt-5.3-codex"
         drop(states);
         let output = String::from_utf8_lossy(&collector.data.lock().unwrap()).to_string();
         let closed = collector.closed.lock().unwrap().clone();
+        let observed_usage = collector.usages.lock().unwrap().clone();
+        let latest_usage = observed_usage.last().map(|(_, usage)| usage);
         assert!(
-            integrated_done && output.contains("LATTICETERM_HERMES_OK"),
-            "states={observed_states:?} closed={closed:?} output={output:?}"
+            integrated_done
+                && output.contains("LATTICETERM_HERMES_OK")
+                && latest_usage.is_some_and(|usage| {
+                    usage.api_calls > 0 && usage.total_tokens > 0
+                }),
+            "states={observed_states:?} usage={observed_usage:?} closed={closed:?} output={output:?}"
         );
         disconnect(sink.as_ref(), registry.as_ref(), &session.session_id).unwrap();
     }
@@ -5718,9 +6031,12 @@ notify = ["notify.exe", "turn-ended"]"#,
         let observer = std::fs::read_to_string(bridge.join("__init__.py")).unwrap();
         assert!(manifest.contains("kind: backend"));
         assert!(manifest.contains("on_session_end"));
+        assert!(manifest.contains("post_api_request"));
         assert!(observer.contains("agent-hermes-hook"));
         assert!(observer.contains("child_session_id"));
+        assert!(observer.contains("_USAGE_FIELDS"));
         assert!(!observer.contains("user_message"));
+        assert!(!observer.contains("assistant_message"));
         assert!(!source.path().join(HERMES_REPORTER_PLUGIN_NAME).exists());
     }
 
@@ -5776,6 +6092,52 @@ notify = ["notify.exe", "turn-ended"]"#,
         assert!(hermes_event_from_hook_payload(oversized.to_string().as_bytes()).is_err());
         assert!(hermes_event_from_hook_payload(br#"{"hook_event_name":"unknown"}"#).is_err());
         assert!(hermes_event_from_hook_payload(b"not-json").is_err());
+
+        let usage = hermes_usage_from_hook_payload(
+            br#"{"hook_event_name":"post_api_request","session_id":"child","api_request_id":"turn-1:api:2","usage":{"input_tokens":120,"output_tokens":30,"cache_read_tokens":40,"cache_write_tokens":5,"reasoning_tokens":12}}"#,
+        )
+        .unwrap();
+        assert_eq!(usage.source_session_id, "child");
+        assert_eq!(usage.request_id, "turn-1:api:2");
+        assert_eq!(usage.total_tokens(), 195);
+        assert_eq!(usage.reasoning_tokens, 12);
+        assert!(hermes_usage_from_hook_payload(
+            br#"{"hook_event_name":"post_api_request","session_id":"main","api_request_id":"turn-1:api:1"}"#
+        )
+        .is_err());
+        assert!(hermes_usage_from_hook_payload(
+            format!(
+                r#"{{"hook_event_name":"post_api_request","session_id":"main","api_request_id":"turn-1:api:1","usage":{{"input_tokens":{}}}}}"#,
+                MAX_REPORTED_TOKENS_PER_REQUEST + 1
+            )
+            .as_bytes()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn reported_usage_totals_stay_exact_for_webview_numbers() {
+        let mut totals = AgentTokenUsage {
+            input_tokens: MAX_SERIALIZED_USAGE_VALUE - 1,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            reasoning_tokens: 0,
+            total_tokens: MAX_SERIALIZED_USAGE_VALUE - 1,
+            api_calls: MAX_SERIALIZED_USAGE_VALUE,
+        };
+        totals.add_report(&AgentUsageReport {
+            source_session_id: "main".to_string(),
+            request_id: "turn-1:api:1".to_string(),
+            input_tokens: 10,
+            output_tokens: 2,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            reasoning_tokens: 1,
+        });
+        assert_eq!(totals.input_tokens, MAX_SERIALIZED_USAGE_VALUE);
+        assert_eq!(totals.total_tokens, MAX_SERIALIZED_USAGE_VALUE);
+        assert_eq!(totals.api_calls, MAX_SERIALIZED_USAGE_VALUE);
     }
 
     #[test]
@@ -6225,6 +6587,35 @@ notify = ["notify.exe", "turn-ended"]"#,
             .iter()
             .any(|(_, state, source)| *state == AgentLifecycle::Done
                 && *source == AgentStateSource::Integration));
+
+        let usage = AgentUsageReport {
+            source_session_id: "child-session".to_string(),
+            request_id: "turn-1:api:1".to_string(),
+            input_tokens: 120,
+            output_tokens: 30,
+            cache_read_tokens: 40,
+            cache_write_tokens: 5,
+            reasoning_tokens: 12,
+        };
+        assert!(send_usage(address, &session.session_id, "wrong-token", &usage).is_err());
+        send_usage(address, &session.session_id, &token, &usage).unwrap();
+        // A lost acknowledgement can make the sidecar retry the same request;
+        // the authenticated request id keeps the totals idempotent.
+        send_usage(address, &session.session_id, &token, &usage).unwrap();
+        let summary = &registry.list()[0];
+        assert_eq!(
+            summary.token_usage,
+            Some(AgentTokenUsage {
+                input_tokens: 120,
+                output_tokens: 30,
+                cache_read_tokens: 40,
+                cache_write_tokens: 5,
+                reasoning_tokens: 12,
+                total_tokens: 195,
+                api_calls: 1,
+            })
+        );
+        assert_eq!(collector.usages.lock().unwrap().len(), 1);
 
         disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
     }

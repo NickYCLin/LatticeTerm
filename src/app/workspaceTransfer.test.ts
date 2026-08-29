@@ -23,6 +23,7 @@ function session(): AgentSessionSummary {
     state: "idle",
     stateSource: "heuristic",
     processId: 42,
+    tokenUsage: null,
     capturedSessionId: "local-conversation-id",
   };
 }

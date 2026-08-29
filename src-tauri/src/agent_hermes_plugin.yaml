@@ -1,11 +1,12 @@
 name: latticeterm-session-status-bridge
-version: "1.0.0"
+version: "1.1.0"
 kind: backend
-description: Process-scoped LatticeTerm lifecycle observer
+description: Process-scoped LatticeTerm lifecycle and token usage observer
 author: LatticeTerm
 hooks:
   - on_session_start
   - pre_llm_call
+  - post_api_request
   - on_session_end
   - subagent_start
   - subagent_stop

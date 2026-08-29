@@ -35,7 +35,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 - **六種主題**：深色、淺色、午夜藍、石墨黑、暖砂與高對比，另可跟隨系統；切換時原生標題列會一起換色。
 - **主機資源檢視**：活躍 SSH 工作階段可定期讀取 Linux 主機的 CPU、記憶體、磁碟與開機時間；未連線或不支援的平台會明確說明，不顯示假數值。
 - **本機持久化**：連線設定會存在本機的應用程式資料目錄，關閉再開仍在；檔案只含主機資訊，不含任何認證資料。
-- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、Google Antigravity CLI、OpenCode、Hermes 等 13 種本機 LLM CLI；未偵測到工具時可先確認固定的上游安裝指令，再開啟看得到完整輸出的安裝終端。目錄會顯示 Codex、Claude 與 Gemini 自己保存在本機的目前登入帳號標籤，但 token 不會進入 WebView。執行中的 CLI 會分開顯示工具名稱、分頁名稱，以及工具啟動畫面或 `--model` 實際回報的模型；沒有可靠值時會明確標成尚未回報。使用者可選擇保存一份工作區共用啟動指示，讓之後每個全新 CLI 進入互動提示後先讀取；自動還原的舊工作階段不會重送。內建繁中 Commit 範本採 `type(scope): subject`、Why／What 與單一意義提交，預設不啟用。通用 Reporter 讓工具 hook 明確回報狀態，並可在二次確認後將同一段提示送給多個已選 Agent。執行中的分頁可直接加開另一個 CLI；Codex 與 Claude 之間可選擇帶入目前對話，讓新的 CLI 接續脈絡，不必再手動設定 Session ID。啟動項目可加入選填備註並保存到可命名、排序的工作區；重新啟動已保存的 Codex 項目時，會續接同一工作目錄最近的對話，Cursor 項目則使用官方的最近對話續接。同一桌面程序內若 WebView 重新載入，活躍 PTY 會重新 attach 並重播最近 256 KiB 記憶體輸出；正常關閉桌面程式時，這段輸出會以 OS 安全儲存區中的裝置金鑰加密保存，下次還原同一項目時先重播。安全儲存區不可用時不會把輸出寫入磁碟。登入與 token 仍由各 CLI 自行管理。
+- **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、Google Antigravity CLI、OpenCode、Hermes 等 13 種本機 LLM CLI；未偵測到工具時可先確認固定的上游安裝指令，再開啟看得到完整輸出的安裝終端。目錄會顯示 Codex、Claude 與 Gemini 自己保存在本機的目前登入帳號標籤，但 token 不會進入 WebView。執行中的 CLI 會分開顯示工具名稱、分頁名稱，以及工具啟動畫面或 `--model` 實際回報的模型；沒有可靠值時會明確標成尚未回報。使用者可選擇保存一份工作區共用啟動指示，讓之後每個全新 CLI 進入互動提示後先讀取；自動還原的舊工作階段不會重送。內建繁中 Commit 範本採 `type(scope): subject`、Why／What 與單一意義提交，預設不啟用。通用 Reporter 讓工具 hook 明確回報狀態；Hermes 也會透過官方 `post_api_request` hook 顯示該工作階段與子 Agent 累計的可信 token buckets，不讀取提示或回覆內容。使用者可在二次確認後將同一段提示送給多個已選 Agent。執行中的分頁可直接加開另一個 CLI；Codex 與 Claude 之間可選擇帶入目前對話，讓新的 CLI 接續脈絡，不必再手動設定 Session ID。啟動項目可加入選填備註並保存到可命名、排序的工作區；重新啟動已保存的 Codex 項目時，會續接同一工作目錄最近的對話，Cursor 項目則使用官方的最近對話續接。同一桌面程序內若 WebView 重新載入，活躍 PTY 會重新 attach 並重播最近 256 KiB 記憶體輸出；正常關閉桌面程式時，這段輸出會以 OS 安全儲存區中的裝置金鑰加密保存，下次還原同一項目時先重播。安全儲存區不可用時不會把輸出寫入磁碟。登入與 token 仍由各 CLI 自行管理。
 - **可靠的 Agent 狀態**：Codex、Claude Code、Gemini CLI、OpenCode、GitHub Copilot CLI、Hermes Agent 與 Qwen Code 會以各自官方 lifecycle hook／plugin event 明確回報工作中、完成或等待權限；Claude 與 Qwen 尚有背景工作或排程時不會誤標完成，OpenCode、Copilot 與 Hermes 的子 Agent 結束也不會被當成主工作階段完成。Gemini、OpenCode、Copilot、Hermes 與 Qwen 的整合只套用在該次 LatticeTerm 工作階段，不改使用者設定；若主機已有不可安全合併的程序級設定、專案停用所有 hooks、無法辨識 Hermes 安裝結構，或 CLI 以 pure／safe／bare mode 啟動，就保留原設定並使用保守 heuristic。其他尚未整合 hook 的工具也只使用保守的終端提示 heuristic。
 - **SSH 連線**：以純 Rust 的 russh 實作，可使用密碼或本機 OpenSSH 私鑰建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼預設只用於當次連線，使用者可在驗證成功後明確保存到系統認證儲存區，私鑰內容與密語不會保存至連線設定。執行中的 SSH 分頁可一鍵「開啟檔案總管」，以同一台主機、同一組認證開啟 SFTP 圖形化檔案瀏覽（已保存密碼免再輸入）。
 - **SSH Tunnel**：可建立本機、遠端與 SOCKS5 動態轉送，顯示即時狀態與連線數；動態代理若未設定驗證只允許綁定 loopback，遠端轉送則依 SSH 伺服器的 GatewayPorts 政策生效。
@@ -76,7 +76,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 
 1. **Lattice Remote 連線範圍**：鍵盤／滑鼠遠端控制已可用（由分享端明確授權）；免帳戶數字裝置 ID、自架 Relay（`docs/RELAY_SERVER.zh-TW.md`）、裝置金鑰釘選（TOFU）與固定配對碼無人值守已可用；接著加入 NAT 直連穿透。連線清單先保存在本機，帳戶只作為日後跨裝置同步與團隊權限的選配層。
 2. **Agent 常駐與遠端能力**：把 PTY owner 抽成使用者自行啟動的背景 daemon，支援跨程序重新 attach，並先以 SSH transport 實作遠端 Agent Fleet。
-3. **Agent 編排與隔離**：補齊工具 hook、token／cost 可觀測事件、依賴圖、佇列、排程、資源限制與每 Agent 沙箱／檔案範圍策略。
+3. **Agent 編排與隔離**：補齊其他工具的 hook 與 token／cost 可觀測事件、依賴圖、佇列、排程、資源限制與每 Agent 沙箱／檔案範圍策略。
 4. **平台完整度**：設計安全的 Windows npm shim adapter、持續強化 Android 發行流程，並在 macOS／Xcode 環境啟動 iOS 建置與驗證。
 5. **正式發行信任**：自動更新包已有 Tauri 簽章；Windows Authenticode 與 Apple Developer ID／notarization 仍需發行者憑證。
 
