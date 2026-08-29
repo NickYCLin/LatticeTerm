@@ -40,6 +40,8 @@ const MAX_LIFECYCLE_HOOK_BYTES: u64 = 1024 * 1024;
 const MAX_REPORTED_TOKENS_PER_REQUEST: u64 = 1_000_000_000_000;
 const MAX_REPORTED_USAGE_REQUESTS: usize = 4096;
 const MAX_SERIALIZED_USAGE_VALUE: u64 = (1_u64 << 53) - 1;
+const MAX_STAGED_IMAGES_PER_SESSION: usize = 32;
+const MAX_STAGED_IMAGE_BYTES_PER_SESSION: u64 = 256 * 1024 * 1024;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REPORT_RETRIES: usize = 5;
 const STARTUP_SEED_PROMPT_SETTLE: Duration = Duration::from_millis(120);
@@ -546,6 +548,45 @@ struct AgentSessionEntry {
     reported_usage_requests: Mutex<ReportedUsageRequests>,
     /// Keeps per-session integration files alive only as long as their PTY.
     _integration_settings: Option<AgentIntegrationSettings>,
+    /// Clipboard images may contain sensitive material. Keep their temporary
+    /// paths tied to this PTY instead of leaking permanent files into /tmp.
+    staged_images: Mutex<StagedAgentImages>,
+}
+
+#[derive(Default)]
+struct StagedAgentImages {
+    files: Vec<tempfile::TempPath>,
+    total_bytes: u64,
+}
+
+impl StagedAgentImages {
+    fn add(&mut self, file: tempfile::NamedTempFile) -> Result<PathBuf, String> {
+        let bytes = file
+            .as_file()
+            .metadata()
+            .map_err(|error| format!("Cannot inspect the staged clipboard image: {error}"))?
+            .len();
+        let total_bytes = self
+            .total_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| "Staged clipboard image storage is too large.".to_string())?;
+        if self.files.len() >= MAX_STAGED_IMAGES_PER_SESSION {
+            return Err("This agent session has too many staged clipboard images.".to_string());
+        }
+        if total_bytes > MAX_STAGED_IMAGE_BYTES_PER_SESSION {
+            return Err("This agent session's staged clipboard images are too large.".to_string());
+        }
+
+        let path = file.path().to_path_buf();
+        self.files.push(file.into_temp_path());
+        self.total_bytes = total_bytes;
+        Ok(path)
+    }
+
+    fn clear(&mut self) {
+        self.files.clear();
+        self.total_bytes = 0;
+    }
 }
 
 enum AgentIntegrationSettings {
@@ -1353,7 +1394,11 @@ impl AgentRegistry {
     }
 
     fn remove(&self, session_id: &str) -> Option<Arc<AgentSessionEntry>> {
-        self.sessions.lock().ok()?.remove(session_id)
+        let entry = self.sessions.lock().ok()?.remove(session_id)?;
+        if let Ok(mut images) = entry.staged_images.lock() {
+            images.clear();
+        }
+        Some(entry)
     }
 
     fn update_state(
@@ -1634,6 +1679,20 @@ impl AgentRegistry {
         snapshots
     }
 
+    /// Retains an owner-only clipboard image only while its target PTY exists.
+    pub fn stage_clipboard_image(
+        &self,
+        session_id: &str,
+        file: tempfile::NamedTempFile,
+    ) -> Result<PathBuf, String> {
+        let entry = self.get(session_id)?;
+        let mut images = entry
+            .staged_images
+            .lock()
+            .map_err(|error| error.to_string())?;
+        images.add(file)
+    }
+
     pub fn terminal_history_snapshots(&self) -> Vec<AgentTerminalHistorySnapshot> {
         let Ok(sessions) = self.sessions.lock() else {
             return Vec::new();
@@ -1666,6 +1725,9 @@ impl AgentRegistry {
         };
         for entry in entries {
             let _ = terminate_agent_entry(entry.as_ref());
+            if let Ok(mut images) = entry.staged_images.lock() {
+                images.clear();
+            }
         }
     }
 }
@@ -4475,6 +4537,7 @@ pub fn launch_with_replay(
         hermes_activity,
         reported_usage_requests: Mutex::new(ReportedUsageRequests::default()),
         _integration_settings: integration_settings,
+        staged_images: Mutex::new(StagedAgentImages::default()),
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
         let _ = terminate_agent_entry(entry.as_ref());
@@ -6906,6 +6969,120 @@ notify = ["notify.exe", "turn-ended"]"#,
         assert!(sink.closed.lock().unwrap().is_empty());
     }
 
+    #[test]
+    fn a_clipboard_image_for_a_missing_session_is_not_left_on_disk() {
+        let registry = AgentRegistry::new();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+
+        assert!(registry
+            .stage_clipboard_image("agent-missing", file)
+            .is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn staged_clipboard_images_have_a_per_session_count_limit() {
+        let mut images = StagedAgentImages::default();
+        let mut paths = Vec::new();
+        for _ in 0..MAX_STAGED_IMAGES_PER_SESSION {
+            let file = tempfile::NamedTempFile::new().unwrap();
+            paths.push(images.add(file).unwrap());
+        }
+        let rejected = tempfile::NamedTempFile::new().unwrap();
+        let rejected_path = rejected.path().to_path_buf();
+
+        assert!(images.add(rejected).is_err());
+        assert!(!rejected_path.exists());
+        assert!(paths.iter().all(|path| path.exists()));
+
+        images.clear();
+        assert!(paths.iter().all(|path| !path.exists()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disconnect_removes_staged_clipboard_images() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let sink: Arc<dyn AgentSink> = Arc::new(TestSink::default());
+        let registry = Arc::new(AgentRegistry::new());
+        let session = launch(
+            sink.clone(),
+            registry.clone(),
+            AgentLaunchRequest {
+                definition_id: "custom".to_string(),
+                label: "Clipboard cleanup".to_string(),
+                executable: "/bin/cat".to_string(),
+                arguments: Vec::new(),
+                resume_session_id: None,
+                group_id: None,
+                seed_input: None,
+                restore_existing_session: false,
+                working_directory: std::env::current_dir().unwrap().display().to_string(),
+                cols: 80,
+                rows: 24,
+            },
+        )
+        .unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"private clipboard image").unwrap();
+        let path = registry
+            .stage_clipboard_image(&session.session_id, file)
+            .unwrap();
+
+        assert!(path.exists());
+        assert_eq!(path.metadata().unwrap().permissions().mode() & 0o077, 0);
+
+        disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn natural_process_exit_removes_staged_clipboard_images() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        let session = launch(
+            sink.clone(),
+            registry.clone(),
+            AgentLaunchRequest {
+                definition_id: "custom".to_string(),
+                label: "Natural clipboard cleanup".to_string(),
+                executable: "/bin/sh".to_string(),
+                arguments: Vec::new(),
+                resume_session_id: None,
+                group_id: None,
+                seed_input: None,
+                restore_existing_session: false,
+                working_directory: std::env::current_dir().unwrap().display().to_string(),
+                cols: 80,
+                rows: 24,
+            },
+        )
+        .unwrap();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = registry
+            .stage_clipboard_image(&session.session_id, file)
+            .unwrap();
+
+        send_bytes(sink.as_ref(), &registry, &session.session_id, b"exit\r").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && path.exists() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(!path.exists());
+        assert!(registry.session_summary(&session.session_id).is_none());
+        assert!(collector
+            .closed
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|reason| reason.starts_with("Process exited:")));
+    }
+
     #[cfg(unix)]
     #[test]
     fn broadcast_fans_out_to_each_selected_pty() {
@@ -6993,11 +7170,17 @@ notify = ["notify.exe", "turn-ended"]"#,
             cols: 80,
             rows: 24,
         };
-        launch(sink, registry.clone(), request).unwrap();
+        let session = launch(sink, registry.clone(), request).unwrap();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = registry
+            .stage_clipboard_image(&session.session_id, file)
+            .unwrap();
         assert_eq!(registry.list().len(), 1);
+        assert!(path.exists());
 
         registry.stop_all();
 
         assert!(registry.list().is_empty());
+        assert!(!path.exists());
     }
 }

@@ -68,6 +68,36 @@ type AppStorage = Mutex<FileStorage>;
 type AppAgentHistory = Mutex<AgentTerminalHistoryStore>;
 type AppAgentPlans = Mutex<FileAgentPlanStore>;
 
+const MAX_CLIPBOARD_IMAGE_EDGE: u32 = 16_384;
+const MAX_CLIPBOARD_IMAGE_PIXELS: usize = 32 * 1024 * 1024;
+
+fn validate_clipboard_image(width: u32, height: u32, rgba_bytes: usize) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err("The clipboard image is empty.".to_string());
+    }
+    if width > MAX_CLIPBOARD_IMAGE_EDGE || height > MAX_CLIPBOARD_IMAGE_EDGE {
+        return Err("The clipboard image dimensions are too large.".to_string());
+    }
+    let pixels = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .ok_or_else(|| "The clipboard image dimensions are invalid.".to_string())?;
+    if pixels > MAX_CLIPBOARD_IMAGE_PIXELS {
+        return Err("The clipboard image contains too many pixels.".to_string());
+    }
+    let expected_bytes = pixels
+        .checked_mul(4)
+        .ok_or_else(|| "The clipboard image size is invalid.".to_string())?;
+    if rgba_bytes != expected_bytes {
+        return Err("The clipboard image pixel data is invalid.".to_string());
+    }
+    Ok(())
+}
+
 /// The trust store, or the reason it could not be opened.
 ///
 /// An unreadable trust file must never degrade into an empty one: that would
@@ -412,11 +442,14 @@ fn agent_broadcast(
 fn agent_paste_clipboard_image(
     app: AppHandle,
     session_id: String,
+    registry: State<'_, Arc<AgentRegistry>>,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
-    // Reserved for future per-session scoping; kept so the wire contract is
-    // stable if we ever route pastes to a session-specific staging area.
-    let _ = session_id;
+
+    // Validate the target before reading potentially sensitive clipboard data.
+    if registry.session_summary(&session_id).is_none() {
+        return Err("Agent session no longer exists.".to_string());
+    }
 
     let image = match app.clipboard().read_image() {
         Ok(image) => image,
@@ -428,6 +461,7 @@ fn agent_paste_clipboard_image(
         return Ok(None);
     }
     let rgba = image.rgba().to_vec();
+    validate_clipboard_image(width, height, rgba.len())?;
 
     let mut file = tempfile::Builder::new()
         .prefix("latticeterm-clip-")
@@ -446,9 +480,7 @@ fn agent_paste_clipboard_image(
             .write_image_data(&rgba)
             .map_err(|err| format!("Cannot encode the pasted image: {err}"))?;
     }
-    let (_, path) = file
-        .keep()
-        .map_err(|err| format!("Cannot save the pasted image: {err}"))?;
+    let path = registry.stage_clipboard_image(&session_id, file)?;
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
@@ -1962,5 +1994,14 @@ mod tests {
 
         assert!(storage.delete_profile("p1").unwrap());
         assert_eq!(storage.get_profile("p1").unwrap(), None);
+    }
+
+    #[test]
+    fn clipboard_images_have_bounded_consistent_rgba_data() {
+        assert!(validate_clipboard_image(32, 32, 32 * 32 * 4).is_ok());
+        assert!(validate_clipboard_image(0, 32, 0).is_err());
+        assert!(validate_clipboard_image(MAX_CLIPBOARD_IMAGE_EDGE + 1, 1, 4).is_err());
+        assert!(validate_clipboard_image(8192, 8192, 8192 * 8192 * 4).is_err());
+        assert!(validate_clipboard_image(32, 32, 32 * 32 * 3).is_err());
     }
 }
