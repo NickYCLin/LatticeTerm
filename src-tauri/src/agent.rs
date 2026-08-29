@@ -479,14 +479,29 @@ struct AgentSessionEntry {
     /// An official CLI lifecycle hook will report completion for this session,
     /// so prompt-rendering control codes must never guess that it is done.
     integrated_completion: AtomicBool,
+    /// Copilot can leave background subagents running after its main agent
+    /// emits Stop. Track them independently so Stop is not mistaken for the
+    /// end of all work in the PTY.
+    copilot_activity: Option<Mutex<CopilotActivity>>,
     /// Keeps per-session integration files alive only as long as their PTY.
     _integration_settings: Option<AgentIntegrationSettings>,
 }
 
 enum AgentIntegrationSettings {
+    Copilot(CopilotReporterPlugin),
     Gemini(tempfile::NamedTempFile),
     Qwen(tempfile::NamedTempFile),
     OpenCode(OpenCodeReporterPlugin),
+}
+
+struct CopilotReporterPlugin {
+    directory: tempfile::TempDir,
+}
+
+impl CopilotReporterPlugin {
+    fn path(&self) -> &Path {
+        self.directory.path()
+    }
 }
 
 struct OpenCodeReporterPlugin {
@@ -860,7 +875,149 @@ struct ReporterEndpoint {
 struct ReporterMessage {
     session_id: String,
     token: String,
-    state: AgentLifecycle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state: Option<AgentLifecycle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    copilot_event: Option<CopilotReporterEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CopilotReporterEvent {
+    source_session_id: String,
+    #[serde(flatten)]
+    action: CopilotReporterAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum CopilotReporterAction {
+    SessionStarted,
+    TurnStarted,
+    Working,
+    Stop,
+    NeedsAttention,
+    RecoverableError,
+    FatalError,
+    BackgroundSubagentQueued,
+    SubagentStart {
+        #[serde(rename = "agentName")]
+        agent_name: String,
+    },
+    SubagentStop {
+        #[serde(rename = "agentName")]
+        agent_name: String,
+    },
+    BackgroundCompleted,
+    BackgroundIdle,
+}
+
+#[derive(Debug, Default)]
+struct CopilotActivity {
+    primary_session_id: Option<String>,
+    main_stopped: bool,
+    fatal_error: bool,
+    pending_background_subagents: usize,
+    active_subagents: HashMap<String, usize>,
+}
+
+impl CopilotActivity {
+    fn begin_turn(&mut self) {
+        self.main_stopped = false;
+        self.fatal_error = false;
+    }
+
+    fn has_background_work(&self) -> bool {
+        self.pending_background_subagents > 0 || !self.active_subagents.is_empty()
+    }
+
+    fn is_primary(&self, source_session_id: &str) -> bool {
+        self.primary_session_id.as_deref() == Some(source_session_id)
+    }
+
+    fn apply(&mut self, event: &CopilotReporterEvent) -> Option<AgentLifecycle> {
+        match &event.action {
+            CopilotReporterAction::SessionStarted => {
+                self.primary_session_id
+                    .get_or_insert_with(|| event.source_session_id.clone());
+                None
+            }
+            CopilotReporterAction::TurnStarted => {
+                self.primary_session_id
+                    .get_or_insert_with(|| event.source_session_id.clone());
+                if self.is_primary(&event.source_session_id) {
+                    self.begin_turn();
+                }
+                Some(AgentLifecycle::Working)
+            }
+            CopilotReporterAction::Working | CopilotReporterAction::RecoverableError => {
+                Some(AgentLifecycle::Working)
+            }
+            CopilotReporterAction::Stop if !self.is_primary(&event.source_session_id) => None,
+            CopilotReporterAction::Stop => {
+                self.main_stopped = true;
+                Some(if self.fatal_error {
+                    AgentLifecycle::NeedsAttention
+                } else if !self.has_background_work() {
+                    AgentLifecycle::Done
+                } else {
+                    AgentLifecycle::Working
+                })
+            }
+            CopilotReporterAction::NeedsAttention => Some(AgentLifecycle::NeedsAttention),
+            CopilotReporterAction::FatalError => {
+                if self.is_primary(&event.source_session_id) {
+                    self.fatal_error = true;
+                }
+                Some(AgentLifecycle::NeedsAttention)
+            }
+            CopilotReporterAction::BackgroundSubagentQueued => {
+                self.pending_background_subagents =
+                    self.pending_background_subagents.saturating_add(1);
+                Some(AgentLifecycle::Working)
+            }
+            CopilotReporterAction::SubagentStart { agent_name } => {
+                self.pending_background_subagents =
+                    self.pending_background_subagents.saturating_sub(1);
+                *self.active_subagents.entry(agent_name.clone()).or_default() += 1;
+                Some(AgentLifecycle::Working)
+            }
+            CopilotReporterAction::SubagentStop { agent_name } => {
+                if let Some(count) = self.active_subagents.get_mut(agent_name) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        self.active_subagents.remove(agent_name);
+                    }
+                }
+                Some(if self.main_stopped && self.fatal_error {
+                    AgentLifecycle::NeedsAttention
+                } else if self.main_stopped && !self.has_background_work() {
+                    AgentLifecycle::Done
+                } else {
+                    AgentLifecycle::Working
+                })
+            }
+            CopilotReporterAction::BackgroundCompleted | CopilotReporterAction::BackgroundIdle => {
+                // Older Copilot versions may notify completion without a
+                // matching subagentStart/subagentStop pair. Consume only the
+                // pending launch so current versions cannot double-decrement
+                // their independently tracked active subagents.
+                self.pending_background_subagents =
+                    self.pending_background_subagents.saturating_sub(1);
+                if !self.main_stopped {
+                    None
+                } else if self.fatal_error {
+                    Some(AgentLifecycle::NeedsAttention)
+                } else if self.has_background_work() {
+                    Some(AgentLifecycle::Working)
+                } else if matches!(&event.action, CopilotReporterAction::BackgroundIdle) {
+                    Some(AgentLifecycle::Idle)
+                } else {
+                    Some(AgentLifecycle::Done)
+                }
+            }
+        }
+    }
 }
 
 fn agent_session_limit_reached(session_count: usize) -> bool {
@@ -970,6 +1127,11 @@ impl AgentRegistry {
         let Ok(entry) = self.get(session_id) else {
             return false;
         };
+        if let Some(activity) = &entry.copilot_activity {
+            if let Ok(mut activity) = activity.lock() {
+                activity.begin_turn();
+            }
+        }
         let Ok(mut summary) = entry.summary.lock() else {
             return false;
         };
@@ -1045,6 +1207,33 @@ impl AgentRegistry {
         // disabled by a higher-precedence user mode.
         entry.integrated_completion.store(true, Ordering::Release);
         Ok(self.update_state(session_id, next, AgentStateSource::Integration))
+    }
+
+    fn update_copilot_event(
+        &self,
+        session_id: &str,
+        token: &str,
+        event: &CopilotReporterEvent,
+    ) -> Result<Option<(bool, AgentLifecycle)>, String> {
+        let entry = self.get(session_id)?;
+        if entry.report_token.as_deref() != Some(token) {
+            return Err("Reporter authentication failed.".to_string());
+        }
+        let activity = entry
+            .copilot_activity
+            .as_ref()
+            .ok_or_else(|| "Copilot lifecycle tracking is unavailable.".to_string())?;
+        let next = activity
+            .lock()
+            .map_err(|error| error.to_string())?
+            .apply(event);
+        entry.integrated_completion.store(true, Ordering::Release);
+        Ok(next.map(|next| {
+            (
+                self.update_state(session_id, next, AgentStateSource::Integration),
+                next,
+            )
+        }))
     }
 
     #[cfg(test)]
@@ -1238,20 +1427,25 @@ fn handle_report_connection(mut stream: TcpStream, registry: &AgentRegistry, sin
         write_report_response(&mut stream, false);
         return;
     };
-    let accepted =
-        match registry.update_reported_state(&message.session_id, &message.token, message.state) {
-            Ok(changed) => {
-                if changed {
-                    sink.state(
-                        &message.session_id,
-                        message.state,
-                        AgentStateSource::Integration,
-                    );
-                }
-                true
+    let update = if let Some(event) = message.copilot_event.as_ref() {
+        registry.update_copilot_event(&message.session_id, &message.token, event)
+    } else if let Some(state) = message.state {
+        registry
+            .update_reported_state(&message.session_id, &message.token, state)
+            .map(|changed| Some((changed, state)))
+    } else {
+        Err("Reporter state is missing.".to_string())
+    };
+    let accepted = match update {
+        Ok(Some((changed, state))) => {
+            if changed {
+                sink.state(&message.session_id, state, AgentStateSource::Integration);
             }
-            Err(_) => false,
-        };
+            true
+        }
+        Ok(None) => true,
+        Err(_) => false,
+    };
     write_report_response(&mut stream, accepted);
 }
 
@@ -1259,7 +1453,8 @@ fn send_report_once(
     address: SocketAddr,
     session_id: &str,
     token: &str,
-    state: AgentLifecycle,
+    state: Option<AgentLifecycle>,
+    copilot_event: Option<&CopilotReporterEvent>,
 ) -> Result<(), String> {
     if !address.ip().is_loopback() {
         return Err("The agent reporter address must be loopback-only.".to_string());
@@ -1276,6 +1471,7 @@ fn send_report_once(
         session_id: session_id.to_string(),
         token: token.to_string(),
         state,
+        copilot_event: copilot_event.cloned(),
     })
     .map_err(|error| format!("Cannot encode the agent state: {error}"))?;
     if payload.len() as u64 > MAX_REPORT_BYTES {
@@ -1305,7 +1501,7 @@ fn send_report(
 ) -> Result<(), String> {
     let mut last_error = None;
     for attempt in 0..REPORT_RETRIES {
-        match send_report_once(address, session_id, token, state) {
+        match send_report_once(address, session_id, token, Some(state), None) {
             Ok(()) => return Ok(()),
             Err(error) => last_error = Some(error),
         }
@@ -1314,6 +1510,25 @@ fn send_report(
         }
     }
     Err(last_error.unwrap_or_else(|| "The agent state report failed.".to_string()))
+}
+
+fn send_copilot_event(
+    address: SocketAddr,
+    session_id: &str,
+    token: &str,
+    event: &CopilotReporterEvent,
+) -> Result<(), String> {
+    let mut last_error = None;
+    for attempt in 0..REPORT_RETRIES {
+        match send_report_once(address, session_id, token, None, Some(event)) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        if attempt + 1 < REPORT_RETRIES {
+            std::thread::sleep(Duration::from_millis(40));
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "The Copilot lifecycle report failed.".to_string()))
 }
 
 fn lifecycle_from_report_arg(value: &str) -> Option<AgentLifecycle> {
@@ -1601,6 +1816,77 @@ fn qwen_reporter_settings_file(
     Ok(Some(file))
 }
 
+fn copilot_reporter_command(event: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "command",
+        "bash": format!(
+            "\"$LATTICETERM_AGENT_REPORTER\" agent-copilot-hook {event}"
+        ),
+        "powershell": format!(
+            "& \"$env:LATTICETERM_AGENT_REPORTER\" agent-copilot-hook {event}"
+        ),
+        "timeoutSec": 5
+    })
+}
+
+fn copilot_reporter_hooks_value() -> serde_json::Value {
+    let hook = |event: &str, matcher: Option<&str>| {
+        let mut value = copilot_reporter_command(event);
+        if let Some(matcher) = matcher {
+            value["matcher"] = serde_json::Value::String(matcher.to_string());
+        }
+        serde_json::Value::Array(vec![value])
+    };
+    serde_json::json!({
+        "version": 1,
+        "hooks": {
+            "sessionStart": hook("sessionStart", None),
+            "userPromptSubmitted": hook("userPromptSubmitted", None),
+            "postToolUse": hook("postToolUse", None),
+            "postToolUseFailure": hook("postToolUseFailure", None),
+            "agentStop": hook("agentStop", None),
+            "permissionRequest": hook("permissionRequest", None),
+            "notification": hook(
+                "notification",
+                Some("permission_prompt|elicitation_dialog|agent_completed|agent_idle")
+            ),
+            "errorOccurred": hook("errorOccurred", None),
+            "subagentStart": hook("subagentStart", None),
+            "subagentStop": hook("subagentStop", None)
+        }
+    })
+}
+
+fn write_copilot_reporter_plugin() -> Result<CopilotReporterPlugin, String> {
+    let directory = tempfile::Builder::new()
+        .prefix("latticeterm-copilot-status-")
+        .tempdir()
+        .map_err(|error| format!("Cannot create Copilot status plugin: {error}"))?;
+    let manifest = serde_json::json!({
+        "name": "latticeterm-agent-status",
+        "version": "1.0.0",
+        "hooks": "hooks.json"
+    });
+    let manifest = serde_json::to_vec(&manifest)
+        .map_err(|error| format!("Cannot encode Copilot status plugin: {error}"))?;
+    let hooks = serde_json::to_vec(&copilot_reporter_hooks_value())
+        .map_err(|error| format!("Cannot encode Copilot status hooks: {error}"))?;
+    std::fs::write(directory.path().join("plugin.json"), manifest)
+        .map_err(|error| format!("Cannot write Copilot status plugin: {error}"))?;
+    std::fs::write(directory.path().join("hooks.json"), hooks)
+        .map_err(|error| format!("Cannot write Copilot status hooks: {error}"))?;
+    Ok(CopilotReporterPlugin { directory })
+}
+
+fn copilot_reporter_arguments(
+    mut arguments: Vec<String>,
+    plugin: &CopilotReporterPlugin,
+) -> Vec<String> {
+    arguments.insert(0, plugin.path().display().to_string());
+    arguments.insert(0, "--plugin-dir".to_string());
+    arguments
+}
+
 const OPENCODE_REPORTER_PLUGIN: &str = include_str!("agent_opencode_plugin.js");
 
 fn opencode_reporter_allowed(
@@ -1791,6 +2077,106 @@ fn report_qwen_hook_from_stdin() -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CopilotHookPayload {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    agent_name: Option<String>,
+    #[serde(default, alias = "notification_type")]
+    notification_type: Option<String>,
+    #[serde(default)]
+    recoverable: Option<bool>,
+    #[serde(default)]
+    tool_name: Option<String>,
+    #[serde(default)]
+    tool_args: Option<serde_json::Value>,
+}
+
+fn valid_copilot_session_id(value: Option<String>) -> Result<String, String> {
+    let value = value.ok_or_else(|| "Copilot hook session id is missing.".to_string())?;
+    if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+        return Err("Copilot hook session id is invalid.".to_string());
+    }
+    Ok(value)
+}
+
+fn valid_copilot_agent_name(value: Option<String>) -> Result<String, String> {
+    let value = value.ok_or_else(|| "Copilot subagent name is missing.".to_string())?;
+    if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+        return Err("Copilot subagent name is invalid.".to_string());
+    }
+    Ok(value)
+}
+
+fn copilot_event_from_hook_payload(
+    event: &str,
+    raw: &[u8],
+) -> Result<Option<CopilotReporterEvent>, String> {
+    let payload: CopilotHookPayload =
+        serde_json::from_slice(raw).map_err(|_| "Copilot hook payload is invalid.".to_string())?;
+    let action = match event {
+        "sessionStart" => Some(CopilotReporterAction::SessionStarted),
+        "userPromptSubmitted" => Some(CopilotReporterAction::TurnStarted),
+        "postToolUse"
+            if payload.tool_name.as_deref() == Some("task")
+                && payload
+                    .tool_args
+                    .as_ref()
+                    .and_then(|args| args.get("mode"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("background") =>
+        {
+            Some(CopilotReporterAction::BackgroundSubagentQueued)
+        }
+        "postToolUse" | "postToolUseFailure" => Some(CopilotReporterAction::Working),
+        "agentStop" => Some(CopilotReporterAction::Stop),
+        "permissionRequest" => Some(CopilotReporterAction::NeedsAttention),
+        "notification" => match payload.notification_type.as_deref() {
+            Some("permission_prompt" | "elicitation_dialog") => {
+                Some(CopilotReporterAction::NeedsAttention)
+            }
+            Some("agent_completed") => Some(CopilotReporterAction::BackgroundCompleted),
+            Some("agent_idle") => Some(CopilotReporterAction::BackgroundIdle),
+            _ => None,
+        },
+        "errorOccurred" if payload.recoverable == Some(true) => {
+            Some(CopilotReporterAction::RecoverableError)
+        }
+        "errorOccurred" => Some(CopilotReporterAction::FatalError),
+        "subagentStart" => Some(CopilotReporterAction::SubagentStart {
+            agent_name: valid_copilot_agent_name(payload.agent_name)?,
+        }),
+        "subagentStop" => Some(CopilotReporterAction::SubagentStop {
+            agent_name: valid_copilot_agent_name(payload.agent_name)?,
+        }),
+        _ => return Err("Copilot hook event is unknown.".to_string()),
+    };
+    let Some(action) = action else {
+        return Ok(None);
+    };
+    Ok(Some(CopilotReporterEvent {
+        source_session_id: valid_copilot_session_id(payload.session_id)?,
+        action,
+    }))
+}
+
+fn report_copilot_hook_from_stdin(event: &str) -> Result<(), String> {
+    let mut payload = Vec::new();
+    std::io::stdin()
+        .take(MAX_LIFECYCLE_HOOK_BYTES + 1)
+        .read_to_end(&mut payload)
+        .map_err(|error| format!("Cannot read the Copilot hook payload: {error}"))?;
+    if payload.len() as u64 > MAX_LIFECYCLE_HOOK_BYTES {
+        return Err("Copilot hook payload is too large.".to_string());
+    }
+    if let Some(event) = copilot_event_from_hook_payload(event, &payload)? {
+        report_copilot_event_from_environment(&event)?;
+    }
+    Ok(())
+}
+
 fn report_from_environment(state: AgentLifecycle) -> Result<(), String> {
     let address: SocketAddr = std::env::var("LATTICETERM_AGENT_REPORT_ADDR")
         .map_err(|_| "Agent reporter environment is unavailable.".to_string())?
@@ -1801,6 +2187,18 @@ fn report_from_environment(state: AgentLifecycle) -> Result<(), String> {
     let token = std::env::var("LATTICETERM_AGENT_REPORT_TOKEN")
         .map_err(|_| "Agent reporter token is unavailable.".to_string())?;
     send_report(address, &session_id, &token, state)
+}
+
+fn report_copilot_event_from_environment(event: &CopilotReporterEvent) -> Result<(), String> {
+    let address: SocketAddr = std::env::var("LATTICETERM_AGENT_REPORT_ADDR")
+        .map_err(|_| "Agent reporter environment is unavailable.".to_string())?
+        .parse()
+        .map_err(|_| "Agent reporter address is invalid.".to_string())?;
+    let session_id = std::env::var("LATTICETERM_AGENT_SESSION")
+        .map_err(|_| "Agent reporter session is unavailable.".to_string())?;
+    let token = std::env::var("LATTICETERM_AGENT_REPORT_TOKEN")
+        .map_err(|_| "Agent reporter token is unavailable.".to_string())?;
+    send_copilot_event(address, &session_id, &token, event)
 }
 
 fn decode_forward_notify(value: &str) -> Option<Vec<String>> {
@@ -1913,6 +2311,19 @@ where
             println!(r#"{{"suppressOutput":true}}"#);
         }
         result
+    } else if command.as_ref() == OsStr::new("agent-copilot-hook") {
+        let event = args
+            .next()
+            .and_then(|value| value.as_ref().to_str().map(str::to_string));
+        if args.next().is_some() {
+            eprintln!("agent-copilot-hook accepts exactly one event");
+            return Some(2);
+        }
+        let Some(event) = event else {
+            eprintln!("agent-copilot-hook is missing its event");
+            return Some(2);
+        };
+        report_copilot_hook_from_stdin(&event)
     } else if command.as_ref() == OsStr::new("agent-qwen-hook") {
         if args.next().is_some() {
             eprintln!("agent-qwen-hook accepts no arguments");
@@ -3158,6 +3569,16 @@ pub fn launch_with_replay(
             .flatten()
             .map(AgentIntegrationSettings::OpenCode);
         integrated_completion = integration_settings.is_some();
+    } else if definition_id == "copilot" && reporter.is_some() {
+        // Copilot's repeatable --plugin-dir flag mounts lifecycle hooks only
+        // for this child process while preserving the user's home, login,
+        // history, permissions, project hooks, and installed plugins.
+        if let Ok(plugin) = write_copilot_reporter_plugin() {
+            arguments = copilot_reporter_arguments(arguments, &plugin);
+            integration_settings = Some(AgentIntegrationSettings::Copilot(plugin));
+        }
+        // Repository settings may intentionally disable all non-policy hooks.
+        // Keep heuristics enabled until the first real hook event arrives.
     } else if definition_id == "qwen" && reporter.is_some() {
         // Qwen's system settings override can be scoped to this child process.
         // Keep heuristics enabled until the first hook actually reports: user
@@ -3191,6 +3612,11 @@ pub fn launch_with_replay(
     }
     if let Some(settings) = integration_settings.as_ref() {
         match settings {
+            AgentIntegrationSettings::Copilot(plugin) => {
+                // The path is already present in --plugin-dir; retaining and
+                // touching the TempDir here documents its launch-time lifetime.
+                let _ = plugin.path();
+            }
             AgentIntegrationSettings::Gemini(file) => {
                 command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", file.path());
             }
@@ -3251,6 +3677,11 @@ pub fn launch_with_replay(
         // fresh announcement in the output still overwrites it.
         captured_session_id: request.resume_session_id.clone(),
     };
+    let copilot_activity = matches!(
+        integration_settings.as_ref(),
+        Some(AgentIntegrationSettings::Copilot(_))
+    )
+    .then(|| Mutex::new(CopilotActivity::default()));
     let entry = Arc::new(AgentSessionEntry {
         summary: Mutex::new(summary.clone()),
         report_token,
@@ -3275,6 +3706,7 @@ pub fn launch_with_replay(
         startup_gate: StartupGate::default(),
         completion_gate: Mutex::new(CompletionReadiness::default()),
         integrated_completion: AtomicBool::new(integrated_completion),
+        copilot_activity,
         _integration_settings: integration_settings,
     });
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
@@ -4688,6 +5120,268 @@ notify = ["notify.exe", "turn-ended"]"#,
             None
         );
         assert!(lifecycle_from_qwen_hook_payload(b"not-json").is_err());
+    }
+
+    #[test]
+    fn copilot_plugin_is_process_scoped_without_replacing_user_config() {
+        let hooks = copilot_reporter_hooks_value();
+        let submitted = &hooks["hooks"]["userPromptSubmitted"][0];
+        let stop = &hooks["hooks"]["agentStop"][0];
+        let notification = &hooks["hooks"]["notification"][0];
+
+        assert_eq!(hooks["version"], 1);
+        assert_eq!(submitted["type"], "command");
+        assert!(submitted["bash"]
+            .as_str()
+            .unwrap()
+            .ends_with("agent-copilot-hook userPromptSubmitted"));
+        assert!(submitted["powershell"]
+            .as_str()
+            .unwrap()
+            .ends_with("agent-copilot-hook userPromptSubmitted"));
+        assert!(stop["bash"]
+            .as_str()
+            .unwrap()
+            .ends_with("agent-copilot-hook agentStop"));
+        assert_eq!(
+            notification["matcher"],
+            "permission_prompt|elicitation_dialog|agent_completed|agent_idle"
+        );
+        assert!(hooks.get("disableAllHooks").is_none());
+
+        let plugin = write_copilot_reporter_plugin().unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(plugin.path().join("plugin.json")).unwrap())
+                .unwrap();
+        let written_hooks: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(plugin.path().join("hooks.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["name"], "latticeterm-agent-status");
+        assert_eq!(manifest["hooks"], "hooks.json");
+        assert_eq!(written_hooks, hooks);
+
+        let arguments = copilot_reporter_arguments(vec!["--model=auto".to_string()], &plugin);
+        assert_eq!(arguments[0], "--plugin-dir");
+        assert_eq!(arguments[1], plugin.path().display().to_string());
+        assert_eq!(arguments[2], "--model=auto");
+    }
+
+    #[test]
+    fn copilot_hooks_distinguish_work_stop_attention_errors_and_subagents() {
+        let event = |name: &str, payload: &str| {
+            let mut payload: serde_json::Value = serde_json::from_str(payload).unwrap();
+            payload["sessionId"] = serde_json::json!("main-session");
+            copilot_event_from_hook_payload(name, payload.to_string().as_bytes())
+                .unwrap()
+                .map(|event| event.action)
+        };
+        assert_eq!(
+            event("userPromptSubmitted", "{}"),
+            Some(CopilotReporterAction::TurnStarted)
+        );
+        assert_eq!(
+            event("sessionStart", "{}"),
+            Some(CopilotReporterAction::SessionStarted)
+        );
+        assert_eq!(event("agentStop", "{}"), Some(CopilotReporterAction::Stop));
+        assert_eq!(
+            event("permissionRequest", "{}"),
+            Some(CopilotReporterAction::NeedsAttention)
+        );
+        assert_eq!(
+            event("errorOccurred", r#"{"recoverable":true}"#),
+            Some(CopilotReporterAction::RecoverableError)
+        );
+        assert_eq!(
+            event("errorOccurred", r#"{"recoverable":false}"#),
+            Some(CopilotReporterAction::FatalError)
+        );
+        assert_eq!(
+            event(
+                "postToolUse",
+                r#"{"toolName":"task","toolArgs":{"mode":"background"}}"#
+            ),
+            Some(CopilotReporterAction::BackgroundSubagentQueued)
+        );
+        assert_eq!(
+            event(
+                "notification",
+                r#"{"notification_type":"permission_prompt"}"#
+            ),
+            Some(CopilotReporterAction::NeedsAttention)
+        );
+        assert_eq!(
+            event("notification", r#"{"notificationType":"agent_idle"}"#),
+            Some(CopilotReporterAction::BackgroundIdle)
+        );
+        assert_eq!(
+            event("notification", r#"{"notificationType":"shell_completed"}"#),
+            None
+        );
+        assert_eq!(
+            event("subagentStart", r#"{"agentName":"explore"}"#),
+            Some(CopilotReporterAction::SubagentStart {
+                agent_name: "explore".to_string()
+            })
+        );
+        assert_eq!(
+            event("subagentStop", r#"{"agentName":"explore"}"#),
+            Some(CopilotReporterAction::SubagentStop {
+                agent_name: "explore".to_string()
+            })
+        );
+        assert!(copilot_event_from_hook_payload("subagentStart", b"{}").is_err());
+        assert!(copilot_event_from_hook_payload("agentStop", b"{}").is_err());
+        assert!(copilot_event_from_hook_payload("unknown", b"{}").is_err());
+        assert!(copilot_event_from_hook_payload("agentStop", b"not-json").is_err());
+    }
+
+    #[test]
+    fn copilot_stop_waits_for_every_active_subagent() {
+        let mut activity = CopilotActivity::default();
+        let event = |source: &str, action| CopilotReporterEvent {
+            source_session_id: source.to_string(),
+            action,
+        };
+        assert_eq!(
+            activity.apply(&event(
+                "main-session",
+                CopilotReporterAction::SessionStarted
+            )),
+            None
+        );
+        assert_eq!(
+            activity.apply(&event(
+                "main-session",
+                CopilotReporterAction::BackgroundSubagentQueued
+            )),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            activity.apply(&event("main-session", CopilotReporterAction::Stop)),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            activity.apply(&event(
+                "main-session",
+                CopilotReporterAction::SubagentStart {
+                    agent_name: "general-purpose".to_string()
+                }
+            )),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            activity.apply(&event("child-session", CopilotReporterAction::TurnStarted)),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            activity.apply(&event("child-session", CopilotReporterAction::Stop)),
+            None
+        );
+        assert_eq!(
+            activity.apply(&event(
+                "main-session",
+                CopilotReporterAction::SubagentStop {
+                    agent_name: "general-purpose".to_string()
+                }
+            )),
+            Some(AgentLifecycle::Done)
+        );
+
+        activity.begin_turn();
+        assert_eq!(
+            activity.apply(&event("main-session", CopilotReporterAction::FatalError)),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+        assert_eq!(
+            activity.apply(&event("main-session", CopilotReporterAction::Stop)),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+
+        activity.begin_turn();
+        assert_eq!(
+            activity.apply(&event("main-session", CopilotReporterAction::Stop)),
+            Some(AgentLifecycle::Done)
+        );
+
+        activity.begin_turn();
+        assert_eq!(
+            activity.apply(&event(
+                "main-session",
+                CopilotReporterAction::BackgroundSubagentQueued
+            )),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            activity.apply(&event("main-session", CopilotReporterAction::Stop)),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            activity.apply(&event(
+                "main-session",
+                CopilotReporterAction::BackgroundIdle
+            )),
+            Some(AgentLifecycle::Idle)
+        );
+    }
+
+    #[test]
+    fn copilot_official_background_event_order_never_finishes_early() {
+        let mut activity = CopilotActivity::default();
+        let mut apply = |name: &str, payload: &str| {
+            let event = copilot_event_from_hook_payload(name, payload.as_bytes())
+                .unwrap()
+                .unwrap();
+            activity.apply(&event)
+        };
+
+        assert_eq!(
+            apply("sessionStart", r#"{"sessionId":"main-session"}"#),
+            None
+        );
+        assert_eq!(
+            apply(
+                "userPromptSubmitted",
+                r#"{"sessionId":"main-session","prompt":"start"}"#
+            ),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            apply(
+                "postToolUse",
+                r#"{"sessionId":"main-session","toolName":"task","toolArgs":{"agent_type":"general-purpose","mode":"background"}}"#
+            ),
+            Some(AgentLifecycle::Working)
+        );
+        // Current Copilot emits the main stop before subagentStart. The
+        // successful background task event above must close this race window.
+        assert_eq!(
+            apply("agentStop", r#"{"sessionId":"main-session"}"#),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            apply(
+                "subagentStart",
+                r#"{"sessionId":"main-session","agentName":"general-purpose"}"#
+            ),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            apply(
+                "userPromptSubmitted",
+                r#"{"sessionId":"child-session","prompt":"work"}"#
+            ),
+            Some(AgentLifecycle::Working)
+        );
+        // A child agentStop must never be interpreted as the main turn stop.
+        assert_eq!(apply("agentStop", r#"{"sessionId":"child-session"}"#), None);
+        assert_eq!(
+            apply(
+                "subagentStop",
+                r#"{"sessionId":"main-session","agentName":"general-purpose"}"#
+            ),
+            Some(AgentLifecycle::Done)
+        );
     }
 
     #[test]
