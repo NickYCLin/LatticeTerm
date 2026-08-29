@@ -7,7 +7,7 @@
  * flow and OS-backed Vault, never in this profile form.
  */
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import {
   connectionTarget,
@@ -38,6 +38,7 @@ import { Callout } from "../common/Callout";
 import { AlertIcon, CheckIcon, CloseIcon } from "../icons";
 import { clearValidationError } from "./connectionValidation";
 import { moveRadioGroupFocus } from "./radioNavigation";
+import { useModalFocus } from "./modalFocus";
 
 function sameDraft(a: ConnectionDraft, b: ConnectionDraft): boolean {
   return (
@@ -106,10 +107,6 @@ export function ConnectionDrawer({
     !sameDraft(draft, initial) ||
     parseTags(tagInput).join(",") !== (initial.tags ?? []).join(",");
 
-  useEffect(() => {
-    nameRef.current?.focus();
-  }, []);
-
   function requestClose() {
     if (dirty) {
       setConfirmDiscard(true);
@@ -118,39 +115,10 @@ export function ConnectionDrawer({
     onClose();
   }
 
-  // Escape closes; Tab is trapped so focus cannot fall behind the drawer.
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        requestClose();
-        return;
-      }
-
-      if (event.key !== "Tab" || !panelRef.current) return;
-
-      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
-        'button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])',
-      );
-      const items = [...focusable].filter(
-        (item) => !item.hasAttribute("disabled"),
-      );
-      if (items.length === 0) return;
-
-      const first = items[0];
-      const last = items[items.length - 1];
-
-      if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      } else if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      }
-    }
-
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
+  useModalFocus({
+    dialogRef: panelRef,
+    getInitialFocus: () => nameRef.current,
+    onEscape: requestClose,
   });
 
   function patch(

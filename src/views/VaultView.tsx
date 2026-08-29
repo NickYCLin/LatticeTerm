@@ -5,7 +5,7 @@
  * can verify and delete OS-store entries, but it never requests secret values.
  */
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useHostTrust } from "../app/useHostTrust";
 import {
@@ -36,6 +36,7 @@ import type { VaultApi } from "../app/useVault";
 import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import { moveTabGroupFocus } from "../components/overlays/tabNavigation";
+import { useModalFocus } from "../components/overlays/modalFocus";
 
 const vaultTabs = ["hosts", "credentials", "encrypted"] as const;
 
@@ -87,6 +88,20 @@ export function VaultView({
   );
   const [newFingerprint, setNewFingerprint] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const addHostDialogRef = useRef<HTMLDivElement>(null);
+  const addHostInputRef = useRef<HTMLInputElement>(null);
+
+  useModalFocus({
+    dialogRef: addHostDialogRef,
+    getInitialFocus: () => addHostInputRef.current,
+    onEscape: closeAddHost,
+    escapeDisabled: saving,
+    active: showAddHostModal,
+  });
+
+  useEffect(() => {
+    if (saving) addHostDialogRef.current?.focus();
+  }, [saving]);
 
   const filteredHosts = useMemo(() => {
     const query = hostSearch.trim().toLocaleLowerCase();
@@ -662,10 +677,12 @@ export function VaultView({
           onMouseDown={closeAddHost}
         >
           <div
+            ref={addHostDialogRef}
             className="dialog"
             role="dialog"
             aria-modal="true"
             aria-labelledby={formId + "-title"}
+            tabIndex={-1}
             onMouseDown={(event) => event.stopPropagation()}
           >
             <header className="dialog__head">
@@ -700,6 +717,7 @@ export function VaultView({
                       {t("vault.form.host")}
                     </label>
                     <input
+                      ref={addHostInputRef}
                       id={formId + "-host"}
                       type="text"
                       className="input"
@@ -709,7 +727,6 @@ export function VaultView({
                       autoCapitalize="none"
                       autoCorrect="off"
                       spellCheck={false}
-                      autoFocus
                     />
                   </div>
                   <div>

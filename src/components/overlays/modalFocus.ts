@@ -73,11 +73,13 @@ export function useModalFocus({
   getInitialFocus,
   onEscape,
   escapeDisabled = false,
+  active = true,
 }: {
   dialogRef: RefObject<HTMLElement | null>;
   getInitialFocus?: () => HTMLElement | null;
   onEscape?: () => void;
   escapeDisabled?: boolean;
+  active?: boolean;
 }): void {
   const initialFocusRef = useRef(getInitialFocus);
   const escapeRef = useRef(onEscape);
@@ -87,6 +89,8 @@ export function useModalFocus({
   escapeDisabledRef.current = escapeDisabled;
 
   useEffect(() => {
+    if (!active) return;
+
     const returnFocus =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -125,5 +129,5 @@ export function useModalFocus({
       document.removeEventListener("keydown", onKeyDown, true);
       if (returnFocus?.isConnected) returnFocus.focus();
     };
-  }, [dialogRef]);
+  }, [active, dialogRef]);
 }

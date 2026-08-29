@@ -71,6 +71,7 @@ import {
 } from "./app/notificationSounds";
 import { anyAgentSessionJustCompleted } from "./app/sessionStatus";
 import { PlusIcon, ScreenShareIcon } from "./components/icons";
+import { useModalFocus } from "./components/overlays/modalFocus";
 import "./styles/index.css";
 
 const ConnectionsView = lazy(() =>
@@ -288,6 +289,19 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const [connectTarget, setConnectTarget] = useState<ConnectionProfile | null>(
     null,
   );
+  const mobileDesktopDialogRef = useRef<HTMLDivElement>(null);
+  const mobileDesktopCloseRef = useRef<HTMLButtonElement>(null);
+  const mobileDesktopDialogOpen =
+    runtime.host === "tauri" &&
+    connectTarget !== null &&
+    onMobile &&
+    (connectTarget.protocol === "rdp" || connectTarget.protocol === "vnc");
+  useModalFocus({
+    dialogRef: mobileDesktopDialogRef,
+    getInitialFocus: () => mobileDesktopCloseRef.current,
+    onEscape: () => setConnectTarget(null),
+    active: mobileDesktopDialogOpen,
+  });
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [terminalMounted, setTerminalMounted] = useState(false);
   const storedSessionSnapshotRef = useRef(
@@ -1023,9 +1037,11 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         (connectTarget.protocol === "rdp" || connectTarget.protocol === "vnc") && (
         <div className="scrim scrim--center" role="presentation" onMouseDown={() => setConnectTarget(null)}>
           <div
+            ref={mobileDesktopDialogRef}
             className="dialog"
             role="dialog"
             aria-modal="true"
+            tabIndex={-1}
             onMouseDown={(event) => event.stopPropagation()}
           >
             <header className="dialog__head">
@@ -1035,6 +1051,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
               <p className="dialog__body">{t("mobile.desktopOnly.body")}</p>
               <div className="dialog__actions">
                 <button
+                  ref={mobileDesktopCloseRef}
                   type="button"
                   className="button button--primary"
                   onClick={() => setConnectTarget(null)}

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type {
   PortableWorkspaceItem,
   WorkspaceTransferFile,
@@ -5,6 +6,7 @@ import type {
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { ImportIcon } from "../icons";
+import { useModalFocus } from "../overlays/modalFocus";
 
 interface WorkspaceImportGroup {
   groupKey: string;
@@ -56,6 +58,19 @@ export function WorkspaceImportDialog({
   );
   const canImportLayout =
     transfer.sidebar.folders.length > 0 || existingCount > 0;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => cancelRef.current,
+    onEscape: onCancel,
+    escapeDisabled: busy,
+  });
+
+  useEffect(() => {
+    if (busy) dialogRef.current?.focus();
+  }, [busy]);
 
   return (
     <div
@@ -66,10 +81,12 @@ export function WorkspaceImportDialog({
       }}
     >
       <div
+        ref={dialogRef}
         className="dialog dialog--wide workspace-import"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="workspace-import-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">
@@ -123,6 +140,7 @@ export function WorkspaceImportDialog({
           </p>
           <div className="dialog__actions">
             <button
+              ref={cancelRef}
               type="button"
               className="button button--ghost"
               disabled={busy}

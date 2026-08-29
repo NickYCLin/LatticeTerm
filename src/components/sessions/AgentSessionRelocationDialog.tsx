@@ -1,7 +1,9 @@
+import { useEffect, useRef } from "react";
 import type { AgentRelocationSummary } from "../../app/agentSessionRelocation";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { FolderIcon } from "../icons";
+import { useModalFocus } from "../overlays/modalFocus";
 
 export function AgentSessionRelocationDialog({
   name,
@@ -26,6 +28,19 @@ export function AgentSessionRelocationDialog({
 }) {
   const { t } = useI18n();
   const blocked = summary.unsupported > 0;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useModalFocus({
+    dialogRef,
+    getInitialFocus: () => cancelRef.current,
+    onEscape: onCancel,
+    escapeDisabled: busy,
+  });
+
+  useEffect(() => {
+    if (busy) dialogRef.current?.focus();
+  }, [busy]);
 
   return (
     <div
@@ -36,10 +51,12 @@ export function AgentSessionRelocationDialog({
       }}
     >
       <div
+        ref={dialogRef}
         className="dialog dialog--wide"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="session-relocation-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">
@@ -95,6 +112,7 @@ export function AgentSessionRelocationDialog({
           )}
           <div className="dialog__actions">
             <button
+              ref={cancelRef}
               type="button"
               className="button button--ghost"
               disabled={busy}

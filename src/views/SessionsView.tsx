@@ -76,6 +76,7 @@ import { VncPane } from "../components/vnc/VncPane";
 import { SftpPane } from "../components/sftp/SftpPane";
 import { TerminalPane } from "../components/terminal/TerminalPane";
 import { moveTabGroupFocus } from "../components/overlays/tabNavigation";
+import { useModalFocus } from "../components/overlays/modalFocus";
 
 type SessionRef =
   | {
@@ -332,6 +333,8 @@ export function SessionsView({
     null,
   );
   const [newProjectError, setNewProjectError] = useState<string | null>(null);
+  const newProjectDialogRef = useRef<HTMLDivElement>(null);
+  const newProjectCancelRef = useRef<HTMLButtonElement>(null);
   const [relocation, setRelocation] = useState<SessionRelocationDraft | null>(
     null,
   );
@@ -347,6 +350,26 @@ export function SessionsView({
   );
   const [importingWorkspace, setImportingWorkspace] = useState(false);
   const [pendingClearWorkspace, setPendingClearWorkspace] = useState(false);
+  const folderDialogRef = useRef<HTMLDivElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  useModalFocus({
+    dialogRef: newProjectDialogRef,
+    getInitialFocus: () => newProjectCancelRef.current,
+    onEscape: closeNewProjectDialog,
+    escapeDisabled: launchingProjectCli !== null,
+    active: newProjectDirectory !== null,
+  });
+  useModalFocus({
+    dialogRef: folderDialogRef,
+    getInitialFocus: () => folderInputRef.current,
+    onEscape: () => setFolderEditor(null),
+    active: folderEditor !== null,
+  });
+
+  useEffect(() => {
+    if (launchingProjectCli) newProjectDialogRef.current?.focus();
+  }, [launchingProjectCli]);
 
   useEffect(() => {
     if (!addCliFor) return;
@@ -398,15 +421,6 @@ export function SessionsView({
     document.addEventListener("keydown", close, true);
     return () => document.removeEventListener("keydown", close, true);
   }, [mobileTreeOpen]);
-
-  useEffect(() => {
-    if (!folderEditor) return;
-    function close(event: KeyboardEvent) {
-      if (event.key === "Escape") setFolderEditor(null);
-    }
-    document.addEventListener("keydown", close, true);
-    return () => document.removeEventListener("keydown", close, true);
-  }, [folderEditor]);
 
   const displayAgentCatalog = agentCatalogForDisplay(agents.catalog);
   const installedAgents = displayAgentCatalog.filter(
@@ -703,19 +717,6 @@ export function SessionsView({
     setNewProjectError(null);
   }
 
-  useEffect(() => {
-    if (!newProjectDirectory) return;
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !launchingProjectCli) {
-        event.stopPropagation();
-        setNewProjectDirectory(null);
-        setNewProjectError(null);
-      }
-    }
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [newProjectDirectory, launchingProjectCli]);
-
   function beginRename(sessionId: string, label: string) {
     setEditingTab(sessionId);
     setTabDraft(label);
@@ -937,10 +938,12 @@ export function SessionsView({
       onMouseDown={closeNewProjectDialog}
     >
       <div
+        ref={newProjectDialogRef}
         className="dialog dialog--wide"
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-project-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">
@@ -990,6 +993,7 @@ export function SessionsView({
           )}
           <div className="dialog__actions">
             <button
+              ref={newProjectCancelRef}
               type="button"
               className="button button--ghost"
               disabled={launchingProjectCli !== null}
@@ -1161,10 +1165,12 @@ export function SessionsView({
       onMouseDown={() => setFolderEditor(null)}
     >
       <div
+        ref={folderDialogRef}
         className="dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="session-folder-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog__head">
@@ -1189,8 +1195,8 @@ export function SessionsView({
           <label className="field">
             <span className="field__label">{t("terminal.projects.folderName")}</span>
             <input
+              ref={folderInputRef}
               className="input"
-              autoFocus
               maxLength={80}
               value={folderDraft}
               onChange={(event) => setFolderDraft(event.currentTarget.value)}

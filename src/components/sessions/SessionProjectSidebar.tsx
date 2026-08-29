@@ -40,6 +40,7 @@ import {
   TrashIcon,
 } from "../icons";
 import { handleMenuNavigation } from "../overlays/menuNavigation";
+import { useModalFocus } from "../overlays/modalFocus";
 
 export type SessionSidebarKind =
   | "agent"
@@ -180,6 +181,15 @@ export function SessionProjectSidebar({
   const launchMenuRef = useRef<HTMLElement>(null);
   const menuAnchorRef = useRef<HTMLButtonElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const moveDialogRef = useRef<HTMLDivElement>(null);
+  const moveCancelRef = useRef<HTMLButtonElement>(null);
+
+  useModalFocus({
+    dialogRef: moveDialogRef,
+    getInitialFocus: () => moveCancelRef.current,
+    onEscape: () => setMovingSession(null),
+    active: movingSession !== null,
+  });
 
   const searchCandidates = useMemo(
     () =>
@@ -281,15 +291,6 @@ export function SessionProjectSidebar({
       window.removeEventListener("scroll", reposition, true);
     };
   }, [launchMenu]);
-
-  useEffect(() => {
-    if (!movingSession) return;
-    function keydown(event: KeyboardEvent) {
-      if (event.key === "Escape") setMovingSession(null);
-    }
-    document.addEventListener("keydown", keydown, true);
-    return () => document.removeEventListener("keydown", keydown, true);
-  }, [movingSession]);
 
   const folderDestinations = useMemo(
     () =>
@@ -1077,10 +1078,12 @@ export function SessionProjectSidebar({
             onMouseDown={() => setMovingSession(null)}
           >
             <div
+              ref={moveDialogRef}
               className="dialog session-move-dialog"
               role="dialog"
               aria-modal="true"
               aria-labelledby="session-move-title"
+              tabIndex={-1}
               onMouseDown={(event) => event.stopPropagation()}
             >
               <header className="dialog__head">
@@ -1138,6 +1141,7 @@ export function SessionProjectSidebar({
                 )}
                 <div className="dialog__actions">
                   <button
+                    ref={moveCancelRef}
                     type="button"
                     className="button button--ghost"
                     onClick={() => setMovingSession(null)}
