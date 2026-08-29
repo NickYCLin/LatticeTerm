@@ -565,29 +565,42 @@ impl CompletionReadiness {
         }
     }
 
-    fn observe_output(&mut self, bytes: &[u8]) -> bool {
-        if !self.submitted {
-            return false;
-        }
+    fn observe_output(
+        &mut self,
+        bytes: &[u8],
+        integrated_completion: bool,
+    ) -> Option<AgentLifecycle> {
         self.control_window.extend_from_slice(bytes);
+
+        // PTY reads may split a human-input prompt anywhere, including in the
+        // middle of "permission required". Inspect the bounded tail instead
+        // of only the newest read, and let an attention prompt win when the
+        // same redraw also re-enables bracketed paste.
+        if lifecycle_from_output(&self.control_window) == AgentLifecycle::NeedsAttention {
+            self.cancel();
+            return Some(AgentLifecycle::NeedsAttention);
+        }
+
         // Bracketed-paste mode is enabled when an interactive prompt is ready
         // for the next command. Cursor visibility (`CSI ? 25 h`) is not a
         // completion signal: spinners and full-screen CLIs toggle it while a
         // response is still being generated.
-        let prompt_ready = self
-            .control_window
-            .windows(b"\x1b[?2004h".len())
-            .any(|window| window == b"\x1b[?2004h");
+        let prompt_ready = self.submitted
+            && !integrated_completion
+            && self
+                .control_window
+                .windows(b"\x1b[?2004h".len())
+                .any(|window| window == b"\x1b[?2004h");
         if prompt_ready {
             self.submitted = false;
             self.control_window.clear();
-            return true;
+            return Some(AgentLifecycle::Done);
         }
         if self.control_window.len() > STARTUP_CONTROL_WINDOW_BYTES {
             let overflow = self.control_window.len() - STARTUP_CONTROL_WINDOW_BYTES;
             self.control_window.drain(..overflow);
         }
-        false
+        None
     }
 
     fn cancel(&mut self) {
@@ -601,15 +614,7 @@ fn heuristic_state_from_output(
     bytes: &[u8],
     integrated_completion: bool,
 ) -> Option<AgentLifecycle> {
-    let output_state = lifecycle_from_output(bytes);
-    if output_state == AgentLifecycle::NeedsAttention {
-        completion.cancel();
-        return Some(AgentLifecycle::NeedsAttention);
-    }
-    if !integrated_completion && completion.observe_output(bytes) {
-        return Some(AgentLifecycle::Done);
-    }
-    None
+    completion.observe_output(bytes, integrated_completion)
 }
 
 #[derive(Debug, Default)]
@@ -3446,25 +3451,31 @@ session id: 0199aa11-"
     fn completion_waits_for_a_submitted_prompt_to_return() {
         let mut readiness = CompletionReadiness::default();
 
-        assert!(!readiness.observe_output(b"\x1b[?2004h"));
+        assert_eq!(readiness.observe_output(b"\x1b[?2004h", false), None);
         readiness.observe_input(b"draft text");
-        assert!(!readiness.observe_output(b"\x1b[?2004h"));
+        assert_eq!(readiness.observe_output(b"\x1b[?2004h", false), None);
 
         readiness.observe_input(b"\r");
-        assert!(!readiness.observe_output(b"answer\x1b[?20"));
-        assert!(readiness.observe_output(b"04h"));
-        assert!(!readiness.observe_output(b"\x1b[?2004h"));
+        assert_eq!(readiness.observe_output(b"answer\x1b[?20", false), None);
+        assert_eq!(
+            readiness.observe_output(b"04h", false),
+            Some(AgentLifecycle::Done)
+        );
+        assert_eq!(readiness.observe_output(b"\x1b[?2004h", false), None);
     }
 
     #[test]
     fn completion_ignores_cursor_visibility_while_the_agent_is_working() {
         let mut readiness = CompletionReadiness::default();
 
-        assert!(!readiness.observe_output(b"\x1b[?25h"));
+        assert_eq!(readiness.observe_output(b"\x1b[?25h", false), None);
         readiness.observe_input(b"review this\r");
-        assert!(!readiness.observe_output(b"answer\x1b[?2"));
-        assert!(!readiness.observe_output(b"5hstill working"));
-        assert!(readiness.observe_output(b"done\x1b[?2004h"));
+        assert_eq!(readiness.observe_output(b"answer\x1b[?2", false), None);
+        assert_eq!(readiness.observe_output(b"5hstill working", false), None);
+        assert_eq!(
+            readiness.observe_output(b"done\x1b[?2004h", false),
+            Some(AgentLifecycle::Done)
+        );
     }
 
     #[test]
@@ -3486,9 +3497,13 @@ session id: 0199aa11-"
     fn attention_prompt_cancels_the_pending_completion() {
         let mut readiness = CompletionReadiness::default();
         readiness.observe_input(b"\r");
-        readiness.cancel();
 
-        assert!(!readiness.observe_output(b"\x1b[?2004h"));
+        assert_eq!(readiness.observe_output(b"permission requ", false), None);
+        assert_eq!(
+            readiness.observe_output(b"ired\x1b[?2004h", false),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+        assert_eq!(readiness.observe_output(b"\x1b[?2004h", false), None);
     }
 
     #[test]
@@ -4456,6 +4471,54 @@ notify = ["notify.exe", "turn-ended"]"#,
             snapshot.end_offset - snapshot.start_offset,
             replay.len() as u64
         );
+        disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn split_attention_prompt_is_not_reported_as_completed_by_the_pty_reader() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        let request = AgentLaunchRequest {
+            definition_id: "custom".to_string(),
+            label: "Split prompt test".to_string(),
+            executable: "/bin/sh".to_string(),
+            arguments: vec![
+                "-c".to_string(),
+                "printf 'permission requ'; sleep 0.1; printf 'ired\\033[?2004h'; sleep 30"
+                    .to_string(),
+            ],
+            resume_session_id: None,
+            group_id: None,
+            seed_input: None,
+            restore_existing_session: false,
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 80,
+            rows: 24,
+        };
+        let session = launch(sink.clone(), registry.clone(), request).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline
+            && !collector
+                .states
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, state, _)| *state == AgentLifecycle::NeedsAttention)
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let states = collector.states.lock().unwrap();
+        assert!(states.iter().any(|(_, state, source)| {
+            *state == AgentLifecycle::NeedsAttention && *source == AgentStateSource::Heuristic
+        }));
+        assert!(!states
+            .iter()
+            .any(|(_, state, _)| *state == AgentLifecycle::Done));
+        drop(states);
         disconnect(sink.as_ref(), &registry, &session.session_id).unwrap();
     }
 
