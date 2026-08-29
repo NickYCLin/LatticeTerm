@@ -68,5 +68,9 @@ describe("session project sidebar", () => {
     expect(markup).toContain("移除「Codex」工作階段");
     expect(markup).toContain('placeholder="搜尋專案或工作階段"');
     expect(markup).toContain('role="combobox"');
+    expect(markup).toContain('role="list" aria-label="專案與工作階段"');
+    expect(markup.match(/role="listitem"/g)).toHaveLength(2);
+    expect(markup).not.toContain('role="tree"');
+    expect(markup).not.toContain('role="treeitem"');
   });
 });

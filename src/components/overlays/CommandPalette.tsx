@@ -122,11 +122,17 @@ export function CommandPalette({
           </span>
           <input
             ref={inputRef}
+            role="combobox"
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
             placeholder={t("palette.placeholder")}
             aria-label={t("palette.placeholder")}
+            aria-autocomplete="list"
+            aria-expanded={entries.length > 0}
             aria-controls="palette-list"
+            aria-activedescendant={
+              entries[active] ? `palette-option-${active}` : undefined
+            }
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
@@ -143,10 +149,11 @@ export function CommandPalette({
               lastGroup = entry.group;
 
               return (
-                <li key={entry.id}>
+                <li key={entry.id} role="presentation">
                   {heading && <p className="palette__group eyebrow">{heading}</p>}
                   <button
                     type="button"
+                    id={`palette-option-${index}`}
                     role="option"
                     aria-selected={index === active}
                     data-active={index === active}

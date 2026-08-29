@@ -564,7 +564,7 @@ export function SessionProjectSidebar({
     const Glyph = glyphFor(session.kind);
     return (
       <div
-        role="treeitem"
+        role="listitem"
         className={`session-tree__session${
           session.sessionId === activeSessionId ? " is-active" : ""
         }${dropTargetNodeId === session.nodeId ? " is-drop-target" : ""}${
@@ -635,7 +635,11 @@ export function SessionProjectSidebar({
     const children = sessionSidebarChildren(layout, project.nodeId);
     const status = projectStatus(project);
     return (
-      <div className="session-tree__project-branch" key={project.nodeId} role="treeitem">
+      <div
+        className="session-tree__project-branch"
+        key={project.nodeId}
+        role="listitem"
+      >
         <div
           className={`session-tree__project${selected ? " is-active" : ""}${
             dropTargetNodeId === project.nodeId ? " is-drop-target" : ""
@@ -659,7 +663,7 @@ export function SessionProjectSidebar({
           </button>
         </div>
         {children.length > 0 && (
-          <div role="group">
+          <div role="list">
             {children.map((id) => renderNode(id, depth + 1))}
           </div>
         )}
@@ -671,7 +675,11 @@ export function SessionProjectSidebar({
     const collapsed = layout.collapsedFolderIds.includes(folder.id);
     const status = nodeStatus(folder.id);
     return (
-      <div className="session-tree__folder" key={folder.id} role="treeitem" aria-expanded={!collapsed}>
+      <div
+        className="session-tree__folder"
+        key={folder.id}
+        role="listitem"
+      >
         <div
           className={`session-tree__folder-row${
             dropTargetNodeId === folder.id ? " is-drop-target" : ""
@@ -688,6 +696,7 @@ export function SessionProjectSidebar({
             className="session-tree__folder-select"
             onClick={() => onToggleFolder(folder.id)}
             title={`${folder.name} · ${t("terminal.projects.dragHint")}`}
+            aria-expanded={!collapsed}
           >
             <FolderIcon size={13} />
             <span className="truncate">{folder.name}</span>
@@ -698,6 +707,7 @@ export function SessionProjectSidebar({
             className="icon-button icon-button--sm"
             onClick={() => onToggleFolder(folder.id)}
             aria-label={t("terminal.projects.toggle")}
+            aria-expanded={!collapsed}
             title={t("terminal.projects.toggle")}
             data-tree-action="true"
           >
@@ -737,7 +747,7 @@ export function SessionProjectSidebar({
           </div>
         </div>
         {!collapsed && (
-          <div role="group">
+          <div role="list">
             {sessionSidebarChildren(layout, folder.id).map((id) => renderNode(id, depth + 1))}
           </div>
         )}
@@ -929,7 +939,8 @@ export function SessionProjectSidebar({
       </div>
       <div
         className={`session-tree${draggedNodeId ? " is-dragging" : ""}`}
-        role="tree"
+        role="list"
+        aria-label={t("terminal.projects")}
       >
         {sessionSidebarChildren(layout, null).map((id) => renderNode(id, 0))}
         <div
@@ -937,6 +948,8 @@ export function SessionProjectSidebar({
             dropTargetNodeId === TREE_ROOT_DROP ? " is-drop-target" : ""
           }`}
           data-tree-root-drop="true"
+          role="presentation"
+          aria-hidden="true"
         >
           {t("terminal.projects.moveToRoot")}
         </div>
