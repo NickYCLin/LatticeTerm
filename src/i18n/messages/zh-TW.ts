@@ -88,6 +88,7 @@ export const zhTW = {
   "connections.all": "全部連線",
   "connections.favorites": "常用",
   "connections.groups": "群組",
+  "connections.filters": "連線篩選",
   "connections.protocols": "連線方式",
   "connections.environments": "環境",
   "connections.tags": "標籤",

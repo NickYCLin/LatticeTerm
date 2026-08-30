@@ -10,6 +10,7 @@ export function ViewHeader({
   actions,
   onToggleSidebar,
   sidebarCollapsed,
+  sidebarIsDialog = false,
   showSidebarToggle = true,
 }: {
   title: string;
@@ -17,6 +18,7 @@ export function ViewHeader({
   actions?: ReactNode;
   onToggleSidebar: () => void;
   sidebarCollapsed: boolean;
+  sidebarIsDialog?: boolean;
   showSidebarToggle?: boolean;
 }) {
   const { t } = useI18n();
@@ -31,7 +33,9 @@ export function ViewHeader({
           type="button"
           className="icon-button"
           onClick={onToggleSidebar}
-          aria-pressed={!sidebarCollapsed}
+          aria-expanded={!sidebarCollapsed}
+          aria-controls="resource-sidebar"
+          aria-haspopup={sidebarIsDialog ? "dialog" : undefined}
           aria-label={toggleLabel}
           data-tooltip={toggleLabel}
         >

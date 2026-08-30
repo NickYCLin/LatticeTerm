@@ -280,12 +280,22 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
       (updater.status === "error" && updater.availableVersion !== null));
 
   const [view, setView] = useState<ViewId>("connections");
+  const [mobileResourceSidebarOpen, setMobileResourceSidebarOpen] =
+    useState(false);
   // A desktop-only view reached on mobile (stale state) snaps back home.
   useEffect(() => {
     if (onMobile && !visibleNavigation.some((entry) => entry.id === view)) {
       setView("connections");
     }
   }, [onMobile, view, visibleNavigation]);
+  useEffect(() => {
+    if (!onMobile || view !== "connections") {
+      setMobileResourceSidebarOpen(false);
+    }
+  }, [onMobile, view]);
+  const sidebarExpanded = onMobile
+    ? mobileResourceSidebarOpen
+    : !preferences.sidebarCollapsed;
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [drawer, setDrawer] = useState<{
     open: boolean;
@@ -512,19 +522,31 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
 
   const openCreate = useCallback(() => {
     setView("connections");
+    setMobileResourceSidebarOpen(false);
     setDrawer({ open: true, profileId: null });
   }, []);
 
   const openEdit = useCallback((id: string) => {
     setView("connections");
+    setMobileResourceSidebarOpen(false);
     setDrawer({ open: true, profileId: id });
   }, []);
 
+  const toggleResourceSidebar = useCallback(() => {
+    if (onMobile) {
+      setView("connections");
+      setMobileResourceSidebarOpen((open) => !open);
+      return;
+    }
+    update({ sidebarCollapsed: !preferences.sidebarCollapsed });
+  }, [onMobile, preferences.sidebarCollapsed, update]);
+
   const focusSearch = useCallback(() => {
     setView("connections");
-    update({ sidebarCollapsed: false });
+    if (onMobile) setMobileResourceSidebarOpen(true);
+    else update({ sidebarCollapsed: false });
     window.setTimeout(() => searchRef.current?.focus(), 0);
-  }, [update]);
+  }, [onMobile, update]);
 
   const saveDraft = useCallback(
     (draft: ConnectionDraft, connectAfterSave: boolean) => {
@@ -647,12 +669,12 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
       },
       {
         id: "action:sidebar",
-        label: preferences.sidebarCollapsed
-          ? t("palette.command.sidebar.show")
-          : t("palette.command.sidebar.hide"),
+        label: sidebarExpanded
+          ? t("palette.command.sidebar.hide")
+          : t("palette.command.sidebar.show"),
         group: t("palette.group.appearance"),
         keys: ["Ctrl", "B"],
-        run: () => update({ sidebarCollapsed: !preferences.sidebarCollapsed }),
+        run: toggleResourceSidebar,
       },
     );
 
@@ -665,10 +687,12 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     preferences.theme,
     preferences.locale,
     preferences.density,
-    preferences.sidebarCollapsed,
+    sidebarExpanded,
     profiles.length,
     loadSamples,
-  , visibleNavigation]);
+    toggleResourceSidebar,
+    visibleNavigation,
+  ]);
 
   // Global shortcuts. Anything typed into a field is left alone.
   useEffect(() => {
@@ -688,7 +712,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
 
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
         event.preventDefault();
-        update({ sidebarCollapsed: !preferences.sidebarCollapsed });
+        toggleResourceSidebar();
         return;
       }
 
@@ -705,10 +729,10 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [openCreate, focusSearch, update, preferences.sidebarCollapsed]);
+  }, [focusSearch, openCreate, toggleResourceSidebar]);
 
   const item = findNavigationItem(view);
-  const showSidebar = view === "connections" && !preferences.sidebarCollapsed;
+  const showSidebar = view === "connections" && sidebarExpanded;
   const showInspector =
     view === "connections" && selected !== null && preferences.inspectorOpen;
   // Read resources only while the inspector can show them; passing null stops
@@ -734,6 +758,8 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           totalCount={profiles.length}
           favoriteCount={profiles.filter((entry) => entry.favorite).length}
           visibleCount={visibleProfiles.length}
+          mobileOpen={onMobile && mobileResourceSidebarOpen}
+          onMobileClose={() => setMobileResourceSidebarOpen(false)}
         />
       )}
 
@@ -741,11 +767,10 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         <ViewHeader
           title={t(item.labelKey)}
           description={t(item.descriptionKey)}
-          sidebarCollapsed={preferences.sidebarCollapsed}
+          sidebarCollapsed={!sidebarExpanded}
+          sidebarIsDialog={onMobile}
           showSidebarToggle={view === "connections"}
-          onToggleSidebar={() =>
-            update({ sidebarCollapsed: !preferences.sidebarCollapsed })
-          }
+          onToggleSidebar={toggleResourceSidebar}
           actions={
             <>
               {headerCapabilities.remoteQuickConnect && (

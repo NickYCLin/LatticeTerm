@@ -93,6 +93,7 @@ export const en: Messages = {
   "connections.all": "All connections",
   "connections.favorites": "Favorites",
   "connections.groups": "Groups",
+  "connections.filters": "Connection filters",
   "connections.protocols": "Protocols",
   "connections.environments": "Environments",
   "connections.tags": "Tags",

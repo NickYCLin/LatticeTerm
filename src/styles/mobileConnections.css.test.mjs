@@ -38,4 +38,19 @@ describe("mobile connection layout", () => {
       /\.connection-advanced\s*\{[^}]*flex:\s*none;/s,
     );
   });
+
+  it("turns the hidden mobile resource sidebar into a safe-area drawer", () => {
+    expect(shellStyles).toMatch(
+      /\.app--mobile \.sidebar\s*\{[^}]*display:\s*none;/s,
+    );
+    expect(shellStyles).toMatch(
+      /\.app--mobile \.resource-sidebar-scrim \.sidebar\s*\{[^}]*display:\s*flex;[^}]*width:\s*min\(20rem, 88vw\);[^}]*height:\s*100%;/s,
+    );
+    expect(shellStyles).toMatch(
+      /\.app--mobile \.resource-sidebar-scrim\s*\{[^}]*justify-content:\s*flex-start;/s,
+    );
+    expect(shellStyles).toMatch(
+      /\.app--mobile \.resource-sidebar-scrim \.sidebar\s*\{[^}]*safe-area-inset-top[^}]*safe-area-inset-bottom/s,
+    );
+  });
 });

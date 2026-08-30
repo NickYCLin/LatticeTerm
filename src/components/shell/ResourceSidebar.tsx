@@ -5,7 +5,7 @@
  * assistive technology and not only the eye.
  */
 
-import { forwardRef } from "react";
+import { forwardRef, useCallback, useRef } from "react";
 import {
   environmentCatalog,
   environmentLabelKey,
@@ -19,6 +19,7 @@ import type { ConnectionFilter, ConnectionGroup } from "../../domain/query";
 import { useI18n } from "../../i18n/context";
 import { ProtocolIcon } from "../common/Badge";
 import { CloseIcon, SearchIcon, StarIcon } from "../icons";
+import { useModalFocus } from "../overlays/modalFocus";
 
 function toggle<T>(values: T[], value: T): T[] {
   return values.includes(value)
@@ -38,6 +39,8 @@ export const ResourceSidebar = forwardRef<
     totalCount: number;
     favoriteCount: number;
     visibleCount: number;
+    mobileOpen?: boolean;
+    onMobileClose?: () => void;
   }
 >(function ResourceSidebar(
   {
@@ -50,21 +53,63 @@ export const ResourceSidebar = forwardRef<
     totalCount,
     favoriteCount,
     visibleCount,
+    mobileOpen = false,
+    onMobileClose,
   },
   searchRef,
 ) {
   const { t } = useI18n();
+  const sidebarRef = useRef<HTMLElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const setSearchInputRef = useCallback(
+    (node: HTMLInputElement | null) => {
+      searchInputRef.current = node;
+      if (typeof searchRef === "function") searchRef(node);
+      else if (searchRef) searchRef.current = node;
+    },
+    [searchRef],
+  );
+
+  useModalFocus({
+    dialogRef: sidebarRef,
+    getInitialFocus: () => searchInputRef.current,
+    onEscape: onMobileClose,
+    active: mobileOpen,
+  });
+
   const patch = (next: Partial<ConnectionFilter>) =>
     onFilterChange({ ...filter, ...next });
 
-  return (
-    <div className="sidebar glass glass--sheen">
+  const sidebar = (
+    <aside
+      ref={sidebarRef}
+      id="resource-sidebar"
+      className="sidebar glass glass--sheen"
+      role={mobileOpen ? "dialog" : undefined}
+      aria-modal={mobileOpen || undefined}
+      aria-labelledby={mobileOpen ? "resource-sidebar-title" : undefined}
+      tabIndex={mobileOpen ? -1 : undefined}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      {mobileOpen && (
+        <header className="sidebar__mobile-head">
+          <h2 id="resource-sidebar-title">{t("connections.filters")}</h2>
+          <button
+            type="button"
+            className="icon-button icon-button--sm"
+            onClick={onMobileClose}
+            aria-label={t("common.close")}
+          >
+            <CloseIcon size={14} />
+          </button>
+        </header>
+      )}
       <div className="sidebar__search">
         <span className="sidebar__search-icon" aria-hidden="true">
           <SearchIcon size={15} />
         </span>
         <input
-          ref={searchRef}
+          ref={setSearchInputRef}
           type="search"
           value={filter.search}
           onChange={(event) => patch({ search: event.currentTarget.value })}
@@ -242,6 +287,18 @@ export const ResourceSidebar = forwardRef<
           </button>
         </div>
       )}
+    </aside>
+  );
+
+  if (!mobileOpen) return sidebar;
+
+  return (
+    <div
+      className="scrim resource-sidebar-scrim"
+      role="presentation"
+      onMouseDown={onMobileClose}
+    >
+      {sidebar}
     </div>
   );
 });
