@@ -22,6 +22,10 @@ import {
   type ViewId,
 } from "./app/navigation";
 import {
+  canUseInAppUpdater,
+  workspaceHeaderCapabilities,
+} from "./app/platformCapabilities";
+import {
   usePreferences,
   type Preferences,
   type PreferencesValue,
@@ -181,6 +185,8 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const runtime = useRuntimeSummary();
   const platform = runtime.summary?.platform;
   const onMobile = isMobilePlatform(platform);
+  const headerCapabilities = workspaceHeaderCapabilities(platform);
+  const inAppUpdaterAvailable = canUseInAppUpdater(runtime.host, platform);
   const visibleNavigation = navigationItemsFor(platform);
   const storage = useStorageStatus();
   const agents = useAgentSessions();
@@ -248,20 +254,20 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const { checkForUpdates } = updater;
   useEffect(() => {
     if (launchCheckedRef.current) return;
-    if (runtime.host !== "tauri") return;
+    if (!inAppUpdaterAvailable) return;
     if (!runtime.summary) return;
     if (!preferences.checkUpdatesOnLaunch) return;
     launchCheckedRef.current = true;
     void checkForUpdates();
   }, [
-    runtime.host,
+    inAppUpdaterAvailable,
     runtime.summary,
     preferences.checkUpdatesOnLaunch,
     checkForUpdates,
   ]);
   const showUpdatePrompt =
     !updatePromptDismissed &&
-    runtime.host === "tauri" &&
+    inAppUpdaterAvailable &&
     (updater.status === "available" ||
       updater.status === "downloading" ||
       updater.status === "installing" ||
@@ -732,7 +738,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           }
           actions={
             <>
-              {!onMobile && (
+              {headerCapabilities.remoteQuickConnect && (
                 <button
                   type="button"
                   className="button button--ghost"
@@ -742,7 +748,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                   {t("remote.quick.action")}
                 </button>
               )}
-              {!onMobile && (
+              {headerCapabilities.remoteHost && (
                 <button
                   type="button"
                   className={
@@ -874,7 +880,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           vaultReady={runtime.summary?.credentialStorageReady ?? false}
           version={runtime.summary?.version ?? APP_VERSION}
           storage={storage}
-          updater={runtime.host === "tauri" ? updater : undefined}
+          updater={inAppUpdaterAvailable ? updater : undefined}
           onUpdateClick={() => {
             setUpdatePromptDismissed(false);
             if (

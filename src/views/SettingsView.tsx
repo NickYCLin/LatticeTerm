@@ -22,6 +22,7 @@ import { Chip } from "../components/common/Badge";
 import { Callout } from "../components/common/Callout";
 import { CheckIcon, PlayIcon } from "../components/icons";
 import { useAppUpdater, type AppUpdater } from "../app/useAppUpdater";
+import { canUseInAppUpdater } from "../app/platformCapabilities";
 import { APP_VERSION } from "../app/version";
 import type { EncryptedBackupRestore } from "../app/encryptedBackup";
 import { EncryptedBackupPanel } from "../components/settings/EncryptedBackupPanel";
@@ -161,6 +162,7 @@ export function SettingsView({
   const { t } = useI18n();
   const { summary, host } = runtime;
   const desktopBackendAvailable = host === "tauri";
+  const inAppUpdaterAvailable = canUseInAppUpdater(host, summary?.platform);
   // A local instance keeps the panel working when rendered standalone; the
   // app passes its own so the panel and the startup prompt stay in sync.
   const localUpdater = useAppUpdater(summary?.version);
@@ -561,61 +563,63 @@ export function SettingsView({
               {host === "unknown" && (
                 <Chip tone="info">{t("common.detecting")}</Chip>
               )}
-              {host === "browser" && (
+              {host !== "unknown" && !inAppUpdaterAvailable && (
                 <Chip tone="planned">{t("settings.updater.desktopOnly")}</Chip>
               )}
-              {desktopBackendAvailable && updater.status === "checking" && (
+              {inAppUpdaterAvailable && updater.status === "checking" && (
                 <Chip tone="info">{t("settings.updater.checking")}</Chip>
               )}
-              {desktopBackendAvailable && updater.status === "up-to-date" && (
+              {inAppUpdaterAvailable && updater.status === "up-to-date" && (
                 <Chip tone="ok">{t("settings.updater.upToDate")}</Chip>
               )}
-              {desktopBackendAvailable && updater.status === "available" && (
+              {inAppUpdaterAvailable && updater.status === "available" && (
                 <Chip tone="warn">
                   {t("settings.updater.available", {
                     version: updater.availableVersion ?? "",
                   })}
                 </Chip>
               )}
-              {desktopBackendAvailable && updater.status === "downloading" && (
+              {inAppUpdaterAvailable && updater.status === "downloading" && (
                 <Chip tone="info">
                   {t("settings.updater.downloading", {
                     percent: updater.progressPercent,
                   })}
                 </Chip>
               )}
-              {desktopBackendAvailable && updater.status === "installing" && (
+              {inAppUpdaterAvailable && updater.status === "installing" && (
                 <Chip tone="info">{t("settings.updater.installing")}</Chip>
               )}
-              {desktopBackendAvailable && updater.status === "downloaded" && (
+              {inAppUpdaterAvailable && updater.status === "downloaded" && (
                 <Chip tone="ok">{t("settings.updater.downloaded")}</Chip>
               )}
-              {desktopBackendAvailable && updater.status === "error" && (
+              {inAppUpdaterAvailable && updater.status === "error" && (
                 <Chip tone="danger">
                   {t("settings.updater.error", { error: updater.error ?? "" })}
                 </Chip>
               )}
-              {desktopBackendAvailable && updater.status === "idle" && (
+              {inAppUpdaterAvailable && updater.status === "idle" && (
                 <span className="text-muted">—</span>
               )}
             </dd>
           </div>
         </dl>
 
-        <SegmentedSetting
-          title={t("settings.updater.autoCheck")}
-          description={t("settings.updater.autoCheckHint")}
-          choices={[
-            { value: "enabled", label: t("settings.updater.autoCheck.on") },
-            { value: "disabled", label: t("settings.updater.autoCheck.off") },
-          ]}
-          value={preferences.checkUpdatesOnLaunch ? "enabled" : "disabled"}
-          onChange={(choice) =>
-            onChange({ checkUpdatesOnLaunch: choice === "enabled" })
-          }
-        />
+        {inAppUpdaterAvailable && (
+          <SegmentedSetting
+            title={t("settings.updater.autoCheck")}
+            description={t("settings.updater.autoCheckHint")}
+            choices={[
+              { value: "enabled", label: t("settings.updater.autoCheck.on") },
+              { value: "disabled", label: t("settings.updater.autoCheck.off") },
+            ]}
+            value={preferences.checkUpdatesOnLaunch ? "enabled" : "disabled"}
+            onChange={(choice) =>
+              onChange({ checkUpdatesOnLaunch: choice === "enabled" })
+            }
+          />
+        )}
 
-        {desktopBackendAvailable && updater.status === "available" && (
+        {inAppUpdaterAvailable && updater.status === "available" && (
           <div className="stack" style={{ gap: "var(--space-3)", marginTop: "var(--space-4)" }}>
             <Callout
               tone="info"
@@ -646,7 +650,7 @@ export function SettingsView({
           </div>
         )}
 
-        {desktopBackendAvailable && updater.status === "downloaded" && (
+        {inAppUpdaterAvailable && updater.status === "downloaded" && (
           <div className="stack" style={{ gap: "var(--space-3)", marginTop: "var(--space-4)" }}>
             <Callout tone="info" title={t("settings.updater.downloaded")}>
               <p>{t("settings.updater.relaunch")}</p>
@@ -669,7 +673,8 @@ export function SettingsView({
           </div>
         )}
 
-        {updater.status !== "available" &&
+        {inAppUpdaterAvailable &&
+          updater.status !== "available" &&
           updater.status !== "downloaded" &&
           updater.status !== "installing" && (
           <div style={{ marginTop: "var(--space-4)" }}>
@@ -677,15 +682,14 @@ export function SettingsView({
               type="button"
               className="button button--ghost"
               disabled={
-                !desktopBackendAvailable ||
                 updater.status === "checking" ||
                 updater.status === "downloading"
               }
               onClick={() => {
-                if (desktopBackendAvailable) void updater.checkForUpdates();
+                void updater.checkForUpdates();
               }}
             >
-              {desktopBackendAvailable && updater.status === "checking"
+              {updater.status === "checking"
                 ? t("settings.updater.checking")
                 : t("settings.updater.check")}
             </button>

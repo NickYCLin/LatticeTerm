@@ -189,6 +189,46 @@
   grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
 }
 
+/* Mobile already has padding around the workspace. Reusing the desktop list
+   gutters leaves less than the card's 19rem minimum on a 360px phone. */
+.app--mobile .connections__toolbar {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3) 0 var(--space-2);
+}
+
+.app--mobile .connections__count {
+  flex-basis: 100%;
+}
+
+.app--mobile .connections__tools {
+  width: 100%;
+  min-width: 0;
+  margin-left: 0;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.app--mobile .connections__tools .select {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.app--mobile .connections__tools .select select {
+  flex: 1;
+  min-width: 0;
+}
+
+.app--mobile .connections__scroll {
+  padding: 0 0 var(--space-6);
+}
+
+.app--mobile .connection-grid,
+:root[data-density="compact"] .app--mobile .connection-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 /* Inspector -------------------------------------------------------------- */
 
 .inspector {

@@ -482,6 +482,20 @@
   flex-wrap: wrap;
 }
 
+.app--mobile .view-header__text {
+  flex: 1 1 10rem;
+}
+
+.app--mobile .view-header__actions {
+  width: 100%;
+  margin-left: 0;
+  flex-wrap: wrap;
+}
+
+.app--mobile .view-header__actions .button {
+  flex: 1 1 auto;
+}
+
 .app--mobile .statusbar {
   display: none;
 }
