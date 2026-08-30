@@ -264,40 +264,71 @@ export const MAX_AGENT_BROADCAST_TARGETS = 32;
 export const MAX_SAVED_AGENT_PLANS = 32;
 
 interface AgentLaunchAttempt {
-  /** Finishes once and returns an early close reason for the resolved session. */
-  finish: (sessionId: string) => string | null;
-  /** Finishes once and returns every close observed during a snapshot request. */
-  finishSnapshot: () => ReadonlyMap<string, string>;
-  /** Finishes without consuming close metadata, e.g. after an invoke error. */
+  /** Finishes once and returns every lifecycle event observed during the request. */
+  finish: () => AgentLaunchEventSnapshot;
+  /** Finishes without consuming buffered events, e.g. after an invoke error. */
   cancel: () => void;
 }
 
+export interface AgentLaunchEventSnapshot {
+  closed: ReadonlyMap<string, string>;
+  states: ReadonlyMap<string, AgentStateEvent>;
+  capturedSessionIds: ReadonlyMap<string, string>;
+  models: ReadonlyMap<string, string>;
+  usages: ReadonlyMap<string, AgentTokenUsage>;
+}
+
+interface MutableAgentLaunchEvents {
+  closed: Map<string, string>;
+  states: Map<string, AgentStateEvent>;
+  capturedSessionIds: Map<string, string>;
+  models: Map<string, string>;
+  usages: Map<string, AgentTokenUsage>;
+}
+
+function emptyAgentLaunchEvents(): MutableAgentLaunchEvents {
+  return {
+    closed: new Map(),
+    states: new Map(),
+    capturedSessionIds: new Map(),
+    models: new Map(),
+    usages: new Map(),
+  };
+}
+
+function cloneAgentLaunchEvents(
+  events: MutableAgentLaunchEvents,
+): AgentLaunchEventSnapshot {
+  return {
+    closed: new Map(events.closed),
+    states: new Map(events.states),
+    capturedSessionIds: new Map(events.capturedSessionIds),
+    models: new Map(events.models),
+    usages: new Map(events.usages),
+  };
+}
+
 /**
- * Records close events that beat an in-flight launch or restore response.
- * Per-attempt maps keep concurrent operations isolated and bound tombstone life.
+ * Records lifecycle events that beat an in-flight launch or restore response.
+ * Per-attempt maps keep concurrent operations isolated and bound to each request.
  */
 export class AgentLaunchRaceGuard {
-  private readonly activeAttempts = new Set<Map<string, string>>();
+  private readonly activeAttempts = new Set<MutableAgentLaunchEvents>();
 
   begin(): AgentLaunchAttempt {
-    const closedDuringAttempt = new Map<string, string>();
-    this.activeAttempts.add(closedDuringAttempt);
+    const eventsDuringAttempt = emptyAgentLaunchEvents();
+    this.activeAttempts.add(eventsDuringAttempt);
     let finished = false;
     const settle = () => {
       if (finished) return false;
       finished = true;
-      this.activeAttempts.delete(closedDuringAttempt);
+      this.activeAttempts.delete(eventsDuringAttempt);
       return true;
     };
     return {
-      finish: (sessionId: string) => {
-        if (!settle()) return null;
-        const reason = closedDuringAttempt.get(sessionId) ?? null;
-        return reason;
-      },
-      finishSnapshot: () => {
-        if (!settle()) return new Map();
-        return new Map(closedDuringAttempt);
+      finish: () => {
+        if (!settle()) return emptyAgentLaunchEvents();
+        return cloneAgentLaunchEvents(eventsDuringAttempt);
       },
       cancel: () => {
         settle();
@@ -307,7 +338,31 @@ export class AgentLaunchRaceGuard {
 
   observeClosed(sessionId: string, reason: string) {
     for (const attempt of this.activeAttempts) {
-      attempt.set(sessionId, reason);
+      attempt.closed.set(sessionId, reason);
+    }
+  }
+
+  observeState(event: AgentStateEvent) {
+    for (const attempt of this.activeAttempts) {
+      attempt.states.set(event.sessionId, event);
+    }
+  }
+
+  observeCaptured(sessionId: string, nativeSessionId: string) {
+    for (const attempt of this.activeAttempts) {
+      attempt.capturedSessionIds.set(sessionId, nativeSessionId);
+    }
+  }
+
+  observeModel(event: AgentModelEvent) {
+    for (const attempt of this.activeAttempts) {
+      attempt.models.set(event.sessionId, event.model);
+    }
+  }
+
+  observeUsage(event: AgentUsageEvent) {
+    for (const attempt of this.activeAttempts) {
+      attempt.usages.set(event.sessionId, event.tokenUsage);
     }
   }
 }
@@ -316,20 +371,44 @@ function agentStartupExitMessage(label: string, reason: string): string {
   return `${label} exited during startup: ${reason}`;
 }
 
-export function applyAgentRestoreCloseEvents(
+export function applyAgentLaunchEvents(
+  session: AgentSessionSummary,
+  events: AgentLaunchEventSnapshot,
+): AgentSessionSummary {
+  const state = events.states.get(session.sessionId);
+  const capturedSessionId = events.capturedSessionIds.get(session.sessionId);
+  const model = events.models.get(session.sessionId);
+  const tokenUsage = events.usages.get(session.sessionId);
+  return {
+    ...session,
+    ...(state ? { state: state.state, stateSource: state.source } : {}),
+    ...(capturedSessionId ? { capturedSessionId } : {}),
+    ...(model ? { model } : {}),
+    ...(tokenUsage ? { tokenUsage } : {}),
+  };
+}
+
+export function applyAgentRestoreLaunchEvents(
   outcomes: AgentRestoreOutcome[],
-  closedDuringRestore: ReadonlyMap<string, string>,
+  events: AgentLaunchEventSnapshot,
 ): AgentRestoreOutcome[] {
   return outcomes.map((outcome) => {
-    const sessionId = outcome.session?.sessionId;
-    if (!sessionId || !closedDuringRestore.has(sessionId)) return outcome;
+    const session = outcome.session;
+    if (!session) return outcome;
+    const sessionId = session.sessionId;
+    if (events.closed.has(sessionId)) {
+      return {
+        ...outcome,
+        session: null,
+        error: agentStartupExitMessage(
+          outcome.label,
+          events.closed.get(sessionId) ?? "Process exited",
+        ),
+      };
+    }
     return {
       ...outcome,
-      session: null,
-      error: agentStartupExitMessage(
-        outcome.label,
-        closedDuringRestore.get(sessionId) ?? "Process exited",
-      ),
+      session: applyAgentLaunchEvents(session, events),
     };
   });
 }
@@ -625,6 +704,7 @@ export function useAgentSessions(): AgentApi {
         const stopState = await listen<AgentStateEvent>(
           "agent://state",
           (event) => {
+            launchRaceGuard.current.observeState(event.payload);
             if (hydrating) {
               stateDuringHydration.set(event.payload.sessionId, event.payload);
               return;
@@ -640,6 +720,10 @@ export function useAgentSessions(): AgentApi {
           sessionId: string;
           nativeSessionId: string;
         }>("agent://capture", (event) => {
+          launchRaceGuard.current.observeCaptured(
+            event.payload.sessionId,
+            event.payload.nativeSessionId,
+          );
           if (hydrating) {
             captureDuringHydration.set(
               event.payload.sessionId,
@@ -663,6 +747,7 @@ export function useAgentSessions(): AgentApi {
         const stopModel = await listen<AgentModelEvent>(
           "agent://model",
           (event) => {
+            launchRaceGuard.current.observeModel(event.payload);
             if (hydrating) {
               modelDuringHydration.set(event.payload.sessionId, event.payload.model);
               return;
@@ -681,6 +766,7 @@ export function useAgentSessions(): AgentApi {
         const stopUsage = await listen<AgentUsageEvent>(
           "agent://usage",
           (event) => {
+            launchRaceGuard.current.observeUsage(event.payload);
             if (hydrating) {
               usageDuringHydration.set(
                 event.payload.sessionId,
@@ -801,7 +887,8 @@ export function useAgentSessions(): AgentApi {
       const session = await invoke<AgentSessionSummary>("agent_launch", {
         request,
       });
-      const closedReason = attempt.finish(session.sessionId);
+      const launchEvents = attempt.finish();
+      const closedReason = launchEvents.closed.get(session.sessionId) ?? null;
       if (closedReason !== null) {
         setLastClosed((current) =>
           current?.sessionId === session.sessionId
@@ -810,11 +897,12 @@ export function useAgentSessions(): AgentApi {
         );
         throw new Error(agentStartupExitMessage(session.label, closedReason));
       }
+      const settledSession = applyAgentLaunchEvents(session, launchEvents);
       setSessions((current) => [
         ...current.filter((entry) => entry.sessionId !== session.sessionId),
-        session,
+        settledSession,
       ]);
-      return session;
+      return settledSession;
     } finally {
       attempt.cancel();
     }
@@ -886,16 +974,14 @@ export function useAgentSessions(): AgentApi {
       });
       const currentSessions =
         await invoke<AgentSessionSummary[]>("agent_sessions");
-      const closedDuringRestore = attempt.finishSnapshot();
-      const closedSessionIds = new Set(closedDuringRestore.keys());
+      const launchEvents = attempt.finish();
+      const closedSessionIds = new Set(launchEvents.closed.keys());
       setSessions((current) =>
-        reconcileSessionSnapshot(
-          current,
-          currentSessions,
-          closedSessionIds,
+        reconcileSessionSnapshot(current, currentSessions, closedSessionIds).map(
+          (session) => applyAgentLaunchEvents(session, launchEvents),
         ),
       );
-      return applyAgentRestoreCloseEvents(outcomes, closedDuringRestore);
+      return applyAgentRestoreLaunchEvents(outcomes, launchEvents);
     } finally {
       attempt.cancel();
     }

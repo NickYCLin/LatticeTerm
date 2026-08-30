@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentLaunchRaceGuard,
-  applyAgentRestoreCloseEvents,
+  applyAgentLaunchEvents,
+  applyAgentRestoreLaunchEvents,
   applyAgentStateEvent,
   applyAgentUsageEvent,
   agentCatalogForDisplay,
@@ -22,8 +23,10 @@ describe("agent session transport", () => {
 
     guard.observeClosed("agent-fast", "Process exited: code 0");
 
-    expect(attempt.finish("agent-fast")).toBe("Process exited: code 0");
-    expect(attempt.finish("agent-fast")).toBeNull();
+    expect(attempt.finish().closed.get("agent-fast")).toBe(
+      "Process exited: code 0",
+    );
+    expect(attempt.finish().closed.size).toBe(0);
   });
 
   it("keeps concurrent launch tombstones until the matching attempt settles", () => {
@@ -32,11 +35,11 @@ describe("agent session transport", () => {
     const running = guard.begin();
     guard.observeClosed("agent-fast", "Process exited");
 
-    expect(running.finish("agent-running")).toBeNull();
-    expect(fast.finish("agent-fast")).toBe("Process exited");
+    expect(running.finish().closed.get("agent-running")).toBeUndefined();
+    expect(fast.finish().closed.get("agent-fast")).toBe("Process exited");
 
     const later = guard.begin();
-    expect(later.finish("agent-fast")).toBeNull();
+    expect(later.finish().closed.get("agent-fast")).toBeUndefined();
   });
 
   it("clears unrelated close events after a rejected launch settles", () => {
@@ -46,7 +49,7 @@ describe("agent session transport", () => {
     rejected.cancel();
 
     const later = guard.begin();
-    expect(later.finish("agent-unrelated")).toBeNull();
+    expect(later.finish().closed.get("agent-unrelated")).toBeUndefined();
   });
 
   it("keeps restore snapshot tombstones isolated from direct launches", () => {
@@ -55,9 +58,11 @@ describe("agent session transport", () => {
     const restore = guard.begin();
     guard.observeClosed("agent-fast", "Process exited: code 0");
 
-    expect(direct.finish("agent-fast")).toBe("Process exited: code 0");
-    const closedDuringRestore = restore.finishSnapshot();
-    expect(closedDuringRestore.get("agent-fast")).toBe(
+    expect(direct.finish().closed.get("agent-fast")).toBe(
+      "Process exited: code 0",
+    );
+    const restoreEvents = restore.finish();
+    expect(restoreEvents.closed.get("agent-fast")).toBe(
       "Process exited: code 0",
     );
 
@@ -77,10 +82,10 @@ describe("agent session transport", () => {
       tokenUsage: null,
       capturedSessionId: null,
     };
-    const closedIds = new Set(closedDuringRestore.keys());
+    const closedIds = new Set(restoreEvents.closed.keys());
     expect(reconcileSessionSnapshot([], [fastSession], closedIds)).toEqual([]);
     expect(
-      applyAgentRestoreCloseEvents(
+      applyAgentRestoreLaunchEvents(
         [
           {
             planId: "plan-fast",
@@ -89,7 +94,7 @@ describe("agent session transport", () => {
             error: null,
           },
         ],
-        closedDuringRestore,
+        restoreEvents,
       ),
     ).toEqual([
       {
@@ -99,6 +104,73 @@ describe("agent session transport", () => {
         error: "Fast CLI exited during startup: Process exited: code 0",
       },
     ]);
+  });
+
+  it("merges lifecycle metadata that arrives before a launch response", () => {
+    const guard = new AgentLaunchRaceGuard();
+    const attempt = guard.begin();
+    const tokenUsage = {
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 1,
+      reasoningTokens: 3,
+      totalTokens: 21,
+      apiCalls: 1,
+    };
+    guard.observeState({
+      sessionId: "agent-starting",
+      state: "working",
+      source: "heuristic",
+    });
+    guard.observeState({
+      sessionId: "agent-starting",
+      state: "done",
+      source: "integration",
+    });
+    guard.observeCaptured("agent-starting", "native-session-id");
+    guard.observeModel({ sessionId: "agent-starting", model: "gpt-5.6-sol" });
+    guard.observeUsage({ sessionId: "agent-starting", tokenUsage });
+
+    const events = attempt.finish();
+    const initial = {
+      sessionId: "agent-starting",
+      groupId: "agent-starting",
+      groupLabel: "Codex",
+      definitionId: "codex",
+      label: "Codex",
+      model: null,
+      executable: "/usr/bin/codex",
+      launchArguments: [],
+      workingDirectory: "/work",
+      state: "working" as const,
+      stateSource: "heuristic" as const,
+      processId: 42,
+      tokenUsage: null,
+      capturedSessionId: null,
+    };
+    const settled = applyAgentLaunchEvents(initial, events);
+
+    expect(settled).toMatchObject({
+      state: "done",
+      stateSource: "integration",
+      capturedSessionId: "native-session-id",
+      model: "gpt-5.6-sol",
+      tokenUsage,
+    });
+    expect(
+      applyAgentRestoreLaunchEvents(
+        [
+          {
+            planId: "plan-codex",
+            label: "Codex",
+            session: initial,
+            error: null,
+          },
+        ],
+        events,
+      )[0].session,
+    ).toEqual(settled);
   });
 
   it("shows Antigravity as Google's single consumer item with Gemini login data", () => {
