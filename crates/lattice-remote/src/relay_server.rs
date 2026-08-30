@@ -10,22 +10,27 @@
 
 use crate::relay::{
     hash_token, normalize_device_id, random_channel_id, read_client_message, write_server_message,
-    RelayClientMessage, RelayServerMessage,
+    RelayClientMessage, RelayServerMessage, MAX_RELAY_AUTH_TOKEN_BYTES,
 };
-use crate::Transport;
+use crate::{Transport, MAX_AGENT_NAME_BYTES};
 use std::collections::HashMap;
+use std::io::Read as _;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 
 /// A registration is dropped when the agent stays silent longer than this;
 /// agents ping every 25 seconds, so three missed pings end the entry.
 const CONTROL_IDLE_LIMIT: Duration = Duration::from_secs(90);
+/// A control write must not pin its carrier forever when an agent stops
+/// reading while continuing to hold the socket open.
+const CONTROL_WRITE_LIMIT: Duration = Duration::from_secs(5);
 /// How long a dialing viewer waits for the agent to join the channel.
 const JOIN_WAIT_LIMIT: Duration = Duration::from_secs(12);
 /// How long a brand-new connection has to say what it wants.
@@ -35,28 +40,114 @@ const FIRST_MESSAGE_LIMIT: Duration = Duration::from_secs(10);
 /// pairing-code guessing or device-ID scanning through the relay.
 const CONNECTIONS_PER_WINDOW: usize = 30;
 const RATE_WINDOW: Duration = Duration::from_secs(60);
+const MAX_RATE_BUCKETS: usize = 10_000;
+/// Hard process-wide carrier cap. This remains effective when HTTPS ingress
+/// makes every public peer appear to come from loopback.
+const MAX_ACTIVE_RELAY_CONNECTIONS: usize = 512;
+/// Viewers waiting for an agent to answer an invite.
+const MAX_PENDING_DIALS: usize = 128;
+/// Persistent device claims accepted before an operator must expand capacity.
+const MAX_DEVICE_REGISTRY_ENTRIES: usize = 10_000;
+const MAX_DEVICE_REGISTRY_BYTES: u64 = 2 * 1024 * 1024;
+const CHANNEL_ID_HEX_BYTES: usize = 64;
 
 struct AgentEntry {
     agent_name: String,
     invites: mpsc::Sender<RelayServerMessage>,
+    cancel: oneshot::Sender<()>,
     generation: u64,
 }
 
+struct JoinedTransport {
+    transport: Transport,
+    /// A joined carrier stays counted until the linked session actually ends.
+    _connection_permit: OwnedSemaphorePermit,
+}
+
+struct PendingJoin {
+    device_id: String,
+    sender: oneshot::Sender<JoinedTransport>,
+}
+
 #[derive(Default)]
+struct DialState {
+    joins: HashMap<String, PendingJoin>,
+    /// The channel holding a device's single pending or linked Dial.
+    device_channels: HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DialReservationError {
+    DeviceBusy,
+    Capacity,
+    ChannelCollision,
+}
+
+struct DialReservation {
+    state: Arc<RelayState>,
+    channel_id: String,
+    device_id: String,
+}
+
+impl Drop for DialReservation {
+    fn drop(&mut self) {
+        self.state.release_dial(&self.channel_id, &self.device_id);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DeviceClaimError {
+    AlreadyClaimed,
+    Capacity,
+    Unavailable,
+}
+
 pub struct RelayState {
     agents: Mutex<HashMap<String, AgentEntry>>,
-    pending: Mutex<HashMap<String, oneshot::Sender<Transport>>>,
+    dials: Mutex<DialState>,
     tokens: Mutex<HashMap<String, String>>,
     state_path: Option<PathBuf>,
     generations: Mutex<u64>,
     rates: Mutex<HashMap<IpAddr, Vec<Instant>>>,
+    connection_slots: Arc<Semaphore>,
+    max_pending_dials: usize,
+    max_device_registry_entries: usize,
+    registry_healthy: AtomicBool,
+}
+
+impl Default for RelayState {
+    fn default() -> Self {
+        Self::new(None)
+    }
 }
 
 impl RelayState {
     pub fn new(state_path: Option<PathBuf>) -> Self {
-        let state = Self {
+        Self::with_limits(
             state_path,
-            ..Self::default()
+            MAX_ACTIVE_RELAY_CONNECTIONS,
+            MAX_PENDING_DIALS,
+            MAX_DEVICE_REGISTRY_ENTRIES,
+        )
+    }
+
+    fn with_limits(
+        state_path: Option<PathBuf>,
+        max_connections: usize,
+        max_pending_dials: usize,
+        max_device_registry_entries: usize,
+    ) -> Self {
+        let state = Self {
+            agents: Mutex::new(HashMap::new()),
+            dials: Mutex::new(DialState::default()),
+            tokens: Mutex::new(HashMap::new()),
+            state_path,
+            generations: Mutex::new(0),
+            rates: Mutex::new(HashMap::new()),
+            connection_slots: Arc::new(Semaphore::new(max_connections)),
+            max_pending_dials,
+            max_device_registry_entries,
+            registry_healthy: AtomicBool::new(true),
         };
         state.load_tokens();
         state
@@ -81,37 +172,127 @@ impl RelayState {
         }
         let now = Instant::now();
         let mut rates = self.rates.lock().expect("rate lock");
+        if rates.len() >= MAX_RATE_BUCKETS && !rates.contains_key(&ip) {
+            rates.retain(|_, entries| {
+                entries.retain(|at| now.duration_since(*at) < RATE_WINDOW);
+                !entries.is_empty()
+            });
+            if rates.len() >= MAX_RATE_BUCKETS {
+                return false;
+            }
+        }
         let recent = rates.entry(ip).or_default();
         recent.retain(|at| now.duration_since(*at) < RATE_WINDOW);
         if recent.len() >= CONNECTIONS_PER_WINDOW {
             return false;
         }
         recent.push(now);
-        // Idle buckets are pruned so a scan cannot grow the map forever.
-        if rates.len() > 10_000 {
-            rates.retain(|_, entries| {
-                entries.retain(|at| now.duration_since(*at) < RATE_WINDOW);
-                !entries.is_empty()
-            });
-        }
         true
     }
 
-    fn verify_or_claim(&self, device_id: &str, auth_token: &str) -> Result<(), &'static str> {
+    fn try_reserve_connection(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.connection_slots).try_acquire_owned().ok()
+    }
+
+    fn reserve_dial(
+        self: &Arc<Self>,
+        channel_id: String,
+        device_id: String,
+    ) -> Result<(oneshot::Receiver<JoinedTransport>, DialReservation), DialReservationError> {
+        let mut dials = self.dials.lock().expect("dial lock");
+        if dials.device_channels.contains_key(&device_id) {
+            return Err(DialReservationError::DeviceBusy);
+        }
+        if dials.joins.len() >= self.max_pending_dials {
+            return Err(DialReservationError::Capacity);
+        }
+        if dials.joins.contains_key(&channel_id) {
+            return Err(DialReservationError::ChannelCollision);
+        }
+        let (sender, receiver) = oneshot::channel();
+        dials
+            .device_channels
+            .insert(device_id.clone(), channel_id.clone());
+        dials.joins.insert(
+            channel_id.clone(),
+            PendingJoin {
+                device_id: device_id.clone(),
+                sender,
+            },
+        );
+        drop(dials);
+        Ok((
+            receiver,
+            DialReservation {
+                state: Arc::clone(self),
+                channel_id,
+                device_id,
+            },
+        ))
+    }
+
+    fn take_pending_join(
+        &self,
+        channel_id: &str,
+        device_id: &str,
+    ) -> Option<oneshot::Sender<JoinedTransport>> {
+        let mut dials = self.dials.lock().expect("dial lock");
+        if dials
+            .joins
+            .get(channel_id)
+            .is_none_or(|pending| pending.device_id != device_id)
+        {
+            return None;
+        }
+        dials.joins.remove(channel_id).map(|pending| pending.sender)
+    }
+
+    fn release_dial(&self, channel_id: &str, device_id: &str) {
+        let mut dials = self.dials.lock().expect("dial lock");
+        if dials
+            .joins
+            .get(channel_id)
+            .is_some_and(|pending| pending.device_id == device_id)
+        {
+            dials.joins.remove(channel_id);
+        }
+        if dials
+            .device_channels
+            .get(device_id)
+            .is_some_and(|active_channel| active_channel == channel_id)
+        {
+            dials.device_channels.remove(device_id);
+        }
+    }
+
+    fn verify_or_claim(&self, device_id: &str, auth_token: &str) -> Result<(), DeviceClaimError> {
+        if !self.registry_healthy.load(Ordering::Acquire) {
+            return Err(DeviceClaimError::Unavailable);
+        }
         let hashed = hash_token(auth_token);
         let mut tokens = self.tokens.lock().expect("token lock");
         match tokens.get(device_id) {
             Some(existing) if *existing == hashed => Ok(()),
-            Some(_) => Err("this device ID belongs to another device"),
+            Some(_) => Err(DeviceClaimError::AlreadyClaimed),
+            None if tokens.len() >= self.max_device_registry_entries => {
+                Err(DeviceClaimError::Capacity)
+            }
             None => {
                 tokens.insert(device_id.to_string(), hashed);
-                self.save_tokens(&tokens);
-                Ok(())
+                if self.save_tokens(&tokens).is_ok() {
+                    Ok(())
+                } else {
+                    tokens.remove(device_id);
+                    Err(DeviceClaimError::Unavailable)
+                }
             }
         }
     }
 
     fn verify_only(&self, device_id: &str, auth_token: &str) -> bool {
+        if !self.registry_healthy.load(Ordering::Acquire) {
+            return false;
+        }
         let hashed = hash_token(auth_token);
         self.tokens
             .lock()
@@ -120,12 +301,12 @@ impl RelayState {
             .is_some_and(|existing| *existing == hashed)
     }
 
-    fn save_tokens(&self, tokens: &HashMap<String, String>) {
+    fn save_tokens(&self, tokens: &HashMap<String, String>) -> Result<(), ()> {
         let Some(path) = &self.state_path else {
-            return;
+            return Ok(());
         };
         match serde_json::to_vec_pretty(tokens) {
-            Ok(json) => {
+            Ok(json) if json.len() as u64 <= MAX_DEVICE_REGISTRY_BYTES => {
                 let staging = path.with_extension("tmp");
                 let mut options = std::fs::OpenOptions::new();
                 options.create(true).truncate(true).write(true);
@@ -149,9 +330,19 @@ impl RelayState {
                 })();
                 if let Err(error) = result {
                     eprintln!("warning: could not persist device registry: {error}");
+                    Err(())
+                } else {
+                    Ok(())
                 }
             }
-            Err(error) => eprintln!("warning: could not encode device registry: {error}"),
+            Ok(_) => {
+                eprintln!("warning: device registry exceeds its safe file-size limit");
+                Err(())
+            }
+            Err(error) => {
+                eprintln!("warning: could not encode device registry: {error}");
+                Err(())
+            }
         }
     }
 
@@ -159,18 +350,51 @@ impl RelayState {
         let Some(path) = &self.state_path else {
             return;
         };
-        match std::fs::read(path) {
-            Ok(bytes) => match serde_json::from_slice::<HashMap<String, String>>(&bytes) {
-                Ok(loaded) => {
-                    let count = loaded.len();
-                    *self.tokens.lock().expect("token lock") = loaded;
-                    println!("Loaded {count} registered device IDs.");
+        let loaded = match std::fs::File::open(path) {
+            Ok(file) => {
+                let mut bytes = Vec::new();
+                match file
+                    .take(MAX_DEVICE_REGISTRY_BYTES + 1)
+                    .read_to_end(&mut bytes)
+                {
+                    Ok(_) if bytes.len() as u64 <= MAX_DEVICE_REGISTRY_BYTES => {
+                        serde_json::from_slice::<HashMap<String, String>>(&bytes)
+                            .map_err(|error| format!("invalid JSON: {error}"))
+                    }
+                    Ok(_) => Err("file exceeds the safe size limit".to_string()),
+                    Err(error) => Err(format!("could not read it: {error}")),
                 }
-                Err(error) => eprintln!("warning: ignoring invalid device registry: {error}"),
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => eprintln!("warning: could not read device registry: {error}"),
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => {
+                self.registry_healthy.store(false, Ordering::Release);
+                eprintln!("warning: refusing device registry after a read error: {error}");
+                return;
+            }
+        };
+        let loaded = match loaded {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                self.registry_healthy.store(false, Ordering::Release);
+                eprintln!("warning: refusing unsafe device registry: {error}");
+                return;
+            }
+        };
+        let valid = loaded.len() <= self.max_device_registry_entries
+            && loaded.iter().all(|(device_id, token_hash)| {
+                device_id.len() == 9
+                    && device_id.bytes().all(|byte| byte.is_ascii_digit())
+                    && token_hash.len() == CHANNEL_ID_HEX_BYTES
+                    && token_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            });
+        if !valid {
+            self.registry_healthy.store(false, Ordering::Release);
+            eprintln!("warning: refusing unsafe or over-capacity device registry");
+            return;
         }
+        let count = loaded.len();
+        *self.tokens.lock().expect("token lock") = loaded;
+        println!("Loaded {count} registered device IDs.");
     }
 }
 
@@ -185,6 +409,21 @@ async fn send_error(stream: &mut Transport, code: &str, detail: &str) {
     .await;
 }
 
+fn valid_agent_name(agent_name: &str) -> bool {
+    !agent_name.trim().is_empty()
+        && agent_name.len() <= MAX_AGENT_NAME_BYTES
+        && !agent_name.chars().any(char::is_control)
+}
+
+fn valid_auth_token(auth_token: &str) -> bool {
+    !auth_token.is_empty() && auth_token.len() <= MAX_RELAY_AUTH_TOKEN_BYTES
+}
+
+fn valid_channel_id(channel_id: &str) -> bool {
+    channel_id.len() == CHANNEL_ID_HEX_BYTES
+        && channel_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 /// Holds an agent's register connection: forwards invites from dial handlers
 /// and answers pings until the agent disappears.
 async fn run_agent_control(
@@ -196,14 +435,19 @@ async fn run_agent_control(
 ) {
     let generation = state.next_generation();
     let (invites_tx, mut invites_rx) = mpsc::channel::<RelayServerMessage>(8);
-    state.agents.lock().expect("agent lock").insert(
+    let (cancel_tx, mut cancel_rx) = oneshot::channel();
+    let previous = state.agents.lock().expect("agent lock").insert(
         device_id.clone(),
         AgentEntry {
             agent_name,
             invites: invites_tx,
+            cancel: cancel_tx,
             generation,
         },
     );
+    if let Some(previous) = previous {
+        let _ = previous.cancel.send(());
+    }
     println!("Registered device {device_id} from {peer}.");
 
     let (mut read_half, write_half) = tokio::io::split(stream);
@@ -212,34 +456,42 @@ async fn run_agent_control(
 
     let mut forwarder = tokio::spawn(async move {
         while let Some(message) = invites_rx.recv().await {
-            let mut guard = ping_writer.lock().await;
-            if write_server_message(&mut *guard, &message).await.is_err() {
+            let written = timeout(CONTROL_WRITE_LIMIT, async {
+                let mut guard = ping_writer.lock().await;
+                write_server_message(&mut *guard, &message).await
+            })
+            .await;
+            if !matches!(written, Ok(Ok(()))) {
                 break;
             }
         }
     });
 
-    loop {
+    let forwarder_finished = loop {
         tokio::select! {
             received = timeout(CONTROL_IDLE_LIMIT, read_client_message(&mut read_half)) => {
                 match received {
                     Ok(Ok(RelayClientMessage::Ping)) => {
-                        let mut guard = writer.lock().await;
-                        if write_server_message(&mut *guard, &RelayServerMessage::Pong)
-                            .await
-                            .is_err()
-                        {
-                            break;
+                        let written = timeout(CONTROL_WRITE_LIMIT, async {
+                            let mut guard = writer.lock().await;
+                            write_server_message(&mut *guard, &RelayServerMessage::Pong).await
+                        }).await;
+                        if !matches!(written, Ok(Ok(()))) {
+                            break false;
                         }
                     }
-                    Ok(Ok(_)) | Ok(Err(_)) | Err(_) => break,
+                    Ok(Ok(_)) | Ok(Err(_)) | Err(_) => break false,
                 }
             }
-            _ = &mut forwarder => break,
+            _ = &mut cancel_rx => break false,
+            _ = &mut forwarder => break true,
         }
-    }
+    };
 
-    forwarder.abort();
+    if !forwarder_finished {
+        forwarder.abort();
+        let _ = forwarder.await;
+    }
     let mut agents = state.agents.lock().expect("agent lock");
     if agents
         .get(&device_id)
@@ -291,37 +543,51 @@ async fn run_dial(
         return;
     };
 
-    let (channel_tx, channel_rx) = oneshot::channel::<Transport>();
-    state
-        .pending
-        .lock()
-        .expect("pending lock")
-        .insert(channel_id.clone(), channel_tx);
+    let (channel_rx, _reservation) = match state.reserve_dial(channel_id.clone(), device_id.clone())
+    {
+        Ok(reservation) => reservation,
+        Err(DialReservationError::DeviceBusy | DialReservationError::Capacity) => {
+            send_error(
+                &mut stream,
+                "busy",
+                "The device or relay is already handling another connection.",
+            )
+            .await;
+            return;
+        }
+        Err(DialReservationError::ChannelCollision) => {
+            send_error(
+                &mut stream,
+                "internal",
+                "The relay could not reserve a channel.",
+            )
+            .await;
+            return;
+        }
+    };
 
-    let invited = invite
-        .send(RelayServerMessage::Invite {
-            channel_id: channel_id.clone(),
-        })
-        .await
-        .is_ok();
-    if !invited {
-        state
-            .pending
-            .lock()
-            .expect("pending lock")
-            .remove(&channel_id);
-        send_error(&mut stream, "offline", "That device just went offline.").await;
-        return;
+    match invite.try_send(RelayServerMessage::Invite {
+        channel_id: channel_id.clone(),
+    }) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            send_error(&mut stream, "offline", "That device just went offline.").await;
+            return;
+        }
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            send_error(
+                &mut stream,
+                "busy",
+                "That device is not accepting another invite yet.",
+            )
+            .await;
+            return;
+        }
     }
 
-    let agent_stream = match timeout(JOIN_WAIT_LIMIT, channel_rx).await {
+    let mut agent_stream = match timeout(JOIN_WAIT_LIMIT, channel_rx).await {
         Ok(Ok(agent_stream)) => agent_stream,
         Ok(Err(_)) | Err(_) => {
-            state
-                .pending
-                .lock()
-                .expect("pending lock")
-                .remove(&channel_id);
             send_error(
                 &mut stream,
                 "busy",
@@ -332,11 +598,10 @@ async fn run_dial(
         }
     };
 
-    let mut agent_stream = agent_stream;
     let linked = RelayServerMessage::Linked {
         agent_name: agent_name.clone(),
     };
-    if write_server_message(&mut agent_stream, &linked)
+    if write_server_message(&mut agent_stream.transport, &linked)
         .await
         .is_err()
     {
@@ -344,12 +609,12 @@ async fn run_dial(
         return;
     }
     if write_server_message(&mut stream, &linked).await.is_err() {
-        let _ = agent_stream.shutdown().await;
+        let _ = agent_stream.transport.shutdown().await;
         return;
     }
 
     println!("Linked a viewer at {peer} with device {device_id}.");
-    match tokio::io::copy_bidirectional(&mut stream, &mut agent_stream).await {
+    match tokio::io::copy_bidirectional(&mut stream, &mut agent_stream.transport).await {
         Ok((to_agent, to_viewer)) => println!(
             "Channel for device {device_id} closed ({to_agent} bytes in, {to_viewer} bytes out)."
         ),
@@ -357,7 +622,12 @@ async fn run_dial(
     }
 }
 
-async fn run_connection(state: Arc<RelayState>, mut stream: Transport, peer: SocketAddr) {
+async fn run_connection(
+    state: Arc<RelayState>,
+    mut stream: Transport,
+    peer: SocketAddr,
+    connection_permit: OwnedSemaphorePermit,
+) {
     let first = match timeout(FIRST_MESSAGE_LIMIT, read_client_message(&mut stream)).await {
         Ok(Ok(message)) => message,
         Ok(Err(_)) | Err(_) => return,
@@ -368,6 +638,15 @@ async fn run_connection(state: Arc<RelayState>, mut stream: Transport, peer: Soc
             auth_token,
             agent_name,
         } => {
+            if !valid_auth_token(&auth_token) || !valid_agent_name(&agent_name) {
+                send_error(
+                    &mut stream,
+                    "invalidRequest",
+                    "The agent name or authentication token is invalid.",
+                )
+                .await;
+                return;
+            }
             let device_id = match normalize_device_id(&device_id) {
                 Ok(device_id) => device_id,
                 Err(_) => {
@@ -375,9 +654,35 @@ async fn run_connection(state: Arc<RelayState>, mut stream: Transport, peer: Soc
                     return;
                 }
             };
-            if let Err(reason) = state.verify_or_claim(&device_id, &auth_token) {
-                send_error(&mut stream, "unauthorized", reason).await;
-                return;
+            match state.verify_or_claim(&device_id, &auth_token) {
+                Ok(()) => {}
+                Err(DeviceClaimError::AlreadyClaimed) => {
+                    send_error(
+                        &mut stream,
+                        "unauthorized",
+                        "This device ID belongs to another device.",
+                    )
+                    .await;
+                    return;
+                }
+                Err(DeviceClaimError::Capacity) => {
+                    send_error(
+                        &mut stream,
+                        "capacity",
+                        "The relay device registry is full.",
+                    )
+                    .await;
+                    return;
+                }
+                Err(DeviceClaimError::Unavailable) => {
+                    send_error(
+                        &mut stream,
+                        "unavailable",
+                        "The relay device registry is unavailable.",
+                    )
+                    .await;
+                    return;
+                }
             }
             if write_server_message(&mut stream, &RelayServerMessage::Registered)
                 .await
@@ -395,22 +700,30 @@ async fn run_connection(state: Arc<RelayState>, mut stream: Transport, peer: Soc
             device_id,
             auth_token,
         } => {
-            let authorized = normalize_device_id(&device_id)
-                .map(|device_id| state.verify_only(&device_id, &auth_token))
-                .unwrap_or(false);
-            if !authorized {
-                send_error(&mut stream, "unauthorized", "Unknown device or token.").await;
+            if !valid_channel_id(&channel_id) || !valid_auth_token(&auth_token) {
+                send_error(
+                    &mut stream,
+                    "invalidRequest",
+                    "The channel or authentication token is invalid.",
+                )
+                .await;
                 return;
             }
-            let waiting = state
-                .pending
-                .lock()
-                .expect("pending lock")
-                .remove(&channel_id);
+            let authorized = normalize_device_id(&device_id)
+                .ok()
+                .filter(|device_id| state.verify_only(device_id, &auth_token));
+            let Some(device_id) = authorized else {
+                send_error(&mut stream, "unauthorized", "Unknown device or token.").await;
+                return;
+            };
+            let waiting = state.take_pending_join(&channel_id, &device_id);
             match waiting {
                 // The dial handler takes over the socket from here.
                 Some(channel) => {
-                    let _ = channel.send(stream);
+                    let _ = channel.send(JoinedTransport {
+                        transport: stream,
+                        _connection_permit: connection_permit,
+                    });
                 }
                 None => {
                     send_error(&mut stream, "expired", "That invite is no longer waiting.").await;
@@ -429,6 +742,12 @@ pub async fn run(listener: TcpListener, state: Arc<RelayState>) {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
+                let Some(connection_permit) = state.try_reserve_connection() else {
+                    // Refuse before spawning or negotiating a carrier. This is
+                    // the backstop for loopback traffic arriving via ingress.
+                    drop(stream);
+                    continue;
+                };
                 let state = Arc::clone(&state);
                 tokio::spawn(async move {
                     // The budget is spent before the WebSocket handshake so a
@@ -440,7 +759,7 @@ pub async fn run(listener: TcpListener, state: Arc<RelayState>) {
                     }
                     let negotiated = timeout(FIRST_MESSAGE_LIMIT, negotiate_carrier(stream)).await;
                     if let Ok(Ok(transport)) = negotiated {
-                        run_connection(state, transport, peer).await;
+                        run_connection(state, transport, peer, connection_permit).await;
                     }
                 });
             }
@@ -659,6 +978,217 @@ mod tests {
         }
     }
 
+    #[test]
+    fn rate_bucket_map_has_a_hard_cardinality_limit() {
+        let state = RelayState::default();
+        let first = u32::from_be_bytes([10, 0, 0, 1]);
+        for offset in 0..MAX_RATE_BUCKETS as u32 {
+            assert!(state.allow_connection(IpAddr::from(std::net::Ipv4Addr::from(first + offset))));
+        }
+        assert!(
+            !state.allow_connection(IpAddr::from(std::net::Ipv4Addr::from(
+                first + MAX_RATE_BUCKETS as u32
+            )))
+        );
+        assert_eq!(state.rates.lock().unwrap().len(), MAX_RATE_BUCKETS);
+        assert!(state.allow_connection(IpAddr::from(std::net::Ipv4Addr::from(first))));
+    }
+
+    #[test]
+    fn global_connection_budget_caps_loopback_ingress_too() {
+        let state = RelayState::default();
+        let mut permits = Vec::new();
+        for _ in 0..MAX_ACTIVE_RELAY_CONNECTIONS {
+            permits.push(
+                state
+                    .try_reserve_connection()
+                    .expect("the configured relay connection slot should exist"),
+            );
+        }
+        assert!(state.try_reserve_connection().is_none());
+
+        permits.pop();
+        assert!(state.try_reserve_connection().is_some());
+    }
+
+    #[tokio::test]
+    async fn joined_transport_keeps_its_connection_slot_until_drop() {
+        let state = RelayState::with_limits(None, 1, 1, 1);
+        let permit = state.try_reserve_connection().unwrap();
+        let (stream, _peer) = tokio::io::duplex(64);
+        let joined = JoinedTransport {
+            transport: Transport::WebSocket(Box::new(stream)),
+            _connection_permit: permit,
+        };
+        let (sender, receiver) = oneshot::channel();
+
+        assert!(sender.send(joined).is_ok());
+        assert!(state.try_reserve_connection().is_none());
+        let joined = receiver.await.unwrap();
+        assert!(state.try_reserve_connection().is_none());
+
+        drop(joined);
+        assert!(state.try_reserve_connection().is_some());
+    }
+
+    #[test]
+    fn one_device_has_one_dial_and_cancel_restores_pending_capacity() {
+        let state = Arc::new(RelayState::with_limits(None, 8, 1, 8));
+        let (first_receiver, first) = state
+            .reserve_dial("channel-one".to_string(), "123456789".to_string())
+            .unwrap();
+
+        assert!(matches!(
+            state.reserve_dial("channel-two".to_string(), "123456789".to_string()),
+            Err(DialReservationError::DeviceBusy)
+        ));
+        assert!(matches!(
+            state.reserve_dial("channel-two".to_string(), "987654321".to_string()),
+            Err(DialReservationError::Capacity)
+        ));
+        assert!(state
+            .take_pending_join("channel-one", "987654321")
+            .is_none());
+        assert_eq!(state.dials.lock().unwrap().joins.len(), 1);
+
+        drop(first);
+        assert!(first_receiver.blocking_recv().is_err());
+        assert!(state.dials.lock().unwrap().joins.is_empty());
+        assert!(state.dials.lock().unwrap().device_channels.is_empty());
+        assert!(state
+            .reserve_dial("channel-two".to_string(), "987654321".to_string())
+            .is_ok());
+    }
+
+    #[test]
+    fn a_join_keeps_the_device_reserved_until_the_link_ends() {
+        let state = Arc::new(RelayState::with_limits(None, 8, 2, 8));
+        let (_receiver, reservation) = state
+            .reserve_dial("channel-one".to_string(), "123456789".to_string())
+            .unwrap();
+        let sender = state
+            .take_pending_join("channel-one", "123456789")
+            .expect("the matching device should claim its pending channel");
+        drop(sender);
+
+        assert!(state.dials.lock().unwrap().joins.is_empty());
+        assert!(matches!(
+            state.reserve_dial("channel-two".to_string(), "123456789".to_string()),
+            Err(DialReservationError::DeviceBusy)
+        ));
+
+        drop(reservation);
+        assert!(state
+            .reserve_dial("channel-two".to_string(), "123456789".to_string())
+            .is_ok());
+    }
+
+    #[test]
+    fn full_device_registry_keeps_existing_owners_but_rejects_new_claims() {
+        let state = RelayState::with_limits(None, 8, 2, 1);
+        assert_eq!(state.verify_or_claim("123456789", "first-token"), Ok(()));
+        assert_eq!(state.verify_or_claim("123456789", "first-token"), Ok(()));
+        assert_eq!(
+            state.verify_or_claim("123456789", "wrong-token"),
+            Err(DeviceClaimError::AlreadyClaimed)
+        );
+        assert_eq!(
+            state.verify_or_claim("987654321", "second-token"),
+            Err(DeviceClaimError::Capacity)
+        );
+    }
+
+    #[test]
+    fn oversized_device_registry_is_read_bounded_and_fails_closed() {
+        let directory = std::env::temp_dir().join(format!(
+            "lattice-relay-oversized-registry-{}-{}",
+            std::process::id(),
+            random_channel_id().unwrap()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("devices.json");
+        std::fs::write(&path, vec![b' '; MAX_DEVICE_REGISTRY_BYTES as usize + 1]).unwrap();
+
+        let state = RelayState::new(Some(path.clone()));
+        assert!(!state.registry_healthy.load(Ordering::Acquire));
+        assert_eq!(
+            state.verify_or_claim("123456789", "token"),
+            Err(DeviceClaimError::Unavailable)
+        );
+
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn malformed_device_registry_fails_closed() {
+        let directory = std::env::temp_dir().join(format!(
+            "lattice-relay-malformed-registry-{}-{}",
+            std::process::id(),
+            random_channel_id().unwrap()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("devices.json");
+        std::fs::write(&path, b"{not-json").unwrap();
+
+        let state = RelayState::new(Some(path.clone()));
+        assert!(!state.registry_healthy.load(Ordering::Acquire));
+        assert_eq!(
+            state.verify_or_claim("123456789", "token"),
+            Err(DeviceClaimError::Unavailable)
+        );
+
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn over_capacity_device_registry_fails_closed_without_dropping_owners() {
+        let directory = std::env::temp_dir().join(format!(
+            "lattice-relay-full-registry-{}-{}",
+            std::process::id(),
+            random_channel_id().unwrap()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("devices.json");
+        let registry = HashMap::from([
+            ("123456789".to_string(), hash_token("one")),
+            ("987654321".to_string(), hash_token("two")),
+        ]);
+        std::fs::write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+
+        let state = RelayState::with_limits(Some(path.clone()), 8, 2, 1);
+        assert!(!state.registry_healthy.load(Ordering::Acquire));
+        assert!(!state.verify_only("123456789", "one"));
+        assert_eq!(
+            state.verify_or_claim("555555555", "three"),
+            Err(DeviceClaimError::Unavailable)
+        );
+
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn relay_identity_fields_have_strict_size_and_shape_limits() {
+        assert!(valid_agent_name("Remote workstation"));
+        assert!(!valid_agent_name(""));
+        assert!(!valid_agent_name("line\nbreak"));
+        assert!(valid_agent_name(&"a".repeat(MAX_AGENT_NAME_BYTES)));
+        assert!(!valid_agent_name(&"a".repeat(MAX_AGENT_NAME_BYTES + 1)));
+
+        assert!(valid_auth_token("token"));
+        assert!(!valid_auth_token(""));
+        assert!(valid_auth_token(&"a".repeat(MAX_RELAY_AUTH_TOKEN_BYTES)));
+        assert!(!valid_auth_token(
+            &"a".repeat(MAX_RELAY_AUTH_TOKEN_BYTES + 1)
+        ));
+
+        assert!(valid_channel_id(&"a".repeat(CHANNEL_ID_HEX_BYTES)));
+        assert!(!valid_channel_id(&"g".repeat(CHANNEL_ID_HEX_BYTES)));
+        assert!(!valid_channel_id(&"a".repeat(CHANNEL_ID_HEX_BYTES - 1)));
+    }
+
     #[cfg(unix)]
     #[test]
     fn persisted_device_registry_is_owner_only() {
@@ -730,5 +1260,38 @@ mod tests {
             RelayServerMessage::Error { code, .. } => assert_eq!(code, "unauthorized"),
             other => panic!("expected a rejection, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn replacing_a_device_control_closes_the_old_carrier() {
+        let (address, state) = start_relay().await;
+        let identity = DeviceIdentity::generate().unwrap();
+        let mut first = register_agent(address, &identity).await;
+        let mut replacement = register_agent(address, &identity).await;
+
+        assert!(
+            timeout(Duration::from_secs(1), read_server_message(&mut first))
+                .await
+                .expect("the replaced control should close promptly")
+                .is_err()
+        );
+        for _ in 0..50 {
+            if state.connection_slots.available_permits() == MAX_ACTIVE_RELAY_CONNECTIONS - 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            state.connection_slots.available_permits(),
+            MAX_ACTIVE_RELAY_CONNECTIONS - 1
+        );
+
+        write_client_message(&mut replacement, &RelayClientMessage::Ping)
+            .await
+            .unwrap();
+        assert_eq!(
+            read_server_message(&mut replacement).await.unwrap(),
+            RelayServerMessage::Pong
+        );
     }
 }

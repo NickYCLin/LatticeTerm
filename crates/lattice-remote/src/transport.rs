@@ -12,9 +12,19 @@ use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::error::ProtocolError;
-use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::tungstenite::protocol::{Message, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Error as WsError;
-use tokio_tungstenite::{accept_async, connect_async, WebSocketStream};
+use tokio_tungstenite::{accept_async_with_config, connect_async_with_config, WebSocketStream};
+
+const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 128 * 1024;
+const MAX_WEBSOCKET_WRITE_BUFFER_BYTES: usize = 256 * 1024;
+
+fn websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_write_buffer_size(MAX_WEBSOCKET_WRITE_BUFFER_BYTES)
+        .max_message_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES))
+}
 
 /// A byte stream that carries relay control messages and encrypted sessions.
 pub enum Transport {
@@ -37,7 +47,10 @@ impl Transport {
     /// Connects to a normalized `HOST:PORT`, `ws://`, or `wss://` endpoint.
     pub async fn connect(endpoint: &str) -> io::Result<Self> {
         if Self::is_websocket_endpoint(endpoint) {
-            let (socket, _response) = connect_async(endpoint).await.map_err(handshake_error)?;
+            let (socket, _response) =
+                connect_async_with_config(endpoint, Some(websocket_config()), false)
+                    .await
+                    .map_err(handshake_error)?;
             Ok(Self::WebSocket(Box::new(WebSocketByteStream::new(socket))))
         } else {
             let stream = TcpStream::connect(endpoint).await?;
@@ -49,7 +62,9 @@ impl Transport {
     /// Completes the server side of a WebSocket upgrade from HTTPS ingress.
     pub async fn accept_websocket(stream: TcpStream) -> io::Result<Self> {
         stream.set_nodelay(true)?;
-        let socket = accept_async(stream).await.map_err(handshake_error)?;
+        let socket = accept_async_with_config(stream, Some(websocket_config()))
+            .await
+            .map_err(handshake_error)?;
         Ok(Self::WebSocket(Box::new(WebSocketByteStream::new(socket))))
     }
 }
@@ -216,5 +231,90 @@ fn stream_error(error: WsError) -> io::Error {
         }
         WsError::Io(error) => error,
         other => io::Error::other(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wire::{read_wire, write_wire, MAX_WIRE_MESSAGE};
+    use tokio::io::{duplex, AsyncReadExt as _};
+    use tokio_tungstenite::tungstenite::error::CapacityError;
+    use tokio_tungstenite::tungstenite::protocol::Role;
+
+    #[test]
+    fn websocket_config_caps_frames_and_messages_without_loosening_defaults() {
+        let defaults = WebSocketConfig::default();
+        let config = websocket_config();
+
+        assert_eq!(config.max_message_size, Some(MAX_WEBSOCKET_MESSAGE_BYTES));
+        assert_eq!(config.max_frame_size, Some(MAX_WEBSOCKET_MESSAGE_BYTES));
+        assert_eq!(config.read_buffer_size, defaults.read_buffer_size);
+        assert_eq!(config.write_buffer_size, defaults.write_buffer_size);
+        assert_eq!(
+            config.max_write_buffer_size,
+            MAX_WEBSOCKET_WRITE_BUFFER_BYTES
+        );
+        assert_eq!(
+            config.accept_unmasked_frames,
+            defaults.accept_unmasked_frames
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_binary_frame_is_rejected_before_reaching_byte_stream() {
+        let (client_io, server_io) = duplex(MAX_WEBSOCKET_MESSAGE_BYTES + 1024);
+        let mut sender = WebSocketStream::from_raw_socket(client_io, Role::Client, None).await;
+        let receiver =
+            WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()))
+                .await;
+        let mut byte_stream = WebSocketByteStream::new(receiver);
+
+        sender
+            .send(Message::Binary(
+                vec![0_u8; MAX_WEBSOCKET_MESSAGE_BYTES + 1].into(),
+            ))
+            .await
+            .expect("the unrestricted peer should send the oversized frame");
+
+        let mut byte = [0_u8; 1];
+        let error = byte_stream
+            .read(&mut byte)
+            .await
+            .expect_err("the configured receiver must reject the oversized frame");
+        let websocket_error = error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<WsError>())
+            .expect("the byte stream should preserve the WebSocket capacity error");
+
+        assert!(matches!(
+            websocket_error,
+            WsError::Capacity(CapacityError::MessageTooLong { size, max_size })
+                if *size == MAX_WEBSOCKET_MESSAGE_BYTES + 1
+                    && *max_size == MAX_WEBSOCKET_MESSAGE_BYTES
+        ));
+    }
+
+    #[tokio::test]
+    async fn largest_valid_wire_message_crosses_the_configured_websocket() {
+        let (client_io, server_io) = duplex(MAX_WIRE_MESSAGE + 2048);
+        let client =
+            WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()))
+                .await;
+        let server =
+            WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()))
+                .await;
+        let mut writer = WebSocketByteStream::new(client);
+        let mut reader = WebSocketByteStream::new(server);
+        let expected = vec![0x5a; MAX_WIRE_MESSAGE];
+        let send_bytes = expected.clone();
+
+        let sending = tokio::spawn(async move {
+            write_wire(&mut writer, &send_bytes).await.unwrap();
+        });
+        let received = read_wire(&mut reader).await.unwrap();
+        sending.await.unwrap();
+
+        assert_eq!(received, expected);
     }
 }

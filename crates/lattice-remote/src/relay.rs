@@ -21,6 +21,8 @@ use url::Url;
 
 pub const DEFAULT_RELAY_PORT: u16 = 44_910;
 const DEVICE_ID_DIGITS: usize = 9;
+const MAX_DEVICE_ID_INPUT_BYTES: usize = 32;
+pub const MAX_RELAY_AUTH_TOKEN_BYTES: usize = 256;
 
 #[derive(Debug, Error)]
 pub enum RelayError {
@@ -184,9 +186,17 @@ pub fn normalize_relay_endpoint(input: &str) -> Result<String, RelayError> {
 }
 
 pub fn normalize_device_id(input: &str) -> Result<String, RelayError> {
+    if input.is_empty()
+        || input.len() > MAX_DEVICE_ID_INPUT_BYTES
+        || !input
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'-' | b' '))
+    {
+        return Err(RelayError::InvalidDeviceId);
+    }
     let digits: String = input
         .chars()
-        .filter(|character| *character != '-' && *character != ' ' && !character.is_control())
+        .filter(|character| *character != '-' && *character != ' ')
         .collect();
     if digits.len() == DEVICE_ID_DIGITS && digits.bytes().all(|byte| byte.is_ascii_digit()) {
         Ok(digits)
@@ -349,9 +359,11 @@ impl DeviceIdentity {
                 let mut identity: Self = serde_json::from_slice(&bytes)
                     .map_err(|error| RelayError::Identity(error.to_string()))?;
                 normalize_device_id(&identity.device_id)?;
-                if identity.auth_token.trim().is_empty() {
+                if identity.auth_token.trim().is_empty()
+                    || identity.auth_token.len() > MAX_RELAY_AUTH_TOKEN_BYTES
+                {
                     return Err(RelayError::Identity(
-                        "the identity file is missing its token".to_string(),
+                        "the identity file has a missing or oversized token".to_string(),
                     ));
                 }
                 if identity.noise_private.trim().is_empty() {
@@ -396,7 +408,36 @@ mod tests {
         assert_eq!(normalize_device_id("123-456-789").unwrap(), "123456789");
         assert!(normalize_device_id("12345678").is_err());
         assert!(normalize_device_id("12345678a").is_err());
+        assert!(normalize_device_id("123\n456789").is_err());
+        assert!(normalize_device_id(&format!(
+            "{}123456789",
+            "-".repeat(MAX_DEVICE_ID_INPUT_BYTES)
+        ))
+        .is_err());
         assert_eq!(format_device_id("123456789"), "123 456 789");
+    }
+
+    #[test]
+    fn identity_files_reject_oversized_authentication_tokens() {
+        let directory = std::env::temp_dir().join(format!(
+            "lattice-relay-invalid-identity-{}-{}",
+            std::process::id(),
+            random_token().unwrap()
+        ));
+        let path = directory.join("identity.json");
+        std::fs::create_dir_all(&directory).unwrap();
+        let json = serde_json::json!({
+            "deviceId": "123456789",
+            "authToken": "a".repeat(MAX_RELAY_AUTH_TOKEN_BYTES + 1),
+            "noisePrivate": random_token().unwrap(),
+        });
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        assert!(matches!(
+            DeviceIdentity::load_or_create(&path),
+            Err(RelayError::Identity(_))
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

@@ -15,6 +15,9 @@ ExecStart=/usr/local/bin/lattice-relay --bind 127.0.0.1:44910 --state /var/lib/l
 Restart=always
 RestartSec=2
 UMask=0077
+LimitNOFILE=2048
+TasksMax=512
+MemoryMax=512M
 
 # The relay needs nothing but a socket and its state file.
 StateDirectory=lattice-relay
