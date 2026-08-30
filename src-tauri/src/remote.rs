@@ -12,15 +12,17 @@ use lattice_remote::relay::{
     dial, format_device_id, normalize_device_id, normalize_relay_endpoint, RelayError,
 };
 use lattice_remote::{
-    normalize_pairing_code, FrameAssembler, PointerButton, RemoteInput, RemoteMessage,
+    normalize_pairing_code, FrameAssembler, PointerButton, RemoteHello, RemoteInput, RemoteMessage,
     SecureConnection, MAX_WHEEL_UNITS, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 use tokio::time::timeout;
@@ -242,6 +244,64 @@ fn failed(stage: &'static str, detail: impl Into<String>) -> RemoteConnectOutcom
     }
 }
 
+struct RelayPinCandidate {
+    path: PathBuf,
+    device_id: String,
+    static_key: Vec<u8>,
+}
+
+/// Waits for the first PSK-authenticated protocol message before committing a
+/// relay device's TOFU pin. With Noise XXpsk3, the initiator can finish its
+/// local handshake after sending message 3 even when the responder will reject
+/// that message because the pairing code is wrong. The responder's encrypted
+/// Hello is therefore the first proof available to the viewer that the peer
+/// actually accepted the PSK.
+async fn receive_authenticated_hello<S>(
+    connection: &mut SecureConnection<S>,
+    relay_pin: Option<RelayPinCandidate>,
+) -> Result<RemoteHello, (&'static str, String)>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let hello = match timeout(Duration::from_secs(30), connection.receive()).await {
+        Ok(Ok(RemoteMessage::Hello(hello))) => hello,
+        Ok(Ok(_)) => {
+            return Err((
+                "protocol",
+                "The Agent did not send its identity first.".to_string(),
+            ))
+        }
+        Ok(Err(_)) => {
+            return Err((
+                "pairing",
+                "The pairing code was rejected by the Agent.".to_string(),
+            ))
+        }
+        Err(_) => {
+            return Err((
+                "protocol",
+                "The Agent did not start screen sharing in time.".to_string(),
+            ))
+        }
+    };
+    if hello.protocol_version != PROTOCOL_VERSION {
+        return Err((
+            "protocol",
+            "The Agent uses an incompatible protocol.".to_string(),
+        ));
+    }
+
+    if let Some(candidate) = relay_pin {
+        crate::remote_pins::verify_or_pin(
+            &candidate.path,
+            &candidate.device_id,
+            &candidate.static_key,
+        )
+        .map_err(|detail| ("pinning", detail))?;
+    }
+    Ok(hello)
+}
+
 pub async fn connect(
     app: AppHandle,
     registry: Arc<RemoteRegistry>,
@@ -299,9 +359,11 @@ pub async fn connect(
         }
     };
 
-    // A relay device must present the same identity key it pinned on first
-    // use, before anything else is trusted about the session.
-    if let Some(device_id) = &device_id {
+    // Keep the presented relay identity in memory until an encrypted Hello
+    // proves that the responder accepted the pairing code. In particular, do
+    // not persist a first-use pin merely because the initiator produced Noise
+    // handshake message 3.
+    let relay_pin = if let Some(device_id) = &device_id {
         let Some(static_key) = connection.remote_static_key() else {
             return failed("pinning", "The Agent did not present an identity key.");
         };
@@ -314,26 +376,19 @@ pub async fn connect(
                 )
             }
         };
-        if let Err(detail) = crate::remote_pins::verify_or_pin(&pins_path, device_id, &static_key) {
-            return failed("pinning", detail);
-        }
-    }
-
-    // Waiting for the encrypted Hello proves the responder accepted the PSK.
-    let hello = match timeout(Duration::from_secs(30), connection.receive()).await {
-        Ok(Ok(RemoteMessage::Hello(hello))) => hello,
-        Ok(Ok(_)) => return failed("protocol", "The Agent did not send its identity first."),
-        Ok(Err(_)) => return failed("pairing", "The pairing code was rejected by the Agent."),
-        Err(_) => {
-            return failed(
-                "protocol",
-                "The Agent did not start screen sharing in time.",
-            )
-        }
+        Some(RelayPinCandidate {
+            path: pins_path,
+            device_id: device_id.clone(),
+            static_key,
+        })
+    } else {
+        None
     };
-    if hello.protocol_version != PROTOCOL_VERSION {
-        return failed("protocol", "The Agent uses an incompatible protocol.");
-    }
+
+    let hello = match receive_authenticated_hello(&mut connection, relay_pin).await {
+        Ok(hello) => hello,
+        Err((stage, detail)) => return failed(stage, detail),
+    };
 
     let session = RemoteSessionSummary {
         session_id: session_id(),
@@ -680,6 +735,31 @@ pub async fn disconnect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lattice_remote::relay::DeviceIdentity;
+    use tokio::net::{TcpListener, TcpStream};
+
+    fn hello(protocol_version: u16) -> RemoteHello {
+        RemoteHello {
+            protocol_version,
+            agent_name: "Test Agent".to_string(),
+            width: 80,
+            height: 24,
+            view_only: true,
+            file_transfer: false,
+            file_root_label: String::new(),
+            terminal: true,
+        }
+    }
+
+    fn pin_candidate(path: PathBuf, connection: &SecureConnection<TcpStream>) -> RelayPinCandidate {
+        RelayPinCandidate {
+            path,
+            device_id: "123456789".to_string(),
+            static_key: connection
+                .remote_static_key()
+                .expect("the relay Agent presented its permanent identity"),
+        }
+    }
 
     #[test]
     fn session_ids_are_distinct_and_namespaced() {
@@ -738,5 +818,106 @@ mod tests {
         ));
         let release: RemoteInputRequest = serde_json::from_str(r#"{"kind":"releaseAll"}"#).unwrap();
         assert!(matches!(release, RemoteInputRequest::ReleaseAll));
+    }
+
+    #[tokio::test]
+    async fn rejected_pairing_code_does_not_create_a_first_use_pin() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let identity = DeviceIdentity::generate().unwrap();
+        let key = identity.noise_private_bytes().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            SecureConnection::accept_with_static_key(stream, "11112222", &key).await
+        });
+
+        let stream = TcpStream::connect(address).await.unwrap();
+        let mut viewer = SecureConnection::initiate(stream, "33334444")
+            .await
+            .expect("the initiator finishes locally before PSK rejection is observed");
+        assert!(server.await.unwrap().is_err());
+
+        let directory = tempfile::tempdir().unwrap();
+        let pins_path = directory.path().join(crate::remote_pins::PINS_FILE);
+        let candidate = pin_candidate(pins_path.clone(), &viewer);
+        let (stage, _) = receive_authenticated_hello(&mut viewer, Some(candidate))
+            .await
+            .unwrap_err();
+
+        assert_eq!(stage, "pairing");
+        assert!(!pins_path.exists());
+    }
+
+    #[tokio::test]
+    async fn valid_authenticated_hello_commits_the_first_use_pin() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let identity = DeviceIdentity::generate().unwrap();
+        let key = identity.noise_private_bytes().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut connection = SecureConnection::accept_with_static_key(stream, "12345678", &key)
+                .await
+                .unwrap();
+            connection
+                .send(&RemoteMessage::Hello(hello(PROTOCOL_VERSION)))
+                .await
+                .unwrap();
+        });
+
+        let stream = TcpStream::connect(address).await.unwrap();
+        let mut viewer = SecureConnection::initiate(stream, "12345678")
+            .await
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let pins_path = directory.path().join(crate::remote_pins::PINS_FILE);
+        let candidate = pin_candidate(pins_path.clone(), &viewer);
+        let presented_key = candidate.static_key.clone();
+
+        let received = receive_authenticated_hello(&mut viewer, Some(candidate))
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        assert_eq!(received, hello(PROTOCOL_VERSION));
+        assert!(pins_path.exists());
+        assert_eq!(
+            crate::remote_pins::verify_or_pin(&pins_path, "123456789", &presented_key).unwrap(),
+            crate::remote_pins::PinOutcome::Matched
+        );
+    }
+
+    #[tokio::test]
+    async fn incompatible_hello_does_not_create_a_first_use_pin() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let identity = DeviceIdentity::generate().unwrap();
+        let key = identity.noise_private_bytes().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut connection = SecureConnection::accept_with_static_key(stream, "12345678", &key)
+                .await
+                .unwrap();
+            connection
+                .send(&RemoteMessage::Hello(hello(PROTOCOL_VERSION + 1)))
+                .await
+                .unwrap();
+        });
+
+        let stream = TcpStream::connect(address).await.unwrap();
+        let mut viewer = SecureConnection::initiate(stream, "12345678")
+            .await
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let pins_path = directory.path().join(crate::remote_pins::PINS_FILE);
+        let candidate = pin_candidate(pins_path.clone(), &viewer);
+
+        let (stage, _) = receive_authenticated_hello(&mut viewer, Some(candidate))
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        assert_eq!(stage, "protocol");
+        assert!(!pins_path.exists());
     }
 }
