@@ -331,7 +331,15 @@
 
 .remote-frame-canvas {
   user-select: none;
+}
+
+.remote-frame-canvas--view-only {
   pointer-events: none;
+}
+
+.remote-frame-canvas--interactive {
+  pointer-events: auto;
+  touch-action: none;
 }
 
 .remote-canvas__waiting {

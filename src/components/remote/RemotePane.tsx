@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { KeyboardEvent, MouseEvent, WheelEvent } from "react";
+import type { KeyboardEvent, PointerEvent, WheelEvent } from "react";
 import type { RemoteApi, RemoteInput, RemoteSessionSummary } from "../../app/useRemoteSessions";
 import type { ThemeId } from "../../app/themes";
 import { useI18n } from "../../i18n/context";
@@ -7,6 +7,10 @@ import { FolderIcon, ScreenShareIcon, ShieldIcon, TerminalIcon } from "../icons"
 import { CanvasCaptureControls } from "./CanvasCaptureControls";
 import { keysymFor } from "./keysym";
 import { RemoteFilesPane } from "./RemoteFilesPane";
+import {
+  RemotePointerInputState,
+  type RemotePointerTransition,
+} from "./remotePointerInput";
 import { RemoteTerminalView } from "./RemoteTerminalView";
 
 export function RemotePane({
@@ -23,15 +27,20 @@ export function RemotePane({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pendingMove = useRef<RemoteInput | null>(null);
   const moveFrame = useRef<number | null>(null);
+  const pointerInput = useRef(new RemotePointerInputState());
   const [filesOpen, setFilesOpen] = useState(false);
   const interactive = !session.viewOnly;
+  // The Remote API container changes whenever a frame updates, while the
+  // memoised input method remains stable. Depending on the whole object would
+  // run the cleanup below every frame and release an active drag at ~10 FPS.
+  const remoteInput = remote.input;
 
   const send = useCallback(
     (request: RemoteInput) => {
       if (!interactive) return;
-      void remote.input(session.sessionId, request).catch(() => undefined);
+      void remoteInput(session.sessionId, request).catch(() => undefined);
     },
-    [interactive, remote, session.sessionId],
+    [interactive, remoteInput, session.sessionId],
   );
 
   useEffect(() => {
@@ -57,12 +66,13 @@ export function RemotePane({
   useEffect(
     () => () => {
       if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
+      pointerInput.current.reset();
       if (interactive) send({ kind: "releaseAll" });
     },
     [interactive, send],
   );
 
-  function position(event: MouseEvent<HTMLCanvasElement>) {
+  function position(event: PointerEvent<HTMLCanvasElement>) {
     const bounds = event.currentTarget.getBoundingClientRect();
     return {
       x: Math.max(
@@ -82,9 +92,21 @@ export function RemotePane({
     };
   }
 
-  function mouseMove(event: MouseEvent<HTMLCanvasElement>) {
+  function pointerMove(event: PointerEvent<HTMLCanvasElement>) {
     if (!interactive) return;
+    const transition = pointerInput.current.move(
+      event.pointerId,
+      event.isPrimary,
+      event.buttons,
+    );
+    if (!transition.accepted) return;
     const point = position(event);
+    if (transition.buttonChanges.length > 0) {
+      clearPendingPointerMove();
+      send({ kind: "mouseMove", ...point });
+      sendPointerButtons(transition);
+      return;
+    }
     pendingMove.current = { kind: "mouseMove", ...point };
     if (moveFrame.current !== null) return;
     moveFrame.current = requestAnimationFrame(() => {
@@ -94,12 +116,73 @@ export function RemotePane({
     });
   }
 
-  function mouseButton(event: MouseEvent<HTMLCanvasElement>, pressed: boolean) {
+  function pointerButton(
+    event: PointerEvent<HTMLCanvasElement>,
+    pressed: boolean,
+  ) {
     if (!interactive) return;
+    const transition = pressed
+      ? pointerInput.current.begin(
+          event.pointerId,
+          event.isPrimary,
+          event.buttons,
+        )
+      : pointerInput.current.end(
+          event.pointerId,
+          event.isPrimary,
+          event.buttons,
+        );
+    if (!transition.accepted) return;
     event.preventDefault();
     event.currentTarget.focus();
+    if (pressed) {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Older WebViews may lack capture; leave/cancel still releases input.
+      }
+    }
+    clearPendingPointerMove();
     send({ kind: "mouseMove", ...position(event) });
-    send({ kind: "mouseButton", button: event.button, pressed });
+    sendPointerButtons(transition);
+    if (
+      !pressed &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function clearPendingPointerMove() {
+    pendingMove.current = null;
+    if (moveFrame.current === null) return;
+    cancelAnimationFrame(moveFrame.current);
+    moveFrame.current = null;
+  }
+
+  function sendPointerButtons(transition: RemotePointerTransition) {
+    for (const change of transition.buttonChanges) {
+      send({ kind: "mouseButton", ...change });
+    }
+  }
+
+  function endPointerUnexpectedly(event: PointerEvent<HTMLCanvasElement>) {
+    if (!interactive) return;
+    const transition = pointerInput.current.cancel(
+      event.pointerId,
+      event.isPrimary,
+    );
+    if (!transition.accepted) return;
+    clearPendingPointerMove();
+    if (transition.releaseAll) send({ kind: "releaseAll" });
+  }
+
+  function pointerLeave(event: PointerEvent<HTMLCanvasElement>) {
+    if (!interactive || !event.isPrimary) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    if (pointerInput.current.activePointerId === event.pointerId) {
+      endPointerUnexpectedly(event);
+    }
   }
 
   function wheel(event: WheelEvent<HTMLCanvasElement>) {
@@ -177,21 +260,41 @@ export function RemotePane({
           <canvas
             ref={canvasRef}
             className={
-              interactive ? "remote-frame-canvas rdp-canvas" : "remote-frame-canvas"
+              interactive
+                ? "remote-frame-canvas remote-frame-canvas--interactive rdp-canvas"
+                : "remote-frame-canvas remote-frame-canvas--view-only"
             }
             width={session.width}
             height={session.height}
             tabIndex={interactive ? 0 : undefined}
             role={interactive ? "application" : "img"}
             aria-label={t("remote.session.frameAlt", { name: session.agentName })}
-            onMouseMove={interactive ? mouseMove : undefined}
-            onMouseDown={interactive ? (event) => mouseButton(event, true) : undefined}
-            onMouseUp={interactive ? (event) => mouseButton(event, false) : undefined}
-            onMouseLeave={interactive ? () => send({ kind: "releaseAll" }) : undefined}
+            onPointerMove={interactive ? pointerMove : undefined}
+            onPointerDown={
+              interactive ? (event) => pointerButton(event, true) : undefined
+            }
+            onPointerUp={
+              interactive ? (event) => pointerButton(event, false) : undefined
+            }
+            onPointerLeave={interactive ? pointerLeave : undefined}
+            onPointerCancel={
+              interactive ? endPointerUnexpectedly : undefined
+            }
+            onLostPointerCapture={
+              interactive ? endPointerUnexpectedly : undefined
+            }
             onWheel={interactive ? wheel : undefined}
             onKeyDown={interactive ? (event) => keyboard(event, true) : undefined}
             onKeyUp={interactive ? (event) => keyboard(event, false) : undefined}
-            onBlur={interactive ? () => send({ kind: "releaseAll" }) : undefined}
+            onBlur={
+              interactive
+                ? () => {
+                    pointerInput.current.reset();
+                    clearPendingPointerMove();
+                    send({ kind: "releaseAll" });
+                  }
+                : undefined
+            }
             onContextMenu={interactive ? (event) => event.preventDefault() : undefined}
           />
           {!session.frame && (
