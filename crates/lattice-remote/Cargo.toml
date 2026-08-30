@@ -7,7 +7,7 @@ description = "Encrypted direct-connect protocol and agent for Lattice Remote"
 
 [features]
 default = []
-agent = ["dep:enigo", "dep:image", "dep:portable-pty", "dep:xcap"]
+agent = ["dep:enigo", "dep:image", "dep:libc", "dep:portable-pty", "dep:xcap"]
 relay-server = []
 
 [dependencies]
@@ -30,6 +30,7 @@ enigo = { version = "0.6", optional = true }
 # Terminal mode shares a PTY shell instead of the display; same crate the
 # desktop app already uses for local CLIs.
 portable-pty = { version = "0.9", optional = true }
+libc = { version = "0.2", optional = true }
 
 [[bin]]
 name = "lattice-agent"

@@ -789,6 +789,7 @@ dependencies = [
  "enigo",
  "futures-util",
  "image 0.25.10",
+ "libc",
  "portable-pty",
  "rustls",
  "serde",

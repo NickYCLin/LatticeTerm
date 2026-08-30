@@ -6,8 +6,8 @@ use lattice_remote::relay::{
 use lattice_remote::{
     frame_messages, generate_pairing_code, host_files::HostUpload, host_files::SharedFiles,
     host_input::InputInjector, normalize_pairing_code, FrameFormat, RemoteFileRequest,
-    RemoteFileResponse, RemoteHello, RemoteMessage, SecureConnection, Transport, DEFAULT_PORT,
-    FILE_CHUNK_SIZE, MAX_FILE_ERROR_BYTES, PROTOCOL_VERSION,
+    RemoteFileResponse, RemoteHello, RemoteMessage, SecureConnection, SecureWriter, Transport,
+    DEFAULT_PORT, FILE_CHUNK_SIZE, MAX_FILE_ERROR_BYTES, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use std::collections::{hash_map::Entry, HashMap};
@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, timeout};
 use xcap::Monitor;
 
@@ -32,6 +32,22 @@ const MAX_PAIRING_FAILURES: u32 = 5;
 const PAIRING_LIFETIME: Duration = Duration::from_secs(5 * 60);
 const RELAY_PING_INTERVAL: Duration = Duration::from_secs(25);
 const RELAY_RECONNECT_CAP: Duration = Duration::from_secs(60);
+const REMOTE_SEND_TIMEOUT: Duration = Duration::from_secs(10);
+const REMOTE_INPUT_ENQUEUE_TIMEOUT: Duration = Duration::from_secs(10);
+// Preserve every key transition while bounding the amount of work an
+// authorised but abusive viewer can queue ahead of the OS input backend.
+const SCREEN_INPUT_QUEUE_CAPACITY: usize = 256;
+// A terminal input chunk is at most 48 KiB, so 32 queued chunks cap the PTY
+// writer backlog at roughly 1.5 MiB while still accommodating large pastes.
+const TERMINAL_INPUT_QUEUE_CAPACITY: usize = 32;
+#[cfg(unix)]
+const TERMINAL_PROCESS_GROUP_GRACE: Duration = Duration::from_millis(100);
+#[cfg(unix)]
+const TERMINAL_PTY_POLL_INTERVAL_MS: libc::c_int = 50;
+#[cfg(target_os = "linux")]
+const TERMINAL_SESSION_KILL_ROUNDS: usize = 4;
+#[cfg(target_os = "linux")]
+const TERMINAL_SESSION_KILL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Clone)]
 struct Options {
@@ -356,7 +372,7 @@ fn spawn_input_thread(
     stream_height: u32,
     display_width: u32,
     display_height: u32,
-    mut inputs: mpsc::UnboundedReceiver<lattice_remote::RemoteInput>,
+    mut inputs: mpsc::Receiver<lattice_remote::RemoteInput>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut injector =
@@ -374,6 +390,193 @@ fn spawn_input_thread(
         }
         injector.release_all();
     })
+}
+
+fn bounded_input_channel<T>(capacity: usize) -> (mpsc::Sender<T>, mpsc::Receiver<T>) {
+    mpsc::channel(capacity)
+}
+
+/// Waits for capacity instead of dropping key transitions. The wait stops
+/// reading the encrypted stream, propagating bounded transport backpressure
+/// to a viewer that sends input faster than the OS or PTY can consume it.
+async fn send_input_with_backpressure<T>(
+    sender: &mpsc::Sender<T>,
+    input: T,
+    wait: Duration,
+) -> bool {
+    matches!(timeout(wait, sender.send(input)).await, Ok(Ok(())))
+}
+
+/// Aborting a Tokio task is asynchronous: await its JoinHandle so captured
+/// channel endpoints are definitely dropped before joining blocking threads.
+async fn abort_and_wait<T>(task: tokio::task::JoinHandle<T>) {
+    task.abort();
+    let _ = task.await;
+}
+
+async fn send_remote_message<S>(
+    writer: &mut SecureWriter<S>,
+    message: &RemoteMessage,
+) -> Result<(), String>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    match timeout(REMOTE_SEND_TIMEOUT, writer.send(message)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => Err("Timed out writing to the remote viewer.".to_string()),
+    }
+}
+
+#[cfg(unix)]
+fn set_pty_nonblocking(file_descriptor: libc::c_int) -> Result<(), String> {
+    // SAFETY: file_descriptor is borrowed from the live PTY master. F_GETFL
+    // and F_SETFL do not take ownership of it.
+    let flags = unsafe { libc::fcntl(file_descriptor, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(format!(
+            "Cannot inspect PTY flags: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // portable-pty creates the reader/writer with dup(2), so this file-status
+    // flag applies to both pumps and makes every read/write cancellable.
+    if unsafe { libc::fcntl(file_descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(format!(
+            "Cannot make PTY I/O cancellable: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn wait_for_pty_event(
+    file_descriptor: libc::c_int,
+    events: libc::c_short,
+    stopped: &AtomicBool,
+) -> bool {
+    while !stopped.load(Ordering::Relaxed) {
+        let mut descriptor = libc::pollfd {
+            fd: file_descriptor,
+            events,
+            revents: 0,
+        };
+        // SAFETY: descriptor points to one initialized pollfd for the live
+        // PTY master and remains valid for the duration of this call.
+        let ready = unsafe { libc::poll(&mut descriptor, 1, TERMINAL_PTY_POLL_INTERVAL_MS) };
+        if stopped.load(Ordering::Relaxed) {
+            return false;
+        }
+        if ready > 0 {
+            if descriptor.revents & libc::POLLNVAL != 0 {
+                return false;
+            }
+            // A requested readiness bit permits one nonblocking I/O attempt.
+            // HUP/ERR without it ends the pump instead of spinning forever on
+            // a persistent terminal error followed by WouldBlock.
+            return descriptor.revents & events != 0;
+        }
+        if ready == 0 {
+            continue;
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return false;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LinuxProcessIdentity {
+    process_id: libc::pid_t,
+    session_id: libc::pid_t,
+    start_time: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_process_identity(
+    process_id: libc::pid_t,
+    stat: &str,
+) -> Option<LinuxProcessIdentity> {
+    // comm may contain spaces and closing parentheses; the final ')' is the
+    // only reliable boundary before the fixed fields beginning with state.
+    let fields = stat
+        .get(stat.rfind(')')? + 1..)?
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    Some(LinuxProcessIdentity {
+        process_id,
+        session_id: fields.get(3)?.parse().ok()?,
+        // starttime is field 22; state is field 3 at index zero here.
+        start_time: fields.get(19)?.parse().ok()?,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn read_linux_process_identity(process_id: libc::pid_t) -> Option<LinuxProcessIdentity> {
+    let stat = std::fs::read_to_string(format!("/proc/{process_id}/stat")).ok()?;
+    parse_linux_process_identity(process_id, &stat)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_session_processes(session_id: libc::pid_t) -> Vec<LinuxProcessIdentity> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse().ok())
+        .filter(|process_id| *process_id > 1 && *process_id != unsafe { libc::getpid() })
+        .filter_map(read_linux_process_identity)
+        .filter(|identity| identity.session_id == session_id)
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn open_verified_pidfd(identity: LinuxProcessIdentity) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd as _;
+
+    // SAFETY: pidfd_open does not borrow userspace pointers. A non-negative
+    // result is a newly owned descriptor, transferred to OwnedFd below.
+    let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, identity.process_id, 0) };
+    if descriptor < 0 {
+        return None;
+    }
+    let descriptor = unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor as libc::c_int) };
+    // Close the scan-to-open PID reuse race: a pidfd pins one process, and a
+    // second stat read must still match the original start-time identity.
+    (read_linux_process_identity(identity.process_id) == Some(identity)).then_some(descriptor)
+}
+
+#[cfg(target_os = "linux")]
+fn signal_pidfd(descriptor: &std::os::fd::OwnedFd, signal: libc::c_int) -> bool {
+    use std::os::fd::AsRawFd as _;
+
+    // SAFETY: the pidfd is owned for this call; a null siginfo with flags zero
+    // requests ordinary signal delivery to that pinned process identity.
+    unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            descriptor.as_raw_fd(),
+            signal,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        ) == 0
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn signal_linux_session(session_id: libc::pid_t, signal: libc::c_int) -> bool {
+    let mut delivered = false;
+    for identity in linux_session_processes(session_id) {
+        let Some(descriptor) = open_verified_pidfd(identity) else {
+            continue;
+        };
+        delivered |= signal_pidfd(&descriptor, signal);
+    }
+    delivered
 }
 
 fn agent_name() -> String {
@@ -707,8 +910,9 @@ where
     let shared_files = file_root.map(SharedFiles::open).transpose()?.map(Arc::new);
     let (mut reader, mut writer_half) = connection.split();
 
-    writer_half
-        .send(&RemoteMessage::Hello(RemoteHello {
+    send_remote_message(
+        &mut writer_half,
+        &RemoteMessage::Hello(RemoteHello {
             protocol_version: PROTOCOL_VERSION,
             agent_name: agent_name(),
             width,
@@ -720,16 +924,19 @@ where
                 .map(|files| files.label().to_string())
                 .unwrap_or_default(),
             terminal: false,
-        }))
-        .await
-        .map_err(|error| error.to_string())?;
+        }),
+    )
+    .await?;
 
     // One bounded writer queue serialises frames and file responses on the
     // Noise send state while applying backpressure to large downloads.
     let (outgoing, mut outgoing_rx) = mpsc::channel::<RemoteMessage>(128);
     let writer = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
-            if writer_half.send(&message).await.is_err() {
+            if send_remote_message(&mut writer_half, &message)
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -738,7 +945,7 @@ where
     // Receiving runs on its own task. Input remains independently authorised;
     // file messages are accepted only when an explicit shared root exists.
     let (input_tx, input_thread) = if allow_input {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = bounded_input_channel(SCREEN_INPUT_QUEUE_CAPACITY);
         let handle = spawn_input_thread(
             capture.stream_width,
             capture.stream_height,
@@ -757,7 +964,9 @@ where
             match reader.receive().await {
                 Ok(RemoteMessage::Input(input)) => {
                     if let Some(tx) = &input_tx {
-                        if tx.send(input).is_err() {
+                        if !send_input_with_backpressure(tx, input, REMOTE_INPUT_ENQUEUE_TIMEOUT)
+                            .await
+                        {
                             break;
                         }
                     }
@@ -770,9 +979,6 @@ where
         // Dropping the sender ends the input thread and releases held keys.
         drop(input_tx);
         file_handler.cancel_all();
-        if let Some(handle) = input_thread {
-            let _ = handle.join();
-        }
     });
 
     let interval = Duration::from_millis(1000 / fps as u64);
@@ -784,9 +990,12 @@ where
         let started = Instant::now();
         frame_id = frame_id.wrapping_add(1);
         let mut send_error = None;
-        for message in frame_messages(frame_id, width, height, FrameFormat::Jpeg, &capture.jpeg)
-            .map_err(|error| error.to_string())?
-        {
+        let messages =
+            match frame_messages(frame_id, width, height, FrameFormat::Jpeg, &capture.jpeg) {
+                Ok(messages) => messages,
+                Err(error) => break Err(error.to_string()),
+            };
+        for message in messages {
             if outgoing.send(message).await.is_err() {
                 send_error = Some("The encrypted writer stopped.".to_string());
                 break;
@@ -799,14 +1008,22 @@ where
         if started.elapsed() < interval {
             sleep(interval - started.elapsed()).await;
         }
-        capture = capture_jpeg(&monitor)?;
+        capture = match capture_jpeg(&monitor) {
+            Ok(capture) => capture,
+            Err(error) => break Err(error),
+        };
         width = capture.stream_width;
         height = capture.stream_height;
     };
 
-    receiver.abort();
+    // Await each abort so its captured senders/receivers are dropped before
+    // joining the blocking input thread or returning to a persistent agent.
+    abort_and_wait(receiver).await;
     drop(outgoing);
-    writer.abort();
+    abort_and_wait(writer).await;
+    if let Some(handle) = input_thread {
+        let _ = handle.join();
+    }
     stream_result
 }
 
@@ -818,17 +1035,68 @@ const TERMINAL_ROWS: u16 = 32;
 /// returning after `spawn_command` can otherwise orphan the shell.
 struct TerminalChildGuard {
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
+    // portable-pty calls setsid(2) before exec on Unix, making the spawned
+    // shell PID both the session and initial process-group leader. Linux uses
+    // the ID to terminate every process still in that PTY session; other Unix
+    // systems safely fall back to its initial process group.
+    #[cfg(unix)]
+    process_group: Option<libc::pid_t>,
 }
 
 impl TerminalChildGuard {
     fn new(child: Box<dyn portable_pty::Child + Send + Sync>) -> Self {
-        Self { child: Some(child) }
+        #[cfg(unix)]
+        let process_group = child
+            .process_id()
+            .and_then(|process_id| libc::pid_t::try_from(process_id).ok())
+            .filter(|process_group| {
+                // Never allow a malformed/custom Child implementation to
+                // target init or the agent's own process group.
+                *process_group > 1 && *process_group != unsafe { libc::getpgrp() }
+            });
+        Self {
+            child: Some(child),
+            #[cfg(unix)]
+            process_group,
+        }
     }
 
     fn terminate_and_wait(&mut self) {
         let Some(mut child) = self.child.take() else {
             return;
         };
+
+        #[cfg(unix)]
+        if let Some(process_group) = self.process_group.take() {
+            // SAFETY: process_group is a validated positive PID distinct from
+            // the agent's group. The unreaped leader pins this group/session
+            // ID until all signalling is complete.
+            let _ = unsafe { libc::killpg(process_group, libc::SIGHUP) };
+
+            #[cfg(target_os = "linux")]
+            let mut used_pidfd = signal_linux_session(process_group, libc::SIGHUP);
+            std::thread::sleep(TERMINAL_PROCESS_GROUP_GRACE);
+
+            #[cfg(target_os = "linux")]
+            for _ in 0..TERMINAL_SESSION_KILL_ROUNDS {
+                used_pidfd |= signal_linux_session(process_group, libc::SIGKILL);
+                std::thread::sleep(TERMINAL_SESSION_KILL_INTERVAL);
+            }
+
+            // Keep the leader unreaped until after this final group fallback,
+            // so its PID cannot be reused for an unrelated process group.
+            let kill_sent = unsafe { libc::killpg(process_group, libc::SIGKILL) } == 0;
+            #[cfg(target_os = "linux")]
+            let termination_sent = used_pidfd || kill_sent;
+            #[cfg(not(target_os = "linux"))]
+            let termination_sent = kill_sent;
+            if !termination_sent {
+                let _ = child.kill();
+            }
+            let _ = child.wait();
+            return;
+        }
+
         if matches!(child.try_wait(), Ok(Some(_))) {
             return;
         }
@@ -886,14 +1154,21 @@ where
     let mut child = TerminalChildGuard::new(child);
     drop(pty.slave);
     let master = pty.master;
+    #[cfg(unix)]
+    let pty_poll_fd = master
+        .as_raw_fd()
+        .ok_or_else(|| "The PTY master has no pollable file descriptor.".to_string())?;
     let mut pty_reader = master
         .try_clone_reader()
         .map_err(|error| error.to_string())?;
     let mut pty_writer = master.take_writer().map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    set_pty_nonblocking(pty_poll_fd)?;
 
     let (mut reader, mut writer_half) = connection.split();
-    writer_half
-        .send(&RemoteMessage::Hello(RemoteHello {
+    send_remote_message(
+        &mut writer_half,
+        &RemoteMessage::Hello(RemoteHello {
             protocol_version: PROTOCOL_VERSION,
             agent_name: agent_name(),
             width: u32::from(TERMINAL_COLS),
@@ -905,27 +1180,46 @@ where
                 .map(|files| files.label().to_string())
                 .unwrap_or_default(),
             terminal: true,
-        }))
-        .await
-        .map_err(|error| error.to_string())?;
+        }),
+    )
+    .await?;
 
     let (outgoing, mut outgoing_rx) = mpsc::channel::<RemoteMessage>(128);
+    // Either side of the PTY-to-wire pump can finish independently of the
+    // viewer's read half. A sticky watch signal wakes the receive loop even
+    // when the viewer keeps its socket open and sends nothing further.
+    let (pump_ended_tx, mut pump_ended_rx) = watch::channel(false);
+    let writer_ended_tx = pump_ended_tx.clone();
     let writer = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
-            if writer_half.send(&message).await.is_err() {
+            if send_remote_message(&mut writer_half, &message)
+                .await
+                .is_err()
+            {
                 break;
             }
         }
+        let _ = writer_ended_tx.send(true);
     });
 
     // Blocking PTY reads run on a plain thread; a closed channel or shell
     // exit ends the pump, and the Close tells the viewer why.
+    let pump_stopped = Arc::new(AtomicBool::new(false));
     let output_tx = outgoing.clone();
+    let output_ended_tx = pump_ended_tx.clone();
+    let output_stopped = Arc::clone(&pump_stopped);
     let output_thread = std::thread::spawn(move || {
         let mut buffer = [0u8; 8192];
         loop {
+            #[cfg(unix)]
+            if !wait_for_pty_event(pty_poll_fd, libc::POLLIN, &output_stopped) {
+                break;
+            }
+            if output_stopped.load(Ordering::Relaxed) {
+                break;
+            }
             match pty_reader.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
+                Ok(0) => break,
                 Ok(length) => {
                     if output_tx
                         .blocking_send(RemoteMessage::TerminalData {
@@ -936,29 +1230,82 @@ where
                         break;
                     }
                 }
+                #[cfg(unix)]
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => break,
             }
         }
-        let _ =
-            output_tx.blocking_send(RemoteMessage::Close("The shell session ended.".to_string()));
+        // Never wait for room for the final advisory Close: the separate end
+        // signal drives teardown and will close the transport if its queue is
+        // already backpressured.
+        let _ = output_tx.try_send(RemoteMessage::Close("The shell session ended.".to_string()));
+        let _ = output_ended_tx.send(true);
     });
 
-    // Keystrokes reach the PTY through their own blocking writer thread.
-    let (keystroke_tx, mut keystroke_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    // Keystrokes reach the PTY through a bounded blocking writer thread. The
+    // async sender below waits for room, bounding large-paste memory usage.
+    let (keystroke_tx, mut keystroke_rx) =
+        bounded_input_channel::<Vec<u8>>(TERMINAL_INPUT_QUEUE_CAPACITY);
+    let input_ended_tx = pump_ended_tx.clone();
+    #[cfg(unix)]
+    let input_stopped = Arc::clone(&pump_stopped);
     let input_thread = std::thread::spawn(move || {
+        #[cfg(unix)]
+        'input: while let Some(bytes) = keystroke_rx.blocking_recv() {
+            let mut remaining = bytes.as_slice();
+            while !remaining.is_empty() {
+                if !wait_for_pty_event(pty_poll_fd, libc::POLLOUT, &input_stopped) {
+                    break 'input;
+                }
+                match pty_writer.write(remaining) {
+                    Ok(0) => break 'input,
+                    Ok(length) => remaining = &remaining[length..],
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(_) => break 'input,
+                }
+            }
+        }
+        #[cfg(not(unix))]
         while let Some(bytes) = keystroke_rx.blocking_recv() {
             if pty_writer.write_all(&bytes).is_err() {
                 break;
             }
             let _ = pty_writer.flush();
         }
+        let _ = input_ended_tx.send(true);
     });
+    drop(pump_ended_tx);
 
     let mut file_handler = FileRequestHandler::new(shared_files, outgoing.clone());
     loop {
-        match reader.receive().await {
+        let message = tokio::select! {
+            biased;
+            _ = pump_ended_rx.changed() => break,
+            message = reader.receive() => message,
+        };
+        match message {
             Ok(RemoteMessage::TerminalInput { bytes }) => {
-                if allow_input && keystroke_tx.send(bytes).is_err() {
-                    break;
+                if allow_input {
+                    let queued = tokio::select! {
+                        biased;
+                        _ = pump_ended_rx.changed() => false,
+                        queued = send_input_with_backpressure(
+                            &keystroke_tx,
+                            bytes,
+                            REMOTE_INPUT_ENQUEUE_TIMEOUT,
+                        ) => queued,
+                    };
+                    if !queued {
+                        break;
+                    }
                 }
             }
             Ok(RemoteMessage::TerminalResize { cols, rows }) => {
@@ -978,13 +1325,22 @@ where
     }
 
     file_handler.cancel_all();
+    drop(file_handler);
     drop(keystroke_tx);
+    pump_stopped.store(true, Ordering::Relaxed);
     child.terminate_and_wait();
-    drop(master);
     drop(outgoing);
-    writer.abort();
+    // Dropping the async receiver first guarantees a PTY output thread stuck
+    // in blocking_send observes closure before we synchronously join it.
+    abort_and_wait(writer).await;
+    // Unix polling borrows master's raw fd, so keep it alive through both
+    // joins. Dropping the ConPTY master is Windows' available I/O wake-up.
+    #[cfg(windows)]
+    drop(master);
     let _ = output_thread.join();
     let _ = input_thread.join();
+    #[cfg(not(windows))]
+    drop(master);
     Ok(())
 }
 
@@ -1579,6 +1935,105 @@ mod tests {
         assert_eq!(state.try_waits, 1);
         assert_eq!(state.kills, 0);
         assert_eq!(state.waits, 0);
+    }
+
+    #[tokio::test]
+    async fn bounded_input_queue_waits_for_room_and_fails_after_receiver_closes() {
+        let (sender, mut receiver) = bounded_input_channel::<usize>(TERMINAL_INPUT_QUEUE_CAPACITY);
+        assert_eq!(sender.capacity(), TERMINAL_INPUT_QUEUE_CAPACITY);
+
+        for value in 0..TERMINAL_INPUT_QUEUE_CAPACITY {
+            assert!(
+                send_input_with_backpressure(&sender, value, REMOTE_INPUT_ENQUEUE_TIMEOUT,).await
+            );
+        }
+
+        let blocked_sender = sender.clone();
+        let blocked = tokio::spawn(async move {
+            send_input_with_backpressure(
+                &blocked_sender,
+                TERMINAL_INPUT_QUEUE_CAPACITY,
+                REMOTE_INPUT_ENQUEUE_TIMEOUT,
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !blocked.is_finished(),
+            "the capacity + 1 input must wait instead of growing the queue"
+        );
+
+        assert_eq!(receiver.recv().await, Some(0));
+        assert!(timeout(Duration::from_secs(1), blocked)
+            .await
+            .expect("backpressured sender should resume")
+            .expect("input sender task should not panic"));
+
+        drop(receiver);
+        assert!(
+            !send_input_with_backpressure(&sender, usize::MAX, REMOTE_INPUT_ENQUEUE_TIMEOUT,).await
+        );
+
+        let (timeout_sender, _timeout_receiver) = bounded_input_channel::<usize>(1);
+        assert!(
+            send_input_with_backpressure(&timeout_sender, 1, REMOTE_INPUT_ENQUEUE_TIMEOUT).await
+        );
+        assert!(
+            !send_input_with_backpressure(&timeout_sender, 2, Duration::from_millis(10)).await,
+            "a full input queue must time out instead of pinning the receive task"
+        );
+
+        let (screen_sender, _screen_receiver) =
+            bounded_input_channel::<usize>(SCREEN_INPUT_QUEUE_CAPACITY);
+        assert_eq!(screen_sender.capacity(), SCREEN_INPUT_QUEUE_CAPACITY);
+    }
+
+    #[tokio::test]
+    async fn abort_and_wait_drops_task_channels_before_returning() {
+        let (sender, mut receiver) = mpsc::channel::<()>(1);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+            drop(sender);
+        });
+        started_rx.await.expect("task should start");
+
+        abort_and_wait(task).await;
+
+        assert_eq!(receiver.recv().await, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_linux_proc_stat_with_spaces_and_closing_parenthesis_in_comm() {
+        let mut fields = vec!["0"; 20];
+        fields[0] = "R";
+        fields[3] = "4242";
+        fields[19] = "987654321";
+        let stat = format!("4242 (shell worker ) tricky) {}", fields.join(" "));
+
+        assert_eq!(
+            parse_linux_process_identity(4242, &stat),
+            Some(LinuxProcessIdentity {
+                process_id: 4242,
+                session_id: 4242,
+                start_time: 987654321,
+            })
+        );
+        assert_eq!(parse_linux_process_identity(4242, "truncated"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn verified_pidfd_keeps_current_process_identity_and_accepts_signal_zero() {
+        // SAFETY: getpid has no preconditions or side effects.
+        let process_id = unsafe { libc::getpid() };
+        let identity = read_linux_process_identity(process_id).expect("read current process stat");
+        let descriptor = open_verified_pidfd(identity).expect("open current process pidfd");
+
+        assert_eq!(read_linux_process_identity(process_id), Some(identity));
+        assert!(signal_pidfd(&descriptor, 0));
     }
 
     #[test]
