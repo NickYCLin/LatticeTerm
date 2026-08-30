@@ -3,6 +3,13 @@ import type { KeyboardEvent, MouseEvent, WheelEvent } from "react";
 import type { RdpApi, RdpInput, RdpSessionSummary } from "../../app/useRdpSessions";
 import { useI18n } from "../../i18n/context";
 import { ScreenShareIcon, ShieldIcon } from "../icons";
+import {
+  CanvasSoftKeyboard,
+  CanvasInputSequence,
+  canvasTextTokens,
+  isCanvasImeKey,
+  isCanvasTextKey,
+} from "../remote/CanvasSoftKeyboard";
 import { CanvasCaptureControls } from "../remote/CanvasCaptureControls";
 
 const extended = (code: number) => 0xe000 | code;
@@ -119,6 +126,7 @@ export function RdpPane({ session, rdp }: { session: RdpSessionSummary; rdp: Rdp
   const pendingMove = useRef<RdpInput | null>(null);
   const moveFrame = useRef<number | null>(null);
   const lastFrame = useRef(0);
+  const keyboardInputSequence = useRef(new CanvasInputSequence());
 
   const send = useCallback(
     (request: RdpInput) => {
@@ -200,13 +208,47 @@ export function RdpPane({ session, rdp }: { session: RdpSessionSummary; rdp: Rdp
   }
 
   function keyboard(event: KeyboardEvent<HTMLCanvasElement>, pressed: boolean) {
+    if (isCanvasImeKey(event.key, event.nativeEvent.isComposing)) return;
     const scancode = scanCodes[event.code];
     if (scancode !== undefined) {
       event.preventDefault();
       send({ kind: "key", scancode, pressed });
-    } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    } else if (isCanvasTextKey(event.key) && !event.ctrlKey && !event.metaKey && !event.altKey) {
       event.preventDefault();
       send({ kind: "unicode", character: event.key, pressed });
+    }
+  }
+
+  function tapKeyboardKey(_key: string, code: string): boolean {
+    const scancode = scanCodes[code];
+    if (scancode === undefined) return false;
+    sendKeyboard({ kind: "key", scancode, pressed: true });
+    sendKeyboard({ kind: "key", scancode, pressed: false });
+    return true;
+  }
+
+  function sendKeyboard(request: RdpInput) {
+    keyboardInputSequence.current.enqueue(() =>
+      rdp.input(session.sessionId, request),
+    );
+  }
+
+  function typeKeyboardText(text: string) {
+    for (const token of canvasTextTokens(text)) {
+      if (token.kind === "key") {
+        tapKeyboardKey(token.key, token.code);
+      } else {
+        sendKeyboard({
+          kind: "unicode",
+          character: token.character,
+          pressed: true,
+        });
+        sendKeyboard({
+          kind: "unicode",
+          character: token.character,
+          pressed: false,
+        });
+      }
     }
   }
 
@@ -228,6 +270,14 @@ export function RdpPane({ session, rdp }: { session: RdpSessionSummary; rdp: Rdp
           canvasRef={canvasRef}
           ready={session.frame !== null}
           label={session.username + "@" + session.host}
+        />
+        <CanvasSoftKeyboard
+          buttonLabel={t("remote.keyboard.open")}
+          closeButtonLabel={t("remote.keyboard.close")}
+          inputLabel={t("remote.keyboard.input")}
+          onText={typeKeyboardText}
+          onKeyTap={tapKeyboardKey}
+          onReleaseAll={() => sendKeyboard({ kind: "releaseAll" })}
         />
         <span className="badge tone-ok">{t("rdp.session.interactive")}</span>
       </div>

@@ -320,6 +320,39 @@
   color: var(--accent);
 }
 
+.canvas-soft-keyboard {
+  display: contents;
+}
+
+.canvas-soft-keyboard__toggle {
+  display: none;
+  flex: none;
+}
+
+.app--mobile .canvas-soft-keyboard__toggle {
+  display: inline-flex;
+}
+
+/* A real editable control is required to summon Android/iOS keyboards. Keep
+   it focusable without letting it cover or scroll the remote canvas. */
+.canvas-soft-keyboard__input {
+  position: fixed;
+  z-index: 1;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0.01;
+  overflow: hidden;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;
+  pointer-events: none;
+}
+
 .remote-frame-canvas,
 .rdp-canvas {
   display: block;
@@ -650,6 +683,26 @@
   }
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .canvas-soft-keyboard__toggle {
+    display: inline-flex;
+  }
+}
+
+.app--mobile .remote-workspace--files {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app--mobile .remote-workspace--files > .remote-canvas,
+.app--mobile .remote-workspace--files > .remote-terminal {
+  display: none;
+}
+
+.app--mobile .remote-workspace__files {
+  width: 100%;
+  border-right: 0;
+}
+
 @media (max-width: 48rem) {
   .remote-host-share-grid {
     grid-template-columns: 1fr;
@@ -665,7 +718,26 @@
   }
 
   .remote-workspace--files {
-    grid-template-columns: minmax(12rem, 42%) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .remote-workspace--files > .remote-canvas,
+  .remote-workspace--files > .remote-terminal {
+    display: none;
+  }
+
+  .remote-workspace__files {
+    width: 100%;
+    border-right: 0;
+  }
+
+  .remote-files-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .remote-files-table th:first-child {
+    width: auto;
   }
 
   .remote-files-table th:nth-child(2),

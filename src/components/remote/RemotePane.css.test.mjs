@@ -15,4 +15,25 @@ describe("Lattice Remote canvas styles", () => {
       /\.remote-frame-canvas--view-only\s*\{[^}]*pointer-events:\s*none;/s,
     );
   });
+
+  it("gives the mobile file browser the full workspace", () => {
+    expect(remoteStyles).toMatch(
+      /@media \(max-width: 48rem\)[\s\S]*?\.remote-workspace--files\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/,
+    );
+    expect(remoteStyles).toMatch(
+      /\.remote-workspace--files > \.remote-canvas,[\s\S]*?\.remote-workspace--files > \.remote-terminal\s*\{[^}]*display:\s*none;/,
+    );
+    expect(remoteStyles).toMatch(
+      /@media \(max-width: 48rem\)[\s\S]*?\.remote-files-actions\s*\{[^}]*flex-wrap:\s*wrap;/,
+    );
+  });
+
+  it("exposes a software-keyboard toggle only on touch/mobile layouts", () => {
+    expect(remoteStyles).toMatch(
+      /\.canvas-soft-keyboard__toggle\s*\{[^}]*display:\s*none;/,
+    );
+    expect(remoteStyles).toMatch(
+      /\.app--mobile \.canvas-soft-keyboard__toggle\s*\{[^}]*display:\s*inline-flex;/,
+    );
+  });
 });

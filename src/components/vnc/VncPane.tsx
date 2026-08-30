@@ -4,6 +4,12 @@ import type { VncApi, VncInput, VncSessionSummary } from "../../app/useVncSessio
 import { useI18n } from "../../i18n/context";
 import { ScreenShareIcon } from "../icons";
 import { CanvasCaptureControls } from "../remote/CanvasCaptureControls";
+import {
+  CanvasSoftKeyboard,
+  CanvasInputSequence,
+  canvasTextTokens,
+  isCanvasImeKey,
+} from "../remote/CanvasSoftKeyboard";
 import { keysymFor } from "../remote/keysym";
 
 export function VncPane({ session, vnc }: { session: VncSessionSummary; vnc: VncApi }) {
@@ -12,6 +18,7 @@ export function VncPane({ session, vnc }: { session: VncSessionSummary; vnc: Vnc
   const pendingMove = useRef<VncInput | null>(null);
   const moveFrame = useRef<number | null>(null);
   const lastFrame = useRef(0);
+  const keyboardInputSequence = useRef(new CanvasInputSequence());
 
   const send = useCallback(
     (request: VncInput) => {
@@ -94,10 +101,35 @@ export function VncPane({ session, vnc }: { session: VncSessionSummary; vnc: Vnc
   }
 
   function keyboard(event: KeyboardEvent<HTMLCanvasElement>, pressed: boolean) {
+    if (isCanvasImeKey(event.key, event.nativeEvent.isComposing)) return;
     const keysym = keysymFor(event.key, event.code);
     if (keysym === null) return;
     event.preventDefault();
     send({ kind: "key", keysym, pressed });
+  }
+
+  function tapKeyboardKey(key: string, code: string): boolean {
+    const keysym = keysymFor(key, code);
+    if (keysym === null) return false;
+    sendKeyboard({ kind: "key", keysym, pressed: true });
+    sendKeyboard({ kind: "key", keysym, pressed: false });
+    return true;
+  }
+
+  function sendKeyboard(request: VncInput) {
+    keyboardInputSequence.current.enqueue(() =>
+      vnc.input(session.sessionId, request),
+    );
+  }
+
+  function typeKeyboardText(text: string) {
+    for (const token of canvasTextTokens(text)) {
+      if (token.kind === "key") {
+        tapKeyboardKey(token.key, token.code);
+      } else {
+        tapKeyboardKey(token.character, "");
+      }
+    }
   }
 
   return (
@@ -114,6 +146,14 @@ export function VncPane({ session, vnc }: { session: VncSessionSummary; vnc: Vnc
           canvasRef={canvasRef}
           ready={session.frame !== null}
           label={session.host + ":" + String(session.port)}
+        />
+        <CanvasSoftKeyboard
+          buttonLabel={t("remote.keyboard.open")}
+          closeButtonLabel={t("remote.keyboard.close")}
+          inputLabel={t("remote.keyboard.input")}
+          onText={typeKeyboardText}
+          onKeyTap={tapKeyboardKey}
+          onReleaseAll={() => sendKeyboard({ kind: "releaseAll" })}
         />
         <span className="badge tone-ok">{t("vnc.session.interactive")}</span>
       </div>

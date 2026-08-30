@@ -4,6 +4,12 @@ import type { RemoteApi, RemoteInput, RemoteSessionSummary } from "../../app/use
 import type { ThemeId } from "../../app/themes";
 import { useI18n } from "../../i18n/context";
 import { FolderIcon, ScreenShareIcon, ShieldIcon, TerminalIcon } from "../icons";
+import {
+  CanvasSoftKeyboard,
+  CanvasInputSequence,
+  canvasTextTokens,
+  isCanvasImeKey,
+} from "./CanvasSoftKeyboard";
 import { CanvasCaptureControls } from "./CanvasCaptureControls";
 import { keysymFor } from "./keysym";
 import { RemoteFilesPane } from "./RemoteFilesPane";
@@ -28,6 +34,7 @@ export function RemotePane({
   const pendingMove = useRef<RemoteInput | null>(null);
   const moveFrame = useRef<number | null>(null);
   const pointerInput = useRef(new RemotePointerInputState());
+  const keyboardInputSequence = useRef(new CanvasInputSequence());
   const [filesOpen, setFilesOpen] = useState(false);
   const interactive = !session.viewOnly;
   // The Remote API container changes whenever a frame updates, while the
@@ -196,10 +203,36 @@ export function RemotePane({
 
   function keyboard(event: KeyboardEvent<HTMLCanvasElement>, pressed: boolean) {
     if (!interactive) return;
+    if (isCanvasImeKey(event.key, event.nativeEvent.isComposing)) return;
     const keysym = keysymFor(event.key, event.code);
     if (keysym === null) return;
     event.preventDefault();
     send({ kind: "key", keysym, pressed });
+  }
+
+  function tapKeyboardKey(key: string, code: string): boolean {
+    const keysym = keysymFor(key, code);
+    if (keysym === null) return false;
+    sendKeyboard({ kind: "key", keysym, pressed: true });
+    sendKeyboard({ kind: "key", keysym, pressed: false });
+    return true;
+  }
+
+  function sendKeyboard(request: RemoteInput) {
+    if (!interactive) return;
+    keyboardInputSequence.current.enqueue(() =>
+      remoteInput(session.sessionId, request),
+    );
+  }
+
+  function typeKeyboardText(text: string) {
+    for (const token of canvasTextTokens(text)) {
+      if (token.kind === "key") {
+        tapKeyboardKey(token.key, token.code);
+      } else {
+        tapKeyboardKey(token.character, "");
+      }
+    }
   }
 
   return (
@@ -229,12 +262,25 @@ export function RemotePane({
             />
           </>
         )}
+        {interactive && !session.terminal && !filesOpen && (
+          <CanvasSoftKeyboard
+            buttonLabel={t("remote.keyboard.open")}
+            closeButtonLabel={t("remote.keyboard.close")}
+            inputLabel={t("remote.keyboard.input")}
+            onText={typeKeyboardText}
+            onKeyTap={tapKeyboardKey}
+            onReleaseAll={() => sendKeyboard({ kind: "releaseAll" })}
+          />
+        )}
         {session.fileTransfer && (
           <button
             type="button"
             className={`capture-button${filesOpen ? " is-active" : ""}`}
             onClick={() => setFilesOpen((current) => !current)}
             aria-pressed={filesOpen}
+            aria-expanded={filesOpen}
+            aria-label={t("remote.files.toggle")}
+            data-tooltip={t("remote.files.toggle")}
           >
             <FolderIcon size={13} />
             <span className="capture-button__label">{t("remote.files.toggle")}</span>
@@ -249,7 +295,10 @@ export function RemotePane({
 
       <div className={`remote-workspace${filesOpen ? " remote-workspace--files" : ""}`}>
         {filesOpen && session.fileTransfer && (
-          <aside className="remote-workspace__files">
+          <aside
+            className="remote-workspace__files"
+            aria-label={t("remote.files.toggle")}
+          >
             <RemoteFilesPane session={session} remote={remote} />
           </aside>
         )}

@@ -1036,6 +1036,9 @@ export const en: Messages = {
   "remote.session.waitingTitle": "Waiting for the first frame",
   "remote.session.waitingBody":
     "Pairing succeeded. The Agent is capturing and encoding its primary display.",
+  "remote.keyboard.open": "Open software keyboard",
+  "remote.keyboard.close": "Close software keyboard",
+  "remote.keyboard.input": "Remote keyboard input",
   "remote.files.toggle": "Host files",
   "remote.files.path": "Remote path",
   "remote.files.up": "Up",

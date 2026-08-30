@@ -27,11 +27,11 @@ const remote = {
   input: vi.fn(() => Promise.resolve()),
 } as unknown as RemoteApi;
 
-function renderRemote(viewOnly: boolean): string {
+function renderRemote(viewOnly: boolean, fileTransfer = false): string {
   return renderToStaticMarkup(
     <I18nProvider locale="zh-TW">
       <RemotePane
-        session={{ ...session, viewOnly }}
+        session={{ ...session, viewOnly, fileTransfer }}
         remote={remote}
         theme="dark"
       />
@@ -49,6 +49,8 @@ describe("Lattice Remote canvas interaction", () => {
     expect(markup).toMatch(
       /<canvas[^>]*tabindex="0"[^>]*role="application"/,
     );
+    expect(markup).toContain('aria-label="開啟軟體鍵盤"');
+    expect(markup).toContain('aria-label="遠端鍵盤輸入"');
   });
 
   it("keeps view-only frames out of pointer and keyboard interaction", () => {
@@ -59,5 +61,14 @@ describe("Lattice Remote canvas interaction", () => {
     );
     expect(markup).toMatch(/<canvas[^>]*role="img"/);
     expect(markup).not.toMatch(/<canvas[^>]*tabindex=/);
+    expect(markup).not.toContain('aria-label="開啟軟體鍵盤"');
+  });
+
+  it("labels the icon-only mobile file disclosure", () => {
+    const markup = renderRemote(false, true);
+
+    expect(markup).toMatch(
+      /<button[^>]*aria-expanded="false"[^>]*aria-label="主機檔案"/,
+    );
   });
 });
