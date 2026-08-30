@@ -4,23 +4,26 @@ use lattice_remote::relay::{
     DeviceIdentity, RelayClientMessage, RelayServerMessage,
 };
 use lattice_remote::{
-    frame_messages, generate_pairing_code, host_files::HostUpload, host_files::SharedFiles,
-    host_input::InputInjector, normalize_pairing_code, FrameFormat, RemoteFileRequest,
-    RemoteFileResponse, RemoteHello, RemoteMessage, SecureConnection, SecureWriter, Transport,
-    DEFAULT_PORT, FILE_CHUNK_SIZE, MAX_FILE_ERROR_BYTES, PROTOCOL_VERSION,
+    frame_messages, generate_pairing_code,
+    host_files::{SharedFiles, UploadFinishOutcome},
+    host_input::InputInjector,
+    normalize_pairing_code, FrameFormat, RemoteFileRequest, RemoteFileResponse, RemoteHello,
+    RemoteMessage, SecureConnection, SecureWriter, Transport, DEFAULT_PORT, FILE_CHUNK_SIZE,
+    MAX_FILE_ERROR_BYTES, PROTOCOL_VERSION,
 };
 use serde::Serialize;
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::HashMap;
 use std::env;
 use std::io::{Cursor, Read as _, Write as _};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, watch};
+use tokio::runtime::Handle;
+use tokio::sync::{mpsc, watch, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{sleep, timeout};
 use xcap::Monitor;
 
@@ -34,6 +37,21 @@ const RELAY_PING_INTERVAL: Duration = Duration::from_secs(25);
 const RELAY_RECONNECT_CAP: Duration = Duration::from_secs(60);
 const REMOTE_SEND_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_INPUT_ENQUEUE_TIMEOUT: Duration = Duration::from_secs(10);
+// File work is authorised by the viewer, but still untrusted. Keep blocking
+// pool demand bounded across the Agent lifetime and descriptors bounded per
+// session.
+const FILE_JOB_LIMIT: usize = 8;
+const ACTIVE_DOWNLOAD_LIMIT: usize = 8;
+const ACTIVE_UPLOAD_LIMIT: usize = 8;
+const FILE_RESPONSE_ENQUEUE_TIMEOUT: Duration = Duration::from_secs(10);
+const FILE_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_millis(250);
+const FILE_JOB_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(500);
+const UPLOAD_COMMAND_QUEUE_CAPACITY: usize = 8;
+const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_UPLOAD_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_SESSION_UPLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+static NEXT_UPLOAD_TARGET_RESERVATION: AtomicU64 = AtomicU64::new(1);
+static ACTIVE_UPLOAD_TARGETS: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
 // Preserve every key transition while bounding the amount of work an
 // authorised but abusive viewer can queue ahead of the OS input backend.
 const SCREEN_INPUT_QUEUE_CAPACITY: usize = 256;
@@ -60,6 +78,9 @@ struct Options {
     relay: Option<String>,
     identity_file: Option<PathBuf>,
     terminal: bool,
+    /// Shared by every relay session so blocked filesystem calls cannot
+    /// accumulate across reconnects.
+    file_job_permits: Arc<Semaphore>,
 }
 
 #[derive(Serialize)]
@@ -299,6 +320,7 @@ fn parse_options() -> Result<Options, String> {
         relay,
         identity_file,
         terminal,
+        file_job_permits: Arc::new(Semaphore::new(FILE_JOB_LIMIT)),
     })
 }
 
@@ -411,6 +433,13 @@ async fn send_input_with_backpressure<T>(
 /// channel endpoints are definitely dropped before joining blocking threads.
 async fn abort_and_wait<T>(task: tokio::task::JoinHandle<T>) {
     task.abort();
+    let _ = task.await;
+}
+
+/// Requests cooperative cleanup before awaiting a task. Unlike aborting, this
+/// lets receiver-owned file workers run their bounded shutdown path.
+async fn stop_and_wait<T>(stop: watch::Sender<bool>, task: tokio::task::JoinHandle<T>) {
+    stop.send_replace(true);
     let _ = task.await;
 }
 
@@ -614,43 +643,892 @@ fn file_error(operation_id: u64, detail: impl Into<String>) -> RemoteMessage {
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FileJobKind {
+    List,
+    Download,
+    Upload { announced_bytes: u64 },
+}
+
+enum UploadCommand {
+    Chunk(Vec<u8>),
+    Finish,
+}
+
+enum UploadActorEvent {
+    Command(UploadCommand),
+    Cancelled,
+    Idle,
+    Closed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FileSendOutcome {
+    Sent,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Clone)]
+enum FileCancelResponse {
+    Complete,
+    Error(String),
+    Silent,
+}
+
+enum FileJobState {
+    Active,
+    Cancelling(FileCancelResponse),
+    /// UploadFinish has crossed its atomic point of no return. A later Cancel
+    /// cannot truthfully undo a flush/rename already in progress, so the actor
+    /// remains the sole owner of the real Complete/Error response.
+    Committing,
+    Terminal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FileCancelDisposition {
+    Requested,
+    TerminalPending,
+}
+
+struct FileJobControl {
+    kind: FileJobKind,
+    state: Mutex<FileJobState>,
+    cancelled: watch::Sender<bool>,
+    failed: watch::Sender<bool>,
+    upload_commands: Option<mpsc::Sender<UploadCommand>>,
+    upload_committed: AtomicBool,
+}
+
+impl FileJobControl {
+    fn new(
+        kind: FileJobKind,
+        upload_commands: Option<mpsc::Sender<UploadCommand>>,
+        failed: watch::Sender<bool>,
+    ) -> Self {
+        let (cancelled, _) = watch::channel(false);
+        Self {
+            kind,
+            state: Mutex::new(FileJobState::Active),
+            cancelled,
+            failed,
+            upload_commands,
+            upload_committed: AtomicBool::new(false),
+        }
+    }
+
+    fn request_cancel(&self, response: FileCancelResponse) -> FileCancelDisposition {
+        let requested = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match &*state {
+                FileJobState::Active => {
+                    *state = FileJobState::Cancelling(response);
+                    true
+                }
+                FileJobState::Cancelling(_) | FileJobState::Committing | FileJobState::Terminal => {
+                    false
+                }
+            }
+        };
+        if requested {
+            self.cancelled.send_replace(true);
+            FileCancelDisposition::Requested
+        } else {
+            FileCancelDisposition::TerminalPending
+        }
+    }
+
+    fn cancel_silently(&self) {
+        let should_signal = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match &*state {
+                FileJobState::Active | FileJobState::Cancelling(_) => {
+                    *state = FileJobState::Cancelling(FileCancelResponse::Silent);
+                    true
+                }
+                FileJobState::Committing | FileJobState::Terminal => false,
+            }
+        };
+        if should_signal {
+            self.cancelled.send_replace(true);
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        matches!(
+            *self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            FileJobState::Cancelling(_)
+        )
+    }
+
+    fn subscribe(&self) -> watch::Receiver<bool> {
+        self.cancelled.subscribe()
+    }
+
+    fn fail_session(&self) {
+        self.failed.send_replace(true);
+    }
+
+    fn claim_active_terminal(&self) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(*state, FileJobState::Active) {
+            *state = FileJobState::Terminal;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn claim_cancel_terminal(&self) -> Option<FileCancelResponse> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let FileJobState::Cancelling(response) = &*state else {
+            return None;
+        };
+        let response = response.clone();
+        *state = FileJobState::Terminal;
+        Some(response)
+    }
+
+    fn begin_upload_commit(&self) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(*state, FileJobState::Active) {
+            *state = FileJobState::Committing;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn finish_upload_commit(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        debug_assert!(matches!(*state, FileJobState::Committing));
+        *state = FileJobState::Terminal;
+    }
+}
+
+#[derive(Default)]
+struct ActiveFileJobs {
+    operations: HashMap<u64, Arc<FileJobControl>>,
+    active_upload_bytes: u64,
+    committed_upload_bytes: u64,
+}
+
+impl ActiveFileJobs {
+    fn insert(
+        &mut self,
+        operation_id: u64,
+        control: Arc<FileJobControl>,
+    ) -> Result<(), &'static str> {
+        if self.operations.contains_key(&operation_id) {
+            return Err("The file operation identifier is already active.");
+        }
+        match control.kind {
+            FileJobKind::List => {}
+            FileJobKind::Download => {
+                let active_downloads = self
+                    .operations
+                    .values()
+                    .filter(|job| job.kind == FileJobKind::Download)
+                    .count();
+                if active_downloads >= ACTIVE_DOWNLOAD_LIMIT {
+                    return Err("Too many downloads are active.");
+                }
+            }
+            FileJobKind::Upload { announced_bytes } => {
+                if announced_bytes > MAX_UPLOAD_FILE_BYTES {
+                    return Err("The upload is larger than the per-file limit.");
+                }
+                let active_uploads = self
+                    .operations
+                    .values()
+                    .filter(|job| matches!(job.kind, FileJobKind::Upload { .. }))
+                    .count();
+                if active_uploads >= ACTIVE_UPLOAD_LIMIT {
+                    return Err("Too many uploads are active.");
+                }
+                let next_bytes = self
+                    .active_upload_bytes
+                    .checked_add(self.committed_upload_bytes)
+                    .and_then(|bytes| bytes.checked_add(announced_bytes))
+                    .ok_or("The session upload byte count overflowed.")?;
+                if next_bytes > MAX_SESSION_UPLOAD_BYTES {
+                    return Err("The uploads exceed the session byte limit.");
+                }
+                self.active_upload_bytes = self
+                    .active_upload_bytes
+                    .checked_add(announced_bytes)
+                    .ok_or("The active upload byte count overflowed.")?;
+            }
+        }
+        self.operations.insert(operation_id, control);
+        Ok(())
+    }
+
+    fn remove_if_current(&mut self, operation_id: u64, control: &Arc<FileJobControl>) {
+        if self
+            .operations
+            .get(&operation_id)
+            .is_some_and(|current| Arc::ptr_eq(current, control))
+        {
+            self.operations.remove(&operation_id);
+            if let FileJobKind::Upload { announced_bytes } = control.kind {
+                if !control.upload_committed.load(Ordering::Acquire) {
+                    self.active_upload_bytes =
+                        self.active_upload_bytes.saturating_sub(announced_bytes);
+                }
+            }
+        }
+    }
+
+    fn commit_upload(&mut self, operation_id: u64, control: &Arc<FileJobControl>) {
+        if !self
+            .operations
+            .get(&operation_id)
+            .is_some_and(|current| Arc::ptr_eq(current, control))
+        {
+            return;
+        }
+        let FileJobKind::Upload { announced_bytes } = control.kind else {
+            return;
+        };
+        if control.upload_committed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.active_upload_bytes = self.active_upload_bytes.saturating_sub(announced_bytes);
+        self.committed_upload_bytes = self
+            .committed_upload_bytes
+            .saturating_add(announced_bytes)
+            .min(MAX_SESSION_UPLOAD_BYTES);
+    }
+
+    fn cancel(&self, operation_id: u64) -> Option<FileCancelDisposition> {
+        self.operations
+            .get(&operation_id)
+            .map(|control| control.request_cancel(FileCancelResponse::Complete))
+    }
+
+    fn cancel_all(&mut self) {
+        for control in self.operations.values() {
+            control.cancel_silently();
+        }
+        // A session being torn down cannot reuse IDs. Clear its registry and
+        // active byte reservations immediately; workers retain their Arc
+        // identity until their bounded cleanup finishes. Committed accounting
+        // remains relevant only for the lifetime of this now-closed registry.
+        self.operations.clear();
+        self.active_upload_bytes = 0;
+    }
+}
+
+struct FileJobRegistry {
+    active: Mutex<ActiveFileJobs>,
+    in_flight: AtomicUsize,
+    settled: Notify,
+    failed: watch::Sender<bool>,
+}
+
+impl FileJobRegistry {
+    fn new() -> Self {
+        let (failed, _) = watch::channel(false);
+        Self {
+            active: Mutex::new(ActiveFileJobs::default()),
+            in_flight: AtomicUsize::new(0),
+            settled: Notify::new(),
+            failed,
+        }
+    }
+
+    fn insert(&self, operation_id: u64, control: Arc<FileJobControl>) -> Result<(), &'static str> {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(operation_id, control)?;
+        self.in_flight.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    fn control(&self, operation_id: u64) -> Option<Arc<FileJobControl>> {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .operations
+            .get(&operation_id)
+            .cloned()
+    }
+
+    fn cancel(&self, operation_id: u64) -> Option<FileCancelDisposition> {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .cancel(operation_id)
+    }
+
+    fn cancel_all(&self) {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .cancel_all();
+    }
+
+    fn commit_upload(&self, operation_id: u64, control: &Arc<FileJobControl>) {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .commit_upload(operation_id, control);
+    }
+
+    fn subscribe_failures(&self) -> watch::Receiver<bool> {
+        self.failed.subscribe()
+    }
+
+    fn fail_session(&self) {
+        self.failed.send_replace(true);
+    }
+
+    async fn wait_for_idle(&self) {
+        loop {
+            let settled = self.settled.notified();
+            if self.in_flight.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            settled.await;
+        }
+    }
+}
+
+struct FileJobRegistration {
+    operation_id: u64,
+    control: Arc<FileJobControl>,
+    registry: Arc<FileJobRegistry>,
+}
+
+impl FileJobRegistration {
+    fn subscribe(&self) -> watch::Receiver<bool> {
+        self.control.subscribe()
+    }
+}
+
+impl Drop for FileJobRegistration {
+    fn drop(&mut self) {
+        self.registry
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove_if_current(self.operation_id, &self.control);
+        let previous = self.registry.in_flight.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "file job accounting underflowed");
+        // `notify_one` stores a permit when shutdown has not polled yet,
+        // avoiding the check-to-wait lost-wakeup window.
+        self.registry.settled.notify_one();
+    }
+}
+
+fn try_admit_file_job(
+    permits: &Arc<Semaphore>,
+    registry: &Arc<FileJobRegistry>,
+    kind: FileJobKind,
+    operation_id: u64,
+    upload_commands: Option<mpsc::Sender<UploadCommand>>,
+) -> Result<(OwnedSemaphorePermit, FileJobRegistration), &'static str> {
+    // `try_acquire_owned` is deliberately fail-fast: no unbounded queue of
+    // authorised-but-hostile requests can accumulate behind blocking I/O.
+    let permit = Arc::clone(permits)
+        .try_acquire_owned()
+        .map_err(|_| "Too many file operations are active.")?;
+    let control = Arc::new(FileJobControl::new(
+        kind,
+        upload_commands,
+        registry.failed.clone(),
+    ));
+    registry.insert(operation_id, Arc::clone(&control))?;
+    Ok((
+        permit,
+        FileJobRegistration {
+            operation_id,
+            control,
+            registry: Arc::clone(registry),
+        },
+    ))
+}
+
+fn send_file_job_message(
+    runtime: &Handle,
+    outgoing: &mpsc::Sender<RemoteMessage>,
+    message: RemoteMessage,
+    control: &FileJobControl,
+    cancelled: &mut watch::Receiver<bool>,
+) -> FileSendOutcome {
+    if *cancelled.borrow() {
+        return FileSendOutcome::Cancelled;
+    }
+    let outcome = runtime.block_on(async {
+        tokio::select! {
+            biased;
+            _ = cancelled.changed() => FileSendOutcome::Cancelled,
+            result = timeout(FILE_RESPONSE_ENQUEUE_TIMEOUT, outgoing.send(message)) => {
+                if matches!(result, Ok(Ok(()))) {
+                    FileSendOutcome::Sent
+                } else {
+                    FileSendOutcome::Failed
+                }
+            }
+        }
+    });
+    if outcome == FileSendOutcome::Failed {
+        control.fail_session();
+    }
+    outcome
+}
+
+fn send_file_terminal_message(
+    runtime: &Handle,
+    outgoing: &mpsc::Sender<RemoteMessage>,
+    message: RemoteMessage,
+    control: &FileJobControl,
+) -> bool {
+    let sent = runtime.block_on(async {
+        matches!(
+            timeout(FILE_RESPONSE_ENQUEUE_TIMEOUT, outgoing.send(message)).await,
+            Ok(Ok(()))
+        )
+    });
+    if !sent {
+        control.fail_session();
+    }
+    sent
+}
+
+fn finish_cancelled_file_job(
+    runtime: &Handle,
+    outgoing: &mpsc::Sender<RemoteMessage>,
+    operation_id: u64,
+    control: &FileJobControl,
+) {
+    let Some(response) = control.claim_cancel_terminal() else {
+        return;
+    };
+    let message = match response {
+        FileCancelResponse::Complete => {
+            Some(RemoteMessage::FileResponse(RemoteFileResponse::Complete {
+                transfer_id: operation_id,
+            }))
+        }
+        FileCancelResponse::Error(detail) => Some(file_error(operation_id, detail)),
+        FileCancelResponse::Silent => None,
+    };
+    if let Some(message) = message {
+        let _ = send_file_terminal_message(runtime, outgoing, message, control);
+    }
+}
+
+fn finish_active_or_cancelled_file_job(
+    runtime: &Handle,
+    outgoing: &mpsc::Sender<RemoteMessage>,
+    operation_id: u64,
+    control: &FileJobControl,
+    active_response: RemoteMessage,
+) {
+    if control.claim_active_terminal() {
+        let _ = send_file_terminal_message(runtime, outgoing, active_response, control);
+    } else {
+        finish_cancelled_file_job(runtime, outgoing, operation_id, control);
+    }
+}
+
+fn spawn_file_thread(
+    name: &str,
+    worker: impl FnOnce() + Send + 'static,
+) -> Result<(), &'static str> {
+    // Detached OS threads are intentional. Unlike Tokio's blocking pool, the
+    // process can still exit after the bounded handler shutdown if a kernel or
+    // network-filesystem syscall never returns. The Agent-wide semaphore caps
+    // the number of such threads at FILE_JOB_LIMIT.
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(worker)
+        .map(|_| ())
+        .map_err(|_| "Cannot start the file worker.")
+}
+
 fn spawn_directory_list(
     files: Arc<SharedFiles>,
     request_id: u64,
     path: String,
     outgoing: mpsc::Sender<RemoteMessage>,
-) {
-    tokio::task::spawn_blocking(move || match files.list(&path) {
-        Ok((path, entries)) => {
-            if outgoing
-                .blocking_send(RemoteMessage::FileResponse(RemoteFileResponse::ListStart {
+    permit: OwnedSemaphorePermit,
+    registration: FileJobRegistration,
+    runtime: Handle,
+) -> Result<(), &'static str> {
+    spawn_file_thread("lattice-file-list", move || {
+        let _permit = permit;
+        let mut cancelled = registration.subscribe();
+        if registration.control.is_cancelled() {
+            finish_cancelled_file_job(&runtime, &outgoing, request_id, &registration.control);
+            return;
+        }
+        match files.list(&path) {
+            Ok((path, entries)) => {
+                match send_file_job_message(
+                    &runtime,
+                    &outgoing,
+                    RemoteMessage::FileResponse(RemoteFileResponse::ListStart { request_id, path }),
+                    &registration.control,
+                    &mut cancelled,
+                ) {
+                    FileSendOutcome::Sent => {}
+                    FileSendOutcome::Cancelled => {
+                        finish_cancelled_file_job(
+                            &runtime,
+                            &outgoing,
+                            request_id,
+                            &registration.control,
+                        );
+                        return;
+                    }
+                    FileSendOutcome::Failed => return,
+                }
+                for entry in entries {
+                    match send_file_job_message(
+                        &runtime,
+                        &outgoing,
+                        RemoteMessage::FileResponse(RemoteFileResponse::ListEntry {
+                            request_id,
+                            entry,
+                        }),
+                        &registration.control,
+                        &mut cancelled,
+                    ) {
+                        FileSendOutcome::Sent => {}
+                        FileSendOutcome::Cancelled => {
+                            finish_cancelled_file_job(
+                                &runtime,
+                                &outgoing,
+                                request_id,
+                                &registration.control,
+                            );
+                            return;
+                        }
+                        FileSendOutcome::Failed => return,
+                    }
+                }
+                finish_active_or_cancelled_file_job(
+                    &runtime,
+                    &outgoing,
                     request_id,
-                    path,
-                }))
-                .is_err()
-            {
+                    &registration.control,
+                    RemoteMessage::FileResponse(RemoteFileResponse::ListDone { request_id }),
+                );
+            }
+            Err(error) => {
+                finish_active_or_cancelled_file_job(
+                    &runtime,
+                    &outgoing,
+                    request_id,
+                    &registration.control,
+                    file_error(request_id, error),
+                );
+            }
+        }
+    })
+}
+
+struct UploadJob {
+    files: Arc<SharedFiles>,
+    transfer_id: u64,
+    path: String,
+    size: u64,
+    overwrite: bool,
+    commands: mpsc::Receiver<UploadCommand>,
+    outgoing: mpsc::Sender<RemoteMessage>,
+    permit: OwnedSemaphorePermit,
+    registration: FileJobRegistration,
+    runtime: Handle,
+}
+
+struct UploadTargetReservation {
+    key: PathBuf,
+    token: u64,
+}
+
+impl Drop for UploadTargetReservation {
+    fn drop(&mut self) {
+        let mut active = ACTIVE_UPLOAD_TARGETS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if active.get(&self.key) == Some(&self.token) {
+            active.remove(&self.key);
+        }
+    }
+}
+
+fn upload_target_reservation_key(destination: &Path) -> PathBuf {
+    // Canonicalisation does not promise a portable Unicode/case-folded
+    // spelling, including on Linux mounts such as VFAT, exFAT, CIFS, and
+    // casefold-enabled ext4. Conservatively serialise uploads within one
+    // canonical parent on every platform, so destination aliases cannot
+    // re-enter the overwrite backup/restore sequence.
+    let parent = destination.parent().unwrap_or(destination);
+    PathBuf::from(parent.to_string_lossy().to_lowercase())
+}
+
+fn try_reserve_upload_target(destination: &Path) -> Result<UploadTargetReservation, &'static str> {
+    let key = upload_target_reservation_key(destination);
+    let token = NEXT_UPLOAD_TARGET_RESERVATION.fetch_add(1, Ordering::Relaxed);
+    let mut active = ACTIVE_UPLOAD_TARGETS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if active.contains_key(&key) {
+        return Err("Another upload in this destination folder is active.");
+    }
+    active.insert(key.clone(), token);
+    Ok(UploadTargetReservation { key, token })
+}
+
+fn spawn_upload(job: UploadJob) -> Result<(), &'static str> {
+    spawn_file_thread("lattice-file-upload", move || {
+        let UploadJob {
+            files,
+            transfer_id,
+            path,
+            size,
+            overwrite,
+            mut commands,
+            outgoing,
+            permit,
+            registration,
+            runtime,
+        } = job;
+        let _permit = permit;
+        let mut cancelled = registration.subscribe();
+        if registration.control.is_cancelled() {
+            finish_cancelled_file_job(&runtime, &outgoing, transfer_id, &registration.control);
+            return;
+        }
+        let destination = match files.upload_destination(&path) {
+            Ok(destination) => destination,
+            Err(error) => {
+                finish_active_or_cancelled_file_job(
+                    &runtime,
+                    &outgoing,
+                    transfer_id,
+                    &registration.control,
+                    file_error(transfer_id, error),
+                );
                 return;
             }
-            for entry in entries {
-                if outgoing
-                    .blocking_send(RemoteMessage::FileResponse(RemoteFileResponse::ListEntry {
-                        request_id,
-                        entry,
-                    }))
-                    .is_err()
-                {
+        };
+        if registration.control.is_cancelled() {
+            finish_cancelled_file_job(&runtime, &outgoing, transfer_id, &registration.control);
+            return;
+        }
+        let _target_reservation = match try_reserve_upload_target(&destination) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                finish_active_or_cancelled_file_job(
+                    &runtime,
+                    &outgoing,
+                    transfer_id,
+                    &registration.control,
+                    file_error(transfer_id, error),
+                );
+                return;
+            }
+        };
+        let mut upload = match files.begin_upload(transfer_id, &path, size, overwrite) {
+            Ok(upload) => upload,
+            Err(error) => {
+                finish_active_or_cancelled_file_job(
+                    &runtime,
+                    &outgoing,
+                    transfer_id,
+                    &registration.control,
+                    file_error(transfer_id, error),
+                );
+                return;
+            }
+        };
+        if upload.destination() != destination {
+            drop(upload);
+            finish_active_or_cancelled_file_job(
+                &runtime,
+                &outgoing,
+                transfer_id,
+                &registration.control,
+                file_error(
+                    transfer_id,
+                    "The upload destination changed while it was being prepared.",
+                ),
+            );
+            return;
+        }
+        // Recheck after every blocking filesystem call. Cancellation cannot
+        // interrupt std::fs itself, but it suppresses every stale response and
+        // drops the staging file at the next boundary.
+        if registration.control.is_cancelled() {
+            drop(upload);
+            finish_cancelled_file_job(&runtime, &outgoing, transfer_id, &registration.control);
+            return;
+        }
+        match send_file_job_message(
+            &runtime,
+            &outgoing,
+            RemoteMessage::FileResponse(RemoteFileResponse::UploadReady { transfer_id }),
+            &registration.control,
+            &mut cancelled,
+        ) {
+            FileSendOutcome::Sent => {}
+            FileSendOutcome::Cancelled => {
+                drop(upload);
+                finish_cancelled_file_job(&runtime, &outgoing, transfer_id, &registration.control);
+                return;
+            }
+            FileSendOutcome::Failed => {
+                drop(upload);
+                let _ = registration.control.claim_active_terminal();
+                return;
+            }
+        }
+
+        loop {
+            let event = runtime.block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = cancelled.changed() => UploadActorEvent::Cancelled,
+                    result = timeout(UPLOAD_IDLE_TIMEOUT, commands.recv()) => match result {
+                        Ok(Some(command)) => UploadActorEvent::Command(command),
+                        Ok(None) => UploadActorEvent::Closed,
+                        Err(_) => UploadActorEvent::Idle,
+                    },
+                }
+            });
+            match event {
+                UploadActorEvent::Command(UploadCommand::Chunk(bytes)) => {
+                    let result = upload.write_chunk(&bytes);
+                    if registration.control.is_cancelled() {
+                        drop(upload);
+                        finish_cancelled_file_job(
+                            &runtime,
+                            &outgoing,
+                            transfer_id,
+                            &registration.control,
+                        );
+                        return;
+                    }
+                    if let Err(error) = result {
+                        drop(upload);
+                        finish_active_or_cancelled_file_job(
+                            &runtime,
+                            &outgoing,
+                            transfer_id,
+                            &registration.control,
+                            file_error(transfer_id, error),
+                        );
+                        return;
+                    }
+                }
+                UploadActorEvent::Command(UploadCommand::Finish) => {
+                    // This state transition is the final cancellation check
+                    // and commit point. Once it succeeds, Cancel cannot claim
+                    // that a flush/rename already in progress was undone.
+                    if !registration.control.begin_upload_commit() {
+                        drop(upload);
+                        finish_cancelled_file_job(
+                            &runtime,
+                            &outgoing,
+                            transfer_id,
+                            &registration.control,
+                        );
+                        return;
+                    }
+                    let result = upload.finish();
+                    if let Ok(outcome) = &result {
+                        registration
+                            .registry
+                            .commit_upload(transfer_id, &registration.control);
+                        if let UploadFinishOutcome::PublishedWithCleanupWarning(detail) = outcome {
+                            eprintln!(
+                                "Remote upload {transfer_id} committed with a cleanup warning: {}",
+                                safe_file_error(detail)
+                            );
+                        }
+                    }
+                    registration.control.finish_upload_commit();
+                    let response = match result {
+                        Ok(UploadFinishOutcome::Published)
+                        | Ok(UploadFinishOutcome::PublishedWithCleanupWarning(_)) => {
+                            RemoteMessage::FileResponse(RemoteFileResponse::Complete {
+                                transfer_id,
+                            })
+                        }
+                        Err(error) => file_error(transfer_id, error),
+                    };
+                    let _ = send_file_terminal_message(
+                        &runtime,
+                        &outgoing,
+                        response,
+                        &registration.control,
+                    );
+                    return;
+                }
+                UploadActorEvent::Cancelled => {
+                    drop(upload);
+                    finish_cancelled_file_job(
+                        &runtime,
+                        &outgoing,
+                        transfer_id,
+                        &registration.control,
+                    );
+                    return;
+                }
+                UploadActorEvent::Idle => {
+                    drop(upload);
+                    finish_active_or_cancelled_file_job(
+                        &runtime,
+                        &outgoing,
+                        transfer_id,
+                        &registration.control,
+                        file_error(transfer_id, "The upload timed out while idle."),
+                    );
+                    return;
+                }
+                UploadActorEvent::Closed => {
+                    drop(upload);
+                    registration.control.cancel_silently();
+                    finish_cancelled_file_job(
+                        &runtime,
+                        &outgoing,
+                        transfer_id,
+                        &registration.control,
+                    );
                     return;
                 }
             }
-            let _ =
-                outgoing.blocking_send(RemoteMessage::FileResponse(RemoteFileResponse::ListDone {
-                    request_id,
-                }));
         }
-        Err(error) => {
-            let _ = outgoing.blocking_send(file_error(request_id, error));
-        }
-    });
+    })
 }
 
 fn spawn_download(
@@ -658,74 +1536,111 @@ fn spawn_download(
     transfer_id: u64,
     path: String,
     outgoing: mpsc::Sender<RemoteMessage>,
-    cancelled: Arc<AtomicBool>,
-    active_downloads: Arc<Mutex<HashMap<u64, Arc<AtomicBool>>>>,
-) {
-    tokio::task::spawn_blocking(move || {
-        let unregister = || {
-            if let Ok(mut active) = active_downloads.lock() {
-                active.remove(&transfer_id);
-            }
-        };
+    permit: OwnedSemaphorePermit,
+    registration: FileJobRegistration,
+    runtime: Handle,
+) -> Result<(), &'static str> {
+    spawn_file_thread("lattice-file-download", move || {
+        let _permit = permit;
+        let mut cancelled = registration.subscribe();
+        if registration.control.is_cancelled() {
+            finish_cancelled_file_job(&runtime, &outgoing, transfer_id, &registration.control);
+            return;
+        }
         let mut download = match files.download(&path) {
             Ok(download) => download,
             Err(error) => {
-                let _ = outgoing.blocking_send(file_error(transfer_id, error));
-                unregister();
+                finish_active_or_cancelled_file_job(
+                    &runtime,
+                    &outgoing,
+                    transfer_id,
+                    &registration.control,
+                    file_error(transfer_id, error),
+                );
                 return;
             }
         };
-        if cancelled.load(Ordering::Relaxed) {
-            unregister();
-            return;
-        }
-        if outgoing
-            .blocking_send(RemoteMessage::FileResponse(
-                RemoteFileResponse::DownloadStart {
-                    transfer_id,
-                    name: download.name.clone(),
-                    size: download.size,
-                },
-            ))
-            .is_err()
-        {
-            unregister();
-            return;
+        match send_file_job_message(
+            &runtime,
+            &outgoing,
+            RemoteMessage::FileResponse(RemoteFileResponse::DownloadStart {
+                transfer_id,
+                name: download.name.clone(),
+                size: download.size,
+            }),
+            &registration.control,
+            &mut cancelled,
+        ) {
+            FileSendOutcome::Sent => {}
+            FileSendOutcome::Cancelled => {
+                drop(download);
+                finish_cancelled_file_job(&runtime, &outgoing, transfer_id, &registration.control);
+                return;
+            }
+            FileSendOutcome::Failed => {
+                drop(download);
+                return;
+            }
         }
         let mut buffer = vec![0; FILE_CHUNK_SIZE];
         loop {
-            if cancelled.load(Ordering::Relaxed) {
-                unregister();
+            if registration.control.is_cancelled() {
+                drop(download);
+                finish_cancelled_file_job(&runtime, &outgoing, transfer_id, &registration.control);
                 return;
             }
             match download.read_chunk(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
-                    if outgoing
-                        .blocking_send(RemoteMessage::FileResponse(
-                            RemoteFileResponse::DownloadChunk {
+                    match send_file_job_message(
+                        &runtime,
+                        &outgoing,
+                        RemoteMessage::FileResponse(RemoteFileResponse::DownloadChunk {
+                            transfer_id,
+                            bytes: buffer[..read].to_vec(),
+                        }),
+                        &registration.control,
+                        &mut cancelled,
+                    ) {
+                        FileSendOutcome::Sent => {}
+                        FileSendOutcome::Cancelled => {
+                            drop(download);
+                            finish_cancelled_file_job(
+                                &runtime,
+                                &outgoing,
                                 transfer_id,
-                                bytes: buffer[..read].to_vec(),
-                            },
-                        ))
-                        .is_err()
-                    {
-                        unregister();
-                        return;
+                                &registration.control,
+                            );
+                            return;
+                        }
+                        FileSendOutcome::Failed => {
+                            drop(download);
+                            return;
+                        }
                     }
                 }
                 Err(error) => {
-                    let _ = outgoing.blocking_send(file_error(transfer_id, error));
-                    unregister();
+                    drop(download);
+                    finish_active_or_cancelled_file_job(
+                        &runtime,
+                        &outgoing,
+                        transfer_id,
+                        &registration.control,
+                        file_error(transfer_id, error),
+                    );
                     return;
                 }
             }
         }
-        let _ = outgoing.blocking_send(RemoteMessage::FileResponse(RemoteFileResponse::Complete {
+        drop(download);
+        finish_active_or_cancelled_file_job(
+            &runtime,
+            &outgoing,
             transfer_id,
-        }));
-        unregister();
-    });
+            &registration.control,
+            RemoteMessage::FileResponse(RemoteFileResponse::Complete { transfer_id }),
+        );
+    })
 }
 
 /// Serves the shared-folder side of a session; both the screen stream and the
@@ -733,74 +1648,95 @@ fn spawn_download(
 struct FileRequestHandler {
     files: Option<Arc<SharedFiles>>,
     outgoing: mpsc::Sender<RemoteMessage>,
-    downloads: Arc<Mutex<HashMap<u64, Arc<AtomicBool>>>>,
-    uploads: HashMap<u64, HostUpload>,
+    permits: Arc<Semaphore>,
+    registry: Arc<FileJobRegistry>,
 }
 
 impl FileRequestHandler {
-    fn new(files: Option<Arc<SharedFiles>>, outgoing: mpsc::Sender<RemoteMessage>) -> Self {
+    fn new(
+        files: Option<Arc<SharedFiles>>,
+        outgoing: mpsc::Sender<RemoteMessage>,
+        permits: Arc<Semaphore>,
+    ) -> Self {
         Self {
             files,
             outgoing,
-            downloads: Arc::new(Mutex::new(HashMap::new())),
-            uploads: HashMap::new(),
+            permits,
+            registry: Arc::new(FileJobRegistry::new()),
         }
     }
 
-    async fn handle(&mut self, request: RemoteFileRequest) {
+    async fn send_immediate(&self, response: RemoteMessage) -> bool {
+        let sent = matches!(
+            timeout(FILE_CONTROL_RESPONSE_TIMEOUT, self.outgoing.send(response)).await,
+            Ok(Ok(()))
+        );
+        if !sent {
+            self.registry.fail_session();
+        }
+        sent
+    }
+
+    async fn reject(&self, operation_id: u64, detail: impl Into<String>) -> bool {
+        self.send_immediate(file_error(operation_id, detail)).await
+    }
+
+    async fn handle(&mut self, request: RemoteFileRequest) -> bool {
         match request {
             RemoteFileRequest::List { request_id, path } => {
-                if let Some(files) = &self.files {
-                    spawn_directory_list(
-                        Arc::clone(files),
+                let Some(files) = self.files.clone() else {
+                    return self
+                        .reject(request_id, "File sharing is not enabled.")
+                        .await;
+                };
+                match try_admit_file_job(
+                    &self.permits,
+                    &self.registry,
+                    FileJobKind::List,
+                    request_id,
+                    None,
+                ) {
+                    Ok((permit, registration)) => match spawn_directory_list(
+                        files,
                         request_id,
                         path,
                         self.outgoing.clone(),
-                    );
-                } else {
-                    let _ = self
-                        .outgoing
-                        .send(file_error(request_id, "File sharing is not enabled."))
-                        .await;
+                        permit,
+                        registration,
+                        Handle::current(),
+                    ) {
+                        Ok(()) => true,
+                        Err(error) => self.reject(request_id, error).await,
+                    },
+                    Err(error) => self.reject(request_id, error).await,
                 }
             }
             RemoteFileRequest::Download { transfer_id, path } => {
-                if let Some(files) = &self.files {
-                    let cancelled = Arc::new(AtomicBool::new(false));
-                    let inserted = self
-                        .downloads
-                        .lock()
-                        .map(|mut active| match active.entry(transfer_id) {
-                            Entry::Vacant(entry) => {
-                                entry.insert(Arc::clone(&cancelled));
-                                true
-                            }
-                            Entry::Occupied(_) => false,
-                        })
-                        .unwrap_or(false);
-                    if inserted {
-                        spawn_download(
-                            Arc::clone(files),
-                            transfer_id,
-                            path,
-                            self.outgoing.clone(),
-                            cancelled,
-                            Arc::clone(&self.downloads),
-                        );
-                    } else {
-                        let _ = self
-                            .outgoing
-                            .send(file_error(
-                                transfer_id,
-                                "The download identifier is already active.",
-                            ))
-                            .await;
-                    }
-                } else {
-                    let _ = self
-                        .outgoing
-                        .send(file_error(transfer_id, "File sharing is not enabled."))
+                let Some(files) = self.files.clone() else {
+                    return self
+                        .reject(transfer_id, "File sharing is not enabled.")
                         .await;
+                };
+                match try_admit_file_job(
+                    &self.permits,
+                    &self.registry,
+                    FileJobKind::Download,
+                    transfer_id,
+                    None,
+                ) {
+                    Ok((permit, registration)) => match spawn_download(
+                        files,
+                        transfer_id,
+                        path,
+                        self.outgoing.clone(),
+                        permit,
+                        registration,
+                        Handle::current(),
+                    ) {
+                        Ok(()) => true,
+                        Err(error) => self.reject(transfer_id, error).await,
+                    },
+                    Err(error) => self.reject(transfer_id, error).await,
                 }
             }
             RemoteFileRequest::UploadStart {
@@ -809,83 +1745,113 @@ impl FileRequestHandler {
                 size,
                 overwrite,
             } => {
-                let result = self
-                    .files
-                    .as_ref()
-                    .ok_or_else(|| "File sharing is not enabled.".to_string())
-                    .and_then(|files| {
-                        if self.uploads.contains_key(&transfer_id) {
-                            return Err("The upload identifier is already active.".to_string());
-                        }
-                        files.begin_upload(transfer_id, &path, size, overwrite)
-                    });
-                match result {
-                    Ok(upload) => {
-                        self.uploads.insert(transfer_id, upload);
-                        let _ = self
-                            .outgoing
-                            .send(RemoteMessage::FileResponse(
-                                RemoteFileResponse::UploadReady { transfer_id },
-                            ))
-                            .await;
-                    }
-                    Err(error) => {
-                        let _ = self.outgoing.send(file_error(transfer_id, error)).await;
-                    }
+                let Some(files) = self.files.clone() else {
+                    return self
+                        .reject(transfer_id, "File sharing is not enabled.")
+                        .await;
+                };
+                let (commands_tx, commands_rx) = mpsc::channel(UPLOAD_COMMAND_QUEUE_CAPACITY);
+                match try_admit_file_job(
+                    &self.permits,
+                    &self.registry,
+                    FileJobKind::Upload {
+                        announced_bytes: size,
+                    },
+                    transfer_id,
+                    Some(commands_tx),
+                ) {
+                    Ok((permit, registration)) => match spawn_upload(UploadJob {
+                        files,
+                        transfer_id,
+                        path,
+                        size,
+                        overwrite,
+                        commands: commands_rx,
+                        outgoing: self.outgoing.clone(),
+                        permit,
+                        registration,
+                        runtime: Handle::current(),
+                    }) {
+                        Ok(()) => true,
+                        Err(error) => self.reject(transfer_id, error).await,
+                    },
+                    Err(error) => self.reject(transfer_id, error).await,
                 }
             }
             RemoteFileRequest::UploadChunk { transfer_id, bytes } => {
-                let result = self
-                    .uploads
-                    .get_mut(&transfer_id)
-                    .ok_or_else(|| "The upload is not active.".to_string())
-                    .and_then(|upload| upload.write_chunk(&bytes).map(|_| ()));
-                if let Err(error) = result {
-                    self.uploads.remove(&transfer_id);
-                    let _ = self.outgoing.send(file_error(transfer_id, error)).await;
-                }
+                self.send_upload_command(transfer_id, UploadCommand::Chunk(bytes))
+                    .await
             }
             RemoteFileRequest::UploadFinish { transfer_id } => {
-                let result = self
-                    .uploads
-                    .remove(&transfer_id)
-                    .ok_or_else(|| "The upload is not active.".to_string())
-                    .and_then(HostUpload::finish);
-                let response = match result {
-                    Ok(()) => {
-                        RemoteMessage::FileResponse(RemoteFileResponse::Complete { transfer_id })
-                    }
-                    Err(error) => file_error(transfer_id, error),
-                };
-                let _ = self.outgoing.send(response).await;
+                self.send_upload_command(transfer_id, UploadCommand::Finish)
+                    .await
             }
             RemoteFileRequest::Cancel { transfer_id } => {
-                self.uploads.remove(&transfer_id);
-                if let Some(cancelled) = self
-                    .downloads
-                    .lock()
-                    .ok()
-                    .and_then(|mut active| active.remove(&transfer_id))
-                {
-                    cancelled.store(true, Ordering::Relaxed);
-                }
-                let _ = self
-                    .outgoing
-                    .send(RemoteMessage::FileResponse(RemoteFileResponse::Complete {
+                if self.registry.cancel(transfer_id).is_some() {
+                    // The worker owns the only terminal response. It first
+                    // stops stale output and closes its FD/temp file, then
+                    // queues Complete before releasing the operation ID.
+                    true
+                } else {
+                    // Unknown/already-settled cancellation is idempotent.
+                    self.send_immediate(RemoteMessage::FileResponse(RemoteFileResponse::Complete {
                         transfer_id,
                     }))
-                    .await;
+                    .await
+                }
             }
         }
     }
 
-    /// Stops in-flight downloads when the session ends.
-    fn cancel_all(&mut self) {
-        if let Ok(mut active) = self.downloads.lock() {
-            for (_, cancelled) in active.drain() {
-                cancelled.store(true, Ordering::Relaxed);
+    async fn send_upload_command(&self, transfer_id: u64, command: UploadCommand) -> bool {
+        let Some(control) = self.registry.control(transfer_id) else {
+            return self.reject(transfer_id, "The upload is not active.").await;
+        };
+        let Some(commands) = &control.upload_commands else {
+            return self
+                .reject(transfer_id, "The file operation is not an upload.")
+                .await;
+        };
+        match timeout(REMOTE_INPUT_ENQUEUE_TIMEOUT, commands.send(command)).await {
+            Ok(Ok(())) => true,
+            Err(_) => {
+                // Bounded waiting propagates disk backpressure into
+                // encrypted/TCP reads. A peer that stays ahead for the full
+                // timeout gets one worker-owned Error after staging cleanup.
+                control.request_cancel(FileCancelResponse::Error(
+                    "The upload input stayed backpressured for too long.".to_string(),
+                ));
+                true
+            }
+            Ok(Err(_)) => {
+                // The actor ended before accepting this command. Its terminal
+                // response is either already queued or failed; wake the
+                // receiver so neither case is silently ignored.
+                self.registry.fail_session();
+                false
             }
         }
+    }
+
+    /// Stops registered work and normally closes upload files when the
+    /// current filesystem call returns. `std::fs` cannot interrupt a kernel or
+    /// network-filesystem syscall already in progress: after the bounded wait,
+    /// that detached worker may still hold its FD/temp file and global permit.
+    /// The Agent-wide cap keeps later sessions fail-fast, and direct process
+    /// exit is not held hostage by a Tokio blocking-pool join.
+    fn cancel_all(&mut self) {
+        self.registry.cancel_all();
+    }
+
+    async fn shutdown(&mut self) {
+        self.cancel_all();
+        let _ = timeout(FILE_JOB_SHUTDOWN_TIMEOUT, self.registry.wait_for_idle()).await;
+    }
+}
+
+impl Drop for FileRequestHandler {
+    fn drop(&mut self) {
+        self.cancel_all();
     }
 }
 
@@ -894,6 +1860,7 @@ async fn serve<S>(
     fps: u32,
     allow_input: bool,
     file_root: Option<PathBuf>,
+    file_job_permits: Arc<Semaphore>,
 ) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -958,27 +1925,53 @@ where
         (None, None)
     };
 
-    let mut file_handler = FileRequestHandler::new(shared_files.clone(), outgoing.clone());
+    let mut file_handler =
+        FileRequestHandler::new(shared_files.clone(), outgoing.clone(), file_job_permits);
+    let mut file_failed_rx = file_handler.registry.subscribe_failures();
+    let (receiver_stop_tx, mut receiver_stop_rx) = watch::channel(false);
     let receiver = tokio::spawn(async move {
         loop {
-            match reader.receive().await {
+            let message = tokio::select! {
+                biased;
+                _ = receiver_stop_rx.changed() => break,
+                _ = file_failed_rx.changed() => break,
+                message = reader.receive() => message,
+            };
+            match message {
                 Ok(RemoteMessage::Input(input)) => {
                     if let Some(tx) = &input_tx {
-                        if !send_input_with_backpressure(tx, input, REMOTE_INPUT_ENQUEUE_TIMEOUT)
-                            .await
-                        {
+                        let queued = tokio::select! {
+                            biased;
+                            _ = receiver_stop_rx.changed() => false,
+                            queued = send_input_with_backpressure(
+                                tx,
+                                input,
+                                REMOTE_INPUT_ENQUEUE_TIMEOUT,
+                            ) => queued,
+                        };
+                        if !queued {
                             break;
                         }
                     }
                 }
-                Ok(RemoteMessage::FileRequest(request)) => file_handler.handle(request).await,
+                Ok(RemoteMessage::FileRequest(request)) => {
+                    let handled = tokio::select! {
+                        biased;
+                        _ = receiver_stop_rx.changed() => false,
+                        _ = file_failed_rx.changed() => false,
+                        handled = file_handler.handle(request) => handled,
+                    };
+                    if !handled {
+                        break;
+                    }
+                }
                 Ok(RemoteMessage::Close(_)) | Err(_) => break,
                 Ok(_) => {}
             }
         }
         // Dropping the sender ends the input thread and releases held keys.
         drop(input_tx);
-        file_handler.cancel_all();
+        file_handler.shutdown().await;
     });
 
     let interval = Duration::from_millis(1000 / fps as u64);
@@ -1016,9 +2009,9 @@ where
         height = capture.stream_height;
     };
 
-    // Await each abort so its captured senders/receivers are dropped before
-    // joining the blocking input thread or returning to a persistent agent.
-    abort_and_wait(receiver).await;
+    // Cooperatively stop and await the receiver so its bounded file shutdown
+    // and input-sender drop run even when capture or the writer failed first.
+    stop_and_wait(receiver_stop_tx, receiver).await;
     drop(outgoing);
     abort_and_wait(writer).await;
     if let Some(handle) = input_thread {
@@ -1126,6 +2119,7 @@ async fn serve_terminal<S>(
     connection: SecureConnection<S>,
     allow_input: bool,
     file_root: Option<PathBuf>,
+    file_job_permits: Arc<Semaphore>,
 ) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -1284,11 +2278,14 @@ where
     });
     drop(pump_ended_tx);
 
-    let mut file_handler = FileRequestHandler::new(shared_files, outgoing.clone());
+    let mut file_handler =
+        FileRequestHandler::new(shared_files, outgoing.clone(), file_job_permits);
+    let mut file_failed_rx = file_handler.registry.subscribe_failures();
     loop {
         let message = tokio::select! {
             biased;
             _ = pump_ended_rx.changed() => break,
+            _ = file_failed_rx.changed() => break,
             message = reader.receive() => message,
         };
         match message {
@@ -1318,13 +2315,23 @@ where
                     });
                 }
             }
-            Ok(RemoteMessage::FileRequest(request)) => file_handler.handle(request).await,
+            Ok(RemoteMessage::FileRequest(request)) => {
+                let handled = tokio::select! {
+                    biased;
+                    _ = pump_ended_rx.changed() => false,
+                    _ = file_failed_rx.changed() => false,
+                    handled = file_handler.handle(request) => handled,
+                };
+                if !handled {
+                    break;
+                }
+            }
             Ok(RemoteMessage::Close(_)) | Err(_) => break,
             Ok(_) => {}
         }
     }
 
-    file_handler.cancel_all();
+    file_handler.shutdown().await;
     drop(file_handler);
     drop(keystroke_tx);
     pump_stopped.store(true, Ordering::Relaxed);
@@ -1409,9 +2416,22 @@ async fn run_relay_session(
         },
     );
     let outcome = if options.terminal {
-        serve_terminal(secure, options.allow_input, options.file_root).await
+        serve_terminal(
+            secure,
+            options.allow_input,
+            options.file_root,
+            Arc::clone(&options.file_job_permits),
+        )
+        .await
     } else {
-        serve(secure, options.fps, options.allow_input, options.file_root).await
+        serve(
+            secure,
+            options.fps,
+            options.allow_input,
+            options.file_root,
+            Arc::clone(&options.file_job_permits),
+        )
+        .await
     };
     match outcome {
         Ok(()) => SessionOutcome::Ended("Remote session completed.".to_string()),
@@ -1800,13 +2820,20 @@ async fn main() {
             println!("Paired with {peer}. Starting encrypted {stream_kind} stream.");
         }
         let outcome = if options.terminal {
-            serve_terminal(secure, options.allow_input, options.file_root.clone()).await
+            serve_terminal(
+                secure,
+                options.allow_input,
+                options.file_root.clone(),
+                Arc::clone(&options.file_job_permits),
+            )
+            .await
         } else {
             serve(
                 secure,
                 options.fps,
                 options.allow_input,
                 options.file_root.clone(),
+                Arc::clone(&options.file_job_permits),
             )
             .await
         };
@@ -1830,6 +2857,84 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static NEXT_FILE_TEST_ROOT: AtomicUsize = AtomicUsize::new(1);
+
+    struct FileTestRoot(PathBuf);
+
+    impl FileTestRoot {
+        fn new(label: &str) -> Self {
+            let token = NEXT_FILE_TEST_ROOT.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "lattice-agent-{label}-{}-{token}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create file handler test root");
+            Self(path)
+        }
+
+        fn shared(&self) -> Arc<SharedFiles> {
+            Arc::new(SharedFiles::open(&self.0).expect("open file handler test root"))
+        }
+
+        fn staging_files(&self) -> usize {
+            fn count(directory: &Path) -> usize {
+                std::fs::read_dir(directory)
+                    .expect("read file handler test directory")
+                    .filter_map(Result::ok)
+                    .map(|entry| {
+                        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                            count(&entry.path())
+                        } else {
+                            usize::from(entry.file_name().to_string_lossy().ends_with(".part"))
+                        }
+                    })
+                    .sum()
+            }
+            count(&self.0)
+        }
+
+        fn private_upload_artifacts(&self) -> usize {
+            fn count(directory: &Path) -> usize {
+                std::fs::read_dir(directory)
+                    .expect("read file handler test directory")
+                    .filter_map(Result::ok)
+                    .map(|entry| {
+                        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                            count(&entry.path())
+                        } else {
+                            let name = entry.file_name();
+                            let name = name.to_string_lossy();
+                            usize::from(
+                                name.contains(".latticeterm-upload-")
+                                    || name.contains(".latticeterm-replaced-"),
+                            )
+                        }
+                    })
+                    .sum()
+            }
+            count(&self.0)
+        }
+    }
+
+    impl Drop for FileTestRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn next_handler_file_response(
+        receiver: &mut mpsc::Receiver<RemoteMessage>,
+    ) -> RemoteFileResponse {
+        match timeout(Duration::from_secs(2), receiver.recv())
+            .await
+            .expect("file handler response timed out")
+            .expect("file handler response channel closed")
+        {
+            RemoteMessage::FileResponse(response) => response,
+            other => panic!("unexpected file handler message: {other:?}"),
+        }
+    }
 
     #[derive(Debug, Default)]
     struct MockTerminalChildState {
@@ -2002,6 +3107,645 @@ mod tests {
         abort_and_wait(task).await;
 
         assert_eq!(receiver.recv().await, None);
+    }
+
+    #[tokio::test]
+    async fn cooperative_stop_runs_receiver_cleanup_before_returning() {
+        let (stop_tx, mut stop_rx) = watch::channel(false);
+        let (cleanup_tx, cleanup_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = stop_rx.changed().await;
+            let _ = cleanup_tx.send(());
+        });
+
+        stop_and_wait(stop_tx, task).await;
+
+        cleanup_rx
+            .await
+            .expect("cooperative receiver cleanup must run before join returns");
+    }
+
+    #[test]
+    fn file_job_admission_is_global_fail_fast_and_cross_kind_unique() {
+        let permits = Arc::new(Semaphore::new(FILE_JOB_LIMIT));
+        let first_session = Arc::new(FileJobRegistry::new());
+        let second_session = Arc::new(FileJobRegistry::new());
+        let mut admitted = Vec::new();
+
+        for operation_id in 0..4 {
+            admitted.push(
+                try_admit_file_job(
+                    &permits,
+                    &first_session,
+                    FileJobKind::List,
+                    operation_id,
+                    None,
+                )
+                .expect("first session job should fit"),
+            );
+        }
+        for operation_id in 4..FILE_JOB_LIMIT as u64 {
+            admitted.push(
+                try_admit_file_job(
+                    &permits,
+                    &second_session,
+                    FileJobKind::Download,
+                    operation_id,
+                    None,
+                )
+                .expect("second session job should fit global cap"),
+            );
+        }
+        assert_eq!(permits.available_permits(), 0);
+        assert_eq!(
+            try_admit_file_job(&permits, &second_session, FileJobKind::List, 99, None,).err(),
+            Some("Too many file operations are active.")
+        );
+
+        drop(admitted);
+        assert_eq!(permits.available_permits(), FILE_JOB_LIMIT);
+        let old = try_admit_file_job(&permits, &first_session, FileJobKind::List, 7, None)
+            .expect("list should be admitted");
+        assert_eq!(
+            try_admit_file_job(&permits, &first_session, FileJobKind::Download, 7, None,).err(),
+            Some("The file operation identifier is already active.")
+        );
+        drop(old);
+        assert_eq!(first_session.in_flight.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn download_and_upload_resource_caps_reject_without_leaking_permits() {
+        let permits = Arc::new(Semaphore::new(32));
+        let downloads = Arc::new(FileJobRegistry::new());
+        let mut admitted_downloads = Vec::new();
+        for operation_id in 0..ACTIVE_DOWNLOAD_LIMIT as u64 {
+            admitted_downloads.push(
+                try_admit_file_job(
+                    &permits,
+                    &downloads,
+                    FileJobKind::Download,
+                    operation_id,
+                    None,
+                )
+                .expect("download should fit its descriptor cap"),
+            );
+        }
+        let permits_before_rejection = permits.available_permits();
+        assert_eq!(
+            try_admit_file_job(&permits, &downloads, FileJobKind::Download, 100, None,).err(),
+            Some("Too many downloads are active.")
+        );
+        assert_eq!(permits.available_permits(), permits_before_rejection);
+        drop(admitted_downloads);
+
+        let uploads = Arc::new(FileJobRegistry::new());
+        let mut admitted_uploads = Vec::new();
+        let mut upload_receivers = Vec::new();
+        for operation_id in 0..ACTIVE_UPLOAD_LIMIT as u64 {
+            let (commands, receiver) = mpsc::channel(1);
+            admitted_uploads.push(
+                try_admit_file_job(
+                    &permits,
+                    &uploads,
+                    FileJobKind::Upload { announced_bytes: 1 },
+                    operation_id,
+                    Some(commands),
+                )
+                .expect("upload should fit its descriptor cap"),
+            );
+            upload_receivers.push(receiver);
+        }
+        assert_eq!(
+            try_admit_file_job(
+                &permits,
+                &uploads,
+                FileJobKind::Upload { announced_bytes: 1 },
+                100,
+                None,
+            )
+            .err(),
+            Some("Too many uploads are active.")
+        );
+        drop(admitted_uploads);
+        drop(upload_receivers);
+
+        let byte_limited = Arc::new(FileJobRegistry::new());
+        let failed_before_open = try_admit_file_job(
+            &permits,
+            &byte_limited,
+            FileJobKind::Upload {
+                announced_bytes: MAX_UPLOAD_FILE_BYTES,
+            },
+            1,
+            None,
+        )
+        .expect("reservation for a not-yet-opened upload should fit");
+        drop(failed_before_open);
+        assert_eq!(byte_limited.active.lock().unwrap().active_upload_bytes, 0);
+        assert_eq!(
+            byte_limited.active.lock().unwrap().committed_upload_bytes,
+            0
+        );
+
+        let (first_permit, first_registration) = try_admit_file_job(
+            &permits,
+            &byte_limited,
+            FileJobKind::Upload {
+                announced_bytes: MAX_UPLOAD_FILE_BYTES,
+            },
+            10,
+            None,
+        )
+        .expect("first committed upload should fit");
+        byte_limited.commit_upload(10, &first_registration.control);
+        drop((first_permit, first_registration));
+        let (second_permit, second_registration) = try_admit_file_job(
+            &permits,
+            &byte_limited,
+            FileJobKind::Upload {
+                announced_bytes: MAX_UPLOAD_FILE_BYTES,
+            },
+            11,
+            None,
+        )
+        .expect("second committed upload should fit session cap");
+        byte_limited.commit_upload(11, &second_registration.control);
+        drop((second_permit, second_registration));
+        assert_eq!(
+            try_admit_file_job(
+                &permits,
+                &byte_limited,
+                FileJobKind::Upload { announced_bytes: 1 },
+                12,
+                None,
+            )
+            .err(),
+            Some("The uploads exceed the session byte limit.")
+        );
+        assert_eq!(
+            try_admit_file_job(
+                &permits,
+                &Arc::new(FileJobRegistry::new()),
+                FileJobKind::Upload {
+                    announced_bytes: MAX_UPLOAD_FILE_BYTES + 1,
+                },
+                4,
+                None,
+            )
+            .err(),
+            Some("The upload is larger than the per-file limit.")
+        );
+        assert_eq!(permits.available_permits(), 32);
+    }
+
+    #[test]
+    fn cancelled_operation_blocks_reuse_and_stale_cleanup_cannot_remove_replacement() {
+        let permits = Arc::new(Semaphore::new(2));
+        let registry = Arc::new(FileJobRegistry::new());
+        let (old_permit, old_registration) =
+            try_admit_file_job(&permits, &registry, FileJobKind::Download, 41, None)
+                .expect("old operation should be admitted");
+        let old_control = Arc::clone(&old_registration.control);
+        assert_eq!(registry.cancel(41), Some(FileCancelDisposition::Requested));
+        assert!(old_control.is_cancelled());
+        assert_eq!(
+            try_admit_file_job(&permits, &registry, FileJobKind::List, 41, None).err(),
+            Some("The file operation identifier is already active.")
+        );
+
+        drop((old_permit, old_registration));
+        let (new_permit, new_registration) =
+            try_admit_file_job(&permits, &registry, FileJobKind::List, 41, None)
+                .expect("identifier can be reused after the old worker exits");
+        registry
+            .active
+            .lock()
+            .unwrap()
+            .remove_if_current(41, &old_control);
+        assert!(registry
+            .control(41)
+            .is_some_and(|current| Arc::ptr_eq(&current, &new_registration.control)));
+        drop((new_permit, new_registration));
+        assert_eq!(registry.in_flight.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn upload_commit_point_rejects_late_cancel_and_preserves_single_terminal_owner() {
+        let (failed, _) = watch::channel(false);
+        let control = FileJobControl::new(FileJobKind::Upload { announced_bytes: 1 }, None, failed);
+        assert!(control.begin_upload_commit());
+        assert_eq!(
+            control.request_cancel(FileCancelResponse::Complete),
+            FileCancelDisposition::TerminalPending
+        );
+        assert!(!control.is_cancelled());
+        control.finish_upload_commit();
+
+        let (failed, _) = watch::channel(false);
+        let cancelled =
+            FileJobControl::new(FileJobKind::Upload { announced_bytes: 1 }, None, failed);
+        assert_eq!(
+            cancelled.request_cancel(FileCancelResponse::Complete),
+            FileCancelDisposition::Requested
+        );
+        assert!(!cancelled.begin_upload_commit());
+    }
+
+    #[test]
+    fn upload_target_reservations_serialize_a_canonical_folder_and_release_on_drop() {
+        let root = FileTestRoot::new("folder-reservation");
+        let shared = root.shared();
+        let first_target = shared.upload_destination("/first.bin").unwrap();
+        let second_target = shared.upload_destination("/second.bin").unwrap();
+        let first = try_reserve_upload_target(&first_target).expect("reserve first target folder");
+
+        assert_eq!(
+            try_reserve_upload_target(&second_target).err(),
+            Some("Another upload in this destination folder is active.")
+        );
+        drop(first);
+
+        let second = try_reserve_upload_target(&second_target)
+            .expect("dropping the old guard should release the folder");
+        drop(second);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn full_outgoing_queue_is_cancelled_without_stranding_worker_or_permit() {
+        let root = FileTestRoot::new("full-outgoing");
+        std::fs::write(root.0.join("large.bin"), vec![7; FILE_CHUNK_SIZE * 2])
+            .expect("write download fixture");
+        let permits = Arc::new(Semaphore::new(FILE_JOB_LIMIT));
+        let (outgoing, _receiver) = mpsc::channel(1);
+        outgoing
+            .try_send(RemoteMessage::Close("queue full".to_string()))
+            .expect("prefill outgoing queue");
+        let mut handler =
+            FileRequestHandler::new(Some(root.shared()), outgoing, Arc::clone(&permits));
+        let registry = Arc::clone(&handler.registry);
+
+        assert!(
+            handler
+                .handle(RemoteFileRequest::Download {
+                    transfer_id: 9,
+                    path: "/large.bin".to_string(),
+                })
+                .await
+        );
+        assert_eq!(registry.in_flight.load(Ordering::Acquire), 1);
+        handler.shutdown().await;
+        timeout(Duration::from_secs(1), registry.wait_for_idle())
+            .await
+            .expect("cancel should wake a worker blocked on outgoing capacity");
+        assert_eq!(permits.available_permits(), FILE_JOB_LIMIT);
+        assert!(registry.active.lock().unwrap().operations.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancel_has_one_worker_owned_terminal_response_after_stale_output_stops() {
+        let root = FileTestRoot::new("cancel-terminal");
+        std::fs::write(root.0.join("large.bin"), vec![3; FILE_CHUNK_SIZE * 2])
+            .expect("write download fixture");
+        let permits = Arc::new(Semaphore::new(FILE_JOB_LIMIT));
+        let (outgoing, mut receiver) = mpsc::channel(1);
+        outgoing
+            .try_send(RemoteMessage::Close("prefill".to_string()))
+            .expect("prefill outgoing queue");
+        let mut handler =
+            FileRequestHandler::new(Some(root.shared()), outgoing, Arc::clone(&permits));
+        let registry = Arc::clone(&handler.registry);
+        assert!(
+            handler
+                .handle(RemoteFileRequest::Download {
+                    transfer_id: 19,
+                    path: "/large.bin".to_string(),
+                })
+                .await
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert!(
+            handler
+                .handle(RemoteFileRequest::Cancel { transfer_id: 19 })
+                .await
+        );
+        assert!(matches!(
+            receiver.recv().await,
+            Some(RemoteMessage::Close(_))
+        ));
+        assert_eq!(
+            next_handler_file_response(&mut receiver).await,
+            RemoteFileResponse::Complete { transfer_id: 19 }
+        );
+        timeout(Duration::from_secs(1), registry.wait_for_idle())
+            .await
+            .expect("cancelled worker should settle after terminal enqueue");
+        assert!(
+            receiver.try_recv().is_err(),
+            "no stale response may follow Complete"
+        );
+        assert_eq!(permits.available_permits(), FILE_JOB_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn full_immediate_error_queue_fails_the_session_closed() {
+        let permits = Arc::new(Semaphore::new(FILE_JOB_LIMIT));
+        let (outgoing, _receiver) = mpsc::channel(1);
+        outgoing
+            .try_send(RemoteMessage::Close("prefill".to_string()))
+            .expect("prefill outgoing queue");
+        let mut handler = FileRequestHandler::new(None, outgoing, permits);
+        let failed = handler.registry.subscribe_failures();
+
+        assert!(
+            !handler
+                .handle(RemoteFileRequest::List {
+                    request_id: 88,
+                    path: "/".to_string(),
+                })
+                .await
+        );
+        assert!(*failed.borrow());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worker_outgoing_failure_wakes_session_and_releases_registration() {
+        let root = FileTestRoot::new("worker-send-failure");
+        std::fs::write(root.0.join("note.txt"), b"data").unwrap();
+        let permits = Arc::new(Semaphore::new(FILE_JOB_LIMIT));
+        let (outgoing, receiver) = mpsc::channel(1);
+        drop(receiver);
+        let mut handler =
+            FileRequestHandler::new(Some(root.shared()), outgoing, Arc::clone(&permits));
+        let registry = Arc::clone(&handler.registry);
+        let mut failed = registry.subscribe_failures();
+
+        assert!(
+            handler
+                .handle(RemoteFileRequest::Download {
+                    transfer_id: 91,
+                    path: "/note.txt".to_string(),
+                })
+                .await
+        );
+        timeout(Duration::from_secs(1), failed.changed())
+            .await
+            .expect("worker send failure must wake the session")
+            .expect("failure sender stays alive with handler");
+        timeout(Duration::from_secs(1), registry.wait_for_idle())
+            .await
+            .expect("failed worker should unregister");
+        assert_eq!(permits.available_permits(), FILE_JOB_LIMIT);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_timeout_keeps_stuck_fd_and_global_permit_until_worker_returns() {
+        let root = FileTestRoot::new("stuck-worker");
+        let shared = root.shared();
+        let upload = shared
+            .begin_upload(55, "/blocked.bin", 1, false)
+            .expect("open staging upload");
+        let permits = Arc::new(Semaphore::new(1));
+        let (outgoing, _receiver) = mpsc::channel(1);
+        let mut handler = FileRequestHandler::new(None, outgoing, Arc::clone(&permits));
+        let registry = Arc::clone(&handler.registry);
+        let (permit, registration) = try_admit_file_job(
+            &permits,
+            &registry,
+            FileJobKind::Upload { announced_bytes: 1 },
+            55,
+            None,
+        )
+        .expect("stuck worker should be admitted");
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        spawn_file_thread("lattice-file-stuck-test", move || {
+            let _permit = permit;
+            let _registration = registration;
+            let _upload = upload;
+            let _ = release_rx.recv();
+        })
+        .expect("spawn stuck worker fixture");
+
+        handler.shutdown().await;
+        assert_eq!(permits.available_permits(), 0);
+        assert_eq!(registry.in_flight.load(Ordering::Acquire), 1);
+        assert!(registry.active.lock().unwrap().operations.is_empty());
+        assert_eq!(root.staging_files(), 1);
+        assert_eq!(
+            try_admit_file_job(
+                &permits,
+                &Arc::new(FileJobRegistry::new()),
+                FileJobKind::List,
+                99,
+                None,
+            )
+            .err(),
+            Some("Too many file operations are active.")
+        );
+
+        release_tx.send(()).expect("release stuck worker fixture");
+        timeout(Duration::from_secs(1), registry.wait_for_idle())
+            .await
+            .expect("released worker should settle");
+        assert_eq!(root.staging_files(), 0);
+        assert_eq!(permits.available_permits(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_flood_opens_only_eight_files_and_drop_cleans_every_staging_file() {
+        let root = FileTestRoot::new("upload-cap");
+        let permits = Arc::new(Semaphore::new(FILE_JOB_LIMIT));
+        let (outgoing, mut receiver) = mpsc::channel(32);
+        let mut handler =
+            FileRequestHandler::new(Some(root.shared()), outgoing, Arc::clone(&permits));
+        let registry = Arc::clone(&handler.registry);
+
+        for transfer_id in 0..ACTIVE_UPLOAD_LIMIT as u64 {
+            std::fs::create_dir(root.0.join(format!("slot-{transfer_id}")))
+                .expect("create independent upload destination folder");
+            assert!(
+                handler
+                    .handle(RemoteFileRequest::UploadStart {
+                        transfer_id,
+                        path: format!("/slot-{transfer_id}/upload.bin"),
+                        size: 1,
+                        overwrite: false,
+                    })
+                    .await
+            );
+        }
+        let mut ready = 0;
+        while ready < ACTIVE_UPLOAD_LIMIT {
+            if matches!(
+                next_handler_file_response(&mut receiver).await,
+                RemoteFileResponse::UploadReady { .. }
+            ) {
+                ready += 1;
+            }
+        }
+        assert_eq!(root.staging_files(), ACTIVE_UPLOAD_LIMIT);
+        assert_eq!(permits.available_permits(), 0);
+
+        assert!(
+            handler
+                .handle(RemoteFileRequest::UploadStart {
+                    transfer_id: 99,
+                    path: "/rejected.bin".to_string(),
+                    size: 1,
+                    overwrite: false,
+                })
+                .await
+        );
+        assert!(matches!(
+            next_handler_file_response(&mut receiver).await,
+            RemoteFileResponse::Error {
+                operation_id: 99,
+                ..
+            }
+        ));
+
+        drop(handler);
+        assert!(registry.active.lock().unwrap().operations.is_empty());
+        timeout(Duration::from_secs(1), registry.wait_for_idle())
+            .await
+            .expect("dropping the handler should settle upload actors");
+        assert_eq!(root.staging_files(), 0);
+        assert_eq!(permits.available_permits(), FILE_JOB_LIMIT);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_sessions_reserve_one_overwrite_target_until_publish_settles() {
+        let root = FileTestRoot::new("same-overwrite-target");
+        std::fs::write(root.0.join("shared.bin"), b"older").unwrap();
+        let shared = root.shared();
+        let permits = Arc::new(Semaphore::new(FILE_JOB_LIMIT));
+        let (outgoing_a, mut receiver_a) = mpsc::channel(8);
+        let (outgoing_b, mut receiver_b) = mpsc::channel(8);
+        let mut handler_a =
+            FileRequestHandler::new(Some(Arc::clone(&shared)), outgoing_a, Arc::clone(&permits));
+        let mut handler_b = FileRequestHandler::new(Some(shared), outgoing_b, Arc::clone(&permits));
+
+        let (accepted_a, accepted_b) = tokio::join!(
+            handler_a.handle(RemoteFileRequest::UploadStart {
+                transfer_id: 201,
+                path: "/shared.bin".to_string(),
+                size: 5,
+                overwrite: true,
+            }),
+            handler_b.handle(RemoteFileRequest::UploadStart {
+                transfer_id: 202,
+                path: "/shared.bin".to_string(),
+                size: 5,
+                overwrite: true,
+            })
+        );
+        assert!(accepted_a && accepted_b);
+
+        let (response_a, response_b) = tokio::join!(
+            next_handler_file_response(&mut receiver_a),
+            next_handler_file_response(&mut receiver_b)
+        );
+        let (winner, winner_bytes, winner_handler, winner_receiver) = match (response_a, response_b)
+        {
+            (
+                RemoteFileResponse::UploadReady { transfer_id: 201 },
+                RemoteFileResponse::Error {
+                    operation_id: 202, ..
+                },
+            ) => (201, b"first".to_vec(), &mut handler_a, &mut receiver_a),
+            (
+                RemoteFileResponse::Error {
+                    operation_id: 201, ..
+                },
+                RemoteFileResponse::UploadReady { transfer_id: 202 },
+            ) => (202, b"other".to_vec(), &mut handler_b, &mut receiver_b),
+            responses => {
+                panic!("expected one ready upload and one reservation error: {responses:?}")
+            }
+        };
+
+        assert!(
+            winner_handler
+                .handle(RemoteFileRequest::UploadChunk {
+                    transfer_id: winner,
+                    bytes: winner_bytes.clone(),
+                })
+                .await
+        );
+        assert!(
+            winner_handler
+                .handle(RemoteFileRequest::UploadFinish {
+                    transfer_id: winner,
+                })
+                .await
+        );
+        assert_eq!(
+            next_handler_file_response(winner_receiver).await,
+            RemoteFileResponse::Complete {
+                transfer_id: winner
+            }
+        );
+
+        handler_a.shutdown().await;
+        handler_b.shutdown().await;
+        assert_eq!(
+            std::fs::read(root.0.join("shared.bin")).unwrap(),
+            winner_bytes
+        );
+        assert_eq!(root.private_upload_artifacts(), 0);
+        assert_eq!(permits.available_permits(), FILE_JOB_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn bounded_upload_command_queue_applies_backpressure_without_false_cancellation() {
+        let permits = Arc::new(Semaphore::new(FILE_JOB_LIMIT));
+        let (outgoing, _responses) = mpsc::channel(2);
+        let handler = FileRequestHandler::new(None, outgoing, Arc::clone(&permits));
+        let (commands, mut commands_receiver) = mpsc::channel(UPLOAD_COMMAND_QUEUE_CAPACITY);
+        let (permit, registration) = try_admit_file_job(
+            &permits,
+            &handler.registry,
+            FileJobKind::Upload { announced_bytes: 8 },
+            71,
+            Some(commands),
+        )
+        .expect("upload should be admitted");
+        for _ in 0..UPLOAD_COMMAND_QUEUE_CAPACITY {
+            registration
+                .control
+                .upload_commands
+                .as_ref()
+                .unwrap()
+                .try_send(UploadCommand::Chunk(vec![1]))
+                .expect("prefill upload command queue");
+        }
+        {
+            let send = handler.send_upload_command(71, UploadCommand::Chunk(vec![1]));
+            tokio::pin!(send);
+            assert!(timeout(Duration::from_millis(10), &mut send).await.is_err());
+            assert!(!registration.control.is_cancelled());
+
+            assert!(commands_receiver.recv().await.is_some());
+            assert!(timeout(Duration::from_secs(1), &mut send)
+                .await
+                .expect("backpressured upload command should resume"));
+        }
+        assert!(!registration.control.is_cancelled());
+        drop((permit, registration, handler));
+        assert_eq!(permits.available_permits(), FILE_JOB_LIMIT);
+    }
+
+    #[test]
+    fn protocol_file_errors_are_sanitized_and_bounded() {
+        let detail = format!("unsafe\n{}\u{0}", "x".repeat(MAX_FILE_ERROR_BYTES * 2));
+        let RemoteMessage::FileResponse(RemoteFileResponse::Error { detail, .. }) =
+            file_error(1, detail)
+        else {
+            panic!("file_error returned the wrong protocol message");
+        };
+        assert!(detail.len() <= MAX_FILE_ERROR_BYTES);
+        assert!(!detail.chars().any(char::is_control));
     }
 
     #[cfg(target_os = "linux")]

@@ -38,6 +38,16 @@ pub struct HostUpload {
     overwrite: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UploadFinishOutcome {
+    Published,
+    /// The destination was atomically published, but a private staging link
+    /// or protected old copy could not be removed. This is a local cleanup
+    /// warning, never a reason to tell the viewer that the committed upload
+    /// failed.
+    PublishedWithCleanupWarning(String),
+}
+
 impl SharedFiles {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, String> {
         let root = fs::canonicalize(root.as_ref())
@@ -156,18 +166,10 @@ impl SharedFiles {
         expected: u64,
         overwrite: bool,
     ) -> Result<HostUpload, String> {
-        let (_, relative) = normalize_virtual_path(virtual_path)?;
-        let name = relative
-            .file_name()
-            .and_then(|value| value.to_str())
-            .filter(|value| valid_visible_name(value))
-            .ok_or_else(|| "Choose a valid destination file name.".to_string())?;
-        let parent_relative = relative.parent().unwrap_or_else(|| Path::new(""));
-        let parent = self.resolve_existing(parent_relative)?;
-        if !parent.is_dir() {
-            return Err("The upload destination is not a folder.".to_string());
-        }
-        let target = parent.join(name);
+        let target = self.upload_destination(virtual_path)?;
+        let parent = target
+            .parent()
+            .ok_or_else(|| "The upload destination has no parent folder.".to_string())?;
         if let Ok(metadata) = fs::symlink_metadata(&target) {
             if metadata.file_type().is_symlink() || metadata.is_dir() {
                 return Err("The upload destination cannot replace a folder or link.".to_string());
@@ -202,6 +204,24 @@ impl SharedFiles {
         })
     }
 
+    /// Resolves the canonical parent and stable destination key without
+    /// opening a staging file. The Agent uses this key for a process-lifetime
+    /// same-target reservation before calling `begin_upload`.
+    pub fn upload_destination(&self, virtual_path: &str) -> Result<PathBuf, String> {
+        let (_, relative) = normalize_virtual_path(virtual_path)?;
+        let name = relative
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| valid_visible_name(value))
+            .ok_or_else(|| "Choose a valid destination file name.".to_string())?;
+        let parent_relative = relative.parent().unwrap_or_else(|| Path::new(""));
+        let parent = self.resolve_existing(parent_relative)?;
+        if !parent.is_dir() {
+            return Err("The upload destination is not a folder.".to_string());
+        }
+        Ok(parent.join(name))
+    }
+
     fn resolve_existing(&self, relative: &Path) -> Result<PathBuf, String> {
         let candidate = self.root.join(relative);
         let canonical = fs::canonicalize(&candidate)
@@ -222,6 +242,10 @@ impl DownloadFile {
 }
 
 impl HostUpload {
+    pub fn destination(&self) -> &Path {
+        &self.target
+    }
+
     pub fn write_chunk(&mut self, bytes: &[u8]) -> Result<u64, String> {
         let next = self
             .written
@@ -239,7 +263,7 @@ impl HostUpload {
         Ok(next)
     }
 
-    pub fn finish(mut self) -> Result<(), String> {
+    pub fn finish(mut self) -> Result<UploadFinishOutcome, String> {
         if self.written != self.expected {
             return Err(format!(
                 "The upload ended after {} of {} bytes.",
@@ -255,13 +279,13 @@ impl HostUpload {
             .map_err(|error| format!("Cannot finish the upload safely: {error}"))?;
         drop(file);
 
-        if self.target.exists() && !self.overwrite {
-            return Err("A file with this name appeared during the upload.".to_string());
+        if !self.overwrite {
+            return publish_without_overwrite(&self.staging, &self.target);
         }
         if !self.target.exists() {
             fs::rename(&self.staging, &self.target)
                 .map_err(|error| format!("Cannot publish the uploaded file: {error}"))?;
-            return Ok(());
+            return Ok(UploadFinishOutcome::Published);
         }
 
         let token = NEXT_STAGING_FILE.fetch_add(1, Ordering::Relaxed);
@@ -280,10 +304,35 @@ impl HostUpload {
                 ),
             });
         }
-        fs::remove_file(&backup).map_err(|error| {
-            format!("The upload succeeded, but its protected backup remains: {error}")
-        })?;
-        Ok(())
+        Ok(cleanup_published_backup(&backup))
+    }
+}
+
+fn publish_without_overwrite(staging: &Path, target: &Path) -> Result<UploadFinishOutcome, String> {
+    // Both paths are siblings, so hard-link creation is an atomic
+    // create-if-absent publish. Never fall back to rename: POSIX rename would
+    // silently replace a destination that appeared after the last check.
+    fs::hard_link(staging, target).map_err(|error| {
+        if target.exists() {
+            "A file with this name appeared during the upload.".to_string()
+        } else {
+            format!("Cannot publish the upload without overwriting safely: {error}")
+        }
+    })?;
+    match fs::remove_file(staging) {
+        Ok(()) => Ok(UploadFinishOutcome::Published),
+        Err(error) => Ok(UploadFinishOutcome::PublishedWithCleanupWarning(format!(
+            "The private staging link could not be removed: {error}"
+        ))),
+    }
+}
+
+fn cleanup_published_backup(backup: &Path) -> UploadFinishOutcome {
+    match fs::remove_file(backup) {
+        Ok(()) => UploadFinishOutcome::Published,
+        Err(error) => UploadFinishOutcome::PublishedWithCleanupWarning(format!(
+            "The protected backup could not be removed: {error}"
+        )),
     }
 }
 
@@ -388,7 +437,7 @@ mod tests {
         upload.write_chunk(b"new").unwrap();
         assert_eq!(fs::read(root.join("note.txt")).unwrap(), b"old");
         upload.write_chunk(b"est").unwrap();
-        upload.finish().unwrap();
+        assert_eq!(upload.finish().unwrap(), UploadFinishOutcome::Published);
         assert_eq!(fs::read(root.join("note.txt")).unwrap(), b"newest");
         fs::remove_dir_all(root).unwrap();
     }
@@ -406,6 +455,59 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .contains(".part")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_non_overwrite_finishes_publish_exactly_one_complete_file() {
+        let root = temp_root("no-clobber");
+        let shared = SharedFiles::open(&root).unwrap();
+        let mut first = shared.begin_upload(21, "/winner.bin", 5, false).unwrap();
+        let mut second = shared.begin_upload(22, "/winner.bin", 5, false).unwrap();
+        first.write_chunk(b"first").unwrap();
+        second.write_chunk(b"other").unwrap();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let first_barrier = std::sync::Arc::clone(&barrier);
+        let first_finish = std::thread::spawn(move || {
+            first_barrier.wait();
+            first.finish()
+        });
+        let second_finish = std::thread::spawn(move || {
+            barrier.wait();
+            second.finish()
+        });
+        let first_result = first_finish.join().unwrap();
+        let second_result = second_finish.join().unwrap();
+
+        assert_ne!(first_result.is_ok(), second_result.is_ok());
+        let expected = if first_result.is_ok() {
+            b"first".as_slice()
+        } else {
+            b"other".as_slice()
+        };
+        assert_eq!(fs::read(root.join("winner.bin")).unwrap(), expected);
+        assert!(fs::read_dir(&root).unwrap().all(|entry| {
+            let name = entry.unwrap().file_name();
+            let name = name.to_string_lossy();
+            !name.contains(".latticeterm-upload-") && !name.contains(".latticeterm-replaced-")
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn published_backup_cleanup_failure_is_a_success_with_local_warning() {
+        let root = temp_root("cleanup-warning");
+        let backup = root.join("protected-backup");
+        fs::create_dir(&backup).unwrap();
+
+        let outcome = cleanup_published_backup(&backup);
+
+        assert!(matches!(
+            outcome,
+            UploadFinishOutcome::PublishedWithCleanupWarning(detail)
+                if detail.contains("protected backup")
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 }

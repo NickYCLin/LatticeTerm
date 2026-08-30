@@ -166,7 +166,26 @@ async fn paired_viewer_lists_uploads_and_downloads_within_shared_root() {
     assert_eq!(downloaded, upload);
 
     let _ = connection.send(&RemoteMessage::Close("done".into())).await;
-    let _ = agent.kill();
-    let _ = agent.wait();
+    drop(connection);
+    let exit = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some(status) = agent.try_wait().expect("poll agent exit") {
+                break status;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await;
+    let status = match exit {
+        Ok(status) => status,
+        Err(_) => {
+            // Failure-only cleanup: a passing test must prove Close makes the
+            // real Agent tear itself down without an external kill.
+            let _ = agent.kill();
+            let _ = agent.wait();
+            panic!("agent did not exit after the viewer sent Close");
+        }
+    };
+    assert!(status.success(), "agent exited unsuccessfully: {status}");
     std::fs::remove_dir_all(root).unwrap();
 }
