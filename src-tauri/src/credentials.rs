@@ -10,14 +10,26 @@
 //! check the preferred backend first and quietly fall back to the other, so
 //! switching preference never strands what was saved before.
 
+use crate::domain::{ConnectionProfile, Protocol};
 use keyring::{Entry, Error};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 const SERVICE: &str = "io.github.NickYCLin.LatticeTerm";
 const MAX_PROFILE_ID_LENGTH: usize = 128;
 const BACKEND_FILE: &str = "credential_backend.json";
+const BOUND_CREDENTIAL_VERSION: u32 = 1;
+const LEGACY_CREDENTIAL_ERROR: &str = "This saved password predates endpoint binding. Re-enter it and choose Remember password again before using saved credentials.";
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BoundCredentialEnvelope {
+    version: u32,
+    binding_sha256: String,
+    secret: String,
+}
 
 /// Where new secrets are written. Reads always cover both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +114,118 @@ impl CredentialKind {
             Self::VncPassword => "vnc-password",
         }
     }
+
+    fn protocol(self) -> Protocol {
+        match self {
+            Self::SshPassword => Protocol::Ssh,
+            Self::SftpPassword => Protocol::Sftp,
+            Self::RdpPassword => Protocol::Rdp,
+            Self::VncPassword => Protocol::Vnc,
+        }
+    }
+}
+
+/// Stable, non-secret identity of the endpoint a saved password belongs to.
+/// Length-prefixing prevents ambiguous concatenations. Every endpoint field is
+/// byte-exact so the digest always matches what the protocol engine actually
+/// receives, even for case-sensitive IPv6 zone identifiers or when an IPC
+/// caller bypasses draft validation.
+pub fn profile_binding_sha256(profile: &ConnectionProfile) -> String {
+    profile_binding_sha256_with_context(profile, "")
+}
+
+/// Extends the endpoint identity with a protocol-specific authentication
+/// realm. RDP uses this for its optional CredSSP domain; other protocols use
+/// the context-free wrapper above.
+pub fn profile_binding_sha256_with_context(
+    profile: &ConnectionProfile,
+    authentication_context: &str,
+) -> String {
+    let fields = [
+        profile.protocol.as_str().to_string(),
+        profile.hostname.clone(),
+        profile.port.to_string(),
+        profile.username.clone(),
+        authentication_context.to_string(),
+    ];
+    let mut digest = Sha256::new();
+    digest.update(b"latticeterm-credential-binding-v1\0");
+    for field in fields {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field.as_bytes());
+    }
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn validate_bound_kind(profile: &ConnectionProfile, kind: CredentialKind) -> Result<(), String> {
+    if profile.protocol != kind.protocol() {
+        return Err("The credential kind does not match the connection protocol.".to_string());
+    }
+    Ok(())
+}
+
+fn encode_bound_secret(
+    profile: &ConnectionProfile,
+    kind: CredentialKind,
+    secret: &str,
+) -> Result<String, String> {
+    encode_bound_secret_with_context(profile, kind, "", secret)
+}
+
+fn encode_bound_secret_with_context(
+    profile: &ConnectionProfile,
+    kind: CredentialKind,
+    authentication_context: &str,
+    secret: &str,
+) -> Result<String, String> {
+    validate_bound_kind(profile, kind)?;
+    if secret.is_empty() {
+        return Err("An empty password cannot be saved.".to_string());
+    }
+    serde_json::to_string(&BoundCredentialEnvelope {
+        version: BOUND_CREDENTIAL_VERSION,
+        binding_sha256: profile_binding_sha256_with_context(profile, authentication_context),
+        secret: secret.to_string(),
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn decode_bound_secret(
+    profile: &ConnectionProfile,
+    kind: CredentialKind,
+    encoded: &str,
+) -> Result<String, String> {
+    decode_bound_secret_with_context(profile, kind, "", encoded)
+}
+
+fn decode_bound_secret_with_context(
+    profile: &ConnectionProfile,
+    kind: CredentialKind,
+    authentication_context: &str,
+    encoded: &str,
+) -> Result<String, String> {
+    validate_bound_kind(profile, kind)?;
+    let envelope: BoundCredentialEnvelope =
+        serde_json::from_str(encoded).map_err(|_| LEGACY_CREDENTIAL_ERROR.to_string())?;
+    if envelope.version != BOUND_CREDENTIAL_VERSION {
+        return Err(LEGACY_CREDENTIAL_ERROR.to_string());
+    }
+    if envelope.binding_sha256
+        != profile_binding_sha256_with_context(profile, authentication_context)
+    {
+        return Err(
+            "The saved password belongs to a different endpoint. Delete it or restore the original host, port, and username before reconnecting."
+                .to_string(),
+        );
+    }
+    if envelope.secret.is_empty() {
+        return Err("The saved password is empty.".to_string());
+    }
+    Ok(envelope.secret)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -223,7 +347,7 @@ pub fn exists(profile_id: &str, kind: CredentialKind) -> Result<bool, String> {
 }
 
 /// New secrets go to the preferred backend only.
-pub fn store(profile_id: &str, kind: CredentialKind, secret: &str) -> Result<(), String> {
+fn store(profile_id: &str, kind: CredentialKind, secret: &str) -> Result<(), String> {
     if secret.is_empty() {
         return Err("An empty password cannot be saved.".to_string());
     }
@@ -237,11 +361,34 @@ pub fn store(profile_id: &str, kind: CredentialKind, secret: &str) -> Result<(),
     }
 }
 
+/// Stores a password together with the exact saved endpoint it may be used
+/// for. Editing or replacing a profile can never silently retarget this
+/// credential because the binding is authenticated by the credential store's
+/// own confidentiality boundary and checked before any connection attempt.
+pub fn store_bound(
+    profile: &ConnectionProfile,
+    kind: CredentialKind,
+    secret: &str,
+) -> Result<(), String> {
+    let encoded = encode_bound_secret(profile, kind, secret)?;
+    store(&profile.id, kind, &encoded)
+}
+
+pub fn store_bound_with_context(
+    profile: &ConnectionProfile,
+    kind: CredentialKind,
+    authentication_context: &str,
+    secret: &str,
+) -> Result<(), String> {
+    let encoded = encode_bound_secret_with_context(profile, kind, authentication_context, secret)?;
+    store(&profile.id, kind, &encoded)
+}
+
 /// Reads the preferred backend first, then the other, so a secret saved
 /// before a preference change is still found. When both miss, the preferred
 /// backend's error wins: "the vault is locked" is actionable, a bare
 /// "not found" after it would be misleading.
-pub fn load(profile_id: &str, kind: CredentialKind) -> Result<String, String> {
+fn load(profile_id: &str, kind: CredentialKind) -> Result<String, String> {
     type Loader = fn(&str, CredentialKind) -> Result<String, String>;
     let (first, second): (Loader, Loader) = match preferred_backend() {
         CredentialBackend::OsKeyring => (keyring_load, vault_load),
@@ -254,6 +401,23 @@ pub fn load(profile_id: &str, kind: CredentialKind) -> Result<String, String> {
             Err(_) => Err(first_error),
         },
     }
+}
+
+/// Loads only the versioned endpoint-bound envelope. Legacy raw passwords are
+/// deliberately not guessed or auto-migrated: there is no trustworthy way to
+/// know which endpoint an old profile-id-only secret originally belonged to.
+pub fn load_bound(profile: &ConnectionProfile, kind: CredentialKind) -> Result<String, String> {
+    let encoded = load(&profile.id, kind)?;
+    decode_bound_secret(profile, kind, &encoded)
+}
+
+pub fn load_bound_with_context(
+    profile: &ConnectionProfile,
+    kind: CredentialKind,
+    authentication_context: &str,
+) -> Result<String, String> {
+    let encoded = load(&profile.id, kind)?;
+    decode_bound_secret_with_context(profile, kind, authentication_context, &encoded)
 }
 
 /// Removes the secret from both backends. A backend that cannot be asked
@@ -284,6 +448,21 @@ pub fn delete(profile_id: &str, kind: CredentialKind) -> Result<bool, String> {
 mod tests {
     use super::*;
 
+    fn profile(protocol: Protocol) -> ConnectionProfile {
+        ConnectionProfile {
+            id: "profile-123".to_string(),
+            name: "Gateway".to_string(),
+            protocol,
+            hostname: "Gateway.Example.COM".to_string(),
+            username: "Operator".to_string(),
+            port: protocol.default_port(),
+            environment: crate::domain::Environment::Production,
+            group: "Servers".to_string(),
+            tags: Vec::new(),
+            favorite: false,
+        }
+    }
+
     #[test]
     fn account_is_namespaced_without_secret_material() {
         let result = account("profile-123", CredentialKind::SshPassword).unwrap();
@@ -303,5 +482,119 @@ mod tests {
             account("profile-123", CredentialKind::SftpPassword).unwrap(),
             "profile:profile-123:sftp-password"
         );
+    }
+
+    #[test]
+    fn endpoint_bound_envelopes_round_trip_only_for_the_same_profile() {
+        let original = profile(Protocol::Ssh);
+        let encoded =
+            encode_bound_secret(&original, CredentialKind::SshPassword, "secret").unwrap();
+
+        assert_eq!(
+            decode_bound_secret(&original, CredentialKind::SshPassword, &encoded).unwrap(),
+            "secret"
+        );
+
+        let mut changed_host = original.clone();
+        changed_host.hostname = "attacker.example".to_string();
+        assert!(
+            decode_bound_secret(&changed_host, CredentialKind::SshPassword, &encoded)
+                .unwrap_err()
+                .contains("different endpoint")
+        );
+
+        let mut changed_user = original.clone();
+        changed_user.username = "root".to_string();
+        assert!(decode_bound_secret(&changed_user, CredentialKind::SshPassword, &encoded).is_err());
+    }
+
+    #[test]
+    fn protocol_authentication_context_cannot_be_retargeted() {
+        let rdp = profile(Protocol::Rdp);
+        let encoded = encode_bound_secret_with_context(
+            &rdp,
+            CredentialKind::RdpPassword,
+            "rdp-domain:some:4:CORP",
+            "secret",
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode_bound_secret_with_context(
+                &rdp,
+                CredentialKind::RdpPassword,
+                "rdp-domain:some:4:CORP",
+                &encoded,
+            )
+            .unwrap(),
+            "secret"
+        );
+        assert!(decode_bound_secret_with_context(
+            &rdp,
+            CredentialKind::RdpPassword,
+            "rdp-domain:some:4:EVIL",
+            &encoded,
+        )
+        .unwrap_err()
+        .contains("different endpoint"));
+    }
+
+    #[test]
+    fn endpoint_binding_is_byte_exact_for_every_protocol_field() {
+        let original = profile(Protocol::Ssh);
+        let mut same_host = original.clone();
+        same_host.hostname = "gateway.example.com".to_string();
+        assert_ne!(
+            profile_binding_sha256(&original),
+            profile_binding_sha256(&same_host)
+        );
+
+        let mut changed_protocol = original.clone();
+        changed_protocol.protocol = Protocol::Sftp;
+        assert_ne!(
+            profile_binding_sha256(&original),
+            profile_binding_sha256(&changed_protocol)
+        );
+
+        let mut changed_username = original.clone();
+        changed_username.username = "operator".to_string();
+        assert_ne!(
+            profile_binding_sha256(&original),
+            profile_binding_sha256(&changed_username)
+        );
+
+        let mut padded_username = original.clone();
+        padded_username.username.push(' ');
+        assert_ne!(
+            profile_binding_sha256(&original),
+            profile_binding_sha256(&padded_username)
+        );
+
+        let mut padded_host = original.clone();
+        padded_host.hostname.push(' ');
+        assert_ne!(
+            profile_binding_sha256(&original),
+            profile_binding_sha256(&padded_host)
+        );
+
+        let mut ipv6_upper = original.clone();
+        ipv6_upper.hostname = "fe80::1%ETH0".to_string();
+        let mut ipv6_lower = ipv6_upper.clone();
+        ipv6_lower.hostname = "fe80::1%eth0".to_string();
+        assert_ne!(
+            profile_binding_sha256(&ipv6_upper),
+            profile_binding_sha256(&ipv6_lower)
+        );
+    }
+
+    #[test]
+    fn legacy_raw_passwords_and_cross_protocol_envelopes_fail_closed() {
+        let ssh = profile(Protocol::Ssh);
+        assert_eq!(
+            decode_bound_secret(&ssh, CredentialKind::SshPassword, "legacy password").unwrap_err(),
+            LEGACY_CREDENTIAL_ERROR
+        );
+        assert!(encode_bound_secret(&ssh, CredentialKind::RdpPassword, "secret").is_err());
+        assert!(encode_bound_secret(&ssh, CredentialKind::SshPassword, "").is_err());
     }
 }

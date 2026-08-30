@@ -893,10 +893,82 @@ async fn credential_delete(profile_id: String, kind: CredentialKind) -> Result<b
     credential_call(move || crate::credentials::delete(&profile_id, kind)).await
 }
 
+fn validate_connection_profile(
+    profile_id: &str,
+    expected_protocol: Protocol,
+    profile: &ConnectionProfile,
+) -> Result<(), String> {
+    if profile.id != profile_id {
+        return Err("the selected profile does not match the saved record".to_string());
+    }
+    if profile.protocol != expected_protocol {
+        return Err(format!(
+            "the selected connection is not a {} profile",
+            expected_protocol.as_str().to_ascii_uppercase()
+        ));
+    }
+    Ok(())
+}
+
+fn bind_ssh_request_to_profile(
+    request: &mut ConnectRequest,
+    profile: &ConnectionProfile,
+) -> Result<(), String> {
+    validate_connection_profile(&request.profile_id, Protocol::Ssh, profile)?;
+
+    // The WebView selects an opaque profile id. Its accompanying endpoint
+    // fields are presentation data, never authority to pair a saved secret
+    // with a different host or username.
+    request.hostname = profile.hostname.clone();
+    request.port = profile.port;
+    request.username = profile.username.clone();
+    Ok(())
+}
+
+fn bind_sftp_request_to_profile(
+    request: &mut SftpConnectRequest,
+    profile: &ConnectionProfile,
+) -> Result<(), String> {
+    validate_connection_profile(&request.profile_id, Protocol::Sftp, profile)?;
+    request.hostname = profile.hostname.clone();
+    request.port = profile.port;
+    request.username = profile.username.clone();
+    Ok(())
+}
+
+fn bind_rdp_request_to_profile(
+    request: &mut RdpConnectRequest,
+    profile: &ConnectionProfile,
+) -> Result<(), String> {
+    validate_connection_profile(&request.profile_id, Protocol::Rdp, profile)?;
+    request.hostname = profile.hostname.clone();
+    request.port = profile.port;
+    request.username = profile.username.clone();
+    Ok(())
+}
+
+fn rdp_credential_context(domain: &Option<String>) -> String {
+    match domain {
+        Some(domain) => format!("rdp-domain:some:{}:{domain}", domain.len()),
+        None => "rdp-domain:none".to_string(),
+    }
+}
+
+fn bind_vnc_request_to_profile(
+    request: &mut VncConnectRequest,
+    profile: &ConnectionProfile,
+) -> Result<(), String> {
+    validate_connection_profile(&request.profile_id, Protocol::Vnc, profile)?;
+    request.hostname = profile.hostname.clone();
+    request.port = profile.port;
+    Ok(())
+}
+
 #[tauri::command]
 async fn ssh_connect(
     app: AppHandle,
     mut request: ConnectRequest,
+    storage: State<'_, AppStorage>,
     trust: State<'_, TrustState>,
     registry: State<'_, Arc<SshRegistry>>,
 ) -> Result<ConnectOutcome, String> {
@@ -907,10 +979,24 @@ async fn ssh_connect(
         });
     }
 
+    let profile = {
+        let guard = storage.lock().map_err(|error| error.to_string())?;
+        guard
+            .get_profile(&request.profile_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "the selected SSH profile no longer exists".to_string())?
+    };
+    if let Err(detail) = bind_ssh_request_to_profile(&mut request, &profile) {
+        return Ok(ConnectOutcome::Failed {
+            stage: "profile",
+            detail,
+        });
+    }
+
     if request.use_saved_password {
-        let profile_id = request.profile_id.clone();
+        let credential_profile = profile.clone();
         let password = match credential_call(move || {
-            crate::credentials::load(&profile_id, CredentialKind::SshPassword)
+            crate::credentials::load_bound(&credential_profile, CredentialKind::SshPassword)
         })
         .await
         {
@@ -925,7 +1011,6 @@ async fn ssh_connect(
         request.auth = crate::ssh::AuthMethod::Password { password };
     }
 
-    let profile_id = request.profile_id.clone();
     let password_to_store = if request.remember_password {
         match &request.auth {
             crate::ssh::AuthMethod::Password { password } => Some(Zeroizing::new(password.clone())),
@@ -963,8 +1048,13 @@ async fn ssh_connect(
     if let (ConnectOutcome::Connected { session_id }, Some(password)) =
         (&outcome, password_to_store)
     {
+        let credential_profile = profile.clone();
         let save_result = credential_call(move || {
-            crate::credentials::store(&profile_id, CredentialKind::SshPassword, password.as_str())
+            crate::credentials::store_bound(
+                &credential_profile,
+                CredentialKind::SshPassword,
+                password.as_str(),
+            )
         })
         .await;
         if let Err(detail) = save_result {
@@ -1041,6 +1131,7 @@ async fn sftp_attach_ssh(
 #[tauri::command]
 async fn sftp_connect(
     mut request: SftpConnectRequest,
+    storage: State<'_, AppStorage>,
     trust: State<'_, TrustState>,
     registry: State<'_, Arc<SftpRegistry>>,
 ) -> Result<SftpConnectOutcome, String> {
@@ -1051,10 +1142,24 @@ async fn sftp_connect(
         });
     }
 
+    let profile = {
+        let guard = storage.lock().map_err(|error| error.to_string())?;
+        guard
+            .get_profile(&request.profile_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "the selected SFTP profile no longer exists".to_string())?
+    };
+    if let Err(detail) = bind_sftp_request_to_profile(&mut request, &profile) {
+        return Ok(SftpConnectOutcome::Failed {
+            stage: "profile",
+            detail,
+        });
+    }
+
     if request.use_saved_password {
-        let profile_id = request.profile_id.clone();
+        let credential_profile = profile.clone();
         request.auth = match credential_call(move || {
-            crate::credentials::load(&profile_id, CredentialKind::SftpPassword)
+            crate::credentials::load_bound(&credential_profile, CredentialKind::SftpPassword)
         })
         .await
         {
@@ -1068,7 +1173,6 @@ async fn sftp_connect(
         };
     }
 
-    let profile_id = request.profile_id.clone();
     let password_to_store = if request.remember_password {
         match &request.auth {
             crate::ssh::AuthMethod::Password { password } => Some(Zeroizing::new(password.clone())),
@@ -1097,8 +1201,13 @@ async fn sftp_connect(
         (&outcome, password_to_store)
     {
         let session_id = session.session_id.clone();
+        let credential_profile = profile.clone();
         if let Err(detail) = credential_call(move || {
-            crate::credentials::store(&profile_id, CredentialKind::SftpPassword, password.as_str())
+            crate::credentials::store_bound(
+                &credential_profile,
+                CredentialKind::SftpPassword,
+                password.as_str(),
+            )
         })
         .await
         {
@@ -1491,6 +1600,7 @@ fn remote_host_status(
 async fn rdp_connect(
     app: AppHandle,
     mut request: RdpConnectRequest,
+    storage: State<'_, AppStorage>,
     registry: State<'_, Arc<RdpRegistry>>,
 ) -> Result<RdpConnectOutcome, String> {
     if request.use_saved_password && request.remember_password {
@@ -1500,10 +1610,30 @@ async fn rdp_connect(
         });
     }
 
+    let profile = {
+        let guard = storage.lock().map_err(|error| error.to_string())?;
+        guard
+            .get_profile(&request.profile_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "the selected RDP profile no longer exists".to_string())?
+    };
+    if let Err(detail) = bind_rdp_request_to_profile(&mut request, &profile) {
+        return Ok(RdpConnectOutcome::Failed {
+            stage: "profile",
+            detail,
+        });
+    }
+    let credential_context = rdp_credential_context(&request.domain);
+
     if request.use_saved_password {
-        let profile_id = request.profile_id.clone();
+        let credential_profile = profile.clone();
+        let load_context = credential_context.clone();
         request.password = match credential_call(move || {
-            crate::credentials::load(&profile_id, CredentialKind::RdpPassword)
+            crate::credentials::load_bound_with_context(
+                &credential_profile,
+                CredentialKind::RdpPassword,
+                &load_context,
+            )
         })
         .await
         {
@@ -1517,7 +1647,6 @@ async fn rdp_connect(
         };
     }
 
-    let profile_id = request.profile_id.clone();
     let password_to_store = request
         .remember_password
         .then(|| Zeroizing::new(request.password.clone()));
@@ -1526,8 +1655,14 @@ async fn rdp_connect(
     if let (RdpConnectOutcome::Connected { session }, Some(password)) =
         (&outcome, password_to_store)
     {
+        let credential_profile = profile.clone();
         let save_result = credential_call(move || {
-            crate::credentials::store(&profile_id, CredentialKind::RdpPassword, password.as_str())
+            crate::credentials::store_bound_with_context(
+                &credential_profile,
+                CredentialKind::RdpPassword,
+                &credential_context,
+                password.as_str(),
+            )
         })
         .await;
         if let Err(detail) = save_result {
@@ -1612,6 +1747,7 @@ fn ssh_forget_host(host: String, port: u16, trust: State<'_, TrustState>) -> Res
 async fn vnc_connect(
     app: AppHandle,
     mut request: VncConnectRequest,
+    storage: State<'_, AppStorage>,
     registry: State<'_, Arc<VncRegistry>>,
 ) -> Result<VncConnectOutcome, String> {
     if request.use_saved_password && request.remember_password {
@@ -1621,10 +1757,24 @@ async fn vnc_connect(
         });
     }
 
+    let profile = {
+        let guard = storage.lock().map_err(|error| error.to_string())?;
+        guard
+            .get_profile(&request.profile_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "the selected VNC profile no longer exists".to_string())?
+    };
+    if let Err(detail) = bind_vnc_request_to_profile(&mut request, &profile) {
+        return Ok(VncConnectOutcome::Failed {
+            stage: "profile",
+            detail,
+        });
+    }
+
     if request.use_saved_password {
-        let profile_id = request.profile_id.clone();
+        let credential_profile = profile.clone();
         request.password = match credential_call(move || {
-            crate::credentials::load(&profile_id, CredentialKind::VncPassword)
+            crate::credentials::load_bound(&credential_profile, CredentialKind::VncPassword)
         })
         .await
         {
@@ -1638,7 +1788,6 @@ async fn vnc_connect(
         };
     }
 
-    let profile_id = request.profile_id.clone();
     let password_to_store = request
         .remember_password
         .then(|| Zeroizing::new(request.password.clone()));
@@ -1647,8 +1796,13 @@ async fn vnc_connect(
     if let (VncConnectOutcome::Connected { session }, Some(password)) =
         (&outcome, password_to_store)
     {
+        let credential_profile = profile.clone();
         let save_result = credential_call(move || {
-            crate::credentials::store(&profile_id, CredentialKind::VncPassword, password.as_str())
+            crate::credentials::store_bound(
+                &credential_profile,
+                CredentialKind::VncPassword,
+                password.as_str(),
+            )
         })
         .await;
         if let Err(detail) = save_result {
@@ -1711,9 +1865,9 @@ async fn tunnel_start(
     if profile.protocol != Protocol::Ssh {
         return Err("profile:SSH tunnels require an SSH connection profile".to_string());
     }
-    request.ssh_hostname = profile.hostname;
+    request.ssh_hostname = profile.hostname.clone();
     request.ssh_port = profile.port;
-    request.ssh_username = profile.username;
+    request.ssh_username = profile.username.clone();
 
     let known: Option<HostKeyRecord> = match trust.inner() {
         TrustState::Unavailable(reason) => return Err(format!("trust:{reason}")),
@@ -1735,11 +1889,12 @@ async fn tunnel_start(
     // tunnel runtime has applied its global admission limit.
     let mut reservation =
         crate::tunnel::reserve_tunnel_start(Arc::clone(registry.inner()), &request)?;
-    let profile_id = request.profile_id.clone();
+    let credential_profile = profile.clone();
     let admission = reservation.take_admission_for_credential()?;
     let mut credential_job = tauri::async_runtime::spawn_blocking(move || {
         (
-            crate::credentials::load(&profile_id, CredentialKind::SshPassword).map(Zeroizing::new),
+            crate::credentials::load_bound(&credential_profile, CredentialKind::SshPassword)
+                .map(Zeroizing::new),
             admission,
         )
     });
@@ -2021,6 +2176,21 @@ mod tests {
     };
     use crate::storage::{InMemoryStorage, Storage};
 
+    fn saved_profile(id: &str, protocol: Protocol) -> ConnectionProfile {
+        ConnectionProfile {
+            id: id.to_string(),
+            name: "Saved endpoint".to_string(),
+            protocol,
+            hostname: "saved.internal".to_string(),
+            username: "saved-user".to_string(),
+            port: protocol.default_port(),
+            environment: Environment::Production,
+            group: "Servers".to_string(),
+            tags: Vec::new(),
+            favorite: false,
+        }
+    }
+
     #[test]
     fn runtime_summary_reports_the_real_secure_storage_status() {
         let summary = runtime_summary();
@@ -2051,6 +2221,139 @@ mod tests {
             ["ssh", "sftp", "lattice"]
         );
         assert_eq!(supported_protocols_for("ios"), ["ssh", "sftp", "lattice"]);
+    }
+
+    #[test]
+    fn saved_ssh_profile_owns_the_endpoint_used_with_its_credential() {
+        let mut request = ConnectRequest {
+            profile_id: "profile-safe".to_string(),
+            hostname: "attacker.example".to_string(),
+            port: 2222,
+            username: "stolen-user".to_string(),
+            auth: crate::ssh::AuthMethod::Password {
+                password: "one-call-secret".to_string(),
+            },
+            use_saved_password: true,
+            remember_password: false,
+            cols: 80,
+            rows: 24,
+        };
+        let profile = ConnectionProfile {
+            id: "profile-safe".to_string(),
+            name: "Production gateway".to_string(),
+            protocol: Protocol::Ssh,
+            hostname: "gateway.internal".to_string(),
+            username: "operator".to_string(),
+            port: 22,
+            environment: Environment::Production,
+            group: "Servers".to_string(),
+            tags: Vec::new(),
+            favorite: false,
+        };
+
+        bind_ssh_request_to_profile(&mut request, &profile).unwrap();
+
+        assert_eq!(request.hostname, "gateway.internal");
+        assert_eq!(request.port, 22);
+        assert_eq!(request.username, "operator");
+    }
+
+    #[test]
+    fn ssh_credentials_cannot_be_paired_with_another_protocol_profile() {
+        let mut request = ConnectRequest {
+            profile_id: "profile-rdp".to_string(),
+            hostname: "gateway.internal".to_string(),
+            port: 22,
+            username: "operator".to_string(),
+            auth: crate::ssh::AuthMethod::Password {
+                password: "one-call-secret".to_string(),
+            },
+            use_saved_password: false,
+            remember_password: true,
+            cols: 80,
+            rows: 24,
+        };
+        let profile = ConnectionProfile {
+            id: "profile-rdp".to_string(),
+            name: "Desktop".to_string(),
+            protocol: Protocol::Rdp,
+            hostname: "desktop.internal".to_string(),
+            username: "operator".to_string(),
+            port: 3389,
+            environment: Environment::Production,
+            group: "Servers".to_string(),
+            tags: Vec::new(),
+            favorite: false,
+        };
+
+        assert!(bind_ssh_request_to_profile(&mut request, &profile).is_err());
+        assert_eq!(request.hostname, "gateway.internal");
+        assert_eq!(request.port, 22);
+    }
+
+    #[test]
+    fn every_password_protocol_uses_its_saved_profile_endpoint() {
+        let mut sftp = SftpConnectRequest {
+            profile_id: "profile-sftp".to_string(),
+            hostname: "attacker.example".to_string(),
+            port: 2222,
+            username: "attacker".to_string(),
+            auth: crate::ssh::AuthMethod::Password {
+                password: "one-call-secret".to_string(),
+            },
+            use_saved_password: true,
+            remember_password: false,
+        };
+        bind_sftp_request_to_profile(&mut sftp, &saved_profile("profile-sftp", Protocol::Sftp))
+            .unwrap();
+        assert_eq!(
+            (sftp.hostname.as_str(), sftp.port, sftp.username.as_str()),
+            ("saved.internal", 22, "saved-user")
+        );
+
+        let mut rdp = RdpConnectRequest {
+            profile_id: "profile-rdp".to_string(),
+            hostname: "attacker.example".to_string(),
+            port: 4444,
+            username: "attacker".to_string(),
+            password: "one-call-secret".to_string(),
+            use_saved_password: true,
+            remember_password: false,
+            domain: None,
+            width: 1280,
+            height: 720,
+            trusted_certificate_sha256: None,
+        };
+        bind_rdp_request_to_profile(&mut rdp, &saved_profile("profile-rdp", Protocol::Rdp))
+            .unwrap();
+        assert_eq!(
+            (rdp.hostname.as_str(), rdp.port, rdp.username.as_str()),
+            ("saved.internal", 3389, "saved-user")
+        );
+
+        let mut vnc = VncConnectRequest {
+            profile_id: "profile-vnc".to_string(),
+            hostname: "attacker.example".to_string(),
+            port: 4444,
+            password: "one-call-secret".to_string(),
+            use_saved_password: true,
+            remember_password: false,
+        };
+        bind_vnc_request_to_profile(&mut vnc, &saved_profile("profile-vnc", Protocol::Vnc))
+            .unwrap();
+        assert_eq!((vnc.hostname.as_str(), vnc.port), ("saved.internal", 5900));
+    }
+
+    #[test]
+    fn rdp_saved_password_binding_distinguishes_the_authentication_domain() {
+        assert_ne!(
+            rdp_credential_context(&Some("CORP".to_string())),
+            rdp_credential_context(&Some("EVIL".to_string()))
+        );
+        assert_ne!(
+            rdp_credential_context(&None),
+            rdp_credential_context(&Some(String::new()))
+        );
     }
 
     #[test]
