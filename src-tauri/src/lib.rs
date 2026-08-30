@@ -1744,8 +1744,11 @@ async fn tunnel_start(
 }
 
 #[tauri::command]
-fn tunnel_stop(tunnel_id: String, registry: State<'_, Arc<TunnelRegistry>>) -> Result<(), String> {
-    registry.stop(&tunnel_id)
+async fn tunnel_stop(
+    tunnel_id: String,
+    registry: State<'_, Arc<TunnelRegistry>>,
+) -> Result<(), String> {
+    registry.stop(&tunnel_id).await
 }
 
 #[tauri::command]

@@ -17,15 +17,17 @@ use russh::{Channel, ChannelOpenFailure, Disconnect};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 const MAX_TUNNEL_ID_BYTES: usize = 128;
 const MAX_HOST_BYTES: usize = 253;
+const REMOTE_FORWARD_CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
+const STOP_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -87,12 +89,54 @@ struct ActiveTunnel {
     /// host cannot reach, a refused forward — becomes visible in the status.
     last_error: Arc<Mutex<Option<String>>>,
     stop_tx: Option<broadcast::Sender<()>>,
+    /// Becomes true only after the worker has released its listener and SSH
+    /// session, so a successful Stop command is a safe restart boundary.
+    completion_tx: watch::Sender<bool>,
 }
 
 #[derive(Default)]
 pub struct TunnelRegistry {
     tunnels: Mutex<HashMap<String, ActiveTunnel>>,
     generations: AtomicU64,
+    shutting_down: AtomicBool,
+}
+
+/// Atomically claims a tunnel id before any bind, SSH connection, or remote
+/// forward is attempted. Dropping an unfinished reservation restores the
+/// previous stopped/error summary instead of leaving a phantom Starting row.
+struct TunnelStartReservation {
+    registry: Arc<TunnelRegistry>,
+    tunnel_id: String,
+    generation: u64,
+    previous: Option<ActiveTunnel>,
+    committed: bool,
+}
+
+impl TunnelStartReservation {
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn commit(mut self, tunnel: ActiveTunnel) -> Result<(), String> {
+        if tunnel.tunnel_id != self.tunnel_id || tunnel.generation != self.generation {
+            return Err("connect:tunnel start reservation does not match the run".to_string());
+        }
+        self.registry
+            .commit_start(&self.tunnel_id, self.generation, tunnel)?;
+        self.previous.take();
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for TunnelStartReservation {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        self.registry
+            .cancel_start(&self.tunnel_id, self.generation, self.previous.take());
+    }
 }
 
 impl TunnelRegistry {
@@ -125,40 +169,143 @@ impl TunnelRegistry {
         guard.values().map(Self::summarize).collect()
     }
 
-    pub fn stop(&self, tunnel_id: &str) -> Result<(), String> {
+    fn owns_worker(tunnel: &ActiveTunnel) -> bool {
+        tunnel.status == TunnelStatus::Starting || tunnel.stop_tx.is_some()
+    }
+
+    fn reserve_start(self: &Arc<Self>, tunnel_id: &str) -> Result<TunnelStartReservation, String> {
         let mut guard = self.tunnels.lock().map_err(|e| e.to_string())?;
-        if let Some(tunnel) = guard.get_mut(tunnel_id) {
-            if let Some(stop_tx) = tunnel.stop_tx.take() {
-                let _ = stop_tx.send(());
-            }
-            tunnel.status = TunnelStatus::Stopped;
-            tunnel.active_connections.store(0, Ordering::Relaxed);
-            Ok(())
-        } else {
-            Err(format!("Tunnel '{tunnel_id}' was not found."))
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("connect:tunnel registry is shutting down".to_string());
         }
+        if guard.get(tunnel_id).is_some_and(Self::owns_worker) {
+            return Err(format!("connect:tunnel '{tunnel_id}' is already running"));
+        }
+
+        let generation = self.generations.fetch_add(1, Ordering::Relaxed) + 1;
+        let previous = guard.remove(tunnel_id);
+        let (completion_tx, _) = watch::channel(false);
+        guard.insert(
+            tunnel_id.to_string(),
+            ActiveTunnel {
+                tunnel_id: tunnel_id.to_string(),
+                status: TunnelStatus::Starting,
+                generation,
+                bytes_uploaded: Arc::new(AtomicU64::new(0)),
+                bytes_downloaded: Arc::new(AtomicU64::new(0)),
+                active_connections: Arc::new(AtomicU32::new(0)),
+                started_at: None,
+                last_error: Arc::new(Mutex::new(None)),
+                stop_tx: None,
+                completion_tx,
+            },
+        );
+
+        Ok(TunnelStartReservation {
+            registry: Arc::clone(self),
+            tunnel_id: tunnel_id.to_string(),
+            generation,
+            previous,
+            committed: false,
+        })
+    }
+
+    fn commit_start(
+        &self,
+        tunnel_id: &str,
+        generation: u64,
+        tunnel: ActiveTunnel,
+    ) -> Result<(), String> {
+        let mut guard = self.tunnels.lock().map_err(|e| e.to_string())?;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("connect:tunnel registry is shutting down".to_string());
+        }
+        let owns_reservation = guard.get(tunnel_id).is_some_and(|current| {
+            current.generation == generation && current.status == TunnelStatus::Starting
+        });
+        if !owns_reservation {
+            return Err(format!(
+                "connect:tunnel '{tunnel_id}' start reservation was lost"
+            ));
+        }
+        guard.insert(tunnel_id.to_string(), tunnel);
+        Ok(())
+    }
+
+    fn cancel_start(&self, tunnel_id: &str, generation: u64, previous: Option<ActiveTunnel>) {
+        if let Ok(mut guard) = self.tunnels.lock() {
+            let owns_reservation = guard.get(tunnel_id).is_some_and(|current| {
+                current.generation == generation && current.status == TunnelStatus::Starting
+            });
+            if !owns_reservation {
+                return;
+            }
+            if let Some(previous) = previous {
+                guard.insert(tunnel_id.to_string(), previous);
+            } else {
+                guard.remove(tunnel_id);
+            }
+        }
+    }
+
+    pub async fn stop(&self, tunnel_id: &str) -> Result<(), String> {
+        let mut completion = {
+            let mut guard = self.tunnels.lock().map_err(|e| e.to_string())?;
+            let Some(tunnel) = guard.get_mut(tunnel_id) else {
+                return Err(format!("Tunnel '{tunnel_id}' was not found."));
+            };
+            if tunnel.status == TunnelStatus::Starting && tunnel.stop_tx.is_none() {
+                return Err(format!("connect:tunnel '{tunnel_id}' is still starting"));
+            }
+            let Some(stop_tx) = tunnel.stop_tx.as_ref() else {
+                return Ok(());
+            };
+
+            let completion = tunnel.completion_tx.subscribe();
+            let _ = stop_tx.send(());
+            // Keep stop_tx as the ownership marker until the worker has
+            // actually released its listener and SSH session.
+            completion
+        };
+
+        let already_finished = *completion.borrow();
+        if !already_finished {
+            tokio::time::timeout(STOP_WAIT_TIMEOUT, completion.changed())
+                .await
+                .map_err(|_| {
+                    format!(
+                        "connect:tunnel '{tunnel_id}' did not stop within {} seconds",
+                        STOP_WAIT_TIMEOUT.as_secs()
+                    )
+                })?
+                .map_err(|_| format!("connect:tunnel '{tunnel_id}' cleanup signal closed"))?;
+        }
+        Ok(())
     }
 
     pub fn stop_all(&self) {
+        // Exit cleanup permanently seals this registry. A start which already
+        // owns a placeholder may finish its network work, but commit_start
+        // will reject it and its reservation will restore the prior summary.
+        self.shutting_down.store(true, Ordering::Release);
         if let Ok(mut guard) = self.tunnels.lock() {
             for tunnel in guard.values_mut() {
-                if let Some(stop_tx) = tunnel.stop_tx.take() {
+                if let Some(stop_tx) = tunnel.stop_tx.as_ref() {
                     let _ = stop_tx.send(());
+                    tunnel.status = TunnelStatus::Stopped;
+                    tunnel.active_connections.store(0, Ordering::Relaxed);
                 }
-                tunnel.status = TunnelStatus::Stopped;
-                tunnel.active_connections.store(0, Ordering::Relaxed);
             }
         }
     }
 
-    /// Records a fresh run and returns its generation number.
+    /// Direct registration is kept for focused registry tests. Production
+    /// starts must reserve first so no side effect happens before ownership.
+    #[cfg(test)]
     fn register(&self, tunnel: ActiveTunnel) -> Result<u64, String> {
         let generation = tunnel.generation;
         let mut guard = self.tunnels.lock().map_err(|e| e.to_string())?;
-        if guard
-            .get(&tunnel.tunnel_id)
-            .is_some_and(|current| current.stop_tx.is_some())
-        {
+        if guard.get(&tunnel.tunnel_id).is_some_and(Self::owns_worker) {
             return Err(format!(
                 "connect:tunnel '{}' is already running",
                 tunnel.tunnel_id
@@ -181,9 +328,9 @@ impl TunnelRegistry {
             if let Some(tunnel) = guard.get_mut(tunnel_id) {
                 if tunnel.generation == generation {
                     // The sender is also the registry's running marker. A
-                    // worker that ends by itself must clear it just like an
-                    // explicit stop, otherwise the UI offers Restart while a
-                    // later start is rejected as "already running".
+                    // worker that ends by itself must clear it; an explicit
+                    // Stop also waits for this same cleanup boundary before
+                    // allowing a later start.
                     tunnel.stop_tx.take();
                     tunnel.status = status;
                     tunnel.active_connections.store(0, Ordering::Relaxed);
@@ -192,16 +339,18 @@ impl TunnelRegistry {
                             *slot = error;
                         }
                     }
+                    tunnel.completion_tx.send_replace(true);
                 }
             }
         }
     }
 
+    #[cfg(test)]
     fn is_running(&self, tunnel_id: &str) -> bool {
         self.tunnels
             .lock()
             .ok()
-            .and_then(|guard| guard.get(tunnel_id).map(|t| t.stop_tx.is_some()))
+            .and_then(|guard| guard.get(tunnel_id).map(Self::owns_worker))
             .unwrap_or(false)
     }
 }
@@ -221,21 +370,39 @@ struct Counters {
     down: Arc<AtomicU64>,
     connections: Arc<AtomicU32>,
     last_error: Arc<Mutex<Option<String>>>,
+    /// The tunnel handler sets this only after russh has shut down the
+    /// transport writer (or when the handler is dropped on an error path).
+    session_cleanup_tx: watch::Sender<bool>,
 }
 
 impl Counters {
     fn new() -> Self {
+        let (session_cleanup_tx, _) = watch::channel(false);
         Self {
             up: Arc::new(AtomicU64::new(0)),
             down: Arc::new(AtomicU64::new(0)),
             connections: Arc::new(AtomicU32::new(0)),
             last_error: Arc::new(Mutex::new(None)),
+            session_cleanup_tx,
         }
     }
 
     fn record_error(&self, message: String) {
         if let Ok(mut slot) = self.last_error.lock() {
             *slot = Some(message);
+        }
+    }
+
+    fn mark_session_cleaned_up(&self) {
+        self.session_cleanup_tx.send_replace(true);
+    }
+
+    async fn wait_for_session_cleanup(&self) {
+        let mut cleanup = self.session_cleanup_tx.subscribe();
+        while !*cleanup.borrow_and_update() {
+            if cleanup.changed().await.is_err() {
+                break;
+            }
         }
     }
 }
@@ -392,6 +559,15 @@ struct TunnelHandler {
     counters: Counters,
 }
 
+impl Drop for TunnelHandler {
+    fn drop(&mut self) {
+        // russh skips Handler::disconnected when transport shutdown itself
+        // errors. Handler drop is still after its transport halves leave the
+        // session runner, so it closes that exceptional cleanup path.
+        self.counters.mark_session_cleaned_up();
+    }
+}
+
 impl client::Handler for TunnelHandler {
     type Error = russh::Error;
 
@@ -400,6 +576,20 @@ impl client::Handler for TunnelHandler {
         server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         self.trust.check_server_key(server_public_key).await
+    }
+
+    async fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        // russh invokes this after stream_write.shutdown(). This notification,
+        // rather than Handle::is_closed(), is the safe immediate-restart
+        // fence for remote forwards whose explicit cancellation timed out.
+        self.counters.mark_session_cleaned_up();
+        match reason {
+            client::DisconnectReason::ReceivedDisconnect(_) => Ok(()),
+            client::DisconnectReason::Error(error) => Err(error),
+        }
     }
 
     async fn server_channel_open_forwarded_tcpip(
@@ -583,12 +773,11 @@ pub async fn start_tunnel(
     known: Option<HostKeyRecord>,
 ) -> Result<TunnelStatusSummary, String> {
     validate_request(&request)?;
-    if registry.is_running(&request.tunnel_id) {
-        return Err(format!(
-            "connect:tunnel '{}' is already running",
-            request.tunnel_id
-        ));
-    }
+    // Claim the id before binding or contacting the SSH host. In particular,
+    // two concurrent remote-forward starts must not both reach the server and
+    // discover the collision only when the registry is updated afterward.
+    let reservation = registry.reserve_start(&request.tunnel_id)?;
+    let generation = reservation.generation();
 
     // Bind first: a port squatted by another process should fail fast, before
     // any network round trip to the SSH host.
@@ -619,10 +808,10 @@ pub async fn start_tunnel(
     }
 
     let (stop_tx, mut stop_rx) = broadcast::channel(1);
+    let (completion_tx, _) = watch::channel(false);
     let started_at = Some(now_epoch_secs());
-    let generation = registry.generations.fetch_add(1, Ordering::Relaxed) + 1;
 
-    registry.register(ActiveTunnel {
+    reservation.commit(ActiveTunnel {
         tunnel_id: request.tunnel_id.clone(),
         status: TunnelStatus::Active,
         generation,
@@ -632,6 +821,7 @@ pub async fn start_tunnel(
         started_at,
         last_error: Arc::clone(&counters.last_error),
         stop_tx: Some(stop_tx),
+        completion_tx,
     })?;
 
     let summary = TunnelStatusSummary {
@@ -691,9 +881,26 @@ pub async fn start_tunnel(
         // terminal status. Without this explicit ordering, an immediate
         // restart can race the worker closure dropping its listener.
         drop(listener);
+
+        // A remote forwarding request survives independently on the SSH
+        // server until it is explicitly cancelled or the session is truly
+        // closed. Bound the polite cancellation request, then disconnect and
+        // retain registry ownership until russh confirms that its session
+        // task has closed. Handle::disconnect only enqueues a message.
+        if request.tunnel_type == TunnelType::Remote && !session.is_closed() {
+            let _ = tokio::time::timeout(
+                REMOTE_FORWARD_CANCEL_TIMEOUT,
+                session.cancel_tcpip_forward(
+                    request.local_host.clone(),
+                    u32::from(request.local_port),
+                ),
+            )
+            .await;
+        }
         let _ = session
             .disconnect(Disconnect::ByApplication, "tunnel stopped", "")
             .await;
+        counters.wait_for_session_cleanup().await;
         registry_task.finish(&request.tunnel_id, generation, outcome.0, outcome.1);
     });
 
@@ -774,8 +981,10 @@ fn spawn_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use russh::client::Handler as _;
 
     fn entry(tunnel_id: &str, generation: u64) -> ActiveTunnel {
+        let (completion_tx, _) = watch::channel(false);
         ActiveTunnel {
             tunnel_id: tunnel_id.to_string(),
             status: TunnelStatus::Active,
@@ -786,6 +995,7 @@ mod tests {
             started_at: Some(1),
             last_error: Arc::new(Mutex::new(None)),
             stop_tx: Some(broadcast::channel(1).0),
+            completion_tx,
         }
     }
 
@@ -804,29 +1014,115 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stopping_a_registered_tunnel_marks_it_stopped() {
-        let registry = TunnelRegistry::new();
-        registry.register(entry("t1", 1)).unwrap();
+    #[tokio::test]
+    async fn handler_disconnection_opens_the_transport_cleanup_fence() {
+        let counters = Counters::new();
+        let waiting_counters = counters.clone();
+        let waiting = tokio::spawn(async move {
+            waiting_counters.wait_for_session_cleanup().await;
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
 
-        registry.stop("t1").unwrap();
+        let mut handler = TunnelHandler {
+            trust: TrustingHandler {
+                host: "gateway.internal".into(),
+                port: 22,
+                known: None,
+                verdict: Arc::new(Mutex::new(None)),
+            },
+            forward_target: None,
+            counters,
+        };
+        handler
+            .disconnected(client::DisconnectReason::ReceivedDisconnect(
+                client::RemoteDisconnectInfo {
+                    reason_code: Disconnect::ByApplication,
+                    message: "done".into(),
+                    lang_tag: String::new(),
+                },
+            ))
+            .await
+            .unwrap();
 
-        let status = registry.status("t1").unwrap();
-        assert_eq!(status.status, TunnelStatus::Stopped);
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("cleanup waiter should be released")
+            .expect("cleanup waiter should not panic");
+    }
+
+    #[tokio::test]
+    async fn stop_waits_for_worker_cleanup_before_allowing_a_restart() {
+        let registry = Arc::new(TunnelRegistry::new());
+        let active = entry("t1", 1);
+        let mut stop_rx = active.stop_tx.as_ref().unwrap().subscribe();
+        registry.register(active).unwrap();
+        registry.generations.store(1, Ordering::Relaxed);
+
+        let stopping_registry = Arc::clone(&registry);
+        let stopping = tokio::spawn(async move { stopping_registry.stop("t1").await });
+        tokio::time::timeout(Duration::from_secs(1), stop_rx.recv())
+            .await
+            .expect("stop request should reach the worker")
+            .expect("stop signal should remain open");
+
+        // Stop has returned a signal, but restart remains blocked until the
+        // worker confirms that its listener and SSH session are gone.
+        assert_eq!(registry.status("t1").unwrap().status, TunnelStatus::Active);
+        assert!(registry.is_running("t1"));
+        assert!(registry.reserve_start("t1").is_err());
+
+        registry.finish("t1", 1, TunnelStatus::Stopped, None);
+        stopping.await.unwrap().unwrap();
         assert!(!registry.is_running("t1"));
+
+        let restart = registry.reserve_start("t1").unwrap();
+        assert_eq!(restart.generation(), 2);
     }
 
     #[test]
-    fn stopping_an_unknown_tunnel_reports_it() {
+    fn shutdown_seals_starts_without_losing_a_reserved_previous_summary() {
+        let registry = Arc::new(TunnelRegistry::new());
+        registry.register(entry("t1", 7)).unwrap();
+        registry.finish(
+            "t1",
+            7,
+            TunnelStatus::Error,
+            Some("connect:old failure".into()),
+        );
+        registry.generations.store(7, Ordering::Relaxed);
+
+        let reservation = registry.reserve_start("t1").unwrap();
+        let generation = reservation.generation();
+        registry.stop_all();
+
+        assert_eq!(
+            registry.status("t1").unwrap().status,
+            TunnelStatus::Starting
+        );
+        assert!(reservation.commit(entry("t1", generation)).is_err());
+
+        let restored = registry.status("t1").unwrap();
+        assert_eq!(restored.status, TunnelStatus::Error);
+        assert_eq!(restored.last_error.as_deref(), Some("connect:old failure"));
+        assert!(registry.reserve_start("t2").is_err());
+    }
+
+    #[tokio::test]
+    async fn stopping_an_unknown_tunnel_reports_it() {
         let registry = TunnelRegistry::new();
-        assert!(registry.stop("missing").unwrap_err().contains("missing"));
+        assert!(registry
+            .stop("missing")
+            .await
+            .unwrap_err()
+            .contains("missing"));
     }
 
     #[test]
     fn a_stale_run_cannot_overwrite_a_restarted_tunnel() {
         let registry = TunnelRegistry::new();
         registry.register(entry("t1", 1)).unwrap();
-        registry.stop("t1").unwrap();
+        registry.finish("t1", 1, TunnelStatus::Stopped, None);
         // The tunnel restarts: same id, new generation.
         registry.register(entry("t1", 2)).unwrap();
 
@@ -865,6 +1161,60 @@ mod tests {
         assert!(!registry.is_running("t1"));
 
         registry.register(entry("t1", 2)).unwrap();
+        assert!(registry.is_running("t1"));
+        assert_eq!(registry.status("t1").unwrap().status, TunnelStatus::Active);
+    }
+
+    #[test]
+    fn a_start_reservation_blocks_concurrent_side_effects_and_cleans_up() {
+        let registry = Arc::new(TunnelRegistry::new());
+        let reservation = registry.reserve_start("t1").unwrap();
+
+        assert!(registry.is_running("t1"));
+        assert_eq!(
+            registry.status("t1").unwrap().status,
+            TunnelStatus::Starting
+        );
+        assert!(registry.reserve_start("t1").is_err());
+        assert!(registry.register(entry("t1", 99)).is_err());
+
+        drop(reservation);
+        assert!(!registry.is_running("t1"));
+        assert!(registry.status("t1").is_none());
+    }
+
+    #[test]
+    fn a_failed_start_restores_the_previous_terminal_summary() {
+        let registry = Arc::new(TunnelRegistry::new());
+        registry.register(entry("t1", 7)).unwrap();
+        registry.finish(
+            "t1",
+            7,
+            TunnelStatus::Error,
+            Some("connect:old failure".into()),
+        );
+        registry.generations.store(7, Ordering::Relaxed);
+
+        let reservation = registry.reserve_start("t1").unwrap();
+        assert_eq!(
+            registry.status("t1").unwrap().status,
+            TunnelStatus::Starting
+        );
+        drop(reservation);
+
+        let restored = registry.status("t1").unwrap();
+        assert_eq!(restored.status, TunnelStatus::Error);
+        assert_eq!(restored.last_error.as_deref(), Some("connect:old failure"));
+    }
+
+    #[test]
+    fn only_the_matching_reservation_can_publish_an_active_run() {
+        let registry = Arc::new(TunnelRegistry::new());
+        let reservation = registry.reserve_start("t1").unwrap();
+        let generation = reservation.generation();
+
+        reservation.commit(entry("t1", generation)).unwrap();
+
         assert!(registry.is_running("t1"));
         assert_eq!(registry.status("t1").unwrap().status, TunnelStatus::Active);
     }
