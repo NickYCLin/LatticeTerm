@@ -2322,7 +2322,6 @@ mod tests {
             domain: None,
             width: 1280,
             height: 720,
-            trusted_certificate_sha256: None,
         };
         bind_rdp_request_to_profile(&mut rdp, &saved_profile("profile-rdp", Protocol::Rdp))
             .unwrap();

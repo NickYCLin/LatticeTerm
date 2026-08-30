@@ -16,10 +16,14 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(desktop)]
+use tauri::Manager;
 use tauri::{AppHandle, Emitter};
+#[cfg(not(target_os = "linux"))]
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{oneshot, watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{sleep, timeout};
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
@@ -27,7 +31,7 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 static NEXT_RESERVATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RdpConnectRequest {
     pub profile_id: String,
     pub hostname: String,
@@ -42,7 +46,6 @@ pub struct RdpConnectRequest {
     pub domain: Option<String>,
     pub width: u16,
     pub height: u16,
-    pub trusted_certificate_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,10 +71,6 @@ pub enum RdpConnectOutcome {
     Connected {
         #[serde(flatten)]
         session: RdpSessionSummary,
-    },
-    CertificateUnknown {
-        fingerprint_sha256: String,
-        detail: String,
     },
     Failed {
         stage: &'static str,
@@ -169,6 +168,7 @@ struct RdpRegistryState {
 pub struct RdpRegistry {
     state: Mutex<RdpRegistryState>,
     admission: Arc<Semaphore>,
+    certificate_prompt_admission: Arc<Semaphore>,
 }
 
 impl Default for RdpRegistry {
@@ -176,6 +176,7 @@ impl Default for RdpRegistry {
         Self {
             state: Mutex::new(RdpRegistryState::default()),
             admission: desktop_sidecar_admission(),
+            certificate_prompt_admission: Arc::new(Semaphore::new(1)),
         }
     }
 }
@@ -216,6 +217,7 @@ impl RdpRegistry {
         Self {
             state: Mutex::new(RdpRegistryState::default()),
             admission,
+            certificate_prompt_admission: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -492,6 +494,284 @@ fn spawn_engine() -> Result<(Child, BoxedSidecarStdin, tokio::process::ChildStdo
     Ok((child, boxed_sidecar_stdin(stdin), stdout))
 }
 
+type EngineLines = tokio::io::Lines<BufReader<tokio::process::ChildStdout>>;
+
+struct ConnectedEngine {
+    child: Child,
+    stdin: BoxedSidecarStdin,
+    lines: EngineLines,
+    width: u16,
+    height: u16,
+}
+
+enum EngineStartOutcome {
+    Connected(Box<ConnectedEngine>),
+    CertificateUnknown { fingerprint_sha256: String },
+    Failed { stage: &'static str, detail: String },
+}
+
+fn canonical_certificate_fingerprint(value: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.len() != 32
+        || parts.iter().any(|part| {
+            part.len() != 2 || !part.chars().all(|character| character.is_ascii_hexdigit())
+        })
+    {
+        return None;
+    }
+
+    let parts: Vec<String> = parts
+        .into_iter()
+        .map(|part| part.to_ascii_uppercase())
+        .collect();
+    Some((parts.join(":"), parts.concat()))
+}
+
+#[cfg(target_os = "linux")]
+fn show_certificate_dialog(
+    app: &AppHandle,
+    message: String,
+    sender: oneshot::Sender<bool>,
+    prompt_permit: OwnedSemaphorePermit,
+) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or_else(|| {
+        "The main window is unavailable for certificate confirmation.".to_string()
+    })?;
+    let main_window = window.clone();
+    window
+        .run_on_main_thread(move || {
+            use gtk::prelude::{DialogExt as _, GtkWindowExt as _, WidgetExt as _};
+            use std::cell::RefCell;
+            use std::rc::Rc;
+
+            let parent = match main_window.gtk_window() {
+                Ok(parent) => parent,
+                Err(_) => {
+                    drop(prompt_permit);
+                    let _ = sender.send(false);
+                    return;
+                }
+            };
+            let dialog = gtk::MessageDialog::new(
+                Some(&parent),
+                gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+                gtk::MessageType::Warning,
+                gtk::ButtonsType::None,
+                &message,
+            );
+            dialog.set_title("Confirm RDP server identity");
+            dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+            dialog.add_button("Trust for this connection", gtk::ResponseType::Accept);
+            dialog.set_default_response(gtk::ResponseType::Cancel);
+
+            let completion = Rc::new(RefCell::new(Some((sender, prompt_permit))));
+            let response_completion = Rc::clone(&completion);
+            dialog.connect_response(move |dialog, response| {
+                if let Some((sender, permit)) = response_completion.borrow_mut().take() {
+                    drop(permit);
+                    let _ = sender.send(response == gtk::ResponseType::Accept);
+                }
+                dialog.close();
+            });
+            dialog.connect_destroy(move |_| {
+                if let Some((sender, permit)) = completion.borrow_mut().take() {
+                    drop(permit);
+                    let _ = sender.send(false);
+                }
+            });
+            dialog.show_all();
+        })
+        .map_err(|error| format!("Could not open the certificate confirmation: {error}"))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn show_certificate_dialog(
+    app: &AppHandle,
+    message: String,
+    sender: oneshot::Sender<bool>,
+    prompt_permit: OwnedSemaphorePermit,
+) -> Result<(), String> {
+    let mut dialog = app
+        .dialog()
+        .message(message)
+        .title("Confirm RDP server identity")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Trust for this connection".to_string(),
+            "Cancel".to_string(),
+        ));
+    #[cfg(desktop)]
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.parent(&window);
+    }
+    dialog.show(move |approved| {
+        drop(prompt_permit);
+        let _ = sender.send(approved);
+    });
+    Ok(())
+}
+
+async fn confirm_certificate(
+    app: &AppHandle,
+    registry: &RdpRegistry,
+    reservation: &mut RdpConnectReservation,
+    request: &RdpConnectRequest,
+    fingerprint: &str,
+) -> Result<bool, String> {
+    let prompt_permit = Arc::clone(&registry.certificate_prompt_admission)
+        .try_acquire_owned()
+        .map_err(|_| {
+            "Another host identity confirmation is already open. Close it before trying again."
+                .to_string()
+        })?;
+    let message = format!(
+        "LatticeTerm observed an untrusted RDP certificate during this connection attempt.\n\nTarget: {}:{}\nSHA-256 fingerprint:\n{}\n\nTrust it only after verifying this exact fingerprint through an independent channel.",
+        request.hostname, request.port, fingerprint
+    );
+    let (sender, receiver) = oneshot::channel();
+    show_certificate_dialog(app, message, sender, prompt_permit)?;
+
+    let approved = receiver
+        .await
+        .map_err(|_| "The certificate confirmation dialog closed unexpectedly.".to_string())?;
+    if reservation
+        .stop_receiver
+        .as_ref()
+        .is_none_or(|stop| *stop.borrow())
+    {
+        return Err(
+            "The RDP runtime stopped while certificate confirmation was pending.".to_string(),
+        );
+    }
+    Ok(approved)
+}
+
+async fn start_engine_attempt(
+    reservation: &mut RdpConnectReservation,
+    request: &RdpConnectRequest,
+    trusted_certificate_sha256: Option<String>,
+) -> EngineStartOutcome {
+    let (mut child, mut stdin, stdout) = match spawn_engine() {
+        Ok(parts) => parts,
+        Err(error) => {
+            return EngineStartOutcome::Failed {
+                stage: "engine",
+                detail: error,
+            }
+        }
+    };
+    let command = EngineCommand::Connect {
+        hostname: request.hostname.clone(),
+        port: request.port,
+        username: request.username.clone(),
+        password: request.password.clone(),
+        domain: request.domain.clone(),
+        width: request.width.clamp(640, 1920),
+        height: request.height.clamp(480, 1200),
+        trusted_certificate_sha256,
+    };
+    let write_result = tokio::select! {
+        biased;
+        _ = reservation.stopped() => {
+            terminate_sidecar(&mut child).await;
+            return EngineStartOutcome::Failed {
+                stage: "session",
+                detail: "The RDP runtime stopped during connection setup.".to_string(),
+            };
+        }
+        result = write_json_line_timeboxed(
+            &mut *stdin,
+            &command,
+            SIDECAR_COMMAND_TIMEOUT,
+            "The RDP engine stdin",
+        ) => result,
+    };
+    if let Err(error) = write_result {
+        terminate_sidecar(&mut child).await;
+        return EngineStartOutcome::Failed {
+            stage: "engine",
+            detail: error,
+        };
+    }
+
+    let mut lines = BufReader::new(stdout).lines();
+    let first_result = tokio::select! {
+        biased;
+        _ = reservation.stopped() => {
+            terminate_sidecar(&mut child).await;
+            return EngineStartOutcome::Failed {
+                stage: "session",
+                detail: "The RDP runtime stopped during connection setup.".to_string(),
+            };
+        }
+        result = timeout(Duration::from_secs(20), read_event(&mut lines)) => result,
+    };
+    let first = match first_result {
+        Ok(Ok(Some(event))) => event,
+        Ok(Ok(None)) => {
+            wait_for_sidecar_exit(&mut child).await;
+            return EngineStartOutcome::Failed {
+                stage: "engine",
+                detail: "The RDP engine exited before connecting.".to_string(),
+            };
+        }
+        Ok(Err(error)) => {
+            terminate_sidecar(&mut child).await;
+            return EngineStartOutcome::Failed {
+                stage: "engine",
+                detail: error,
+            };
+        }
+        Err(_) => {
+            terminate_sidecar(&mut child).await;
+            return EngineStartOutcome::Failed {
+                stage: "connect",
+                detail: "The RDP server did not answer within 20 seconds.".to_string(),
+            };
+        }
+    };
+
+    match first {
+        EngineEvent::Connected { width, height } => {
+            EngineStartOutcome::Connected(Box::new(ConnectedEngine {
+                child,
+                stdin,
+                lines,
+                width,
+                height,
+            }))
+        }
+        EngineEvent::CertificateUnknown {
+            fingerprint_sha256,
+            detail: _,
+        } => {
+            terminate_sidecar(&mut child).await;
+            EngineStartOutcome::CertificateUnknown { fingerprint_sha256 }
+        }
+        EngineEvent::Failed { stage: _, detail } => {
+            terminate_sidecar(&mut child).await;
+            EngineStartOutcome::Failed {
+                stage: "connect",
+                detail,
+            }
+        }
+        EngineEvent::Closed { reason } => {
+            terminate_sidecar(&mut child).await;
+            EngineStartOutcome::Failed {
+                stage: "connect",
+                detail: reason,
+            }
+        }
+        EngineEvent::Frame { .. } => {
+            terminate_sidecar(&mut child).await;
+            EngineStartOutcome::Failed {
+                stage: "protocol",
+                detail: "The RDP engine sent a frame before it connected.".to_string(),
+            }
+        }
+    }
+}
+
 pub async fn connect(
     app: AppHandle,
     registry: Arc<RdpRegistry>,
@@ -509,94 +789,57 @@ pub async fn connect(
         Err(error) => return failed("session", error),
     };
 
-    let (mut child, mut stdin, stdout) = match spawn_engine() {
-        Ok(parts) => parts,
-        Err(error) => return failed("engine", error),
-    };
-    let command = EngineCommand::Connect {
-        hostname: request.hostname.clone(),
-        port: request.port,
-        username: request.username.clone(),
-        password: request.password,
-        domain: request.domain,
-        width: request.width.clamp(640, 1920),
-        height: request.height.clamp(480, 1200),
-        trusted_certificate_sha256: request.trusted_certificate_sha256,
-    };
-    let write_result = tokio::select! {
-        biased;
-        _ = reservation.stopped() => {
-            terminate_sidecar(&mut child).await;
-            return failed("session", "The RDP runtime stopped during connection setup.");
-        }
-        result = write_json_line_timeboxed(
-            &mut *stdin,
-            &command,
-            SIDECAR_COMMAND_TIMEOUT,
-            "The RDP engine stdin",
-        ) => result,
-    };
-    if let Err(error) = write_result {
-        terminate_sidecar(&mut child).await;
-        return failed("engine", error);
-    }
-
-    let mut lines = BufReader::new(stdout).lines();
-    let first_result = tokio::select! {
-        biased;
-        _ = reservation.stopped() => {
-            terminate_sidecar(&mut child).await;
-            return failed("session", "The RDP runtime stopped during connection setup.");
-        }
-        result = timeout(Duration::from_secs(20), read_event(&mut lines)) => result,
-    };
-    let first = match first_result {
-        Ok(Ok(Some(event))) => event,
-        Ok(Ok(None)) => {
-            wait_for_sidecar_exit(&mut child).await;
-            return failed("engine", "The RDP engine exited before connecting.");
-        }
-        Ok(Err(error)) => {
-            terminate_sidecar(&mut child).await;
-            return failed("engine", error);
-        }
-        Err(_) => {
-            terminate_sidecar(&mut child).await;
-            return failed(
-                "connect",
-                "The RDP server did not answer within 20 seconds.",
-            );
-        }
-    };
-
-    let (width, height) = match first {
-        EngineEvent::Connected { width, height } => (width, height),
-        EngineEvent::CertificateUnknown {
-            fingerprint_sha256,
-            detail,
-        } => {
-            terminate_sidecar(&mut child).await;
-            return RdpConnectOutcome::CertificateUnknown {
-                fingerprint_sha256,
-                detail,
+    let first = start_engine_attempt(&mut reservation, &request, None).await;
+    let connected = match first {
+        EngineStartOutcome::Connected(connected) => connected,
+        EngineStartOutcome::CertificateUnknown { fingerprint_sha256 } => {
+            let Some((display_fingerprint, approved_pin)) =
+                canonical_certificate_fingerprint(&fingerprint_sha256)
+            else {
+                return failed(
+                    "certificate",
+                    "The RDP engine reported an invalid certificate fingerprint.",
+                );
             };
+            match confirm_certificate(
+                &app,
+                &registry,
+                &mut reservation,
+                &request,
+                &display_fingerprint,
+            )
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    return failed(
+                        "certificate",
+                        "The RDP certificate was not trusted by the user.",
+                    )
+                }
+                Err(error) => return failed("certificate", error),
+            }
+
+            match start_engine_attempt(&mut reservation, &request, Some(approved_pin)).await {
+                EngineStartOutcome::Connected(connected) => connected,
+                EngineStartOutcome::CertificateUnknown { .. } => {
+                    return failed(
+                        "certificate",
+                        "The RDP certificate changed while it was being confirmed.",
+                    )
+                }
+                EngineStartOutcome::Failed { stage, detail } => return failed(stage, detail),
+            }
         }
-        EngineEvent::Failed { stage: _, detail } => {
-            terminate_sidecar(&mut child).await;
-            return failed("connect", detail);
-        }
-        EngineEvent::Closed { reason } => {
-            terminate_sidecar(&mut child).await;
-            return failed("connect", reason);
-        }
-        EngineEvent::Frame { .. } => {
-            terminate_sidecar(&mut child).await;
-            return failed(
-                "protocol",
-                "The RDP engine sent a frame before it connected.",
-            );
-        }
+        EngineStartOutcome::Failed { stage, detail } => return failed(stage, detail),
     };
+    let ConnectedEngine {
+        mut child,
+        stdin,
+        mut lines,
+        width,
+        height,
+    } = *connected;
 
     let summary = RdpSessionSummary {
         session_id: session_id(),
@@ -801,22 +1044,8 @@ mod tests {
         assert_ne!(first, second);
     }
 
-    /// The interface reads these payloads by field name, and a mismatch
-    /// fails silently: a certificate fingerprint that arrives as
-    /// `fingerprint_sha256` is simply `undefined` to the dialog, which then
-    /// offers to trust an empty fingerprint forever. Pin the wire shape.
     #[test]
     fn connect_outcomes_use_the_field_names_the_interface_reads() {
-        let unknown = serde_json::to_value(RdpConnectOutcome::CertificateUnknown {
-            fingerprint_sha256: "AA:BB".into(),
-            detail: "self-signed".into(),
-        })
-        .expect("serialize outcome");
-
-        assert_eq!(unknown["outcome"], "certificateUnknown");
-        assert_eq!(unknown["fingerprintSha256"], "AA:BB");
-        assert!(unknown.get("fingerprint_sha256").is_none());
-
         let failed = serde_json::to_value(RdpConnectOutcome::Failed {
             stage: "connect",
             detail: "refused".into(),
@@ -824,6 +1053,62 @@ mod tests {
         .expect("serialize outcome");
         assert_eq!(failed["outcome"], "failed");
         assert_eq!(failed["stage"], "connect");
+    }
+
+    #[test]
+    fn renderer_cannot_supply_an_approved_certificate_pin() {
+        let request = serde_json::json!({
+            "profileId": "rdp-profile",
+            "hostname": "desktop.internal",
+            "port": 3389,
+            "username": "operator",
+            "password": "secret",
+            "useSavedPassword": false,
+            "rememberPassword": false,
+            "domain": null,
+            "width": 1280,
+            "height": 720,
+            "trustedCertificateSha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        });
+
+        let error = serde_json::from_value::<RdpConnectRequest>(request).unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn certificate_fingerprints_must_be_exact_sha256_values() {
+        let observed = (0_u8..32)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(":");
+        let (display, pin) = canonical_certificate_fingerprint(&observed).unwrap();
+
+        assert_eq!(display.split(':').count(), 32);
+        assert_eq!(pin.len(), 64);
+        assert!(display.chars().all(|character| {
+            character == ':' || character.is_ascii_digit() || ('A'..='F').contains(&character)
+        }));
+        assert!(canonical_certificate_fingerprint(&pin).is_none());
+        assert!(canonical_certificate_fingerprint("AA:BB").is_none());
+        assert!(canonical_certificate_fingerprint(
+            "GG:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn only_one_native_certificate_prompt_can_be_open() {
+        let registry = RdpRegistry::new();
+        let first = Arc::clone(&registry.certificate_prompt_admission)
+            .try_acquire_owned()
+            .unwrap();
+        assert!(Arc::clone(&registry.certificate_prompt_admission)
+            .try_acquire_owned()
+            .is_err());
+        drop(first);
+        assert!(Arc::clone(&registry.certificate_prompt_admission)
+            .try_acquire_owned()
+            .is_ok());
     }
 
     #[test]

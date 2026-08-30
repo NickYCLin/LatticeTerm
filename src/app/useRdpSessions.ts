@@ -39,16 +39,10 @@ export interface RdpConnectRequest {
   domain?: string;
   width: number;
   height: number;
-  trustedCertificateSha256?: string;
 }
 
 export type RdpConnectOutcome =
   | ({ outcome: "connected" } & Omit<RdpSessionSummary, "frame">)
-  | {
-      outcome: "certificateUnknown";
-      fingerprintSha256: string;
-      detail: string;
-    }
   | { outcome: "failed"; stage: string; detail: string };
 
 export type RdpInput =

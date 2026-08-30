@@ -28,10 +28,6 @@ export function RdpConnectFlow({
   const [domain, setDomain] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [certificate, setCertificate] = useState<{
-    fingerprint: string;
-    detail: string;
-  } | null>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -57,7 +53,7 @@ export function RdpConnectFlow({
     if (busy) dialogRef.current?.focus();
   }, [busy]);
 
-  async function attempt(trustedCertificateSha256?: string) {
+  async function attempt() {
     if (!profile.username.trim()) {
       setProblem(t("rdp.connect.noUsername"));
       return;
@@ -75,17 +71,11 @@ export function RdpConnectFlow({
       domain: domain.trim() || undefined,
       width: 1280,
       height: 720,
-      trustedCertificateSha256,
     });
     setBusy(false);
     if (outcome.outcome === "connected") {
       setPassword("");
       onConnected(outcome.sessionId);
-    } else if (outcome.outcome === "certificateUnknown") {
-      setCertificate({
-        fingerprint: outcome.fingerprintSha256,
-        detail: outcome.detail,
-      });
     } else {
       if (outcome.stage === "credential" && useSavedPassword) {
         setUseSavedPassword(false);
@@ -165,24 +155,6 @@ export function RdpConnectFlow({
               {problem}
             </Callout>
           )}
-          {certificate && (
-            <Callout tone="warn" title={t("rdp.connect.certificateTitle")}>
-              <div className="rdp-certificate">
-                <span>{t("rdp.connect.certificateBody")}</span>
-                <code>{certificate.fingerprint}</code>
-                <small>{certificate.detail}</small>
-                <button
-                  type="button"
-                  className="button button--danger"
-                  disabled={busy}
-                  onClick={() => void attempt(certificate.fingerprint)}
-                >
-                  {t("rdp.connect.trustOnce")}
-                </button>
-              </div>
-            </Callout>
-          )}
-
           {savedCredential.state.mode === "saved" && (
             <Callout tone="security" title={t("credential.saved.title")}>
               <div className="credential-choice">

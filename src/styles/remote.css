@@ -485,26 +485,6 @@
   color: var(--warn);
 }
 
-.rdp-certificate {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.rdp-certificate code {
-  overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: var(--text-xs);
-  line-height: 1.6;
-}
-
-.rdp-certificate small {
-  color: var(--text-faint);
-}
-
-.rdp-certificate .button {
-  justify-self: start;
-}
-
 .remote-host-dialog {
   max-width: 42rem;
 }

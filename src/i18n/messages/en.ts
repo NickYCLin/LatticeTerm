@@ -1153,10 +1153,6 @@ export const en: Messages = {
   "rdp.connect.connecting": "Verifying and connecting…",
   "rdp.connect.failedTitle": "Web RDP could not connect",
   "rdp.connect.failedBody": "Stage: {stage}. {detail}",
-  "rdp.connect.certificateTitle": "The RDP host certificate is not system-trusted",
-  "rdp.connect.certificateBody":
-    "Compare this SHA-256 fingerprint over another trusted channel. Approval applies only to this connection attempt.",
-  "rdp.connect.trustOnce": "Trust this fingerprint and retry",
   "rdp.session.secure": "TLS / NLA encrypted",
   "rdp.session.interactive": "Interactive",
   "rdp.session.canvasLabel": "Interactive RDP display for {host}",
