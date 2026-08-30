@@ -180,6 +180,11 @@ impl TunnelRegistry {
         if let Ok(mut guard) = self.tunnels.lock() {
             if let Some(tunnel) = guard.get_mut(tunnel_id) {
                 if tunnel.generation == generation {
+                    // The sender is also the registry's running marker. A
+                    // worker that ends by itself must clear it just like an
+                    // explicit stop, otherwise the UI offers Restart while a
+                    // later start is rejected as "already running".
+                    tunnel.stop_tx.take();
                     tunnel.status = status;
                     tunnel.active_connections.store(0, Ordering::Relaxed);
                     if error.is_some() {
@@ -682,6 +687,10 @@ pub async fn start_tunnel(
             }
         }
 
+        // Release a local/dynamic bind before publishing the restartable
+        // terminal status. Without this explicit ordering, an immediate
+        // restart can race the worker closure dropping its listener.
+        drop(listener);
         let _ = session
             .disconnect(Disconnect::ByApplication, "tunnel stopped", "")
             .await;
@@ -827,10 +836,37 @@ mod tests {
         let status = registry.status("t1").unwrap();
         assert_eq!(status.status, TunnelStatus::Active);
         assert!(status.last_error.is_none());
+        assert!(registry.is_running("t1"));
 
         // The current run's ending is still recorded normally.
         registry.finish("t1", 2, TunnelStatus::Stopped, None);
         assert_eq!(registry.status("t1").unwrap().status, TunnelStatus::Stopped);
+        assert!(!registry.is_running("t1"));
+    }
+
+    #[test]
+    fn a_run_that_ends_with_an_error_can_restart() {
+        let registry = TunnelRegistry::new();
+        registry.register(entry("t1", 1)).unwrap();
+
+        registry.finish(
+            "t1",
+            1,
+            TunnelStatus::Error,
+            Some("connect:the SSH connection dropped".into()),
+        );
+
+        let failed = registry.status("t1").unwrap();
+        assert_eq!(failed.status, TunnelStatus::Error);
+        assert_eq!(
+            failed.last_error.as_deref(),
+            Some("connect:the SSH connection dropped")
+        );
+        assert!(!registry.is_running("t1"));
+
+        registry.register(entry("t1", 2)).unwrap();
+        assert!(registry.is_running("t1"));
+        assert_eq!(registry.status("t1").unwrap().status, TunnelStatus::Active);
     }
 
     #[test]
