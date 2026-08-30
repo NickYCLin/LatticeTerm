@@ -16,18 +16,20 @@ use lattice_remote::{
     SecureConnection, MAX_WHEEL_UNITS, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 use tokio::time::timeout;
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+const MAX_REMOTE_SESSIONS: usize = 32;
+const REMOTE_TERMINAL_TAIL_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,6 +66,15 @@ pub struct RemoteSessionSummary {
     pub file_root_label: String,
     /// True when the agent shares a shell (headless host) instead of a display.
     pub terminal: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTerminalSnapshot {
+    pub session_id: String,
+    pub start_offset: u64,
+    pub end_offset: u64,
+    pub base64: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,9 +141,74 @@ struct RemoteClosedEvent {
 #[serde(rename_all = "camelCase")]
 struct RemoteTerminalEvent {
     session_id: String,
+    /// Absolute byte offset of the first byte in this chunk.
+    offset: u64,
     /// Raw PTY bytes; base64 keeps multi-byte characters split across reads
     /// intact until the frontend decodes them.
     base64: String,
+}
+
+#[derive(Debug, Default)]
+struct RemoteTerminalOutput {
+    start_offset: u64,
+    end_offset: u64,
+    bytes: VecDeque<u8>,
+}
+
+impl RemoteTerminalOutput {
+    fn append(&mut self, bytes: &[u8]) -> Result<u64, String> {
+        let offset = self.end_offset;
+        let chunk_len = u64::try_from(bytes.len())
+            .map_err(|_| "The remote terminal chunk is too large.".to_string())?;
+        let end_offset = self
+            .end_offset
+            .checked_add(chunk_len)
+            .ok_or_else(|| "The remote terminal output offset overflowed.".to_string())?;
+        self.end_offset = end_offset;
+        self.bytes.extend(bytes.iter().copied());
+
+        let overflow = self.bytes.len().saturating_sub(REMOTE_TERMINAL_TAIL_BYTES);
+        if overflow > 0 {
+            self.bytes.drain(..overflow);
+        }
+        // The retained length is capped at 256 KiB and therefore always fits.
+        self.start_offset = self.end_offset - self.bytes.len() as u64;
+        Ok(offset)
+    }
+
+    fn snapshot(&self, session_id: String) -> RemoteTerminalSnapshot {
+        RemoteTerminalSnapshot {
+            session_id,
+            start_offset: self.start_offset,
+            end_offset: self.end_offset,
+            base64: BASE64.encode(self.bytes.iter().copied().collect::<Vec<_>>()),
+        }
+    }
+}
+
+struct RemoteReaderStart {
+    sender: oneshot::Sender<()>,
+}
+
+struct RemoteReaderGate {
+    receiver: oneshot::Receiver<()>,
+}
+
+fn remote_reader_start_gate() -> (RemoteReaderStart, RemoteReaderGate) {
+    let (sender, receiver) = oneshot::channel();
+    (RemoteReaderStart { sender }, RemoteReaderGate { receiver })
+}
+
+impl RemoteReaderStart {
+    fn open(self) -> Result<(), ()> {
+        self.sender.send(())
+    }
+}
+
+impl RemoteReaderGate {
+    async fn wait(self) -> Result<(), ()> {
+        self.receiver.await.map_err(|_| ())
+    }
 }
 
 struct RemoteSessionRecord {
@@ -140,6 +216,7 @@ struct RemoteSessionRecord {
     abort: AbortHandle,
     outbound: mpsc::Sender<RemoteMessage>,
     files: Option<Arc<RemoteFilesClient>>,
+    terminal_output: Option<RemoteTerminalOutput>,
 }
 
 #[derive(Clone)]
@@ -166,19 +243,42 @@ impl RemoteRegistry {
         outbound: mpsc::Sender<RemoteMessage>,
         files: Option<Arc<RemoteFilesClient>>,
     ) -> Result<(), String> {
-        self.sessions
-            .lock()
-            .map_err(|error| error.to_string())?
-            .insert(
-                summary.session_id.clone(),
-                RemoteSessionRecord {
-                    summary,
-                    abort,
-                    outbound,
-                    files,
-                },
-            );
+        let mut sessions = self.sessions.lock().map_err(|error| error.to_string())?;
+        if sessions.contains_key(&summary.session_id) {
+            return Err(format!(
+                "Lattice Remote session '{}' is already connected.",
+                summary.session_id
+            ));
+        }
+        if sessions.len() >= MAX_REMOTE_SESSIONS {
+            return Err(format!(
+                "At most {MAX_REMOTE_SESSIONS} Lattice Remote sessions can be connected at once."
+            ));
+        }
+
+        let terminal_output = summary.terminal.then(RemoteTerminalOutput::default);
+        sessions.insert(
+            summary.session_id.clone(),
+            RemoteSessionRecord {
+                summary,
+                abort,
+                outbound,
+                files,
+                terminal_output,
+            },
+        );
         Ok(())
+    }
+
+    fn append_terminal(&self, session_id: &str, bytes: &[u8]) -> Result<u64, String> {
+        let mut sessions = self.sessions.lock().map_err(|error| error.to_string())?;
+        let record = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| format!("Lattice Remote session '{session_id}' is not connected."))?;
+        let output = record.terminal_output.as_mut().ok_or_else(|| {
+            "The Agent sent terminal data without advertising a terminal session.".to_string()
+        })?;
+        output.append(bytes)
     }
 
     fn access(&self, session_id: &str) -> Result<RemoteSessionAccess, String> {
@@ -212,6 +312,21 @@ impl RemoteRegistry {
             .collect();
         summaries.sort_by(|left, right| left.session_id.cmp(&right.session_id));
         summaries
+    }
+
+    pub fn terminal_snapshots(&self) -> Result<Vec<RemoteTerminalSnapshot>, String> {
+        let sessions = self.sessions.lock().map_err(|error| error.to_string())?;
+        let mut snapshots: Vec<_> = sessions
+            .iter()
+            .filter_map(|(session_id, record)| {
+                record
+                    .terminal_output
+                    .as_ref()
+                    .map(|output| output.snapshot(session_id.clone()))
+            })
+            .collect();
+        snapshots.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        Ok(snapshots)
     }
 
     pub fn transfers(&self) -> Vec<RemoteFileTransfer> {
@@ -433,7 +548,11 @@ pub async fn connect(
     let task_app = app.clone();
     let task_files = files.clone();
     let writer_abort = writer.abort_handle();
+    let (reader_start, reader_gate) = remote_reader_start_gate();
     let task = tokio::spawn(async move {
+        if reader_gate.wait().await.is_err() {
+            return;
+        }
         let mut assembler = FrameAssembler::new();
         let reason = loop {
             match reader.receive().await {
@@ -458,8 +577,13 @@ pub async fn connect(
                     Err(error) => break format!("Invalid frame stream: {error}"),
                 },
                 Ok(RemoteMessage::TerminalData { bytes }) => {
+                    let offset = match task_registry.append_terminal(&task_session_id, &bytes) {
+                        Ok(offset) => offset,
+                        Err(error) => break error,
+                    };
                     let payload = RemoteTerminalEvent {
                         session_id: task_session_id.clone(),
+                        offset,
                         base64: BASE64.encode(bytes),
                     };
                     if task_app.emit("remote://terminal-data", payload).is_err() {
@@ -492,19 +616,29 @@ pub async fn connect(
         if let Some(files) = &task_files {
             files.close(&reason);
         }
-        let _ = task_registry.remove(&task_session_id);
-        let _ = task_app.emit(
-            "remote://closed",
-            RemoteClosedEvent {
-                session_id: task_session_id,
-                reason,
-            },
-        );
+        // Only the path that actually removes the live record owns the closed
+        // event. A concurrent local disconnect removes first and emits its own
+        // reason, so the reader must not send a later duplicate.
+        if matches!(task_registry.remove(&task_session_id), Ok(Some(_))) {
+            let _ = task_app.emit(
+                "remote://closed",
+                RemoteClosedEvent {
+                    session_id: task_session_id,
+                    reason,
+                },
+            );
+        }
     });
     if let Err(error) = registry.insert(session.clone(), task.abort_handle(), outbound, files) {
         task.abort();
         writer.abort();
         return failed("session", error);
+    }
+    if reader_start.open().is_err() {
+        let _ = registry.remove(&session.session_id);
+        task.abort();
+        writer.abort();
+        return failed("session", "The remote reader could not be started.");
     }
 
     RemoteConnectOutcome::Connected { session }
@@ -736,7 +870,9 @@ pub async fn disconnect(
 mod tests {
     use super::*;
     use lattice_remote::relay::DeviceIdentity;
+    use std::future::pending;
     use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::Barrier;
 
     fn hello(protocol_version: u16) -> RemoteHello {
         RemoteHello {
@@ -748,6 +884,23 @@ mod tests {
             file_transfer: false,
             file_root_label: String::new(),
             terminal: true,
+        }
+    }
+
+    fn remote_summary(session_id: impl Into<String>, terminal: bool) -> RemoteSessionSummary {
+        RemoteSessionSummary {
+            session_id: session_id.into(),
+            profile_id: "test-profile".to_string(),
+            host: "test-host".to_string(),
+            port: 443,
+            via_relay: true,
+            agent_name: "Test Agent".to_string(),
+            width: 80,
+            height: 24,
+            view_only: false,
+            file_transfer: false,
+            file_root_label: String::new(),
+            terminal,
         }
     }
 
@@ -767,6 +920,182 @@ mod tests {
         let second = session_id();
         assert!(first.starts_with("remote-"));
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn terminal_output_tracks_absolute_offsets_and_keeps_a_bounded_tail() {
+        let mut output = RemoteTerminalOutput::default();
+        assert_eq!(output.append(b"abc").unwrap(), 0);
+        assert_eq!(output.append(b"def").unwrap(), 3);
+
+        let snapshot = output.snapshot("remote-test".to_string());
+        assert_eq!(snapshot.start_offset, 0);
+        assert_eq!(snapshot.end_offset, 6);
+        assert_eq!(BASE64.decode(snapshot.base64).unwrap(), b"abcdef");
+
+        let mut output = RemoteTerminalOutput::default();
+        let prefix = vec![b'x'; REMOTE_TERMINAL_TAIL_BYTES - 2];
+        assert_eq!(output.append(&prefix).unwrap(), 0);
+        assert_eq!(
+            output.append(b"wxyz").unwrap(),
+            u64::try_from(REMOTE_TERMINAL_TAIL_BYTES - 2).unwrap()
+        );
+
+        let snapshot = output.snapshot("remote-tail".to_string());
+        assert_eq!(snapshot.start_offset, 2);
+        assert_eq!(
+            snapshot.end_offset,
+            u64::try_from(REMOTE_TERMINAL_TAIL_BYTES + 2).unwrap()
+        );
+        let retained = BASE64.decode(snapshot.base64).unwrap();
+        assert_eq!(retained.len(), REMOTE_TERMINAL_TAIL_BYTES);
+        assert_eq!(&retained[retained.len() - 4..], b"wxyz");
+    }
+
+    #[test]
+    fn terminal_output_rejects_offset_overflow_without_mutating_the_tail() {
+        let mut output = RemoteTerminalOutput {
+            start_offset: u64::MAX,
+            end_offset: u64::MAX,
+            bytes: VecDeque::new(),
+        };
+
+        assert!(output.append(b"x").is_err());
+        assert_eq!(output.start_offset, u64::MAX);
+        assert_eq!(output.end_offset, u64::MAX);
+        assert!(output.bytes.is_empty());
+    }
+
+    #[test]
+    fn terminal_event_and_snapshot_serialize_with_offsets() {
+        let event = RemoteTerminalEvent {
+            session_id: "remote-event".to_string(),
+            offset: 42,
+            base64: "YWJj".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "sessionId": "remote-event",
+                "offset": 42,
+                "base64": "YWJj"
+            })
+        );
+
+        let snapshot = RemoteTerminalSnapshot {
+            session_id: "remote-snapshot".to_string(),
+            start_offset: 40,
+            end_offset: 43,
+            base64: "YWJj".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap(),
+            serde_json::json!({
+                "sessionId": "remote-snapshot",
+                "startOffset": 40,
+                "endOffset": 43,
+                "base64": "YWJj"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn reader_waits_until_its_start_gate_opens() {
+        let (start, gate) = remote_reader_start_gate();
+        let passed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task_passed = Arc::clone(&passed);
+        let waiter = tokio::spawn(async move {
+            gate.wait().await.unwrap();
+            task_passed.store(true, Ordering::SeqCst);
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!passed.load(Ordering::SeqCst));
+        start.open().unwrap();
+        waiter.await.unwrap();
+        assert!(passed.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn registry_enforces_the_remote_session_limit_atomically() {
+        let registry = Arc::new(RemoteRegistry::new());
+        let attempts = MAX_REMOTE_SESSIONS + 16;
+        let barrier = Arc::new(Barrier::new(attempts));
+        let mut insertions = Vec::with_capacity(attempts);
+
+        for index in 0..attempts {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            insertions.push(tokio::spawn(async move {
+                let worker = tokio::spawn(pending::<()>());
+                let (outbound, _outbound_rx) = mpsc::channel(1);
+                barrier.wait().await;
+                let result = registry.insert(
+                    remote_summary(format!("remote-limit-{index}"), true),
+                    worker.abort_handle(),
+                    outbound,
+                    None,
+                );
+                if result.is_err() {
+                    worker.abort();
+                }
+                result
+            }));
+        }
+
+        let mut connected = 0;
+        let mut rejected = 0;
+        for insertion in insertions {
+            match insertion.await.unwrap() {
+                Ok(()) => connected += 1,
+                Err(error) => {
+                    assert!(error.contains("At most 32"));
+                    rejected += 1;
+                }
+            }
+        }
+
+        assert_eq!(connected, MAX_REMOTE_SESSIONS);
+        assert_eq!(rejected, attempts - MAX_REMOTE_SESSIONS);
+        assert_eq!(registry.list().len(), MAX_REMOTE_SESSIONS);
+
+        for record in registry.sessions.lock().unwrap().values() {
+            record.abort.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn removing_a_closed_session_drops_its_terminal_snapshot() {
+        let registry = RemoteRegistry::new();
+        let worker = tokio::spawn(pending::<()>());
+        let (outbound, _outbound_rx) = mpsc::channel(1);
+        registry
+            .insert(
+                remote_summary("remote-closed", true),
+                worker.abort_handle(),
+                outbound,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            registry.append_terminal("remote-closed", b"ready").unwrap(),
+            0
+        );
+        assert_eq!(
+            registry.terminal_snapshots().unwrap(),
+            vec![RemoteTerminalSnapshot {
+                session_id: "remote-closed".to_string(),
+                start_offset: 0,
+                end_offset: 5,
+                base64: BASE64.encode(b"ready"),
+            }]
+        );
+
+        let record = registry.remove("remote-closed").unwrap().unwrap();
+        record.abort.abort();
+        assert!(registry.terminal_snapshots().unwrap().is_empty());
+        assert!(registry.append_terminal("remote-closed", b"late").is_err());
+        worker.abort();
     }
 
     #[test]

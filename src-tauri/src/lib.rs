@@ -43,7 +43,7 @@ use crate::rdp::{
 };
 use crate::remote::{
     RemoteConnectOutcome, RemoteConnectRequest, RemoteInputRequest, RemoteRegistry,
-    RemoteSessionSummary,
+    RemoteSessionSummary, RemoteTerminalSnapshot,
 };
 use crate::remote_files::{RemoteDirectory, RemoteFileTransfer};
 use crate::remote_host::{RemoteHostRegistry, RemoteHostStartRequest, RemoteHostStatus};
@@ -1297,6 +1297,13 @@ fn remote_sessions(registry: State<'_, Arc<RemoteRegistry>>) -> Vec<RemoteSessio
 }
 
 #[tauri::command]
+fn remote_terminal_snapshots(
+    registry: State<'_, Arc<RemoteRegistry>>,
+) -> Result<Vec<RemoteTerminalSnapshot>, String> {
+    registry.terminal_snapshots()
+}
+
+#[tauri::command]
 async fn remote_input(
     session_id: String,
     request: RemoteInputRequest,
@@ -1843,6 +1850,7 @@ pub fn run() {
             remote_connect,
             remote_disconnect,
             remote_sessions,
+            remote_terminal_snapshots,
             remote_input,
             remote_terminal_input,
             remote_terminal_resize,

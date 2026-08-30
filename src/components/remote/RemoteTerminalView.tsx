@@ -2,9 +2,8 @@
  * The shell view of a terminal-mode Lattice Remote session.
  *
  * xterm.js owns the screen; this component only moves bytes. Keystrokes go to
- * the backend command, PTY output arrives as base64 events (raw bytes may
- * split multi-byte characters across reads, so they are decoded as a byte
- * stream), and the agent is told whenever the pane changes size.
+ * the backend command, the app-wide Remote hook replays and streams raw PTY
+ * bytes, and the agent is told whenever the pane changes size.
  */
 
 import { useEffect, useRef } from "react";
@@ -26,15 +25,6 @@ import {
 import { nativeTerminalClipboard } from "../terminal/nativeTerminalClipboard";
 import type { ThemeId } from "../../app/themes";
 
-function decodeBase64(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
 export function remoteTerminalClipboardOptions(
   shouldProcessKeyEvent: NonNullable<
     TerminalClipboardOptions["shouldProcessKeyEvent"]
@@ -44,6 +34,14 @@ export function remoteTerminalClipboardOptions(
     ...nativeTerminalClipboard,
     shouldProcessKeyEvent,
   };
+}
+
+export function attachRemoteTerminalOutput(
+  remote: Pick<RemoteApi, "onTerminalData">,
+  sessionId: string,
+  terminal: Pick<Terminal, "write">,
+): () => void {
+  return remote.onTerminalData(sessionId, (bytes) => terminal.write(bytes));
 }
 
 export function RemoteTerminalView({
@@ -135,25 +133,11 @@ export function RemoteTerminalView({
     };
     textarea?.addEventListener("input", handleInput);
 
-    // PTY bytes stream in over one shared event channel, filtered by session.
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        const stop = await listen<{ sessionId: string; base64: string }>(
-          "remote://terminal-data",
-          (event) => {
-            if (event.payload.sessionId !== sessionId) return;
-            terminal.write(decodeBase64(event.payload.base64));
-          },
-        );
-        if (cancelled) stop();
-        else unlisten = stop;
-      } catch {
-        // Browser preview has no Tauri event source.
-      }
-    })();
+    const stopData = attachRemoteTerminalOutput(
+      remoteRef.current,
+      sessionId,
+      terminal,
+    );
 
     const observer = new ResizeObserver(scheduleFit);
     observer.observe(host);
@@ -161,8 +145,7 @@ export function RemoteTerminalView({
     terminal.focus();
 
     return () => {
-      cancelled = true;
-      unlisten?.();
+      stopData();
       observer.disconnect();
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
       textarea?.removeEventListener("input", handleInput);

@@ -24,6 +24,126 @@ fn agent_binary() -> PathBuf {
     path
 }
 
+#[cfg(unix)]
+struct TemporaryShell {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+#[cfg(unix)]
+impl Drop for TemporaryShell {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_dir(&self.directory);
+    }
+}
+
+#[cfg(unix)]
+fn immediate_output_shell(marker: &str) -> TemporaryShell {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after Unix epoch")
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "lattice-terminal-boot-e2e-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&directory).expect("create temporary shell directory");
+    let path = directory.join("shell-wrapper");
+    std::fs::write(
+        &path,
+        format!("#!/bin/sh\nprintf '%s\\r\\n' \"{marker}\"\nexec /bin/sh\n"),
+    )
+    .expect("write temporary shell wrapper");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+        .expect("make temporary shell wrapper executable");
+    TemporaryShell { directory, path }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "spawns a real shell in a PTY; run manually"]
+async fn captures_shell_output_emitted_immediately_after_spawn() {
+    let binary = agent_binary();
+    assert!(
+        binary.is_file(),
+        "build the agent first: cargo build --features agent --bin lattice-agent"
+    );
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after Unix epoch")
+        .as_nanos();
+    let marker = format!("lattice-terminal-boot-{}-{nonce}", std::process::id());
+    let shell = immediate_output_shell(&marker);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve local port");
+    let port = listener.local_addr().expect("local address").port();
+    drop(listener);
+
+    let mut agent = Command::new(&binary)
+        .args([
+            "--json",
+            "--terminal",
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+            "--pair-code",
+            "97531864",
+        ])
+        .env("SHELL", &shell.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn agent");
+
+    let stdout = agent.stdout.take().expect("agent stdout");
+    let mut reader = BufReader::new(stdout);
+    let mut ready = String::new();
+    reader.read_line(&mut ready).expect("read ready line");
+    assert!(ready.contains("\"kind\":\"ready\""), "unexpected: {ready}");
+
+    let mut connection = SecureConnection::connect("127.0.0.1", port, "97531864")
+        .await
+        .expect("connect to agent");
+    match timeout(Duration::from_secs(10), connection.receive())
+        .await
+        .expect("hello timeout")
+        .expect("hello")
+    {
+        RemoteMessage::Hello(hello) => assert!(hello.terminal),
+        other => panic!("expected hello before terminal output, got {other:?}"),
+    }
+
+    let mut seen = String::new();
+    let found = timeout(Duration::from_secs(10), async {
+        loop {
+            match connection.receive().await {
+                Ok(RemoteMessage::TerminalData { bytes }) => {
+                    seen.push_str(&String::from_utf8_lossy(&bytes));
+                    if seen.contains(&marker) {
+                        return true;
+                    }
+                }
+                Ok(RemoteMessage::Close(_)) | Err(_) => return false,
+                Ok(_) => {}
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let _ = connection.send(&RemoteMessage::Close("done".into())).await;
+    let _ = agent.kill();
+    let _ = agent.wait();
+
+    assert!(
+        found,
+        "shell output emitted at spawn was not delivered; saw: {seen}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "spawns a real shell in a PTY; run manually"]
 async fn paired_viewer_types_into_the_remote_shell() {
