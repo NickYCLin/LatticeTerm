@@ -1730,20 +1730,38 @@ async fn tunnel_start(
         );
     }
 
+    // Reserve before keyring I/O. A flood of distinct tunnel ids must not
+    // create an unbounded number of blocking credential jobs before the
+    // tunnel runtime has applied its global admission limit.
+    let mut reservation =
+        crate::tunnel::reserve_tunnel_start(Arc::clone(registry.inner()), &request)?;
     let profile_id = request.profile_id.clone();
-    let password = Zeroizing::new(
-        credential_call(move || crate::credentials::load(&profile_id, CredentialKind::SshPassword))
-            .await
-            .map_err(|detail| format!("credential:{detail}"))?,
-    );
+    let admission = reservation.take_admission_for_credential()?;
+    let mut credential_job = tauri::async_runtime::spawn_blocking(move || {
+        (
+            crate::credentials::load(&profile_id, CredentialKind::SshPassword).map(Zeroizing::new),
+            admission,
+        )
+    });
+    let (password, admission) = tokio::select! {
+        biased;
+        _ = reservation.wait_until_stopped() => {
+            // Dropping a blocking JoinHandle detaches rather than cancels it.
+            // The job itself owns admission, so repeated cancelled starts stay
+            // bounded until their keyring calls have truly returned.
+            drop(credential_job);
+            return Err("connect:tunnel start was cancelled".to_string());
+        }
+        result = &mut credential_job => {
+            result.map_err(|error| {
+                format!("credential:Credential operation did not complete: {error}")
+            })?
+        }
+    };
+    reservation.restore_admission_after_credential(admission)?;
+    let password = password.map_err(|detail| format!("credential:{detail}"))?;
 
-    crate::tunnel::start_tunnel(
-        Arc::clone(registry.inner()),
-        request,
-        password.as_str(),
-        known,
-    )
-    .await
+    crate::tunnel::start_reserved_tunnel(reservation, request, password.as_str(), known).await
 }
 
 #[tauri::command]

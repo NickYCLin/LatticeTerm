@@ -13,21 +13,37 @@
 use crate::hostkeys::{HostKeyRecord, TrustVerdict};
 use crate::ssh::TrustingHandler;
 use russh::client;
-use russh::{Channel, ChannelOpenFailure, Disconnect};
+use russh::{Channel, ChannelMsg, ChannelOpenFailure, Disconnect};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::IpAddr;
+use std::net::Shutdown;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
 
 const MAX_TUNNEL_ID_BYTES: usize = 128;
 const MAX_HOST_BYTES: usize = 253;
+const MAX_ACTIVE_TUNNELS: usize = 16;
+const MAX_GLOBAL_TUNNEL_CONNECTIONS: usize = 128;
+const MAX_CONNECTIONS_PER_TUNNEL: usize = 32;
+const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const SSH_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+const SSH_AUTH_TIMEOUT: Duration = Duration::from_secs(15);
+const LOCAL_BIND_TIMEOUT: Duration = Duration::from_secs(5);
+const REMOTE_FORWARD_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+const REMOTE_FORWARD_RETRY_DELAY: Duration = Duration::from_millis(50);
+const REMOTE_FORWARD_RETRY_LIMIT: usize = 20;
+const CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
+const SOCKS_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(10);
+const LOCAL_TARGET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const SSH_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 const REMOTE_FORWARD_CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
-const STOP_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+const STOP_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -88,27 +104,66 @@ struct ActiveTunnel {
     /// Shared with the run's tasks so a per-connection failure — a target the
     /// host cannot reach, a refused forward — becomes visible in the status.
     last_error: Arc<Mutex<Option<String>>>,
-    stop_tx: Option<broadcast::Sender<()>>,
+    stop_tx: Option<watch::Sender<bool>>,
     /// Becomes true only after the worker has released its listener and SSH
     /// session, so a successful Stop command is a safe restart boundary.
     completion_tx: watch::Sender<bool>,
 }
 
-#[derive(Default)]
 pub struct TunnelRegistry {
     tunnels: Mutex<HashMap<String, ActiveTunnel>>,
     generations: AtomicU64,
     shutting_down: AtomicBool,
+    tunnel_admission: Arc<Semaphore>,
+    connection_admission: Arc<Semaphore>,
+}
+
+impl Default for TunnelRegistry {
+    fn default() -> Self {
+        Self {
+            tunnels: Mutex::new(HashMap::new()),
+            generations: AtomicU64::new(0),
+            shutting_down: AtomicBool::new(false),
+            tunnel_admission: Arc::new(Semaphore::new(MAX_ACTIVE_TUNNELS)),
+            connection_admission: Arc::new(Semaphore::new(MAX_GLOBAL_TUNNEL_CONNECTIONS)),
+        }
+    }
+}
+
+/// Holds one tunnel slot until the complete SSH transport has been reaped.
+/// The handler owns a clone while russh owns its background task, which makes
+/// cancelling a start future unable to release admission ahead of that task.
+struct TunnelAdmission {
+    permit: Mutex<Option<OwnedSemaphorePermit>>,
+}
+
+impl TunnelAdmission {
+    fn new(permit: OwnedSemaphorePermit) -> Self {
+        Self {
+            permit: Mutex::new(Some(permit)),
+        }
+    }
+
+    fn release(&self) {
+        let mut permit = self
+            .permit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        drop(permit.take());
+    }
 }
 
 /// Atomically claims a tunnel id before any bind, SSH connection, or remote
 /// forward is attempted. Dropping an unfinished reservation restores the
 /// previous stopped/error summary instead of leaving a phantom Starting row.
-struct TunnelStartReservation {
+pub(crate) struct TunnelStartReservation {
     registry: Arc<TunnelRegistry>,
     tunnel_id: String,
     generation: u64,
     previous: Option<ActiveTunnel>,
+    stop_tx: watch::Sender<bool>,
+    stop_rx: Option<watch::Receiver<bool>>,
+    admission: Option<OwnedSemaphorePermit>,
     committed: bool,
 }
 
@@ -117,15 +172,65 @@ impl TunnelStartReservation {
         self.generation
     }
 
-    fn commit(mut self, tunnel: ActiveTunnel) -> Result<(), String> {
+    fn stop_sender(&self) -> watch::Sender<bool> {
+        self.stop_tx.clone()
+    }
+
+    fn stop_receiver(&mut self) -> &mut watch::Receiver<bool> {
+        self.stop_rx
+            .as_mut()
+            .expect("a start reservation owns its stop receiver until commit")
+    }
+
+    pub(crate) async fn wait_until_stopped(&mut self) {
+        wait_for_stop(self.stop_receiver()).await;
+    }
+
+    /// Transfers admission into a blocking credential job. If its caller is
+    /// cancelled, Tokio detaches that job, whose captured permit continues to
+    /// bound the work until the keyring call actually returns.
+    pub(crate) fn take_admission_for_credential(&mut self) -> Result<OwnedSemaphorePermit, String> {
+        self.admission
+            .take()
+            .ok_or_else(|| "credential:tunnel admission was already transferred".to_string())
+    }
+
+    pub(crate) fn restore_admission_after_credential(
+        &mut self,
+        admission: OwnedSemaphorePermit,
+    ) -> Result<(), String> {
+        if self.admission.is_some() {
+            return Err("credential:tunnel admission was restored twice".to_string());
+        }
+        self.admission = Some(admission);
+        Ok(())
+    }
+
+    fn take_admission_for_session(&mut self) -> Result<Arc<TunnelAdmission>, String> {
+        let admission = self.admission.take().ok_or_else(|| {
+            "connect:tunnel admission was not available for SSH setup".to_string()
+        })?;
+        Ok(Arc::new(TunnelAdmission::new(admission)))
+    }
+
+    fn commit(&mut self, mut tunnel: ActiveTunnel) -> Result<watch::Receiver<bool>, String> {
         if tunnel.tunnel_id != self.tunnel_id || tunnel.generation != self.generation {
             return Err("connect:tunnel start reservation does not match the run".to_string());
         }
+        if self.admission.is_some() {
+            return Err(
+                "connect:tunnel admission was not transferred to the SSH session".to_string(),
+            );
+        }
+        tunnel.stop_tx = Some(self.stop_tx.clone());
         self.registry
             .commit_start(&self.tunnel_id, self.generation, tunnel)?;
         self.previous.take();
         self.committed = true;
-        Ok(())
+        Ok(self
+            .stop_rx
+            .take()
+            .expect("a committed tunnel keeps the reservation stop receiver"))
     }
 }
 
@@ -134,6 +239,11 @@ impl Drop for TunnelStartReservation {
         if self.committed {
             return;
         }
+        // Cancellation may come from Stop or from the caller dropping its
+        // start future. Make it sticky for any early remote-connection tasks,
+        // and release admission before publishing the completion fence.
+        self.stop_tx.send_replace(true);
+        drop(self.admission.take());
         self.registry
             .cancel_start(&self.tunnel_id, self.generation, self.previous.take());
     }
@@ -142,6 +252,17 @@ impl Drop for TunnelStartReservation {
 impl TunnelRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(test)]
+    fn with_limits(max_tunnels: usize, max_connections: usize) -> Self {
+        Self {
+            tunnels: Mutex::new(HashMap::new()),
+            generations: AtomicU64::new(0),
+            shutting_down: AtomicBool::new(false),
+            tunnel_admission: Arc::new(Semaphore::new(max_tunnels)),
+            connection_admission: Arc::new(Semaphore::new(max_connections)),
+        }
     }
 
     fn summarize(tunnel: &ActiveTunnel) -> TunnelStatusSummary {
@@ -182,9 +303,14 @@ impl TunnelRegistry {
             return Err(format!("connect:tunnel '{tunnel_id}' is already running"));
         }
 
+        let admission = Arc::clone(&self.tunnel_admission)
+            .try_acquire_owned()
+            .map_err(|_| format!("connect:at most {MAX_ACTIVE_TUNNELS} tunnels may run at once"))?;
+
         let generation = self.generations.fetch_add(1, Ordering::Relaxed) + 1;
         let previous = guard.remove(tunnel_id);
         let (completion_tx, _) = watch::channel(false);
+        let (stop_tx, stop_rx) = watch::channel(false);
         guard.insert(
             tunnel_id.to_string(),
             ActiveTunnel {
@@ -196,7 +322,7 @@ impl TunnelRegistry {
                 active_connections: Arc::new(AtomicU32::new(0)),
                 started_at: None,
                 last_error: Arc::new(Mutex::new(None)),
-                stop_tx: None,
+                stop_tx: Some(stop_tx.clone()),
                 completion_tx,
             },
         );
@@ -206,6 +332,9 @@ impl TunnelRegistry {
             tunnel_id: tunnel_id.to_string(),
             generation,
             previous,
+            stop_tx,
+            stop_rx: Some(stop_rx),
+            admission: Some(admission),
             committed: false,
         })
     }
@@ -221,7 +350,9 @@ impl TunnelRegistry {
             return Err("connect:tunnel registry is shutting down".to_string());
         }
         let owns_reservation = guard.get(tunnel_id).is_some_and(|current| {
-            current.generation == generation && current.status == TunnelStatus::Starting
+            current.generation == generation
+                && current.status == TunnelStatus::Starting
+                && current.stop_tx.as_ref().is_some_and(|stop| !*stop.borrow())
         });
         if !owns_reservation {
             return Err(format!(
@@ -240,10 +371,12 @@ impl TunnelRegistry {
             if !owns_reservation {
                 return;
             }
+            let Some(current) = guard.remove(tunnel_id) else {
+                return;
+            };
+            current.completion_tx.send_replace(true);
             if let Some(previous) = previous {
                 guard.insert(tunnel_id.to_string(), previous);
-            } else {
-                guard.remove(tunnel_id);
             }
         }
     }
@@ -254,15 +387,12 @@ impl TunnelRegistry {
             let Some(tunnel) = guard.get_mut(tunnel_id) else {
                 return Err(format!("Tunnel '{tunnel_id}' was not found."));
             };
-            if tunnel.status == TunnelStatus::Starting && tunnel.stop_tx.is_none() {
-                return Err(format!("connect:tunnel '{tunnel_id}' is still starting"));
-            }
             let Some(stop_tx) = tunnel.stop_tx.as_ref() else {
                 return Ok(());
             };
 
             let completion = tunnel.completion_tx.subscribe();
-            let _ = stop_tx.send(());
+            stop_tx.send_replace(true);
             // Keep stop_tx as the ownership marker until the worker has
             // actually released its listener and SSH session.
             completion
@@ -291,9 +421,7 @@ impl TunnelRegistry {
         if let Ok(mut guard) = self.tunnels.lock() {
             for tunnel in guard.values_mut() {
                 if let Some(stop_tx) = tunnel.stop_tx.as_ref() {
-                    let _ = stop_tx.send(());
-                    tunnel.status = TunnelStatus::Stopped;
-                    tunnel.active_connections.store(0, Ordering::Relaxed);
+                    stop_tx.send_replace(true);
                 }
             }
         }
@@ -333,7 +461,6 @@ impl TunnelRegistry {
                     // allowing a later start.
                     tunnel.stop_tx.take();
                     tunnel.status = status;
-                    tunnel.active_connections.store(0, Ordering::Relaxed);
                     if error.is_some() {
                         if let Ok(mut slot) = tunnel.last_error.lock() {
                             *slot = error;
@@ -370,20 +497,78 @@ struct Counters {
     down: Arc<AtomicU64>,
     connections: Arc<AtomicU32>,
     last_error: Arc<Mutex<Option<String>>>,
+    fatal: Arc<AtomicBool>,
     /// The tunnel handler sets this only after russh has shut down the
     /// transport writer (or when the handler is dropped on an error path).
     session_cleanup_tx: watch::Sender<bool>,
+    connection_slots: Arc<Semaphore>,
+    connection_limit: u32,
+    global_connection_slots: Arc<Semaphore>,
+    stop_tx: watch::Sender<bool>,
 }
 
 impl Counters {
-    fn new() -> Self {
+    fn new(global_connection_slots: Arc<Semaphore>, stop_tx: watch::Sender<bool>) -> Self {
+        Self::with_connection_limit(global_connection_slots, stop_tx, MAX_CONNECTIONS_PER_TUNNEL)
+    }
+
+    fn with_connection_limit(
+        global_connection_slots: Arc<Semaphore>,
+        stop_tx: watch::Sender<bool>,
+        max_connections: usize,
+    ) -> Self {
         let (session_cleanup_tx, _) = watch::channel(false);
         Self {
             up: Arc::new(AtomicU64::new(0)),
             down: Arc::new(AtomicU64::new(0)),
             connections: Arc::new(AtomicU32::new(0)),
             last_error: Arc::new(Mutex::new(None)),
+            fatal: Arc::new(AtomicBool::new(false)),
             session_cleanup_tx,
+            connection_slots: Arc::new(Semaphore::new(max_connections)),
+            connection_limit: u32::try_from(max_connections)
+                .expect("the configured tunnel connection limit fits in u32"),
+            global_connection_slots,
+            stop_tx,
+        }
+    }
+
+    fn try_open_connection(&self) -> Result<ConnectionLease, ConnectionAdmissionError> {
+        if *self.stop_tx.borrow() {
+            return Err(ConnectionAdmissionError::Stopping);
+        }
+        let tunnel = Arc::clone(&self.connection_slots)
+            .try_acquire_owned()
+            .map_err(|_| ConnectionAdmissionError::TunnelLimit)?;
+        let global = Arc::clone(&self.global_connection_slots)
+            .try_acquire_owned()
+            .map_err(|_| ConnectionAdmissionError::GlobalLimit)?;
+        // Stop and admission can race. Recheck after both permits so the drain
+        // barrier never misses a connection admitted concurrently with Stop.
+        if *self.stop_tx.borrow() {
+            return Err(ConnectionAdmissionError::Stopping);
+        }
+        Ok(ConnectionLease {
+            stop_rx: self.stop_tx.subscribe(),
+            guard: Some(ConnectionGuard::open(&self.connections)),
+            global: Some(global),
+            // This permit is the drain barrier and must be released last.
+            tunnel: Some(tunnel),
+        })
+    }
+
+    fn seal_connections(&self) {
+        self.stop_tx.send_replace(true);
+    }
+
+    async fn wait_for_connections(&self) {
+        // Every connection owns exactly one local permit. Taking the complete
+        // set is therefore a deterministic drain barrier after cancellation.
+        if let Ok(permits) = Arc::clone(&self.connection_slots)
+            .acquire_many_owned(self.connection_limit)
+            .await
+        {
+            drop(permits);
         }
     }
 
@@ -391,6 +576,19 @@ impl Counters {
         if let Ok(mut slot) = self.last_error.lock() {
             *slot = Some(message);
         }
+    }
+
+    fn fail_tunnel(&self, message: String) {
+        self.record_error(message);
+        self.fatal.store(true, Ordering::Release);
+        self.stop_tx.send_replace(true);
+    }
+
+    fn fatal_error(&self) -> Option<String> {
+        if !self.fatal.load(Ordering::Acquire) {
+            return None;
+        }
+        self.last_error.lock().ok().and_then(|slot| slot.clone())
     }
 
     fn mark_session_cleaned_up(&self) {
@@ -407,23 +605,87 @@ impl Counters {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionAdmissionError {
+    Stopping,
+    TunnelLimit,
+    GlobalLimit,
+}
+
+impl ConnectionAdmissionError {
+    fn message(self) -> String {
+        match self {
+            Self::Stopping => "connect:the tunnel is stopping".to_string(),
+            Self::TunnelLimit => format!(
+                "connect:the tunnel connection limit of {MAX_CONNECTIONS_PER_TUNNEL} was reached"
+            ),
+            Self::GlobalLimit => format!(
+                "connect:the global tunnel connection limit of {MAX_GLOBAL_TUNNEL_CONNECTIONS} was reached"
+            ),
+        }
+    }
+
+    fn channel_failure(self) -> ChannelOpenFailure {
+        match self {
+            Self::Stopping => ChannelOpenFailure::AdministrativelyProhibited,
+            Self::TunnelLimit | Self::GlobalLimit => ChannelOpenFailure::ResourceShortage,
+        }
+    }
+}
+
+struct ConnectionLease {
+    stop_rx: watch::Receiver<bool>,
+    guard: Option<ConnectionGuard>,
+    global: Option<OwnedSemaphorePermit>,
+    tunnel: Option<OwnedSemaphorePermit>,
+}
+
+impl ConnectionLease {
+    async fn run<F>(mut self, operation: F)
+    where
+        F: Future<Output = ()>,
+    {
+        tokio::select! {
+            biased;
+            _ = wait_for_stop(&mut self.stop_rx) => {}
+            _ = operation => {}
+        }
+    }
+}
+
+impl Drop for ConnectionLease {
+    fn drop(&mut self) {
+        // `wait_for_connections` waits on the per-tunnel permit. Release the
+        // observable counter and global capacity first, then release that
+        // barrier permit last so a completed drain is a complete cleanup fence.
+        drop(self.guard.take());
+        drop(self.global.take());
+        drop(self.tunnel.take());
+    }
+}
+
+async fn wait_for_stop(stop_rx: &mut watch::Receiver<bool>) {
+    while !*stop_rx.borrow_and_update() {
+        if stop_rx.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
 /// Decrements the live-connection count however the connection ends.
 struct ConnectionGuard(Arc<AtomicU32>);
 
 impl ConnectionGuard {
     fn open(counter: &Arc<AtomicU32>) -> Self {
-        counter.fetch_add(1, Ordering::Relaxed);
+        counter.fetch_add(1, Ordering::AcqRel);
         Self(Arc::clone(counter))
     }
 }
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        let _ = self
-            .0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                Some(current.saturating_sub(1))
-            });
+        let previous = self.0.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "connection count underflowed");
     }
 }
 
@@ -447,11 +709,60 @@ where
     }
 }
 
+async fn copy_channel_counted<W>(
+    channel: &mut Channel<client::Msg>,
+    writer: &mut W,
+    counted: &AtomicU64,
+) -> bool
+where
+    W: AsyncWrite + Unpin,
+{
+    loop {
+        match channel.wait().await {
+            Some(ChannelMsg::Data { data }) => {
+                if writer.write_all(&data).await.is_err() {
+                    return false;
+                }
+                counted.fetch_add(data.len() as u64, Ordering::Relaxed);
+            }
+            Some(ChannelMsg::Close) | None => return true,
+            Some(ChannelMsg::Eof) => return false,
+            Some(_) => {}
+        }
+    }
+}
+
+async fn close_channel_or_fail(
+    channel: &mut Channel<client::Msg>,
+    counters: &Counters,
+    context: &str,
+) {
+    let closed = tokio::time::timeout(SSH_CONTROL_TIMEOUT, async {
+        channel.close().await.map_err(|error| error.to_string())?;
+        while let Some(message) = channel.wait().await {
+            if matches!(message, ChannelMsg::Close) {
+                return Ok::<(), String>(());
+            }
+        }
+        // A closed receiver means the transport itself has gone away, so its
+        // channel maps can no longer survive this connection.
+        Ok(())
+    })
+    .await;
+    if !matches!(closed, Ok(Ok(()))) {
+        counters.fail_tunnel(format!(
+            "connect:the SSH host did not close {context} within {} seconds",
+            SSH_CONTROL_TIMEOUT.as_secs()
+        ));
+    }
+}
+
 /// Moves bytes both ways between a TCP socket and an SSH channel until both
-/// directions have closed. Socket-to-channel counts as upload.
-async fn pump(socket: TcpStream, channel: Channel<client::Msg>, counters: Counters) {
-    let stream = channel.into_stream();
-    let (mut channel_read, mut channel_write) = tokio::io::split(stream);
+/// directions have closed. Socket-to-channel counts as upload. A completed
+/// connection explicitly closes and acknowledges the SSH channel so the
+/// session's internal maps cannot outlive the connection admission lease.
+async fn pump(socket: TcpStream, mut channel: Channel<client::Msg>, counters: Counters) {
+    let mut channel_write = channel.make_writer();
     let (mut socket_read, mut socket_write) = socket.into_split();
 
     let upload = async {
@@ -459,11 +770,16 @@ async fn pump(socket: TcpStream, channel: Channel<client::Msg>, counters: Counte
         let _ = channel_write.shutdown().await;
     };
     let download = async {
-        copy_counted(&mut channel_read, &mut socket_write, &counters.down).await;
+        let remote_closed =
+            copy_channel_counted(&mut channel, &mut socket_write, &counters.down).await;
         let _ = socket_write.shutdown().await;
+        remote_closed
     };
 
-    tokio::join!(upload, download);
+    let (_, remote_closed) = tokio::join!(upload, download);
+    if !remote_closed {
+        close_channel_or_fail(&mut channel, &counters, "a forwarded channel").await;
+    }
 }
 
 /// SOCKS5 reply codes, straight from RFC 1928.
@@ -509,6 +825,10 @@ where
 
     let mut request = [0u8; 4];
     socket.read_exact(&mut request).await.ok()?;
+    if request[0] != 0x05 || request[2] != 0x00 {
+        socks_reply(socket, SOCKS_GENERAL_FAILURE).await;
+        return None;
+    }
     if request[1] != 0x01 {
         socks_reply(socket, SOCKS_COMMAND_NOT_SUPPORTED).await;
         return None;
@@ -526,9 +846,13 @@ where
             let mut name = vec![0u8; len[0] as usize];
             socket.read_exact(&mut name).await.ok()?;
             match String::from_utf8(name) {
-                Ok(name) => name,
+                Ok(name) if validate_host(&name, "SOCKS target").is_ok() => name,
                 Err(_) => {
-                    socks_reply(socket, SOCKS_GENERAL_FAILURE).await;
+                    socks_reply(socket, SOCKS_ADDRESS_NOT_SUPPORTED).await;
+                    return None;
+                }
+                Ok(_) => {
+                    socks_reply(socket, SOCKS_ADDRESS_NOT_SUPPORTED).await;
                     return None;
                 }
             }
@@ -546,17 +870,94 @@ where
 
     let mut port = [0u8; 2];
     socket.read_exact(&mut port).await.ok()?;
-    Some((host, u16::from_be_bytes(port)))
+    let port = u16::from_be_bytes(port);
+    if port == 0 {
+        socks_reply(socket, SOCKS_GENERAL_FAILURE).await;
+        return None;
+    }
+    Some((host, port))
+}
+
+async fn socks5_read_target_with_deadline<S>(
+    socket: &mut S,
+    deadline: Duration,
+) -> Option<(String, u16)>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    tokio::time::timeout(deadline, socks5_read_target(socket))
+        .await
+        .ok()
+        .flatten()
+}
+
+struct RemoteForwardGate {
+    enabled: AtomicBool,
+    bind_address: IpAddr,
+    bind_port: u32,
+    target_host: String,
+    target_port: u16,
+}
+
+impl RemoteForwardGate {
+    fn new(request: &StartTunnelRequest) -> Self {
+        Self {
+            enabled: AtomicBool::new(false),
+            bind_address: request
+                .local_host
+                .parse()
+                .expect("validated tunnel bind addresses are IP literals"),
+            bind_port: u32::from(request.local_port),
+            target_host: request.remote_host.clone(),
+            target_port: request.remote_port,
+        }
+    }
+
+    fn enable(&self) {
+        self.enabled.store(true, Ordering::Release);
+    }
+
+    fn disable(&self) {
+        self.enabled.store(false, Ordering::Release);
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Acquire)
+    }
+
+    fn matches_bind(&self, connected_address: &str, connected_port: u32) -> bool {
+        if connected_port != self.bind_port {
+            return false;
+        }
+        let Ok(connected) = connected_address
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+        else {
+            return false;
+        };
+        match (self.bind_address, connected) {
+            (IpAddr::V4(expected), IpAddr::V4(actual)) => {
+                expected.is_unspecified() || expected == actual
+            }
+            (IpAddr::V6(expected), IpAddr::V6(actual)) => {
+                expected.is_unspecified() || expected == actual
+            }
+            _ => false,
+        }
+    }
 }
 
 /// The russh handler for a tunnel session: answers the host key question from
-/// the trust store, and — when a remote forward is active — delivers the
-/// server's forwarded connections to the configured local target.
+/// the trust store, and — only after a remote forward is published — delivers
+/// the server's matching forwarded connections to the configured local target.
 struct TunnelHandler {
     trust: TrustingHandler,
-    /// `Some` only for remote tunnels: where forwarded connections go.
-    forward_target: Option<(String, u16)>,
+    remote_forward: Option<Arc<RemoteForwardGate>>,
     counters: Counters,
+    /// Keeps tunnel admission tied to russh's actual transport task even if
+    /// the outer start future is dropped before it can run async cleanup.
+    _tunnel_admission: Arc<TunnelAdmission>,
 }
 
 impl Drop for TunnelHandler {
@@ -595,38 +996,94 @@ impl client::Handler for TunnelHandler {
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
         channel: Channel<client::Msg>,
-        _connected_address: &str,
-        _connected_port: u32,
+        connected_address: &str,
+        connected_port: u32,
         _originator_address: &str,
         _originator_port: u32,
         reply: russh::client::ChannelOpenHandle,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
-        let Some((host, port)) = self.forward_target.clone() else {
-            reply
-                .reject(ChannelOpenFailure::AdministrativelyProhibited)
-                .await;
+        let Some(forward) = self.remote_forward.clone() else {
+            let _ = tokio::time::timeout(
+                SSH_CONTROL_TIMEOUT,
+                reply.reject(ChannelOpenFailure::AdministrativelyProhibited),
+            )
+            .await;
             return Ok(());
         };
+        if !forward.is_enabled() {
+            let _ = tokio::time::timeout(
+                SSH_CONTROL_TIMEOUT,
+                reply.reject(ChannelOpenFailure::AdministrativelyProhibited),
+            )
+            .await;
+            return Ok(());
+        }
+        if !forward.matches_bind(connected_address, connected_port) {
+            self.counters.fail_tunnel(
+                "forward:the SSH host opened a connection for an unexpected remote bind"
+                    .to_string(),
+            );
+            let _ = tokio::time::timeout(
+                SSH_CONTROL_TIMEOUT,
+                reply.reject(ChannelOpenFailure::AdministrativelyProhibited),
+            )
+            .await;
+            return Ok(());
+        }
+        let host = forward.target_host.clone();
+        let port = forward.target_port;
 
         let counters = self.counters.clone();
-        tokio::spawn(async move {
-            match TcpStream::connect((host.as_str(), port)).await {
-                Ok(socket) => {
-                    reply.accept().await;
-                    let _guard = ConnectionGuard::open(&counters.connections);
-                    // For a remote tunnel "upload" is what local services send
-                    // back toward the remote side, mirroring `ssh -R`.
-                    pump(socket, channel, counters).await;
+        let lease = match counters.try_open_connection() {
+            Ok(lease) => lease,
+            Err(error) => {
+                counters.record_error(error.message());
+                let failure = error.channel_failure();
+                let _ = tokio::time::timeout(SSH_CONTROL_TIMEOUT, reply.reject(failure)).await;
+                return Ok(());
+            }
+        };
+        tokio::spawn(lease.run(async move {
+            match tokio::time::timeout(
+                LOCAL_TARGET_CONNECT_TIMEOUT,
+                TcpStream::connect((host.as_str(), port)),
+            )
+            .await
+            {
+                Ok(Ok(socket)) => {
+                    if tokio::time::timeout(SSH_CONTROL_TIMEOUT, reply.accept())
+                        .await
+                        .is_ok()
+                    {
+                        // For a remote tunnel "upload" is what local services send
+                        // back toward the remote side, mirroring `ssh -R`.
+                        pump(socket, channel, counters).await;
+                    }
                 }
-                Err(_) => {
+                Ok(Err(_)) => {
                     counters.record_error(format!(
                         "forward:the local target {host}:{port} is unavailable"
                     ));
-                    reply.reject(ChannelOpenFailure::ConnectFailed).await;
+                    let _ = tokio::time::timeout(
+                        SSH_CONTROL_TIMEOUT,
+                        reply.reject(ChannelOpenFailure::ConnectFailed),
+                    )
+                    .await;
+                }
+                Err(_) => {
+                    counters.record_error(format!(
+                        "forward:the local target {host}:{port} did not connect within {} seconds",
+                        LOCAL_TARGET_CONNECT_TIMEOUT.as_secs()
+                    ));
+                    let _ = tokio::time::timeout(
+                        SSH_CONTROL_TIMEOUT,
+                        reply.reject(ChannelOpenFailure::ConnectFailed),
+                    )
+                    .await;
                 }
             }
-        });
+        }));
         Ok(())
     }
 }
@@ -709,14 +1166,111 @@ fn validate_request(request: &StartTunnelRequest) -> Result<(), String> {
     Ok(())
 }
 
+async fn run_start_stage<T, F>(
+    stop_rx: &mut watch::Receiver<bool>,
+    deadline: Duration,
+    timeout_error: String,
+    operation: F,
+) -> Result<T, String>
+where
+    F: Future<Output = Result<T, String>>,
+{
+    if *stop_rx.borrow() {
+        return Err("connect:tunnel start was cancelled".to_string());
+    }
+    tokio::select! {
+        biased;
+        _ = wait_for_stop(stop_rx) => {
+            Err("connect:tunnel start was cancelled".to_string())
+        }
+        result = tokio::time::timeout(deadline, operation) => {
+            result.map_err(|_| timeout_error)?
+        }
+    }
+}
+
+/// Owns an OS-level duplicate of the SSH transport. russh can temporarily stop
+/// polling its command receiver during key exchange or a blocked write; this
+/// guard is the non-cooperative cancellation path that still tears the socket
+/// down when a setup future or worker is cancelled.
+struct SessionSocketGuard(Option<std::net::TcpStream>);
+
+impl SessionSocketGuard {
+    fn new(socket: std::net::TcpStream) -> Self {
+        Self(Some(socket))
+    }
+
+    fn shutdown_now(&mut self) {
+        if let Some(socket) = self.0.take() {
+            let _ = socket.shutdown(Shutdown::Both);
+        }
+    }
+}
+
+impl Drop for SessionSocketGuard {
+    fn drop(&mut self) {
+        self.shutdown_now();
+    }
+}
+
+struct OpenSession {
+    handle: client::Handle<TunnelHandler>,
+    shutdown: SessionSocketGuard,
+    remote_forward: Option<Arc<RemoteForwardGate>>,
+}
+
+async fn shutdown_unpublished_session(mut session: OpenSession, counters: &Counters) {
+    // A hostile server can send forwarded-tcpip before tcpip_forward has been
+    // published. Seal and drain those tasks even on auth/setup/commit failure.
+    counters.seal_connections();
+    counters.wait_for_connections().await;
+    let _ = tokio::time::timeout(
+        SSH_CONTROL_TIMEOUT,
+        session
+            .handle
+            .disconnect(Disconnect::ByApplication, "tunnel setup stopped", ""),
+    )
+    .await;
+    session.shutdown.shutdown_now();
+    let mut handle = session.handle;
+    let _ = (&mut handle).await;
+    counters.wait_for_session_cleanup().await;
+}
+
+async fn request_remote_forward(
+    session: &client::Handle<TunnelHandler>,
+    address: &str,
+    port: u16,
+) -> Result<(), russh::Error> {
+    for attempt in 0..=REMOTE_FORWARD_RETRY_LIMIT {
+        match session.tcpip_forward(address, u32::from(port)).await {
+            Ok(_) => return Ok(()),
+            // OpenSSH can acknowledge cancellation and close the old SSH
+            // transport just before its forwarding listener becomes
+            // re-bindable. Retry only that protocol-level refusal, for at
+            // most one second, so Stop followed by immediate Start is stable
+            // without hiding transport failures or a lasting port conflict.
+            Err(russh::Error::RequestDenied) if attempt < REMOTE_FORWARD_RETRY_LIMIT => {
+                tokio::time::sleep(REMOTE_FORWARD_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the bounded remote-forward retry loop always returns")
+}
+
 /// Connects and authenticates the tunnel's own SSH session.
 async fn open_session(
     request: &StartTunnelRequest,
     password: &str,
     known: Option<HostKeyRecord>,
-) -> Result<(client::Handle<TunnelHandler>, Counters), String> {
-    let counters = Counters::new();
+    counters: Counters,
+    tunnel_admission: Arc<TunnelAdmission>,
+    stop_rx: &mut watch::Receiver<bool>,
+) -> Result<OpenSession, String> {
     let verdict = Arc::new(Mutex::new(None));
+    let remote_forward = matches!(request.tunnel_type, TunnelType::Remote)
+        .then(|| Arc::new(RemoteForwardGate::new(request)));
     let handler = TunnelHandler {
         trust: TrustingHandler {
             host: request.ssh_hostname.clone(),
@@ -724,9 +1278,9 @@ async fn open_session(
             known,
             verdict: Arc::clone(&verdict),
         },
-        forward_target: matches!(request.tunnel_type, TunnelType::Remote)
-            .then(|| (request.remote_host.clone(), request.remote_port)),
+        remote_forward: remote_forward.clone(),
         counters: counters.clone(),
+        _tunnel_admission: tunnel_admission,
     };
 
     let config = Arc::new(client::Config {
@@ -737,81 +1291,203 @@ async fn open_session(
         ..Default::default()
     });
 
-    let mut session = match client::connect(
-        config,
-        (request.ssh_hostname.as_str(), request.ssh_port),
-        handler,
+    let socket = run_start_stage(
+        stop_rx,
+        SSH_CONNECT_TIMEOUT,
+        format!(
+            "connect:the SSH host did not connect within {} seconds",
+            SSH_CONNECT_TIMEOUT.as_secs()
+        ),
+        async {
+            TcpStream::connect((request.ssh_hostname.as_str(), request.ssh_port))
+                .await
+                .map_err(|error| format!("connect:{error}"))
+        },
+    )
+    .await?;
+
+    // `connect_stream` starts russh's transport task before key exchange has
+    // completed. Keep a duplicate OS socket solely as a cancellation handle;
+    // on timeout it forces that task to leave before admission is released.
+    let std_socket = socket
+        .into_std()
+        .map_err(|error| format!("connect:cannot prepare the SSH socket: {error}"))?;
+    let shutdown_socket = std_socket
+        .try_clone()
+        .map_err(|error| format!("connect:cannot guard the SSH socket: {error}"))?;
+    let mut shutdown = SessionSocketGuard::new(shutdown_socket);
+    let socket = TcpStream::from_std(std_socket)
+        .map_err(|error| format!("connect:cannot activate the SSH socket: {error}"))?;
+
+    let handshake = run_start_stage(
+        stop_rx,
+        SSH_HANDSHAKE_TIMEOUT,
+        format!(
+            "connect:the SSH handshake did not finish within {} seconds",
+            SSH_HANDSHAKE_TIMEOUT.as_secs()
+        ),
+        async {
+            client::connect_stream(config, socket, handler)
+                .await
+                .map_err(|error| {
+                    let recorded = verdict.lock().ok().and_then(|slot| slot.clone());
+                    connect_error(recorded, error.to_string())
+                })
+        },
+    )
+    .await;
+    let handle = match handshake {
+        Ok(session) => session,
+        Err(error) => {
+            shutdown.shutdown_now();
+            counters.wait_for_session_cleanup().await;
+            return Err(error);
+        }
+    };
+    let mut session = OpenSession {
+        handle,
+        shutdown,
+        remote_forward,
+    };
+
+    let authenticated = match run_start_stage(
+        stop_rx,
+        SSH_AUTH_TIMEOUT,
+        format!(
+            "auth:the SSH host did not authenticate within {} seconds",
+            SSH_AUTH_TIMEOUT.as_secs()
+        ),
+        async {
+            session
+                .handle
+                .authenticate_password(&request.ssh_username, password)
+                .await
+                .map(|result| result.success())
+                .map_err(|error| format!("auth:{error}"))
+        },
     )
     .await
     {
-        Ok(session) => session,
+        Ok(authenticated) => authenticated,
         Err(error) => {
-            let recorded = verdict.lock().ok().and_then(|slot| slot.clone());
-            return Err(connect_error(recorded, error.to_string()));
+            shutdown_unpublished_session(session, &counters).await;
+            return Err(error);
         }
     };
 
-    let authenticated = session
-        .authenticate_password(&request.ssh_username, password)
-        .await
-        .map_err(|error| format!("auth:{error}"))?
-        .success();
-
     if !authenticated {
+        shutdown_unpublished_session(session, &counters).await;
         return Err("auth:the host rejected the credentials".to_string());
     }
 
-    Ok((session, counters))
+    Ok(session)
 }
 
-/// Starts a tunnel: authenticates its SSH session, sets up the forwarding for
-/// its type, and registers the run so it can be observed and stopped.
-pub async fn start_tunnel(
+/// Reserves admission before any potentially blocking credential or network
+/// operation. The command layer deliberately calls this before keyring I/O.
+pub(crate) fn reserve_tunnel_start(
     registry: Arc<TunnelRegistry>,
+    request: &StartTunnelRequest,
+) -> Result<TunnelStartReservation, String> {
+    validate_request(request)?;
+    registry.reserve_start(&request.tunnel_id)
+}
+
+/// Starts a tunnel from a previously admitted reservation.
+pub(crate) async fn start_reserved_tunnel(
+    mut reservation: TunnelStartReservation,
     request: StartTunnelRequest,
     password: &str,
     known: Option<HostKeyRecord>,
 ) -> Result<TunnelStatusSummary, String> {
     validate_request(&request)?;
-    // Claim the id before binding or contacting the SSH host. In particular,
-    // two concurrent remote-forward starts must not both reach the server and
-    // discover the collision only when the registry is updated afterward.
-    let reservation = registry.reserve_start(&request.tunnel_id)?;
+    if reservation.tunnel_id != request.tunnel_id {
+        return Err("connect:tunnel start reservation does not match the request".to_string());
+    }
+    let registry = Arc::clone(&reservation.registry);
     let generation = reservation.generation();
 
     // Bind first: a port squatted by another process should fail fast, before
     // any network round trip to the SSH host.
     let listener = match request.tunnel_type {
         TunnelType::Local | TunnelType::Dynamic => Some(
-            TcpListener::bind((request.local_host.as_str(), request.local_port))
-                .await
-                .map_err(|err| {
-                    format!(
-                        "bind:cannot listen on {}:{}: {err}",
-                        request.local_host, request.local_port
-                    )
-                })?,
+            run_start_stage(
+                reservation.stop_receiver(),
+                LOCAL_BIND_TIMEOUT,
+                format!(
+                    "bind:cannot listen on {}:{} within {} seconds",
+                    request.local_host,
+                    request.local_port,
+                    LOCAL_BIND_TIMEOUT.as_secs()
+                ),
+                async {
+                    TcpListener::bind((request.local_host.as_str(), request.local_port))
+                        .await
+                        .map_err(|err| {
+                            format!(
+                                "bind:cannot listen on {}:{}: {err}",
+                                request.local_host, request.local_port
+                            )
+                        })
+                },
+            )
+            .await?,
         ),
         TunnelType::Remote => None,
     };
 
-    let (session, counters) = open_session(&request, password, known).await?;
-    // Shared because every forwarded connection opens its own channel; all
-    // post-authentication operations take `&self`.
-    let session = Arc::new(session);
+    let tunnel_admission = reservation.take_admission_for_session()?;
+    let counters = Counters::new(
+        Arc::clone(&registry.connection_admission),
+        reservation.stop_sender(),
+    );
+    let session = open_session(
+        &request,
+        password,
+        known,
+        counters.clone(),
+        Arc::clone(&tunnel_admission),
+        reservation.stop_receiver(),
+    )
+    .await;
+    let session = match session {
+        Ok(session) => session,
+        // `connect_stream` may already have spawned russh's transport task.
+        // Let the handler's Arc own admission until that task has truly
+        // dropped instead of releasing the slot at this API boundary.
+        Err(error) => return Err(error),
+    };
 
     if matches!(request.tunnel_type, TunnelType::Remote) {
-        session
-            .tcpip_forward(request.local_host.clone(), u32::from(request.local_port))
-            .await
-            .map_err(|error| format!("forward:the host refused the remote forward: {error}"))?;
+        let forward = run_start_stage(
+            reservation.stop_receiver(),
+            REMOTE_FORWARD_SETUP_TIMEOUT,
+            format!(
+                "forward:the host did not open the remote forward within {} seconds",
+                REMOTE_FORWARD_SETUP_TIMEOUT.as_secs()
+            ),
+            async {
+                request_remote_forward(
+                    &session.handle,
+                    request.local_host.as_str(),
+                    request.local_port,
+                )
+                .await
+                .map_err(|error| format!("forward:the host refused the remote forward: {error}"))
+            },
+        )
+        .await;
+        if let Err(error) = forward {
+            shutdown_unpublished_session(session, &counters).await;
+            tunnel_admission.release();
+            return Err(error);
+        }
     }
 
-    let (stop_tx, mut stop_rx) = broadcast::channel(1);
     let (completion_tx, _) = watch::channel(false);
     let started_at = Some(now_epoch_secs());
 
-    reservation.commit(ActiveTunnel {
+    let committed = reservation.commit(ActiveTunnel {
         tunnel_id: request.tunnel_id.clone(),
         status: TunnelStatus::Active,
         generation,
@@ -820,9 +1496,40 @@ pub async fn start_tunnel(
         active_connections: Arc::clone(&counters.connections),
         started_at,
         last_error: Arc::clone(&counters.last_error),
-        stop_tx: Some(stop_tx),
+        stop_tx: None,
         completion_tx,
-    })?;
+    });
+    let mut stop_rx = match committed {
+        Ok(committed) => committed,
+        Err(error) => {
+            if request.tunnel_type == TunnelType::Remote && !session.handle.is_closed() {
+                let _ = tokio::time::timeout(
+                    REMOTE_FORWARD_CANCEL_TIMEOUT,
+                    session.handle.cancel_tcpip_forward(
+                        request.local_host.clone(),
+                        u32::from(request.local_port),
+                    ),
+                )
+                .await;
+            }
+            shutdown_unpublished_session(session, &counters).await;
+            tunnel_admission.release();
+            return Err(error);
+        }
+    };
+    if let Some(forward) = session.remote_forward.as_ref() {
+        forward.enable();
+    }
+
+    // Shared because every forwarded connection opens its own channel; keep
+    // the OS hard-stop guard separately in the owning worker for the complete
+    // lifetime of the russh transport.
+    let OpenSession {
+        handle,
+        mut shutdown,
+        remote_forward,
+    } = session;
+    let session = Arc::new(handle);
 
     let summary = TunnelStatusSummary {
         tunnel_id: request.tunnel_id.clone(),
@@ -851,7 +1558,8 @@ pub async fn start_tunnel(
             };
 
             tokio::select! {
-                _ = stop_rx.recv() => break,
+                biased;
+                _ = wait_for_stop(&mut stop_rx) => break,
                 _ = health.tick() => {
                     if session.is_closed() {
                         outcome = (
@@ -877,10 +1585,18 @@ pub async fn start_tunnel(
             }
         }
 
+        if let Some(error) = counters.fatal_error() {
+            outcome = (TunnelStatus::Error, Some(error));
+        }
+        if let Some(forward) = remote_forward.as_ref() {
+            forward.disable();
+        }
+        counters.seal_connections();
         // Release a local/dynamic bind before publishing the restartable
         // terminal status. Without this explicit ordering, an immediate
         // restart can race the worker closure dropping its listener.
         drop(listener);
+        counters.wait_for_connections().await;
 
         // A remote forwarding request survives independently on the SSH
         // server until it is explicitly cancelled or the session is truly
@@ -897,14 +1613,50 @@ pub async fn start_tunnel(
             )
             .await;
         }
-        let _ = session
-            .disconnect(Disconnect::ByApplication, "tunnel stopped", "")
-            .await;
+        let _ = tokio::time::timeout(
+            SSH_CONTROL_TIMEOUT,
+            session.disconnect(Disconnect::ByApplication, "tunnel stopped", ""),
+        )
+        .await;
+        // A rekey or zero-window write can prevent russh from polling its
+        // command receiver. Always force the underlying socket closed after
+        // the bounded polite shutdown, then reap the session task.
+        shutdown.shutdown_now();
+        let mut shared = session;
+        let mut handle = loop {
+            match Arc::try_unwrap(shared) {
+                Ok(handle) => break handle,
+                Err(still_shared) => {
+                    // The connection drain above should make this at most one
+                    // scheduler turn; fail closed and retain admission if an
+                    // unexpected clone ever survives.
+                    shared = still_shared;
+                    tokio::task::yield_now().await;
+                }
+            }
+        };
+        let _ = (&mut handle).await;
         counters.wait_for_session_cleanup().await;
+        // Stop completion is the documented immediate-restart boundary. Free
+        // admission before publishing it so a full registry cannot report a
+        // spurious capacity error immediately after Stop succeeds.
+        tunnel_admission.release();
         registry_task.finish(&request.tunnel_id, generation, outcome.0, outcome.1);
     });
 
     Ok(summary)
+}
+
+/// Convenience entry used by library consumers and live tests that already
+/// have a credential. The Tauri command reserves before loading its password.
+pub async fn start_tunnel(
+    registry: Arc<TunnelRegistry>,
+    request: StartTunnelRequest,
+    password: &str,
+    known: Option<HostKeyRecord>,
+) -> Result<TunnelStatusSummary, String> {
+    let reservation = reserve_tunnel_start(registry, &request)?;
+    start_reserved_tunnel(reservation, request, password, known).await
 }
 
 /// Handles one accepted local connection according to the tunnel type.
@@ -915,27 +1667,34 @@ fn spawn_connection(
     peer: std::net::SocketAddr,
     counters: Counters,
 ) {
+    let lease = match counters.try_open_connection() {
+        Ok(lease) => lease,
+        Err(error) => {
+            counters.record_error(error.message());
+            return;
+        }
+    };
     let session = Arc::clone(session);
     let tunnel_type = request.tunnel_type;
     let remote_host = request.remote_host.clone();
     let remote_port = request.remote_port;
 
-    tokio::spawn(async move {
-        let _guard = ConnectionGuard::open(&counters.connections);
-
+    tokio::spawn(lease.run(async move {
         match tunnel_type {
             TunnelType::Local => {
-                match session
-                    .channel_open_direct_tcpip(
+                match tokio::time::timeout(
+                    CHANNEL_OPEN_TIMEOUT,
+                    session.channel_open_direct_tcpip(
                         remote_host.clone(),
                         u32::from(remote_port),
                         peer.ip().to_string(),
                         u32::from(peer.port()),
-                    )
-                    .await
+                    ),
+                )
+                .await
                 {
-                    Ok(channel) => pump(socket, channel, counters).await,
-                    Err(error) => {
+                    Ok(Ok(channel)) => pump(socket, channel, counters).await,
+                    Ok(Err(error)) => {
                         // The user sees a connection that opens and instantly
                         // dies; the status has to say why. A host with
                         // AllowTcpForwarding off lands here.
@@ -943,45 +1702,95 @@ fn spawn_connection(
                             "connect:the host would not forward to {remote_host}:{remote_port}: {error}"
                         ));
                     }
+                    Err(_) => counters.fail_tunnel(format!(
+                        "connect:the host did not open a channel to {remote_host}:{remote_port} within {} seconds",
+                        CHANNEL_OPEN_TIMEOUT.as_secs()
+                    )),
                 }
             }
             TunnelType::Dynamic => {
-                let Some((target_host, target_port)) = socks5_read_target(&mut socket).await else {
+                let Some((target_host, target_port)) = socks5_read_target_with_deadline(
+                    &mut socket,
+                    SOCKS_NEGOTIATION_TIMEOUT,
+                )
+                .await
+                else {
                     return;
                 };
                 let target_host_label = format!("{target_host}:{target_port}");
-                match session
-                    .channel_open_direct_tcpip(
+                match tokio::time::timeout(
+                    CHANNEL_OPEN_TIMEOUT,
+                    session.channel_open_direct_tcpip(
                         target_host,
                         u32::from(target_port),
                         peer.ip().to_string(),
                         u32::from(peer.port()),
-                    )
-                    .await
+                    ),
+                )
+                .await
                 {
-                    Ok(channel) => {
-                        if socks_reply(&mut socket, SOCKS_OK).await {
+                    Ok(Ok(mut channel)) => {
+                        if tokio::time::timeout(
+                            SSH_CONTROL_TIMEOUT,
+                            socks_reply(&mut socket, SOCKS_OK),
+                        )
+                        .await
+                        .is_ok_and(|sent| sent)
+                        {
                             pump(socket, channel, counters).await;
+                        } else {
+                            close_channel_or_fail(
+                                &mut channel,
+                                &counters,
+                                "a SOCKS forwarding channel",
+                            )
+                            .await;
                         }
                     }
-                    Err(error) => {
+                    Ok(Err(error)) => {
                         counters.record_error(format!(
                             "connect:the host would not open a connection to {target_host_label}: {error}"
                         ));
-                        socks_reply(&mut socket, SOCKS_CONNECTION_REFUSED).await;
+                        let _ = tokio::time::timeout(
+                            SSH_CONTROL_TIMEOUT,
+                            socks_reply(&mut socket, SOCKS_CONNECTION_REFUSED),
+                        )
+                        .await;
+                    }
+                    Err(_) => {
+                        counters.fail_tunnel(format!(
+                            "connect:the host did not open a connection to {target_host_label} within {} seconds",
+                            CHANNEL_OPEN_TIMEOUT.as_secs()
+                        ));
+                        let _ = tokio::time::timeout(
+                            SSH_CONTROL_TIMEOUT,
+                            socks_reply(&mut socket, SOCKS_CONNECTION_REFUSED),
+                        )
+                        .await;
                     }
                 }
             }
             // Remote connections never arrive through the local listener.
             TunnelType::Remote => {}
         }
-    });
+    }));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use russh::client::Handler as _;
+
+    fn test_tunnel_admission() -> Arc<TunnelAdmission> {
+        let semaphore = Arc::new(Semaphore::new(1));
+        let permit = semaphore.try_acquire_owned().unwrap();
+        Arc::new(TunnelAdmission::new(permit))
+    }
+
+    fn test_counters(global: Arc<Semaphore>, per_tunnel: usize) -> Counters {
+        let (stop_tx, _) = watch::channel(false);
+        Counters::with_connection_limit(global, stop_tx, per_tunnel)
+    }
 
     fn entry(tunnel_id: &str, generation: u64) -> ActiveTunnel {
         let (completion_tx, _) = watch::channel(false);
@@ -994,7 +1803,7 @@ mod tests {
             active_connections: Arc::new(AtomicU32::new(0)),
             started_at: Some(1),
             last_error: Arc::new(Mutex::new(None)),
-            stop_tx: Some(broadcast::channel(1).0),
+            stop_tx: Some(watch::channel(false).0),
             completion_tx,
         }
     }
@@ -1016,7 +1825,7 @@ mod tests {
 
     #[tokio::test]
     async fn handler_disconnection_opens_the_transport_cleanup_fence() {
-        let counters = Counters::new();
+        let counters = test_counters(Arc::new(Semaphore::new(1)), 1);
         let waiting_counters = counters.clone();
         let waiting = tokio::spawn(async move {
             waiting_counters.wait_for_session_cleanup().await;
@@ -1031,8 +1840,9 @@ mod tests {
                 known: None,
                 verdict: Arc::new(Mutex::new(None)),
             },
-            forward_target: None,
+            remote_forward: None,
             counters,
+            _tunnel_admission: test_tunnel_admission(),
         };
         handler
             .disconnected(client::DisconnectReason::ReceivedDisconnect(
@@ -1061,10 +1871,11 @@ mod tests {
 
         let stopping_registry = Arc::clone(&registry);
         let stopping = tokio::spawn(async move { stopping_registry.stop("t1").await });
-        tokio::time::timeout(Duration::from_secs(1), stop_rx.recv())
+        tokio::time::timeout(Duration::from_secs(1), stop_rx.changed())
             .await
             .expect("stop request should reach the worker")
             .expect("stop signal should remain open");
+        assert!(*stop_rx.borrow());
 
         // Stop has returned a signal, but restart remains blocked until the
         // worker confirms that its listener and SSH session are gone.
@@ -1092,8 +1903,9 @@ mod tests {
         );
         registry.generations.store(7, Ordering::Relaxed);
 
-        let reservation = registry.reserve_start("t1").unwrap();
+        let mut reservation = registry.reserve_start("t1").unwrap();
         let generation = reservation.generation();
+        let _admission = reservation.take_admission_for_session().unwrap();
         registry.stop_all();
 
         assert_eq!(
@@ -1101,6 +1913,7 @@ mod tests {
             TunnelStatus::Starting
         );
         assert!(reservation.commit(entry("t1", generation)).is_err());
+        drop(reservation);
 
         let restored = registry.status("t1").unwrap();
         assert_eq!(restored.status, TunnelStatus::Error);
@@ -1184,6 +1997,65 @@ mod tests {
     }
 
     #[test]
+    fn tunnel_admission_is_released_before_cleanup_completion_is_published() {
+        let registry = Arc::new(TunnelRegistry::with_limits(1, 2));
+        let mut first = registry.reserve_start("t1").unwrap();
+        assert!(registry.reserve_start("t2").is_err());
+
+        let generation = first.generation();
+        let admission = first.take_admission_for_session().unwrap();
+        let _stop_rx = first.commit(entry("t1", generation)).unwrap();
+
+        // Active cleanup retains admission, but the worker releases it before
+        // publishing the completion fence observed by Stop.
+        assert!(registry.reserve_start("t2").is_err());
+        admission.release();
+        registry.finish("t1", generation, TunnelStatus::Stopped, None);
+        assert!(registry.reserve_start("t2").is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_starting_tunnel_can_be_stopped_before_network_setup() {
+        let registry = Arc::new(TunnelRegistry::with_limits(1, 2));
+        let reservation = registry.reserve_start("t1").unwrap();
+        let stopping_registry = Arc::clone(&registry);
+        let stopping = tokio::spawn(async move { stopping_registry.stop("t1").await });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !*reservation.stop_tx.borrow() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the starting reservation should observe Stop");
+        drop(reservation);
+
+        stopping.await.unwrap().unwrap();
+        assert!(registry.status("t1").is_none());
+        assert!(
+            registry.reserve_start("t2").is_ok(),
+            "Stop completion must follow admission release for Starting runs"
+        );
+    }
+
+    #[test]
+    fn a_detached_credential_job_keeps_its_admission_but_not_its_starting_row() {
+        let registry = Arc::new(TunnelRegistry::with_limits(1, 2));
+        let mut reservation = registry.reserve_start("t1").unwrap();
+        let credential_admission = reservation.take_admission_for_credential().unwrap();
+
+        drop(reservation);
+        assert!(registry.status("t1").is_none());
+        assert!(
+            registry.reserve_start("t2").is_err(),
+            "the detached blocking job must retain admission"
+        );
+
+        drop(credential_admission);
+        assert!(registry.reserve_start("t2").is_ok());
+    }
+
+    #[test]
     fn a_failed_start_restores_the_previous_terminal_summary() {
         let registry = Arc::new(TunnelRegistry::new());
         registry.register(entry("t1", 7)).unwrap();
@@ -1210,10 +2082,11 @@ mod tests {
     #[test]
     fn only_the_matching_reservation_can_publish_an_active_run() {
         let registry = Arc::new(TunnelRegistry::new());
-        let reservation = registry.reserve_start("t1").unwrap();
+        let mut reservation = registry.reserve_start("t1").unwrap();
         let generation = reservation.generation();
+        let _admission = reservation.take_admission_for_session().unwrap();
 
-        reservation.commit(entry("t1", generation)).unwrap();
+        let _run = reservation.commit(entry("t1", generation)).unwrap();
 
         assert!(registry.is_running("t1"));
         assert_eq!(registry.status("t1").unwrap().status, TunnelStatus::Active);
@@ -1240,12 +2113,185 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_guard_cannot_underflow_after_stop_resets_the_counter() {
+    fn russh_handler_retains_tunnel_admission_until_transport_drop() {
+        let slots = Arc::new(Semaphore::new(1));
+        let permit = Arc::clone(&slots).try_acquire_owned().unwrap();
+        let admission = Arc::new(TunnelAdmission::new(permit));
+        let counters = test_counters(Arc::new(Semaphore::new(1)), 1);
+        let handler = TunnelHandler {
+            trust: TrustingHandler {
+                host: "gateway.internal".into(),
+                port: 22,
+                known: None,
+                verdict: Arc::new(Mutex::new(None)),
+            },
+            remote_forward: None,
+            counters,
+            _tunnel_admission: Arc::clone(&admission),
+        };
+
+        drop(admission);
+        assert_eq!(slots.available_permits(), 0);
+        drop(handler);
+        assert_eq!(slots.available_permits(), 1);
+    }
+
+    #[test]
+    fn remote_forward_gate_requires_publication_and_the_requested_bind() {
+        let mut remote = request(TunnelType::Remote);
+        remote.local_host = "0.0.0.0".into();
+        remote.local_port = 3333;
+        let gate = RemoteForwardGate::new(&remote);
+
+        assert!(!gate.is_enabled());
+        gate.enable();
+        assert!(gate.is_enabled());
+        assert!(gate.matches_bind("127.0.0.1", 3333));
+        assert!(!gate.matches_bind("127.0.0.1", 3334));
+        assert!(!gate.matches_bind("::1", 3333));
+        gate.disable();
+        assert!(!gate.is_enabled());
+
+        remote.local_host = "127.0.0.1".into();
+        let specific = RemoteForwardGate::new(&remote);
+        assert!(specific.matches_bind("127.0.0.1", 3333));
+        assert!(!specific.matches_bind("127.0.0.2", 3333));
+    }
+
+    #[test]
+    fn fatal_connection_errors_are_sticky_and_stop_the_tunnel() {
+        let counters = test_counters(Arc::new(Semaphore::new(1)), 1);
+        counters.fail_tunnel("connect:pending channel timed out".into());
+
+        assert!(*counters.stop_tx.borrow());
+        assert_eq!(
+            counters.fatal_error().as_deref(),
+            Some("connect:pending channel timed out")
+        );
+    }
+
+    #[test]
+    fn a_connection_guard_tracks_real_lifetime() {
         let counter = Arc::new(AtomicU32::new(0));
         let guard = ConnectionGuard::open(&counter);
-        counter.store(0, Ordering::Relaxed);
+        assert_eq!(counter.load(Ordering::Acquire), 1);
         drop(guard);
-        assert_eq!(counter.load(Ordering::Relaxed), 0);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn per_tunnel_and_global_connection_caps_are_atomic() {
+        let global = Arc::new(Semaphore::new(2));
+        let first = test_counters(Arc::clone(&global), 1);
+        let second = test_counters(Arc::clone(&global), 2);
+
+        let first_lease = first.try_open_connection().unwrap();
+        assert!(matches!(
+            first.try_open_connection(),
+            Err(ConnectionAdmissionError::TunnelLimit)
+        ));
+        assert_eq!(first.connections.load(Ordering::Acquire), 1);
+
+        let second_lease = second.try_open_connection().unwrap();
+        assert!(matches!(
+            second.try_open_connection(),
+            Err(ConnectionAdmissionError::GlobalLimit)
+        ));
+        assert_eq!(global.available_permits(), 0);
+
+        drop(first_lease);
+        let replacement = second.try_open_connection().unwrap();
+        assert_eq!(first.connections.load(Ordering::Acquire), 0);
+        assert_eq!(second.connections.load(Ordering::Acquire), 2);
+
+        drop(second_lease);
+        drop(replacement);
+        assert_eq!(global.available_permits(), 2);
+        assert_eq!(second.connections.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_and_drains_pending_connection_tasks() {
+        struct DropProbe(Arc<AtomicBool>);
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let global = Arc::new(Semaphore::new(1));
+        let counters = test_counters(Arc::clone(&global), 1);
+        let lease = counters.try_open_connection().unwrap();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let task_dropped = Arc::clone(&dropped);
+        let task = tokio::spawn(lease.run(async move {
+            let _probe = DropProbe(task_dropped);
+            std::future::pending::<()>().await;
+        }));
+        tokio::task::yield_now().await;
+        assert_eq!(counters.connections.load(Ordering::Acquire), 1);
+
+        counters.seal_connections();
+        tokio::time::timeout(Duration::from_secs(1), counters.wait_for_connections())
+            .await
+            .expect("connection drain should not hang");
+        // The barrier itself, not joining a detached task afterwards, must
+        // prove every observable resource has already been released.
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(counters.connections.load(Ordering::Acquire), 0);
+        assert_eq!(global.available_permits(), 1);
+        assert!(matches!(
+            counters.try_open_connection(),
+            Err(ConnectionAdmissionError::Stopping)
+        ));
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn start_stage_deadline_and_sticky_stop_both_cancel_work() {
+        let (stop_tx, mut stop_rx) = watch::channel(false);
+        let timeout_error = run_start_stage(
+            &mut stop_rx,
+            Duration::from_millis(10),
+            "connect:test stage timed out".to_string(),
+            std::future::pending::<Result<(), String>>(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(timeout_error, "connect:test stage timed out");
+
+        stop_tx.send_replace(true);
+        let cancelled = run_start_stage(
+            &mut stop_rx,
+            Duration::from_secs(1),
+            "unused".to_string(),
+            std::future::pending::<Result<(), String>>(),
+        )
+        .await
+        .unwrap_err();
+        assert!(cancelled.contains("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn socks5_slow_reads_and_stalled_writes_hit_one_total_deadline() {
+        let (mut slow_client, mut slow_server) = tokio::io::duplex(16);
+        slow_client.write_all(&[0x05]).await.unwrap();
+        assert_eq!(
+            socks5_read_target_with_deadline(&mut slow_server, Duration::from_millis(20)).await,
+            None
+        );
+
+        let (mut stalled_client, mut stalled_server) = tokio::io::duplex(1);
+        let writer = tokio::spawn(async move {
+            let _ = stalled_client.write_all(&[0x05, 0x01, 0x00]).await;
+            std::future::pending::<()>().await;
+        });
+        assert_eq!(
+            socks5_read_target_with_deadline(&mut stalled_server, Duration::from_millis(20),).await,
+            None
+        );
+        writer.abort();
+        let _ = writer.await;
     }
 
     #[tokio::test]
@@ -1287,6 +2333,50 @@ mod tests {
 
         let target = negotiation.await.unwrap();
         assert_eq!(target, Some(("example.com".to_string(), 80)));
+    }
+
+    #[tokio::test]
+    async fn socks5_rejects_empty_control_or_oversized_domain_names() {
+        for name in [Vec::new(), b"bad\nname".to_vec(), vec![b'a'; 254]] {
+            let (mut client, mut server) = tokio::io::duplex(512);
+            let negotiation = tokio::spawn(async move { socks5_read_target(&mut server).await });
+
+            client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+            let mut chosen = [0u8; 2];
+            client.read_exact(&mut chosen).await.unwrap();
+
+            let mut request = vec![0x05, 0x01, 0x00, 0x03, name.len() as u8];
+            request.extend_from_slice(&name);
+            request.extend_from_slice(&80u16.to_be_bytes());
+            client.write_all(&request).await.unwrap();
+
+            assert_eq!(negotiation.await.unwrap(), None);
+            let mut refusal = [0u8; 10];
+            client.read_exact(&mut refusal).await.unwrap();
+            assert_eq!(refusal[1], SOCKS_ADDRESS_NOT_SUPPORTED);
+        }
+    }
+
+    #[tokio::test]
+    async fn socks5_rejects_invalid_request_headers_and_zero_ports() {
+        for request in [
+            [0x04, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50],
+            [0x05, 0x01, 0x01, 0x01, 127, 0, 0, 1, 0x00, 0x50],
+            [0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x00],
+        ] {
+            let (mut client, mut server) = tokio::io::duplex(64);
+            let negotiation = tokio::spawn(async move { socks5_read_target(&mut server).await });
+
+            client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+            let mut chosen = [0u8; 2];
+            client.read_exact(&mut chosen).await.unwrap();
+            client.write_all(&request).await.unwrap();
+
+            assert_eq!(negotiation.await.unwrap(), None);
+            let mut refusal = [0u8; 10];
+            client.read_exact(&mut refusal).await.unwrap();
+            assert_eq!(refusal[1], SOCKS_GENERAL_FAILURE);
+        }
     }
 
     #[tokio::test]

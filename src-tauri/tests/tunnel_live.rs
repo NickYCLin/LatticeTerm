@@ -20,7 +20,9 @@
 
 use latticeterm_lib::hostkeys::HostTrustStore;
 use latticeterm_lib::ssh::{connect, ConnectOutcome, ConnectRequest, SessionSink, SshRegistry};
-use latticeterm_lib::tunnel::{start_tunnel, StartTunnelRequest, TunnelRegistry, TunnelType};
+use latticeterm_lib::tunnel::{
+    start_tunnel, StartTunnelRequest, TunnelRegistry, TunnelStatus, TunnelType,
+};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -190,9 +192,14 @@ async fn a_dynamic_socks5_proxy_connects_to_a_requested_target() {
         ssh_username: USER.into(),
     };
 
-    start_tunnel(Arc::clone(&registry), request, PASSWORD, Some(known))
-        .await
-        .unwrap();
+    start_tunnel(
+        Arc::clone(&registry),
+        request.clone(),
+        PASSWORD,
+        Some(known.clone()),
+    )
+    .await
+    .unwrap();
 
     let mut stream = TcpStream::connect(("127.0.0.1", local_port)).await.unwrap();
 
@@ -216,6 +223,27 @@ async fn a_dynamic_socks5_proxy_connects_to_a_requested_target() {
         "expected the proxied service's banner, got {banner:?}"
     );
 
+    registry.stop("live-dynamic").await.unwrap();
+    let stopped = registry.status("live-dynamic").unwrap();
+    assert_eq!(stopped.status, TunnelStatus::Stopped);
+    assert_eq!(stopped.active_connections, 0);
+
+    let mut byte = [0u8; 1];
+    match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut byte)).await {
+        Ok(Ok(0)) | Ok(Err(_)) => {}
+        Ok(Ok(read)) => panic!("the stopped tunnel still delivered {read} byte(s)"),
+        Err(_) => panic!("the existing SOCKS connection survived tunnel stop"),
+    }
+    assert!(
+        TcpStream::connect(("127.0.0.1", local_port)).await.is_err(),
+        "the stopped SOCKS listener no longer accepts connections"
+    );
+
+    // A successful Stop is an immediate restart boundary: the same id and
+    // bind address must be reusable without waiting for a detached cleanup.
+    start_tunnel(Arc::clone(&registry), request, PASSWORD, Some(known))
+        .await
+        .unwrap();
     registry.stop("live-dynamic").await.unwrap();
 }
 
@@ -254,9 +282,14 @@ async fn a_remote_forward_delivers_server_side_connections_locally() {
         ssh_username: USER.into(),
     };
 
-    start_tunnel(Arc::clone(&registry), request, PASSWORD, Some(known))
-        .await
-        .unwrap();
+    start_tunnel(
+        Arc::clone(&registry),
+        request.clone(),
+        PASSWORD,
+        Some(known.clone()),
+    )
+    .await
+    .unwrap();
 
     // Port 3333 is published by the container and GatewayPorts is explicitly
     // enabled in the setup above. Bytes entering that server-side listener
@@ -286,5 +319,32 @@ async fn a_remote_forward_delivers_server_side_connections_locally() {
         "remote bytes reached the local target"
     );
 
+    registry.stop("live-remote").await.unwrap();
+    let stopped = registry.status("live-remote").unwrap();
+    assert_eq!(stopped.status, TunnelStatus::Stopped);
+    assert_eq!(stopped.active_connections, 0);
+
+    let mut byte = [0u8; 1];
+    match tokio::time::timeout(Duration::from_secs(2), remote.read(&mut byte)).await {
+        Ok(Ok(0)) | Ok(Err(_)) => {}
+        Ok(Ok(read)) => panic!("the stopped remote tunnel still delivered {read} byte(s)"),
+        Err(_) => panic!("the existing remote-forward connection survived tunnel stop"),
+    }
+    // Docker's published-port proxy can complete TCP connect even when no
+    // process listens inside the container. Prove the old SSH listener is gone
+    // by requiring an actual echo attempt to fail or close without bytes.
+    if let Ok(mut probe) = TcpStream::connect((HOST, REMOTE_FORWARD_PORT)).await {
+        let _ = probe.write_all(b"stopped-probe").await;
+        let mut reply = [0u8; 13];
+        match tokio::time::timeout(Duration::from_secs(2), probe.read(&mut reply)).await {
+            Ok(Ok(0)) | Ok(Err(_)) => {}
+            Ok(Ok(read)) => panic!("the stopped remote listener echoed {read} byte(s)"),
+            Err(_) => panic!("the stopped remote listener kept a probe connection open"),
+        }
+    }
+
+    start_tunnel(Arc::clone(&registry), request, PASSWORD, Some(known))
+        .await
+        .unwrap();
     registry.stop("live-remote").await.unwrap();
 }
