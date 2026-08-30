@@ -19,7 +19,11 @@ import {
   terminalFontFamily,
   terminalTheme,
 } from "../terminal/terminalTheme";
-import { attachTerminalClipboard } from "../terminal/terminalClipboard";
+import {
+  attachTerminalClipboard,
+  type TerminalClipboardOptions,
+} from "../terminal/terminalClipboard";
+import { nativeTerminalClipboard } from "../terminal/nativeTerminalClipboard";
 import type { ThemeId } from "../../app/themes";
 
 function decodeBase64(base64: string): Uint8Array {
@@ -29,6 +33,17 @@ function decodeBase64(base64: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
+}
+
+export function remoteTerminalClipboardOptions(
+  shouldProcessKeyEvent: NonNullable<
+    TerminalClipboardOptions["shouldProcessKeyEvent"]
+  >,
+): TerminalClipboardOptions {
+  return {
+    ...nativeTerminalClipboard,
+    shouldProcessKeyEvent,
+  };
 }
 
 export function RemoteTerminalView({
@@ -94,10 +109,12 @@ export function RemoteTerminalView({
     };
     fitAndReport();
 
-    attachTerminalClipboard(terminal, {
-      shouldProcessKeyEvent: () =>
+    attachTerminalClipboard(
+      terminal,
+      remoteTerminalClipboardOptions(() =>
         imePresentation.shouldProcessTerminalKeyEvent(),
-    });
+      ),
+    );
 
     const sendInput = (data: string) => {
       if (viewOnly) return;
