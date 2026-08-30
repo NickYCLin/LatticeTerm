@@ -9,9 +9,9 @@
 import { useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import type { Workspace } from "../app/useWorkspace";
+import { canConnectProtocol } from "../app/platformCapabilities";
 import {
   UNGROUPED,
-  isProtocolAvailable,
   type ConnectionProfile,
 } from "../domain/connection";
 import type { SortOrder } from "../domain/query";
@@ -63,12 +63,18 @@ export function ConnectionsView({
   onEdit,
   onDelete,
   onConnect,
+  supportedProtocols,
+  backendAvailable,
+  mobile,
 }: {
   workspace: Workspace;
   onCreate: () => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
   onConnect: (profile: ConnectionProfile) => void;
+  supportedProtocols: readonly string[];
+  backendAvailable: boolean;
+  mobile: boolean;
 }) {
   const { t } = useI18n();
   const {
@@ -344,9 +350,19 @@ export function ConnectionsView({
                     onDelete={() => onDelete(profile.id)}
                     onToggleFavorite={() => toggleFavorite(profile.id)}
                     onConnect={
-                      isProtocolAvailable(profile.protocol)
+                      canConnectProtocol(
+                        profile.protocol,
+                        supportedProtocols,
+                      )
                         ? () => onConnect(profile)
                         : undefined
+                    }
+                    unavailableReason={
+                      !backendAvailable
+                        ? "backend-required"
+                        : mobile
+                          ? "desktop-only"
+                          : "runtime-unsupported"
                     }
                   />
                 ))}

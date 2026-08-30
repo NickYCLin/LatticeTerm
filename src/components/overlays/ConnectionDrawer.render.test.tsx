@@ -10,12 +10,20 @@ import {
 
 function renderDrawer(
   profile: Parameters<typeof ConnectionDrawer>[0]["profile"] = null,
+  options: {
+    supportedProtocols?: readonly string[];
+    mobile?: boolean;
+  } = {},
 ) {
   return renderToStaticMarkup(
     <I18nProvider locale="zh-TW">
       <ConnectionDrawer
         profile={profile}
         profiles={profile ? [profile] : []}
+        supportedProtocols={
+          options.supportedProtocols ?? ["ssh", "sftp", "rdp", "vnc", "lattice"]
+        }
+        mobile={options.mobile ?? false}
         onSave={vi.fn()}
         onClose={vi.fn()}
       />
@@ -73,6 +81,50 @@ describe("connection drawer", () => {
     expect(markup).toContain("screen.example.com");
     expect(markup).not.toContain("使用者名稱");
     expect(markup).not.toContain("stale-user");
+  });
+
+  it("offers only native mobile protocols for a new profile", () => {
+    const markup = renderDrawer(null, {
+      supportedProtocols: ["ssh", "sftp", "lattice"],
+      mobile: true,
+    });
+
+    expect(
+      markup.match(/class="protocol-option(?: is-selected)?"/g),
+    ).toHaveLength(3);
+    expect(markup).toContain("SSH");
+    expect(markup).toContain("SFTP");
+    expect(markup).toContain("REMOTE");
+    expect(markup).not.toContain(">RDP<");
+    expect(markup).not.toContain(">VNC<");
+    expect(markup).toContain("儲存並連線");
+  });
+
+  it("keeps an existing desktop-only profile editable on mobile", () => {
+    const profile = createConnectionProfile(
+      {
+        ...emptyDraft("rdp"),
+        name: "Office PC",
+        hostname: "desktop.example.com",
+        username: "operator",
+      },
+      "rdp-mobile",
+    );
+    const markup = renderDrawer(profile, {
+      supportedProtocols: ["ssh", "sftp", "lattice"],
+      mobile: true,
+    });
+
+    expect(
+      markup.match(/class="protocol-option(?: is-selected)?"/g),
+    ).toHaveLength(4);
+    expect(markup).toContain("Office PC");
+    expect(markup).toContain("desktop.example.com");
+    expect(markup).toContain("operator");
+    expect(markup).toContain("這個裝置只能管理此連線");
+    expect(markup).toContain("桌面版連線");
+    expect(markup).toContain(">儲存<");
+    expect(markup).not.toContain("儲存並連線");
   });
 
   it("explains direct mode without asking for a Remote username", () => {

@@ -1,5 +1,14 @@
 import { isMobilePlatform } from "./navigation";
 import type { RuntimeState } from "./useRuntimeSummary";
+import type { Protocol } from "../domain/connection";
+
+/** True only when the current native package registered this session engine. */
+export function canConnectProtocol(
+  protocol: Protocol,
+  supportedProtocols: readonly string[],
+): boolean {
+  return supportedProtocols.includes(protocol);
+}
 
 /** Header actions that the current operating system can actually perform. */
 export function workspaceHeaderCapabilities(platform: string | undefined): {

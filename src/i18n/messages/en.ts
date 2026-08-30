@@ -104,6 +104,12 @@ export const en: Messages = {
   // Connection card -------------------------------------------------------
   "row.connect": "Connect",
   "row.connectComingSoon": "Connecting is in development",
+  "row.connectDesktopOnly": "Desktop only",
+  "row.connectDesktopOnlyHint": "You can manage this connection on mobile, but only LatticeTerm desktop can open it.",
+  "row.connectBackendRequired": "App required",
+  "row.connectBackendRequiredHint": "The browser preview can manage settings; live connections require the LatticeTerm app.",
+  "row.connectRuntimeUnsupported": "Not in this build",
+  "row.connectRuntimeUnsupportedHint": "The installed LatticeTerm package does not include this session engine.",
   "row.addFavorite": "Add {name} to favorites",
   "row.removeFavorite": "Remove {name} from favorites",
   "row.edit": "Edit {name}",
@@ -146,6 +152,11 @@ export const en: Messages = {
   "form.duplicate.title": "Another connection uses the same target",
   "form.duplicate.body":
     "{name} already reaches {target} over {protocol}. Saving is fine if that is deliberate.",
+  "form.protocolUnavailable.title": "This device can manage this connection only",
+  "form.protocolUnavailable.mobileBody":
+    "Settings and imported data remain intact, but RDP and VNC connections can only be opened in LatticeTerm desktop.",
+  "form.protocolUnavailable.backendBody":
+    "You can still create and edit the profile; use the LatticeTerm app to open the live connection.",
   "form.unsaved": "Unsaved changes",
   "form.noChanges": "No changes yet",
   "form.discard.question": "Discard your changes?",

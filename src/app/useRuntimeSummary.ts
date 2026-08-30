@@ -29,7 +29,9 @@ export interface RuntimeState {
 const fallback: RuntimeSummary = {
   appName: "LatticeTerm",
   version: APP_VERSION,
-  supportedProtocols: ["ssh", "rdp", "lattice"],
+  // A browser can manage profile metadata, but it has no native session
+  // engine. Product availability and runtime capability are separate facts.
+  supportedProtocols: [],
   credentialStorageReady: false,
   platform: "browser",
 };

@@ -1,10 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
+  canConnectProtocol,
   canUseInAppUpdater,
   workspaceHeaderCapabilities,
 } from "./platformCapabilities";
 
 describe("platform capabilities", () => {
+  it("uses the runtime protocol contract instead of product availability", () => {
+    const desktop = ["ssh", "sftp", "rdp", "vnc", "lattice"];
+    const mobile = ["ssh", "sftp", "lattice"];
+
+    expect(canConnectProtocol("vnc", desktop)).toBe(true);
+    expect(canConnectProtocol("lattice", mobile)).toBe(true);
+    expect(canConnectProtocol("rdp", mobile)).toBe(false);
+    expect(canConnectProtocol("vnc", mobile)).toBe(false);
+  });
+
   it("keeps the Remote viewer reachable on mobile without offering hosting", () => {
     expect(workspaceHeaderCapabilities("android")).toEqual({
       remoteQuickConnect: true,

@@ -99,6 +99,12 @@ export const zhTW = {
   // 連線卡片 --------------------------------------------------------------
   "row.connect": "連線",
   "row.connectComingSoon": "連線功能開發中",
+  "row.connectDesktopOnly": "桌面版限定",
+  "row.connectDesktopOnlyHint": "這個連線可在行動裝置管理，但只能由 LatticeTerm 桌面版開啟。",
+  "row.connectBackendRequired": "需要桌面應用程式",
+  "row.connectBackendRequiredHint": "瀏覽器預覽可管理設定；實際連線需要 LatticeTerm 應用程式。",
+  "row.connectRuntimeUnsupported": "此版本不支援",
+  "row.connectRuntimeUnsupportedHint": "目前安裝的 LatticeTerm 沒有提供這個連線引擎。",
   "row.addFavorite": "把「{name}」加入常用",
   "row.removeFavorite": "把「{name}」移出常用",
   "row.edit": "編輯「{name}」",
@@ -141,6 +147,11 @@ export const zhTW = {
   "form.duplicate.title": "已經有一筆連到同一個位置",
   "form.duplicate.body":
     "「{name}」已經用 {protocol} 連到 {target}。如果是刻意建立兩筆，直接儲存沒問題。",
+  "form.protocolUnavailable.title": "這個裝置只能管理此連線",
+  "form.protocolUnavailable.mobileBody":
+    "設定與匯入資料都會完整保留，但 RDP 與 VNC 只能在 LatticeTerm 桌面版連線。",
+  "form.protocolUnavailable.backendBody":
+    "你仍可建立與編輯設定；實際連線需要使用 LatticeTerm 應用程式。",
   "form.unsaved": "尚未儲存",
   "form.noChanges": "還沒有變更",
   "form.discard.question": "要放棄這次的修改嗎？",

@@ -156,11 +156,24 @@ where
 struct RuntimeSummary {
     app_name: &'static str,
     version: &'static str,
-    supported_protocols: [&'static str; 4],
+    supported_protocols: &'static [&'static str],
     credential_storage_ready: bool,
     /// "windows" | "macos" | "linux" | "android" | "ios" — the interface
     /// hides desktop-only areas (agents, sidecar engines) on mobile.
     platform: &'static str,
+}
+
+const DESKTOP_PROTOCOLS: &[&str] = &["ssh", "sftp", "rdp", "vnc", "lattice"];
+const MOBILE_PROTOCOLS: &[&str] = &["ssh", "sftp", "lattice"];
+
+/// Session engines registered by each operating-system package. Keeping this
+/// platform-driven (rather than compile-target-only) makes the contract easy
+/// to verify for Android and iOS in desktop CI.
+fn supported_protocols_for(platform: &str) -> &'static [&'static str] {
+    match platform {
+        "android" | "ios" => MOBILE_PROTOCOLS,
+        _ => DESKTOP_PROTOCOLS,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -186,12 +199,13 @@ struct EncryptedBackupRestore {
 
 #[tauri::command]
 fn runtime_summary() -> RuntimeSummary {
+    let platform = std::env::consts::OS;
     RuntimeSummary {
         app_name: "LatticeTerm",
         version: env!("CARGO_PKG_VERSION"),
-        supported_protocols: ["ssh", "sftp", "rdp", "lattice"],
+        supported_protocols: supported_protocols_for(platform),
         credential_storage_ready: crate::credentials::status().ready,
-        platform: std::env::consts::OS,
+        platform,
     }
 }
 
@@ -1983,12 +1997,29 @@ mod tests {
         assert_eq!(summary.app_name, "LatticeTerm");
         assert_eq!(
             summary.supported_protocols,
-            ["ssh", "sftp", "rdp", "lattice"]
+            supported_protocols_for(std::env::consts::OS)
         );
         assert_eq!(
             summary.credential_storage_ready,
             crate::credentials::status().ready
         );
+    }
+
+    #[test]
+    fn runtime_protocols_match_desktop_and_mobile_engines() {
+        assert_eq!(
+            supported_protocols_for("linux"),
+            ["ssh", "sftp", "rdp", "vnc", "lattice"]
+        );
+        assert_eq!(
+            supported_protocols_for("windows"),
+            ["ssh", "sftp", "rdp", "vnc", "lattice"]
+        );
+        assert_eq!(
+            supported_protocols_for("android"),
+            ["ssh", "sftp", "lattice"]
+        );
+        assert_eq!(supported_protocols_for("ios"), ["ssh", "sftp", "lattice"]);
     }
 
     #[test]

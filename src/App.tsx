@@ -22,6 +22,7 @@ import {
   type ViewId,
 } from "./app/navigation";
 import {
+  canConnectProtocol,
   canUseInAppUpdater,
   workspaceHeaderCapabilities,
 } from "./app/platformCapabilities";
@@ -159,6 +160,8 @@ const SftpConnectFlow = lazy(() =>
   })),
 );
 
+const NO_SUPPORTED_PROTOCOLS: readonly string[] = [];
+
 function LazyViewFallback() {
   const { t } = useI18n();
   return (
@@ -185,6 +188,8 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const runtime = useRuntimeSummary();
   const platform = runtime.summary?.platform;
   const onMobile = isMobilePlatform(platform);
+  const supportedProtocols =
+    runtime.summary?.supportedProtocols ?? NO_SUPPORTED_PROTOCOLS;
   const headerCapabilities = workspaceHeaderCapabilities(platform);
   const inAppUpdaterAvailable = canUseInAppUpdater(runtime.host, platform);
   const visibleNavigation = navigationItemsFor(platform);
@@ -527,9 +532,14 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         ? updateProfile(drawer.profileId, draft)
         : addProfile(draft);
       setDrawer({ open: false, profileId: null });
-      if (connectAfterSave) setConnectTarget(saved);
+      if (
+        connectAfterSave &&
+        canConnectProtocol(saved.protocol, supportedProtocols)
+      ) {
+        setConnectTarget(saved);
+      }
     },
-    [drawer.profileId, addProfile, updateProfile],
+    [drawer.profileId, addProfile, supportedProtocols, updateProfile],
   );
 
 
@@ -790,6 +800,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                   onEdit={openEdit}
                   onDelete={requestDelete}
                   onConnect={setConnectTarget}
+                  supportedProtocols={supportedProtocols}
+                  backendAvailable={runtime.host === "tauri"}
+                  mobile={onMobile}
                 />
               )}
             </Suspense>
@@ -900,6 +913,8 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           key={drawer.profileId ?? "new"}
           profile={editing}
           profiles={profiles}
+          supportedProtocols={supportedProtocols}
+          mobile={onMobile}
           onSave={saveDraft}
           onClose={() => setDrawer({ open: false, profileId: null })}
         />

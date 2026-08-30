@@ -9,6 +9,7 @@
 
 import { useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { canConnectProtocol } from "../../app/platformCapabilities";
 import {
   connectionTarget,
   createConnectionProfile,
@@ -71,12 +72,18 @@ const hostnamePlaceholderKeys: Record<Protocol, MessageKey> = {
 export function ConnectionDrawer({
   profile,
   profiles,
+  supportedProtocols,
+  mobile,
   onSave,
   onClose,
 }: {
   /** `null` opens an empty draft; a profile opens it for editing. */
   profile: ConnectionProfile | null;
   profiles: ConnectionProfile[];
+  /** Native session engines registered by this package. */
+  supportedProtocols: readonly string[];
+  /** Mobile packages show only usable protocols when creating a profile. */
+  mobile: boolean;
   onSave: (draft: ConnectionDraft, connectAfterSave: boolean) => void;
   onClose: () => void;
 }) {
@@ -106,6 +113,21 @@ export function ConnectionDrawer({
   const dirty =
     !sameDraft(draft, initial) ||
     parseTags(tagInput).join(",") !== (initial.tags ?? []).join(",");
+  const protocolOptions = useMemo(
+    () =>
+      mobile
+        ? protocolCatalog.filter(
+            (entry) =>
+              canConnectProtocol(entry.id, supportedProtocols) ||
+              entry.id === profile?.protocol,
+          )
+        : protocolCatalog,
+    [mobile, profile?.protocol, supportedProtocols],
+  );
+  const connectSupported = canConnectProtocol(
+    draft.protocol,
+    supportedProtocols,
+  );
 
   function requestClose() {
     if (dirty) {
@@ -189,7 +211,7 @@ export function ConnectionDrawer({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    save(true);
+    save(connectSupported);
   }
 
   const title = profile ? t("form.editTitle") : t("form.addTitle");
@@ -242,7 +264,7 @@ export function ConnectionDrawer({
               role="radiogroup"
               aria-label={t("form.step.protocol")}
             >
-              {protocolCatalog.map((entry, index) => {
+              {protocolOptions.map((entry, index) => {
                 const active = draft.protocol === entry.id;
                 return (
                   <button
@@ -258,7 +280,7 @@ export function ConnectionDrawer({
                         event,
                         index,
                         (nextIndex) =>
-                          selectProtocol(protocolCatalog[nextIndex].id),
+                          selectProtocol(protocolOptions[nextIndex].id),
                       )
                     }
                   >
@@ -273,6 +295,18 @@ export function ConnectionDrawer({
                 );
               })}
             </div>
+            {!connectSupported && (
+              <Callout
+                tone="info"
+                title={t("form.protocolUnavailable.title")}
+              >
+                {t(
+                  mobile
+                    ? "form.protocolUnavailable.mobileBody"
+                    : "form.protocolUnavailable.backendBody",
+                )}
+              </Callout>
+            )}
           </section>
 
           <section className="form-section">
@@ -600,18 +634,22 @@ export function ConnectionDrawer({
               </button>
               <button
                 type="button"
-                className="button button--secondary"
+                className={`button ${
+                  connectSupported ? "button--secondary" : "button--primary"
+                }`}
                 onClick={() => save(false)}
               >
                 {t("form.submit.saveOnly")}
               </button>
-              <button
-                type="submit"
-                form={formId}
-                className="button button--primary"
-              >
-                {t("form.submit.saveAndConnect")}
-              </button>
+              {connectSupported && (
+                <button
+                  type="submit"
+                  form={formId}
+                  className="button button--primary"
+                >
+                  {t("form.submit.saveAndConnect")}
+                </button>
+              )}
             </div>
           </div>
         )}

@@ -2,9 +2,9 @@
  * One connection card.
  *
  * The card body opens the details panel; the star and the action buttons sit
- * above it as siblings, so nothing is nested inside another control. "Connect"
- * is deliberately not a button — no engine exists yet, and a disabled button
- * would suggest the capability is merely unavailable right now.
+ * above it as siblings, so nothing is nested inside another control. When the
+ * current package has no matching session engine, the footer states the exact
+ * platform boundary instead of offering a button that cannot work.
  */
 
 import {
@@ -22,6 +22,11 @@ import {
   TrashIcon,
 } from "../icons";
 
+export type ConnectionUnavailableReason =
+  | "desktop-only"
+  | "backend-required"
+  | "runtime-unsupported";
+
 export function ConnectionCard({
   profile,
   selected,
@@ -31,6 +36,7 @@ export function ConnectionCard({
   onDelete,
   onToggleFavorite,
   onConnect,
+  unavailableReason,
 }: {
   profile: ConnectionProfile;
   selected: boolean;
@@ -41,6 +47,7 @@ export function ConnectionCard({
   onToggleFavorite: () => void;
   /** Provided only for protocols that can actually open a session today. */
   onConnect?: () => void;
+  unavailableReason?: ConnectionUnavailableReason;
 }) {
   const { t } = useI18n();
   const protocol = findProtocol(profile.protocol);
@@ -108,9 +115,22 @@ export function ConnectionCard({
         ) : (
           <span
             className="connection-card__connect"
-            title={t("row.connectComingSoon")}
+            title={t(
+              unavailableReason === "desktop-only"
+                ? "row.connectDesktopOnlyHint"
+                : unavailableReason === "backend-required"
+                  ? "row.connectBackendRequiredHint"
+                  : "row.connectRuntimeUnsupportedHint",
+            )}
           >
-            {t("row.connect")} · {t("common.comingSoon")}
+            {t("row.connect")} ·{" "}
+            {t(
+              unavailableReason === "desktop-only"
+                ? "row.connectDesktopOnly"
+                : unavailableReason === "backend-required"
+                  ? "row.connectBackendRequired"
+                  : "row.connectRuntimeUnsupported",
+            )}
           </span>
         )}
 
