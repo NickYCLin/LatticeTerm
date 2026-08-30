@@ -29,6 +29,8 @@ export const en: Messages = {
   "common.available": "Available",
   "common.copy": "Copy",
   "common.copied": "Copied",
+  "common.copyFailed.title": "Could not copy to the clipboard",
+  "common.copyFailed.body": "The clipboard is currently unavailable: {error}",
   "common.detecting": "Detecting…",
   "common.loading": "Loading feature…",
 

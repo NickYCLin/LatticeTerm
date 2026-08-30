@@ -26,6 +26,8 @@ export const zhTW = {
   "common.available": "可使用",
   "common.copy": "複製",
   "common.copied": "已複製",
+  "common.copyFailed.title": "無法複製到剪貼簿",
+  "common.copyFailed.body": "剪貼簿目前無法使用：{error}",
   "common.detecting": "偵測中…",
   "common.loading": "正在載入功能…",
 

@@ -6,7 +6,8 @@
  * what the host itself reports.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { copyTextToClipboard } from "../../app/clipboardText";
 import type { HostFingerprint } from "../../domain/security";
 import { hostTargetKey } from "../../domain/security";
 import { useI18n } from "../../i18n/context";
@@ -30,8 +31,11 @@ export function HostFingerprintDialog({
 }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [copyProblem, setCopyProblem] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const copyTimerRef = useRef<number | null>(null);
+  const copyRequestRef = useRef(0);
 
   useModalFocus({
     dialogRef,
@@ -39,13 +43,41 @@ export function HostFingerprintDialog({
     onEscape: onCancel,
   });
 
+  useEffect(
+    () => () => {
+      copyRequestRef.current += 1;
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    },
+    [],
+  );
+
   async function copy() {
+    const request = ++copyRequestRef.current;
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
+    setCopied(false);
+    setCopyProblem(null);
     try {
-      await navigator.clipboard.writeText(fingerprint.fingerprint);
+      await copyTextToClipboard(fingerprint.fingerprint);
+      if (request !== copyRequestRef.current) return;
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard access can be refused; the value stays selectable on screen.
+      copyTimerRef.current = window.setTimeout(() => {
+        if (request === copyRequestRef.current) {
+          setCopied(false);
+          copyTimerRef.current = null;
+        }
+      }, 2_000);
+    } catch (reason) {
+      if (request !== copyRequestRef.current) return;
+      setCopyProblem(
+        t("common.copyFailed.body", {
+          error: reason instanceof Error ? reason.message : String(reason),
+        }),
+      );
     }
   }
 
@@ -96,7 +128,7 @@ export function HostFingerprintDialog({
               <button
                 type="button"
                 className="button button--ghost button--sm"
-                onClick={copy}
+                onClick={() => void copy()}
               >
                 {copied ? <CheckIcon size={13} /> : null}
                 {copied ? t("common.copied") : t("common.copy")}
@@ -106,6 +138,16 @@ export function HostFingerprintDialog({
               {fingerprint.fingerprint}
             </span>
           </div>
+
+          {copyProblem && (
+            <p
+              role="alert"
+              className="dialog__body"
+              style={{ color: "var(--danger)" }}
+            >
+              {copyProblem}
+            </p>
+          )}
 
           <p className="dialog__body">{t("security.verifyHint")}</p>
         </div>

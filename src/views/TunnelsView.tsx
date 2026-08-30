@@ -6,7 +6,8 @@
  * over pure Rust SSH connections.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { copyTextToClipboard } from "../app/clipboardText";
 import {
   formatBytes,
   formatSshTunnelCommand,
@@ -94,6 +95,19 @@ export function TunnelsView({
   const [deletingTunnel, setDeletingTunnel] = useState(false);
   const [deleteProblem, setDeleteProblem] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copyProblem, setCopyProblem] = useState<string | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
+  const copyRequestRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      copyRequestRef.current += 1;
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    },
+    [],
+  );
 
   // Filtered tunnels
   const filteredTunnels = useMemo(() => {
@@ -121,7 +135,7 @@ export function TunnelsView({
   const totalUploaded = Object.values(states).reduce((acc, s) => acc + s.bytesUploaded, 0);
   const totalDownloaded = Object.values(states).reduce((acc, s) => acc + s.bytesDownloaded, 0);
 
-  const handleCopyCommand = (tunnel: TunnelConfig) => {
+  const handleCopyCommand = async (tunnel: TunnelConfig) => {
     const profile = sshProfiles.find((p) => p.id === tunnel.profileId);
     // Without a matching profile the command keeps its obvious placeholders
     // instead of silently borrowing some other connection's gateway.
@@ -129,11 +143,31 @@ export function TunnelsView({
       ? formatSshTunnelCommand(tunnel, profile.username, profile.hostname, profile.port)
       : formatSshTunnelCommand(tunnel);
 
-    void navigator.clipboard.writeText(cmd);
-    setCopiedId(tunnel.id);
-    setTimeout(() => {
-      setCopiedId(null);
-    }, 2000);
+    const request = ++copyRequestRef.current;
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
+    setCopiedId(null);
+    setCopyProblem(null);
+    try {
+      await copyTextToClipboard(cmd);
+      if (request !== copyRequestRef.current) return;
+      setCopiedId(tunnel.id);
+      copyTimerRef.current = window.setTimeout(() => {
+        if (request === copyRequestRef.current) {
+          setCopiedId(null);
+          copyTimerRef.current = null;
+        }
+      }, 2_000);
+    } catch (reason) {
+      if (request !== copyRequestRef.current) return;
+      setCopyProblem(
+        t("common.copyFailed.body", {
+          error: reason instanceof Error ? reason.message : String(reason),
+        }),
+      );
+    }
   };
 
   async function confirmDelete() {
@@ -201,6 +235,11 @@ export function TunnelsView({
       {!backendAvailable && (
         <Callout tone="info" title={t("tunnels.desktopOnly.title")}>
           {t("tunnels.desktopOnly.body")}
+        </Callout>
+      )}
+      {copyProblem && (
+        <Callout tone="danger" title={t("common.copyFailed.title")}>
+          {copyProblem}
         </Callout>
       )}
 
@@ -465,7 +504,7 @@ export function TunnelsView({
                       type="button"
                       className="button button--ghost"
                       style={{ padding: "0.25rem 0.6rem", fontSize: "var(--text-xs)" }}
-                      onClick={() => handleCopyCommand(tunnel)}
+                      onClick={() => void handleCopyCommand(tunnel)}
                       title={t("tunnels.action.copySsh")}
                     >
                       {isCopied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}

@@ -68,6 +68,15 @@ export async function installUpdateAndRelaunch(
   await relaunch();
 }
 
+/**
+ * Lets the Rust shell seal and clear tracked sensitive clipboard content
+ * before Tauri requests its otherwise-unpreventable restart exit code.
+ */
+async function restartAppSafely(): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("app_restart_safely");
+}
+
 export type UpdateStatus =
   | "idle"
   | "checking"
@@ -180,16 +189,15 @@ export function useAppUpdater(currentVersion = APP_VERSION) {
         pendingUpdate,
         async () => {
           // downloadAndInstall resolves only after installation. Mark this
-          // before loading the process plugin so a relaunch failure offers a
-          // safe manual retry instead of claiming the install failed.
+          // before asking the Rust shell to restart so a restart failure
+          // offers a safe manual retry instead of claiming the install failed.
           installed = true;
           setInfo((prev) => ({
             ...prev,
             status: "installing",
             progressPercent: 100,
           }));
-          const { relaunch } = await import("@tauri-apps/plugin-process");
-          await relaunch();
+          await restartAppSafely();
         },
         (event) => {
           progress = nextDownloadProgress(progress, event);
@@ -208,8 +216,7 @@ export function useAppUpdater(currentVersion = APP_VERSION) {
   const relaunchApp = useCallback(async () => {
     setInfo((prev) => ({ ...prev, status: "installing", error: null }));
     try {
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
+      await restartAppSafely();
     } catch (err: unknown) {
       setInfo((prev) => ({
         ...prev,

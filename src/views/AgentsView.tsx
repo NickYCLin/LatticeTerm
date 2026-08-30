@@ -7,6 +7,7 @@ import type {
   AgentSessionSummary,
 } from "../app/useAgentSessions";
 import { agentCatalogForDisplay } from "../app/useAgentSessions";
+import { copyTextToClipboard } from "../app/clipboardText";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import {
   MAX_AGENT_BROADCAST_TARGETS,
@@ -100,6 +101,9 @@ export function AgentsView({
   const [installing, setInstalling] = useState<string | null>(null);
   const [pendingInstall, setPendingInstall] = useState<AgentDefinition | null>(null);
   const [copiedInstallSource, setCopiedInstallSource] = useState<string | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
+  const copyRequestRef = useRef(0);
+  const [copyProblem, setCopyProblem] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -155,6 +159,16 @@ export function AgentsView({
       window.removeEventListener("scroll", reposition, true);
     };
   }, [migrationNotice]);
+
+  useEffect(
+    () => () => {
+      copyRequestRef.current += 1;
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    },
+    [],
+  );
   const [pendingStop, setPendingStop] = useState<AgentSessionSummary | null>(null);
   const [stoppingSessionId, setStoppingSessionId] = useState<string | null>(null);
   const [selectedBroadcastIds, setSelectedBroadcastIds] = useState<Set<string>>(
@@ -271,12 +285,30 @@ export function AgentsView({
   }
 
   async function copyInstallSource(definition: AgentDefinition) {
+    const request = ++copyRequestRef.current;
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
+    setCopiedInstallSource(null);
+    setCopyProblem(null);
     try {
-      await navigator.clipboard.writeText(definition.install.sourceUrl);
+      await copyTextToClipboard(definition.install.sourceUrl);
+      if (request !== copyRequestRef.current) return;
       setCopiedInstallSource(definition.id);
-      setError(null);
+      copyTimerRef.current = window.setTimeout(() => {
+        if (request === copyRequestRef.current) {
+          setCopiedInstallSource(null);
+          copyTimerRef.current = null;
+        }
+      }, 2_000);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (request !== copyRequestRef.current) return;
+      setCopyProblem(
+        t("common.copyFailed.body", {
+          error: reason instanceof Error ? reason.message : String(reason),
+        }),
+      );
     }
   }
 
@@ -489,6 +521,11 @@ export function AgentsView({
       {error && (
         <Callout tone="danger" title={t("agents.operation.failed")}>
           <span className="mono">{error}</span>
+        </Callout>
+      )}
+      {copyProblem && (
+        <Callout tone="danger" title={t("common.copyFailed.title")}>
+          <span className="mono">{copyProblem}</span>
         </Callout>
       )}
 

@@ -459,7 +459,7 @@ pub struct EventSink(pub AppHandle);
 
 impl AgentSink for EventSink {
     fn data(&self, session_id: &str, offset: u64, bytes: &[u8]) {
-        let _ = self.0.emit(
+        let result = self.0.emit(
             EVENT_DATA,
             AgentData {
                 session_id: session_id.to_string(),
@@ -467,6 +467,10 @@ impl AgentSink for EventSink {
                 base64: encode(bytes),
             },
         );
+        if let Err(error) = result {
+            // Losing PTY output silently makes a healthy local CLI look hung.
+            eprintln!("failed to deliver agent output: {error}");
+        }
     }
 
     fn state(&self, session_id: &str, state: AgentLifecycle, source: AgentStateSource) {

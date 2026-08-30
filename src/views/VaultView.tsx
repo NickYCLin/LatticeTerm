@@ -8,6 +8,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useHostTrust } from "../app/useHostTrust";
+import { copyTextToClipboard } from "../app/clipboardText";
 import {
   useCredentialInventory,
   type CredentialInventoryEntry,
@@ -74,6 +75,9 @@ export function VaultView({
   const [showAddHostModal, setShowAddHostModal] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<HostKeyRecord | null>(null);
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
+  const [copyProblem, setCopyProblem] = useState<string | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
+  const copyRequestRef = useRef(0);
   const [actionError, setActionError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -102,6 +106,16 @@ export function VaultView({
   useEffect(() => {
     if (saving) addHostDialogRef.current?.focus();
   }, [saving]);
+
+  useEffect(
+    () => () => {
+      copyRequestRef.current += 1;
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const filteredHosts = useMemo(() => {
     const query = hostSearch.trim().toLocaleLowerCase();
@@ -146,13 +160,27 @@ export function VaultView({
 
   async function handleCopy(record: HostKeyRecord) {
     const target = hostTargetKey(record.host, record.port);
+    const request = ++copyRequestRef.current;
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
+    setCopiedTarget(null);
+    setCopyProblem(null);
     try {
-      await navigator.clipboard.writeText(record.fingerprint);
+      await copyTextToClipboard(record.fingerprint);
+      if (request !== copyRequestRef.current) return;
       setCopiedTarget(target);
-      window.setTimeout(() => setCopiedTarget(null), 2000);
+      copyTimerRef.current = window.setTimeout(() => {
+        if (request === copyRequestRef.current) {
+          setCopiedTarget(null);
+          copyTimerRef.current = null;
+        }
+      }, 2_000);
     } catch (reason) {
-      setActionError(
-        t("vault.actionFailed.body", { error: reasonText(reason) }),
+      if (request !== copyRequestRef.current) return;
+      setCopyProblem(
+        t("common.copyFailed.body", { error: reasonText(reason) }),
       );
     }
   }
@@ -413,6 +441,11 @@ export function VaultView({
         {actionError && (
           <Callout tone="danger" title={t("vault.actionFailed.title")}>
             {actionError}
+          </Callout>
+        )}
+        {copyProblem && (
+          <Callout tone="danger" title={t("common.copyFailed.title")}>
+            {copyProblem}
           </Callout>
         )}
 

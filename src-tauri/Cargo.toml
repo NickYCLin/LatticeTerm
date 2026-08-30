@@ -31,10 +31,8 @@ russh-sftp = "2.4.0"
 sha2 = "0.11.0"
 base64 = "0.23.1"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time", "process"] }
-tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
 lattice-remote = { path = "../crates/lattice-remote" }
 keyring = "4.1.6"
 zeroize = "1.9.0"
@@ -47,7 +45,11 @@ tempfile = "3.27.0"
 png = "0.18.1"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 tauri-plugin-single-instance = "2"
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-clipboard-manager = "2.3.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"

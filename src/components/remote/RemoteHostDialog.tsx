@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { SensitiveClipboardClearChoice } from "../../app/preferences";
+import { copyTextToClipboard } from "../../app/clipboardText";
 import {
   formatDeviceId,
   loadRelayAddress,
@@ -40,12 +41,15 @@ export function RemoteHostDialog({
   const [fileRoot, setFileRoot] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [copyProblem, setCopyProblem] = useState<string | null>(null);
   const [copied, setCopied] = useState<"address" | "code" | "deviceId" | null>(
     null,
   );
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1_000));
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const copyTimerRef = useRef<number | null>(null);
+  const copyRequestRef = useRef(0);
 
   useModalFocus({
     dialogRef,
@@ -66,6 +70,16 @@ export function RemoteHostDialog({
   useEffect(() => {
     if (busy) dialogRef.current?.focus();
   }, [busy]);
+
+  useEffect(
+    () => () => {
+      copyRequestRef.current += 1;
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const secondsRemaining = Math.max(
     0,
@@ -121,16 +135,34 @@ export function RemoteHostDialog({
   }
 
   async function copy(kind: "address" | "code" | "deviceId", value: string) {
+    const request = ++copyRequestRef.current;
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
+    setCopied(null);
+    setCopyProblem(null);
     try {
       if (kind === "code") {
         await copySensitiveText(value, sensitiveClipboardClear);
       } else {
-        await navigator.clipboard.writeText(value);
+        await copyTextToClipboard(value);
       }
+      if (request !== copyRequestRef.current) return;
       setCopied(kind);
-      window.setTimeout(() => setCopied(null), 1_500);
+      copyTimerRef.current = window.setTimeout(() => {
+        if (request === copyRequestRef.current) {
+          setCopied(null);
+          copyTimerRef.current = null;
+        }
+      }, 1_500);
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : String(error));
+      if (request !== copyRequestRef.current) return;
+      setCopyProblem(
+        t("common.copyFailed.body", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
   }
 
@@ -183,6 +215,11 @@ export function RemoteHostDialog({
           {(problem || host.closedReason) && (
             <Callout tone="warn" title={t("remote.host.problemTitle")}>
               {problem ?? host.closedReason}
+            </Callout>
+          )}
+          {copyProblem && (
+            <Callout tone="warn" title={t("common.copyFailed.title")}>
+              {copyProblem}
             </Callout>
           )}
 

@@ -32,9 +32,7 @@ use crate::agent::{
 use crate::agent_history::AgentTerminalHistoryStore;
 use crate::agent_plans::{AgentPlanSnapshot, FileAgentPlanStore};
 use crate::backup::{DecryptedBackup, ValidatedAppData};
-use crate::clipboard::{
-    read_terminal_text, write_terminal_text, SensitiveClipboard, SensitiveClipboardClearOutcome,
-};
+use crate::clipboard::{SensitiveClipboard, SensitiveClipboardClearOutcome};
 use crate::credentials::{CredentialKind, CredentialStoreStatus};
 use crate::domain::{ConnectionProfile, Protocol};
 use crate::hostkeys::{HostKeyRecord, HostTrustStore};
@@ -60,7 +58,7 @@ use crate::vnc::{
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 use zeroize::Zeroizing;
 
@@ -70,6 +68,7 @@ type AppAgentPlans = Mutex<FileAgentPlanStore>;
 
 const MAX_CLIPBOARD_IMAGE_EDGE: u32 = 16_384;
 const MAX_CLIPBOARD_IMAGE_PIXELS: usize = 32 * 1024 * 1024;
+const CLIPBOARD_EXIT_TIMEOUT: Duration = Duration::from_millis(750);
 
 fn validate_clipboard_image(width: u32, height: u32, rgba_bytes: usize) -> Result<(), String> {
     if width == 0 || height == 0 {
@@ -140,6 +139,16 @@ where
     tauri::async_runtime::spawn_blocking(operation)
         .await
         .map_err(|error| format!("Backup operation did not complete: {error}"))?
+}
+
+async fn clipboard_call<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("Clipboard operation did not complete: {error}"))?
 }
 
 #[derive(Debug, Serialize)]
@@ -439,49 +448,50 @@ fn agent_broadcast(
 /// so on Ctrl+V the frontend pastes this path in. Returns `None` when the
 /// clipboard holds no image, which the caller treats as "nothing to paste".
 #[tauri::command]
-fn agent_paste_clipboard_image(
+async fn agent_paste_clipboard_image(
     app: AppHandle,
     session_id: String,
     registry: State<'_, Arc<AgentRegistry>>,
+    clipboard: State<'_, Arc<SensitiveClipboard>>,
 ) -> Result<Option<String>, String> {
-    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let registry = Arc::clone(registry.inner());
+    let clipboard = Arc::clone(clipboard.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        // Validate the target before reading potentially sensitive clipboard data.
+        if registry.session_summary(&session_id).is_none() {
+            return Err("Agent session no longer exists.".to_string());
+        }
 
-    // Validate the target before reading potentially sensitive clipboard data.
-    if registry.session_summary(&session_id).is_none() {
-        return Err("Agent session no longer exists.".to_string());
-    }
+        let Some((width, height, rgba)) = clipboard.read_image_rgba(&app)? else {
+            return Ok(None);
+        };
+        if width == 0 || height == 0 {
+            return Ok(None);
+        }
+        validate_clipboard_image(width, height, rgba.len())?;
 
-    let image = match app.clipboard().read_image() {
-        Ok(image) => image,
-        Err(_) => return Ok(None),
-    };
-    let width = image.width();
-    let height = image.height();
-    if width == 0 || height == 0 {
-        return Ok(None);
-    }
-    let rgba = image.rgba().to_vec();
-    validate_clipboard_image(width, height, rgba.len())?;
-
-    let mut file = tempfile::Builder::new()
-        .prefix("latticeterm-clip-")
-        .suffix(".png")
-        .tempfile()
-        .map_err(|err| format!("Cannot stage the pasted image: {err}"))?;
-    {
-        let writer = std::io::BufWriter::new(file.as_file_mut());
-        let mut encoder = png::Encoder::new(writer, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut png_writer = encoder
-            .write_header()
-            .map_err(|err| format!("Cannot encode the pasted image: {err}"))?;
-        png_writer
-            .write_image_data(&rgba)
-            .map_err(|err| format!("Cannot encode the pasted image: {err}"))?;
-    }
-    let path = registry.stage_clipboard_image(&session_id, file)?;
-    Ok(Some(path.to_string_lossy().into_owned()))
+        let mut file = tempfile::Builder::new()
+            .prefix("latticeterm-clip-")
+            .suffix(".png")
+            .tempfile()
+            .map_err(|err| format!("Cannot stage the pasted image: {err}"))?;
+        {
+            let writer = std::io::BufWriter::new(file.as_file_mut());
+            let mut encoder = png::Encoder::new(writer, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut png_writer = encoder
+                .write_header()
+                .map_err(|err| format!("Cannot encode the pasted image: {err}"))?;
+            png_writer
+                .write_image_data(&rgba)
+                .map_err(|err| format!("Cannot encode the pasted image: {err}"))?;
+        }
+        let path = registry.stage_clipboard_image(&session_id, file)?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|error| format!("Clipboard image operation did not complete: {error}"))?
 }
 
 /// Reads a running CLI's own conversation into plain, role-labelled text so it
@@ -797,31 +807,65 @@ async fn vault_change_password(
 }
 
 #[tauri::command]
-fn sensitive_clipboard_copy(
+async fn sensitive_clipboard_copy(
     app: AppHandle,
     value: String,
     clear_after_seconds: Option<u64>,
     clipboard: State<'_, Arc<SensitiveClipboard>>,
 ) -> Result<(), String> {
-    clipboard.copy(&app, value, clear_after_seconds)
+    let clipboard = Arc::clone(clipboard.inner());
+    clipboard_call(move || clipboard.copy(&app, value, clear_after_seconds)).await
 }
 
 #[tauri::command]
-fn sensitive_clipboard_clear(
+async fn sensitive_clipboard_clear(
     app: AppHandle,
     clipboard: State<'_, Arc<SensitiveClipboard>>,
-) -> SensitiveClipboardClearOutcome {
-    clipboard.clear_current(&app)
+) -> Result<SensitiveClipboardClearOutcome, String> {
+    let clipboard = Arc::clone(clipboard.inner());
+    clipboard_call(move || Ok(clipboard.clear_current(&app))).await
 }
 
 #[tauri::command]
-fn terminal_clipboard_read_text(app: AppHandle) -> Result<Option<String>, String> {
-    read_terminal_text(&app)
+async fn terminal_clipboard_read_text(
+    app: AppHandle,
+    clipboard: State<'_, Arc<SensitiveClipboard>>,
+) -> Result<Option<String>, String> {
+    let clipboard = Arc::clone(clipboard.inner());
+    clipboard_call(move || clipboard.read_terminal_text(&app)).await
 }
 
 #[tauri::command]
-fn terminal_clipboard_write_text(app: AppHandle, text: String) -> Result<(), String> {
-    write_terminal_text(&app, text)
+async fn terminal_clipboard_write_text(
+    app: AppHandle,
+    text: String,
+    clipboard: State<'_, Arc<SensitiveClipboard>>,
+) -> Result<(), String> {
+    let clipboard = Arc::clone(clipboard.inner());
+    clipboard_call(move || clipboard.write_terminal_text(&app, text)).await
+}
+
+/// The restart exit code cannot be prevented by Tauri's ExitRequested API.
+/// Seal and time-bound clipboard cleanup before requesting it instead.
+#[tauri::command]
+async fn app_restart_safely(
+    app: AppHandle,
+    clipboard: State<'_, Arc<SensitiveClipboard>>,
+) -> Result<(), String> {
+    let clipboard = Arc::clone(clipboard.inner());
+    if !clipboard.seal_for_exit() {
+        if clipboard.exit_ready() {
+            app.request_restart();
+            return Ok(());
+        }
+        return Err("LatticeTerm is already preparing to exit.".to_string());
+    }
+    let _ = clipboard
+        .clear_auto_on_exit_timeboxed(app.clone(), CLIPBOARD_EXIT_TIMEOUT)
+        .await;
+    clipboard.mark_exit_ready();
+    app.request_restart();
+    Ok(())
 }
 
 #[tauri::command]
@@ -1731,15 +1775,13 @@ pub fn run() {
     ));
     #[cfg(mobile)]
     let builder = tauri::Builder::default();
-    let builder = builder
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_dialog::init());
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
     // Auto-update and relaunch are desktop concerns; mobile installs come
     // from a package manager and restart through the OS.
     #[cfg(desktop)]
-    let builder = builder
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     let app = builder
         .setup(|app| {
             // Connection data belongs beside the app's other data, not next to
@@ -1815,6 +1857,7 @@ pub fn run() {
             sensitive_clipboard_clear,
             terminal_clipboard_read_text,
             terminal_clipboard_write_text,
+            app_restart_safely,
             credential_exists,
             credential_delete,
             storage_status,
@@ -1884,16 +1927,42 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building LatticeTerm");
     app.run(|handle, event| {
-        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+        if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+            let clipboard = Arc::clone(handle.state::<Arc<SensitiveClipboard>>().inner());
+            let is_restart = code == Some(tauri::RESTART_EXIT_CODE);
+
+            if !clipboard.exit_ready() && !is_restart {
+                // A normal close can be delayed. Raise the seal synchronously,
+                // clear off-main with a deadline, then request the real exit.
+                api.prevent_exit();
+                if clipboard.seal_for_exit() {
+                    let exit_app = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = clipboard
+                            .clear_auto_on_exit_timeboxed(exit_app.clone(), CLIPBOARD_EXIT_TIMEOUT)
+                            .await;
+                        clipboard.mark_exit_ready();
+                        exit_app.exit(code.unwrap_or(0));
+                    });
+                }
+                return;
+            }
+
+            // Safe updater restarts arrive ready. An unexpected restart cannot
+            // be prevented by Tauri, but still seals new writes and performs
+            // the non-clipboard shutdown exactly once.
+            if is_restart && !clipboard.exit_ready() {
+                clipboard.seal_for_exit();
+            }
+            if !clipboard.begin_runtime_cleanup() {
+                return;
+            }
             let registry = handle.state::<Arc<AgentRegistry>>();
             if let Ok(mut history) = handle.state::<AppAgentHistory>().lock() {
                 let _ = history.save(registry.terminal_history_snapshots());
             }
             registry.stop_all();
             handle.state::<Arc<TunnelRegistry>>().stop_all();
-            handle
-                .state::<Arc<SensitiveClipboard>>()
-                .clear_auto_on_exit(handle);
         }
     });
 }
