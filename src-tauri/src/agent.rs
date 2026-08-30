@@ -6874,6 +6874,42 @@ notify = ["notify.exe", "turn-ended"]"#,
 
     #[cfg(unix)]
     #[test]
+    fn rapid_process_exit_is_removed_and_emitted_once() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        let session = launch(
+            sink,
+            registry.clone(),
+            AgentLaunchRequest {
+                definition_id: "custom".to_string(),
+                label: "Immediate exit".to_string(),
+                executable: "/bin/true".to_string(),
+                arguments: Vec::new(),
+                resume_session_id: None,
+                group_id: None,
+                seed_input: None,
+                restore_existing_session: false,
+                working_directory: std::env::current_dir().unwrap().display().to_string(),
+                cols: 80,
+                rows: 24,
+            },
+        )
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && collector.closed.lock().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(registry.session_summary(&session.session_id).is_none());
+        let closed = collector.closed.lock().unwrap();
+        assert_eq!(closed.len(), 1);
+        assert!(closed[0].starts_with("Process exited:"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn split_attention_prompt_is_not_reported_as_completed_by_the_pty_reader() {
         let collector = Arc::new(TestSink::default());
         let sink: Arc<dyn AgentSink> = collector.clone();

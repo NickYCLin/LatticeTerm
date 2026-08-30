@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentLaunchRaceGuard,
+  applyAgentRestoreCloseEvents,
   applyAgentStateEvent,
   applyAgentUsageEvent,
   agentCatalogForDisplay,
@@ -11,8 +13,94 @@ import {
   splitAgentArguments,
   type AgentDefinition,
 } from "./useAgentSessions";
+import { reconcileSessionSnapshot } from "./sessionSnapshot";
 
 describe("agent session transport", () => {
+  it("does not resurrect a launch whose close event arrived first", () => {
+    const guard = new AgentLaunchRaceGuard();
+    const attempt = guard.begin();
+
+    guard.observeClosed("agent-fast", "Process exited: code 0");
+
+    expect(attempt.finish("agent-fast")).toBe("Process exited: code 0");
+    expect(attempt.finish("agent-fast")).toBeNull();
+  });
+
+  it("keeps concurrent launch tombstones until the matching attempt settles", () => {
+    const guard = new AgentLaunchRaceGuard();
+    const fast = guard.begin();
+    const running = guard.begin();
+    guard.observeClosed("agent-fast", "Process exited");
+
+    expect(running.finish("agent-running")).toBeNull();
+    expect(fast.finish("agent-fast")).toBe("Process exited");
+
+    const later = guard.begin();
+    expect(later.finish("agent-fast")).toBeNull();
+  });
+
+  it("clears unrelated close events after a rejected launch settles", () => {
+    const guard = new AgentLaunchRaceGuard();
+    const rejected = guard.begin();
+    guard.observeClosed("agent-unrelated", "Process exited");
+    rejected.cancel();
+
+    const later = guard.begin();
+    expect(later.finish("agent-unrelated")).toBeNull();
+  });
+
+  it("keeps restore snapshot tombstones isolated from direct launches", () => {
+    const guard = new AgentLaunchRaceGuard();
+    const direct = guard.begin();
+    const restore = guard.begin();
+    guard.observeClosed("agent-fast", "Process exited: code 0");
+
+    expect(direct.finish("agent-fast")).toBe("Process exited: code 0");
+    const closedDuringRestore = restore.finishSnapshot();
+    expect(closedDuringRestore.get("agent-fast")).toBe(
+      "Process exited: code 0",
+    );
+
+    const fastSession = {
+      sessionId: "agent-fast",
+      groupId: "agent-fast",
+      groupLabel: "Fast CLI",
+      definitionId: "custom",
+      label: "Fast CLI",
+      model: null,
+      executable: "/bin/true",
+      launchArguments: [],
+      workingDirectory: "/work",
+      state: "working" as const,
+      stateSource: "heuristic" as const,
+      processId: 42,
+      tokenUsage: null,
+      capturedSessionId: null,
+    };
+    const closedIds = new Set(closedDuringRestore.keys());
+    expect(reconcileSessionSnapshot([], [fastSession], closedIds)).toEqual([]);
+    expect(
+      applyAgentRestoreCloseEvents(
+        [
+          {
+            planId: "plan-fast",
+            label: "Fast CLI",
+            session: fastSession,
+            error: null,
+          },
+        ],
+        closedDuringRestore,
+      ),
+    ).toEqual([
+      {
+        planId: "plan-fast",
+        label: "Fast CLI",
+        session: null,
+        error: "Fast CLI exited during startup: Process exited: code 0",
+      },
+    ]);
+  });
+
   it("shows Antigravity as Google's single consumer item with Gemini login data", () => {
     const base = {
       adapterVersion: 1,

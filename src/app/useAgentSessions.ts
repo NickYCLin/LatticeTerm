@@ -263,6 +263,77 @@ const MAX_PENDING_OUTPUT = 256 * 1024;
 export const MAX_AGENT_BROADCAST_TARGETS = 32;
 export const MAX_SAVED_AGENT_PLANS = 32;
 
+interface AgentLaunchAttempt {
+  /** Finishes once and returns an early close reason for the resolved session. */
+  finish: (sessionId: string) => string | null;
+  /** Finishes once and returns every close observed during a snapshot request. */
+  finishSnapshot: () => ReadonlyMap<string, string>;
+  /** Finishes without consuming close metadata, e.g. after an invoke error. */
+  cancel: () => void;
+}
+
+/**
+ * Records close events that beat an in-flight launch or restore response.
+ * Per-attempt maps keep concurrent operations isolated and bound tombstone life.
+ */
+export class AgentLaunchRaceGuard {
+  private readonly activeAttempts = new Set<Map<string, string>>();
+
+  begin(): AgentLaunchAttempt {
+    const closedDuringAttempt = new Map<string, string>();
+    this.activeAttempts.add(closedDuringAttempt);
+    let finished = false;
+    const settle = () => {
+      if (finished) return false;
+      finished = true;
+      this.activeAttempts.delete(closedDuringAttempt);
+      return true;
+    };
+    return {
+      finish: (sessionId: string) => {
+        if (!settle()) return null;
+        const reason = closedDuringAttempt.get(sessionId) ?? null;
+        return reason;
+      },
+      finishSnapshot: () => {
+        if (!settle()) return new Map();
+        return new Map(closedDuringAttempt);
+      },
+      cancel: () => {
+        settle();
+      },
+    };
+  }
+
+  observeClosed(sessionId: string, reason: string) {
+    for (const attempt of this.activeAttempts) {
+      attempt.set(sessionId, reason);
+    }
+  }
+}
+
+function agentStartupExitMessage(label: string, reason: string): string {
+  return `${label} exited during startup: ${reason}`;
+}
+
+export function applyAgentRestoreCloseEvents(
+  outcomes: AgentRestoreOutcome[],
+  closedDuringRestore: ReadonlyMap<string, string>,
+): AgentRestoreOutcome[] {
+  return outcomes.map((outcome) => {
+    const sessionId = outcome.session?.sessionId;
+    if (!sessionId || !closedDuringRestore.has(sessionId)) return outcome;
+    return {
+      ...outcome,
+      session: null,
+      error: agentStartupExitMessage(
+        outcome.label,
+        closedDuringRestore.get(sessionId) ?? "Process exited",
+      ),
+    };
+  });
+}
+
 async function core() {
   return import("@tauri-apps/api/core");
 }
@@ -411,6 +482,7 @@ export function useAgentSessions(): AgentApi {
   const outputOffsets = useRef(new Map<string, number>());
   const sessionsRef = useRef(sessions);
   const intentionalDisconnects = useRef(new Set<string>());
+  const launchRaceGuard = useRef(new AgentLaunchRaceGuard());
   sessionsRef.current = sessions;
 
   const refreshCatalog = useCallback(async () => {
@@ -503,6 +575,10 @@ export function useAgentSessions(): AgentApi {
         }>("agent://closed", (event) => {
           const sessionId = event.payload.sessionId;
           if (hydrating) closedDuringHydration.add(sessionId);
+          launchRaceGuard.current.observeClosed(
+            sessionId,
+            event.payload.reason,
+          );
           const intentional = intentionalDisconnects.current.delete(sessionId);
           if (!intentional) {
             setLastClosed(
@@ -720,14 +796,28 @@ export function useAgentSessions(): AgentApi {
 
   const launch = useCallback(async (request: AgentLaunchRequest) => {
     const { invoke } = await core();
-    const session = await invoke<AgentSessionSummary>("agent_launch", {
-      request,
-    });
-    setSessions((current) => [
-      ...current.filter((entry) => entry.sessionId !== session.sessionId),
-      session,
-    ]);
-    return session;
+    const attempt = launchRaceGuard.current.begin();
+    try {
+      const session = await invoke<AgentSessionSummary>("agent_launch", {
+        request,
+      });
+      const closedReason = attempt.finish(session.sessionId);
+      if (closedReason !== null) {
+        setLastClosed((current) =>
+          current?.sessionId === session.sessionId
+            ? { ...current, label: session.label, reason: closedReason }
+            : current,
+        );
+        throw new Error(agentStartupExitMessage(session.label, closedReason));
+      }
+      setSessions((current) => [
+        ...current.filter((entry) => entry.sessionId !== session.sessionId),
+        session,
+      ]);
+      return session;
+    } finally {
+      attempt.cancel();
+    }
   }, []);
 
   const rename = useCallback(async (sessionId: string, label: string) => {
@@ -789,15 +879,26 @@ export function useAgentSessions(): AgentApi {
 
   const restorePlans = useCallback(async (planIds: string[]) => {
     const { invoke } = await core();
-    const outcomes = await invoke<AgentRestoreOutcome[]>("agent_plan_restore", {
-      planIds,
-    });
-    const currentSessions =
-      await invoke<AgentSessionSummary[]>("agent_sessions");
-    setSessions((current) =>
-      reconcileSessionSnapshot(current, currentSessions),
-    );
-    return outcomes;
+    const attempt = launchRaceGuard.current.begin();
+    try {
+      const outcomes = await invoke<AgentRestoreOutcome[]>("agent_plan_restore", {
+        planIds,
+      });
+      const currentSessions =
+        await invoke<AgentSessionSummary[]>("agent_sessions");
+      const closedDuringRestore = attempt.finishSnapshot();
+      const closedSessionIds = new Set(closedDuringRestore.keys());
+      setSessions((current) =>
+        reconcileSessionSnapshot(
+          current,
+          currentSessions,
+          closedSessionIds,
+        ),
+      );
+      return applyAgentRestoreCloseEvents(outcomes, closedDuringRestore);
+    } finally {
+      attempt.cancel();
+    }
   }, []);
 
   const send = useCallback(async (sessionId: string, data: string) => {
