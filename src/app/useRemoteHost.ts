@@ -1,7 +1,10 @@
 /** User-controlled lifecycle for sharing this device through Lattice Remote. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { reconcileSingletonSnapshot } from "./sessionSnapshot";
+import {
+  reconcileSingletonSnapshot,
+  snapshotSessionIds,
+} from "./sessionSnapshot";
 
 export interface RemoteHostStatus {
   hostId: string;
@@ -107,13 +110,14 @@ export function useRemoteHost(): RemoteHostApi {
           "remote_host_status",
         );
         if (!cancelled) {
+          const closedSnapshot = snapshotSessionIds(closedDuringHydration);
           setStatus((latest) => {
             if (statusRevision.current === hydrationRevision) return current;
             return reconcileSingletonSnapshot(
               latest,
               current,
               (entry) => entry.hostId,
-              closedDuringHydration,
+              closedSnapshot,
             );
           });
           hydrating = false;

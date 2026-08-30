@@ -162,7 +162,7 @@ async fn a_local_forward_carries_real_bytes_end_to_end() {
     let status = registry.status("live-local").unwrap();
     assert!(status.bytes_downloaded > 0, "downloaded bytes were counted");
 
-    registry.stop("live-local").unwrap();
+    registry.stop("live-local").await.unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(
         TcpStream::connect(("127.0.0.1", local_port)).await.is_err(),
@@ -216,7 +216,7 @@ async fn a_dynamic_socks5_proxy_connects_to_a_requested_target() {
         "expected the proxied service's banner, got {banner:?}"
     );
 
-    registry.stop("live-dynamic").unwrap();
+    registry.stop("live-dynamic").await.unwrap();
 }
 
 #[tokio::test]
@@ -286,5 +286,5 @@ async fn a_remote_forward_delivers_server_side_connections_locally() {
         "remote bytes reached the local target"
     );
 
-    registry.stop("live-remote").unwrap();
+    registry.stop("live-remote").await.unwrap();
 }

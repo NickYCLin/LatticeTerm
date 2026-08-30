@@ -3,6 +3,8 @@ import {
   createSessionClosedNotice,
   reconcileSessionSnapshot,
   reconcileSingletonSnapshot,
+  snapshotHydrationMap,
+  snapshotSessionIds,
   shouldClearSessionSelection,
 } from "./sessionSnapshot";
 
@@ -53,6 +55,34 @@ describe("createSessionClosedNotice", () => {
         43,
       ).label,
     ).toBe("ssh-early-close");
+  });
+});
+
+describe("hydration snapshots", () => {
+  it("remain stable when React runs an updater after buffers are cleared", () => {
+    const closedBuffer = new Set(["closed"]);
+    const stateBuffer = new Map([["working", 2]]);
+    const closedSnapshot = snapshotSessionIds(closedBuffer);
+    const stateSnapshot = snapshotHydrationMap(stateBuffer);
+    const deferredUpdater = () => ({
+      sessions: reconcileSessionSnapshot<TestSession>(
+        [],
+        [
+          { sessionId: "open", revision: 1 },
+          { sessionId: "closed", revision: 1 },
+        ],
+        closedSnapshot,
+      ),
+      workingRevision: stateSnapshot.get("working"),
+    });
+
+    closedBuffer.clear();
+    stateBuffer.clear();
+
+    expect(deferredUpdater()).toEqual({
+      sessions: [{ sessionId: "open", revision: 1 }],
+      workingRevision: 2,
+    });
   });
 });
 

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createSessionClosedNotice,
   reconcileSessionSnapshot,
+  snapshotHydrationMap,
+  snapshotSessionIds,
   type SessionClosedNotice,
 } from "./sessionSnapshot";
 
@@ -796,21 +798,24 @@ export function useAgentSessions(): AgentApi {
         ]);
         if (disposed) return;
 
+        const closedSnapshot = snapshotSessionIds(closedDuringHydration);
+        const stateSnapshot = snapshotHydrationMap(stateDuringHydration);
+        const captureSnapshot = snapshotHydrationMap(captureDuringHydration);
+        const modelSnapshot = snapshotHydrationMap(modelDuringHydration);
+        const usageSnapshot = snapshotHydrationMap(usageDuringHydration);
         setSessions((current) => {
           let restored = reconcileSessionSnapshot(
             current,
             existingSessions,
-            closedDuringHydration,
+            closedSnapshot,
           );
-          for (const event of stateDuringHydration.values()) {
+          for (const event of stateSnapshot.values()) {
             restored = applyAgentStateEvent(restored, event);
           }
           return restored.map((session) => {
-            const capturedSessionId = captureDuringHydration.get(
-              session.sessionId,
-            );
-            const model = modelDuringHydration.get(session.sessionId);
-            const tokenUsage = usageDuringHydration.get(session.sessionId);
+            const capturedSessionId = captureSnapshot.get(session.sessionId);
+            const model = modelSnapshot.get(session.sessionId);
+            const tokenUsage = usageSnapshot.get(session.sessionId);
             return {
               ...session,
               ...(capturedSessionId ? { capturedSessionId } : {}),

@@ -3,7 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   reconcileSessionSnapshot,
+  SessionConnectRaceGuard,
+  SessionEventReadinessGate,
+  snapshotSessionIds,
   type SessionClosedNotice,
+} from "./sessionSnapshot";
+
+export {
+  SessionConnectRaceGuard as RemoteConnectRaceGuard,
+  SessionEventReadinessGate as RemoteEventReadinessGate,
 } from "./sessionSnapshot";
 
 export interface RemoteFrame {
@@ -507,108 +515,6 @@ export class RemoteTerminalOutputRouter {
   }
 }
 
-interface RemoteConnectAttempt {
-  finish: () => ReadonlyMap<string, string>;
-  cancel: () => void;
-}
-
-interface RemoteEventReadinessAttempt {
-  ready: () => void;
-  fail: () => void;
-}
-
-interface RemoteEventReadinessCycle {
-  promise: Promise<boolean>;
-  settle: (ready: boolean) => void;
-}
-
-function remoteEventReadinessCycle(): RemoteEventReadinessCycle {
-  let settled = false;
-  let resolveCycle: (ready: boolean) => void = () => {};
-  const promise = new Promise<boolean>((resolve) => {
-    resolveCycle = resolve;
-  });
-  return {
-    promise,
-    settle: (ready) => {
-      if (settled) return;
-      settled = true;
-      resolveCycle(ready);
-    },
-  };
-}
-
-/**
- * Gates direct connects on the app-wide event listeners. A React StrictMode
- * cleanup can fail one generation and immediately replace it; existing waiters
- * follow the replacement instead of hanging or slipping through the gap.
- */
-export class RemoteEventReadinessGate {
-  private current = remoteEventReadinessCycle();
-
-  begin(): RemoteEventReadinessAttempt {
-    const previous = this.current;
-    const cycle = remoteEventReadinessCycle();
-    this.current = cycle;
-    previous.settle(false);
-    return {
-      ready: () => {
-        if (this.current === cycle) cycle.settle(true);
-        else cycle.settle(false);
-      },
-      fail: () => {
-        if (this.current !== cycle) {
-          cycle.settle(false);
-          return;
-        }
-        const failed = remoteEventReadinessCycle();
-        this.current = failed;
-        cycle.settle(false);
-        failed.settle(false);
-      },
-    };
-  }
-
-  async wait(): Promise<boolean> {
-    for (;;) {
-      const cycle = this.current;
-      const ready = await cycle.promise;
-      if (this.current !== cycle) continue;
-      return ready;
-    }
-  }
-}
-
-/** Buffers close events that can beat a direct remote_connect response. */
-export class RemoteConnectRaceGuard {
-  private readonly attempts = new Set<Map<string, string>>();
-
-  begin(): RemoteConnectAttempt {
-    const closed = new Map<string, string>();
-    this.attempts.add(closed);
-    let finished = false;
-    const settle = () => {
-      if (finished) return false;
-      finished = true;
-      this.attempts.delete(closed);
-      return true;
-    };
-    return {
-      finish: () => {
-        if (!settle()) return new Map();
-        return new Map(closed);
-      },
-      cancel: () => {
-        settle();
-      },
-    };
-  }
-
-  observeClosed(sessionId: string, reason: string): void {
-    for (const attempt of this.attempts) attempt.set(sessionId, reason);
-  }
-}
-
 export function settleRemoteConnectOutcome(
   outcome: RemoteConnectOutcome,
   closed: ReadonlyMap<string, string>,
@@ -712,8 +618,8 @@ export function useRemoteSessions(): RemoteApi {
   const sessionsRef = useRef(sessions);
   const intentionalDisconnects = useRef(new Set<string>());
   const terminalOutput = useRef<RemoteTerminalOutputRouter | null>(null);
-  const connectRaceGuard = useRef(new RemoteConnectRaceGuard());
-  const eventReadiness = useRef(new RemoteEventReadinessGate());
+  const connectRaceGuard = useRef(new SessionConnectRaceGuard());
+  const eventReadiness = useRef(new SessionEventReadinessGate());
   if (!terminalOutput.current) {
     terminalOutput.current = new RemoteTerminalOutputRouter();
   }
@@ -845,12 +751,9 @@ export function useRemoteSessions(): RemoteApi {
               ? { ...session, width: frame.width, height: frame.height, frame }
               : { ...session, frame: null };
           });
+          const closedSnapshot = snapshotSessionIds(closedDuringHydration);
           setSessions((current) =>
-            reconcileSessionSnapshot(
-              current,
-              restored,
-              closedDuringHydration,
-            ),
+            reconcileSessionSnapshot(current, restored, closedSnapshot),
           );
           setTransfers((current) => {
             const next = { ...current };

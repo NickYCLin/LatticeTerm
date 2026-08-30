@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   reconcileSessionSnapshot,
+  SessionConnectRaceGuard,
+  SessionEventReadinessGate,
+  snapshotSessionIds,
   type SessionClosedNotice,
 } from "./sessionSnapshot";
 
@@ -73,12 +76,16 @@ export function useVncSessions(): VncApi {
   const [lastClosed, setLastClosed] = useState<SessionClosedNotice | null>(null);
   const sessionsRef = useRef(sessions);
   const intentionalDisconnects = useRef(new Set<string>());
+  const connectRaceGuard = useRef(new SessionConnectRaceGuard());
+  const eventReadiness = useRef(new SessionEventReadinessGate());
   sessionsRef.current = sessions;
 
   useEffect(() => {
+    const readinessAttempt = eventReadiness.current.begin();
     const disposers: Array<() => void> = [];
     let cancelled = false;
     let hydrating = true;
+    let listenersReady = false;
     const closedDuringHydration = new Set<string>();
     const pendingFrames = new Map<string, VncFrame>();
 
@@ -102,6 +109,10 @@ export function useVncSessions(): VncApi {
           "vnc://closed",
           (event) => {
             const sessionId = event.payload.sessionId;
+            connectRaceGuard.current.observeClosed(
+              sessionId,
+              event.payload.reason,
+            );
             if (hydrating) closedDuringHydration.add(sessionId);
             pendingFrames.delete(sessionId);
             const intentional = intentionalDisconnects.current.delete(sessionId);
@@ -123,7 +134,10 @@ export function useVncSessions(): VncApi {
             );
           },
         );
-        if (!keep(stopClosed)) return;
+        if (!keep(stopClosed)) {
+          readinessAttempt.fail();
+          return;
+        }
 
         const stopFrames = await listen<FrameEvent>("vnc://frame", (event) => {
           const frame: VncFrame = {
@@ -141,7 +155,13 @@ export function useVncSessions(): VncApi {
             ),
           );
         });
-        if (!keep(stopFrames)) return;
+        if (!keep(stopFrames)) {
+          readinessAttempt.fail();
+          return;
+        }
+
+        readinessAttempt.ready();
+        listenersReady = true;
 
         const existing =
           await invoke<Array<Omit<VncSessionSummary, "frame">>>("vnc_sessions");
@@ -152,18 +172,16 @@ export function useVncSessions(): VncApi {
               ? { ...session, width: frame.width, height: frame.height, frame }
               : { ...session, frame: null };
           });
+          const closedSnapshot = snapshotSessionIds(closedDuringHydration);
           setSessions((current) =>
-            reconcileSessionSnapshot(
-              current,
-              restored,
-              closedDuringHydration,
-            ),
+            reconcileSessionSnapshot(current, restored, closedSnapshot),
           );
           hydrating = false;
           closedDuringHydration.clear();
           pendingFrames.clear();
         }
       } catch {
+        if (!listenersReady) readinessAttempt.fail();
         hydrating = false;
         closedDuringHydration.clear();
         pendingFrames.clear();
@@ -174,12 +192,21 @@ export function useVncSessions(): VncApi {
     void subscribe();
     return () => {
       cancelled = true;
+      readinessAttempt.fail();
       for (const dispose of disposers) dispose();
     };
   }, []);
 
   const connect = useCallback(
     async (request: VncConnectRequest): Promise<VncConnectOutcome> => {
+      if (!(await eventReadiness.current.wait())) {
+        return {
+          outcome: "failed",
+          stage: "events",
+          detail: "VNC event listeners are unavailable.",
+        };
+      }
+      const attempt = connectRaceGuard.current.begin();
       try {
         const { invoke } = await core();
         const outcome = await invoke<VncConnectOutcome>("vnc_connect", {
@@ -187,6 +214,24 @@ export function useVncSessions(): VncApi {
         });
         if (outcome.outcome === "connected") {
           const { outcome: _outcome, ...summary } = outcome;
+          const closed = attempt.finish();
+          if (closed.has(summary.sessionId)) {
+            const reason = closed.get(summary.sessionId) || "Connection closed";
+            setLastClosed((current) =>
+              current?.sessionId === summary.sessionId
+                ? {
+                    ...current,
+                    label: summary.host + ":" + summary.port,
+                    reason,
+                  }
+                : current,
+            );
+            return {
+              outcome: "failed",
+              stage: "startup",
+              detail: `${summary.host}:${summary.port} closed during startup: ${reason}`,
+            };
+          }
           setSessions((current) => [
             ...current.filter(
               (session) => session.sessionId !== summary.sessionId,
@@ -201,6 +246,8 @@ export function useVncSessions(): VncApi {
           stage: "invoke",
           detail: error instanceof Error ? error.message : String(error),
         };
+      } finally {
+        attempt.cancel();
       }
     },
     [],

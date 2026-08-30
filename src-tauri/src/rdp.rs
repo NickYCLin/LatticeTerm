@@ -3,6 +3,12 @@
 //! The password is written once to the child process stdin. It is never placed
 //! in process arguments, session state, events, or logs.
 
+use crate::sidecar::{
+    boxed_sidecar_stdin, desktop_sidecar_admission, terminate_sidecar, wait_for_sidecar_exit,
+    wait_for_stop, write_json_line_timeboxed, write_locked_json_line_timeboxed, BoxedSidecarStdin,
+    SidecarCloseCancellationGuard, MAX_DESKTOP_SIDECARS, SIDECAR_COMMAND_TIMEOUT,
+    SIDECAR_EXIT_TIMEOUT,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,13 +17,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::Mutex as AsyncMutex;
-use tokio::task::AbortHandle;
-use tokio::time::timeout;
+use tokio::io::{AsyncBufReadExt as _, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::{watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
+use tokio::time::{sleep, timeout};
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+static NEXT_RESERVATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,13 +153,58 @@ struct RdpClosedEvent {
 
 struct RdpSessionRecord {
     summary: RdpSessionSummary,
-    stdin: AsyncMutex<ChildStdin>,
-    abort: AbortHandle,
+    generation: u64,
+    stdin: AsyncMutex<BoxedSidecarStdin>,
+    stop: watch::Sender<bool>,
 }
 
 #[derive(Default)]
+struct RdpRegistryState {
+    sessions: HashMap<String, Arc<RdpSessionRecord>>,
+    closing: HashMap<u64, watch::Sender<bool>>,
+    pending: HashMap<u64, watch::Sender<bool>>,
+    shutting_down: bool,
+}
+
 pub struct RdpRegistry {
-    sessions: Mutex<HashMap<String, Arc<RdpSessionRecord>>>,
+    state: Mutex<RdpRegistryState>,
+    admission: Arc<Semaphore>,
+}
+
+impl Default for RdpRegistry {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(RdpRegistryState::default()),
+            admission: desktop_sidecar_admission(),
+        }
+    }
+}
+
+pub(crate) struct RdpConnectReservation {
+    registry: Arc<RdpRegistry>,
+    token: u64,
+    stop: watch::Sender<bool>,
+    stop_receiver: Option<watch::Receiver<bool>>,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl RdpConnectReservation {
+    async fn stopped(&mut self) {
+        if let Some(stop) = self.stop_receiver.as_mut() {
+            wait_for_stop(stop).await;
+        }
+    }
+}
+
+impl Drop for RdpConnectReservation {
+    fn drop(&mut self) {
+        if self.permit.is_none() {
+            return;
+        }
+        if let Ok(mut state) = self.registry.state.lock() {
+            state.pending.remove(&self.token);
+        }
+    }
 }
 
 impl RdpRegistry {
@@ -160,41 +212,192 @@ impl RdpRegistry {
         Self::default()
     }
 
-    fn insert(&self, record: Arc<RdpSessionRecord>) -> Result<(), String> {
-        self.sessions
+    pub(crate) fn with_admission(admission: Arc<Semaphore>) -> Self {
+        Self {
+            state: Mutex::new(RdpRegistryState::default()),
+            admission,
+        }
+    }
+
+    pub(crate) fn reserve(self: &Arc<Self>) -> Result<RdpConnectReservation, String> {
+        if self
+            .state
             .lock()
             .map_err(|error| error.to_string())?
+            .shutting_down
+        {
+            return Err("The RDP runtime is shutting down.".to_string());
+        }
+        let permit = Arc::clone(&self.admission)
+            .try_acquire_owned()
+            .map_err(|_| {
+                format!(
+                    "At most {MAX_DESKTOP_SIDECARS} RDP/VNC sessions can be connecting, connected, or closing at once."
+                )
+            })?;
+        let token = NEXT_RESERVATION.fetch_add(1, Ordering::Relaxed);
+        let (stop, stop_receiver) = watch::channel(false);
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        if state.shutting_down {
+            return Err("The RDP runtime is shutting down.".to_string());
+        }
+        state.pending.insert(token, stop.clone());
+        drop(state);
+        Ok(RdpConnectReservation {
+            registry: Arc::clone(self),
+            token,
+            stop,
+            stop_receiver: Some(stop_receiver),
+            permit: Some(permit),
+        })
+    }
+
+    fn commit(
+        &self,
+        reservation: &mut RdpConnectReservation,
+        record: Arc<RdpSessionRecord>,
+    ) -> Result<(OwnedSemaphorePermit, watch::Receiver<bool>), String> {
+        if !std::ptr::eq(self, Arc::as_ptr(&reservation.registry)) {
+            return Err("The RDP reservation belongs to another registry.".to_string());
+        }
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        if state.shutting_down {
+            return Err("The RDP runtime is shutting down.".to_string());
+        }
+        if !state.pending.contains_key(&reservation.token) {
+            return Err("The RDP connection reservation is no longer active.".to_string());
+        }
+        if state.sessions.contains_key(&record.summary.session_id) {
+            return Err(format!(
+                "RDP session '{}' is already registered.",
+                record.summary.session_id
+            ));
+        }
+        if reservation.permit.is_none() || reservation.stop_receiver.is_none() {
+            return Err("The RDP connection reservation was already committed.".to_string());
+        }
+
+        let permit = reservation.permit.take().expect("permit checked above");
+        let stop_receiver = reservation
+            .stop_receiver
+            .take()
+            .expect("stop receiver checked above");
+        state.pending.remove(&reservation.token);
+        state
+            .sessions
             .insert(record.summary.session_id.clone(), record);
-        Ok(())
+        Ok((permit, stop_receiver))
     }
 
     fn get(&self, session_id: &str) -> Result<Option<Arc<RdpSessionRecord>>, String> {
         Ok(self
-            .sessions
+            .state
             .lock()
             .map_err(|error| error.to_string())?
+            .sessions
             .get(session_id)
             .cloned())
     }
 
-    fn remove(&self, session_id: &str) -> Result<Option<Arc<RdpSessionRecord>>, String> {
-        Ok(self
+    fn begin_close(&self, session_id: &str) -> Result<Option<Arc<RdpSessionRecord>>, String> {
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        let Some(record) = state.sessions.remove(session_id) else {
+            return Ok(None);
+        };
+        state.closing.insert(record.generation, record.stop.clone());
+        Ok(Some(record))
+    }
+
+    fn begin_close_if_current(
+        &self,
+        session_id: &str,
+        generation: u64,
+    ) -> Result<Option<Arc<RdpSessionRecord>>, String> {
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        if state
             .sessions
-            .lock()
-            .map_err(|error| error.to_string())?
-            .remove(session_id))
+            .get(session_id)
+            .is_some_and(|record| record.generation == generation)
+        {
+            let record = state
+                .sessions
+                .remove(session_id)
+                .expect("the current RDP record was checked above");
+            state.closing.insert(record.generation, record.stop.clone());
+            Ok(Some(record))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn finish_worker(
+        &self,
+        session_id: &str,
+        generation: u64,
+    ) -> Result<Option<Arc<RdpSessionRecord>>, String> {
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        let record = if state
+            .sessions
+            .get(session_id)
+            .is_some_and(|record| record.generation == generation)
+        {
+            state.sessions.remove(session_id)
+        } else {
+            None
+        };
+        state.closing.remove(&generation);
+        Ok(record)
     }
 
     pub fn list(&self) -> Vec<RdpSessionSummary> {
-        let Ok(sessions) = self.sessions.lock() else {
+        let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
-        let mut summaries: Vec<_> = sessions
+        let mut summaries: Vec<_> = state
+            .sessions
             .values()
             .map(|record| record.summary.clone())
             .collect();
         summaries.sort_by(|left, right| left.session_id.cmp(&right.session_id));
         summaries
+    }
+
+    /// Permanently seals the registry and signals both handshakes and live
+    /// workers. Commit and shutdown share one lock, so a connection cannot be
+    /// published after the drain.
+    pub fn stop_all(&self) {
+        let (pending, closing, records) = match self.state.lock() {
+            Ok(mut state) => {
+                state.shutting_down = true;
+                let pending: Vec<watch::Sender<bool>> =
+                    state.pending.drain().map(|(_, stop)| stop).collect();
+                let closing: Vec<watch::Sender<bool>> =
+                    state.closing.drain().map(|(_, stop)| stop).collect();
+                let records: Vec<Arc<RdpSessionRecord>> =
+                    state.sessions.drain().map(|(_, record)| record).collect();
+                (pending, closing, records)
+            }
+            Err(poisoned) => {
+                let mut state = poisoned.into_inner();
+                state.shutting_down = true;
+                let pending: Vec<watch::Sender<bool>> =
+                    state.pending.drain().map(|(_, stop)| stop).collect();
+                let closing: Vec<watch::Sender<bool>> =
+                    state.closing.drain().map(|(_, stop)| stop).collect();
+                let records: Vec<Arc<RdpSessionRecord>> =
+                    state.sessions.drain().map(|(_, record)| record).collect();
+                (pending, closing, records)
+            }
+        };
+        for stop in pending {
+            let _ = stop.send(true);
+        }
+        for stop in closing {
+            let _ = stop.send(true);
+        }
+        for record in records {
+            let _ = record.stop.send(true);
+        }
     }
 }
 
@@ -258,16 +461,6 @@ fn failed(stage: &'static str, detail: impl Into<String>) -> RdpConnectOutcome {
     }
 }
 
-async fn write_line<T: Serialize>(stdin: &mut ChildStdin, value: &T) -> Result<(), String> {
-    let mut line = serde_json::to_vec(value).map_err(|error| error.to_string())?;
-    line.push(b'\n');
-    stdin
-        .write_all(&line)
-        .await
-        .map_err(|error| error.to_string())?;
-    stdin.flush().await.map_err(|error| error.to_string())
-}
-
 async fn read_event(
     lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
 ) -> Result<Option<EngineEvent>, String> {
@@ -279,7 +472,7 @@ async fn read_event(
         .map_err(|error| error.to_string())
 }
 
-fn spawn_engine() -> Result<(Child, ChildStdin, tokio::process::ChildStdout), String> {
+fn spawn_engine() -> Result<(Child, BoxedSidecarStdin, tokio::process::ChildStdout), String> {
     let path = engine_path()?;
     let mut child = Command::new(path)
         .stdin(Stdio::piped())
@@ -296,7 +489,7 @@ fn spawn_engine() -> Result<(Child, ChildStdin, tokio::process::ChildStdout), St
         .stdout
         .take()
         .ok_or_else(|| "The RDP engine stdout is unavailable.".to_string())?;
-    Ok((child, stdin, stdout))
+    Ok((child, boxed_sidecar_stdin(stdin), stdout))
 }
 
 pub async fn connect(
@@ -310,6 +503,11 @@ pub async fn connect(
     {
         return failed("connect", "The RDP target or username is incomplete.");
     }
+
+    let mut reservation = match registry.reserve() {
+        Ok(reservation) => reservation,
+        Err(error) => return failed("session", error),
+    };
 
     let (mut child, mut stdin, stdout) = match spawn_engine() {
         Ok(parts) => parts,
@@ -325,18 +523,45 @@ pub async fn connect(
         height: request.height.clamp(480, 1200),
         trusted_certificate_sha256: request.trusted_certificate_sha256,
     };
-    if let Err(error) = write_line(&mut stdin, &command).await {
-        let _ = child.kill().await;
+    let write_result = tokio::select! {
+        biased;
+        _ = reservation.stopped() => {
+            terminate_sidecar(&mut child).await;
+            return failed("session", "The RDP runtime stopped during connection setup.");
+        }
+        result = write_json_line_timeboxed(
+            &mut *stdin,
+            &command,
+            SIDECAR_COMMAND_TIMEOUT,
+            "The RDP engine stdin",
+        ) => result,
+    };
+    if let Err(error) = write_result {
+        terminate_sidecar(&mut child).await;
         return failed("engine", error);
     }
 
     let mut lines = BufReader::new(stdout).lines();
-    let first = match timeout(Duration::from_secs(20), read_event(&mut lines)).await {
+    let first_result = tokio::select! {
+        biased;
+        _ = reservation.stopped() => {
+            terminate_sidecar(&mut child).await;
+            return failed("session", "The RDP runtime stopped during connection setup.");
+        }
+        result = timeout(Duration::from_secs(20), read_event(&mut lines)) => result,
+    };
+    let first = match first_result {
         Ok(Ok(Some(event))) => event,
-        Ok(Ok(None)) => return failed("engine", "The RDP engine exited before connecting."),
-        Ok(Err(error)) => return failed("engine", error),
+        Ok(Ok(None)) => {
+            wait_for_sidecar_exit(&mut child).await;
+            return failed("engine", "The RDP engine exited before connecting.");
+        }
+        Ok(Err(error)) => {
+            terminate_sidecar(&mut child).await;
+            return failed("engine", error);
+        }
         Err(_) => {
-            let _ = child.kill().await;
+            terminate_sidecar(&mut child).await;
             return failed(
                 "connect",
                 "The RDP server did not answer within 20 seconds.",
@@ -350,19 +575,22 @@ pub async fn connect(
             fingerprint_sha256,
             detail,
         } => {
-            let _ = child.kill().await;
+            terminate_sidecar(&mut child).await;
             return RdpConnectOutcome::CertificateUnknown {
                 fingerprint_sha256,
                 detail,
             };
         }
         EngineEvent::Failed { stage: _, detail } => {
-            let _ = child.kill().await;
+            terminate_sidecar(&mut child).await;
             return failed("connect", detail);
         }
-        EngineEvent::Closed { reason } => return failed("connect", reason),
+        EngineEvent::Closed { reason } => {
+            terminate_sidecar(&mut child).await;
+            return failed("connect", reason);
+        }
         EngineEvent::Frame { .. } => {
-            let _ = child.kill().await;
+            terminate_sidecar(&mut child).await;
             return failed(
                 "protocol",
                 "The RDP engine sent a frame before it connected.",
@@ -380,12 +608,41 @@ pub async fn connect(
         height,
         interactive: true,
     };
+    let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+    let record = Arc::new(RdpSessionRecord {
+        summary: summary.clone(),
+        generation,
+        stdin: AsyncMutex::new(stdin),
+        stop: reservation.stop.clone(),
+    });
+    let (admission, mut stop_receiver) = match registry.commit(&mut reservation, record) {
+        Ok(committed) => committed,
+        Err(error) => {
+            terminate_sidecar(&mut child).await;
+            return failed("session", error);
+        }
+    };
+
     let task_summary = summary.clone();
     let task_registry = Arc::clone(&registry);
     let task_app = app.clone();
-    let task = tokio::spawn(async move {
+    tokio::spawn(async move {
+        // The permit follows the actual worker through process reap, so rapid
+        // connect/disconnect calls cannot bypass the cap.
+        let _admission = admission;
+        let mut reaped = false;
         let reason = loop {
-            match read_event(&mut lines).await {
+            let event = tokio::select! {
+                biased;
+                _ = wait_for_stop(&mut stop_receiver) => None,
+                event = read_event(&mut lines) => Some(event),
+            };
+            let Some(event) = event else {
+                terminate_sidecar(&mut child).await;
+                reaped = true;
+                break "The RDP engine was stopped.".to_string();
+            };
+            match event {
                 Ok(Some(EngineEvent::Frame {
                     frame_id,
                     width,
@@ -415,29 +672,27 @@ pub async fn connect(
                 Err(error) => break error,
             }
         };
-        let _ = child.wait().await;
-        let _ = task_registry.remove(&task_summary.session_id);
-        let _ = task_app.emit(
-            "rdp://closed",
-            RdpClosedEvent {
-                session_id: task_summary.session_id,
-                reason,
-            },
-        );
+        if !reaped {
+            wait_for_sidecar_exit(&mut child).await;
+        }
+        if matches!(
+            task_registry.finish_worker(&task_summary.session_id, generation),
+            Ok(Some(_))
+        ) {
+            let _ = task_app.emit(
+                "rdp://closed",
+                RdpClosedEvent {
+                    session_id: task_summary.session_id,
+                    reason,
+                },
+            );
+        }
     });
-    let record = Arc::new(RdpSessionRecord {
-        summary: summary.clone(),
-        stdin: AsyncMutex::new(stdin),
-        abort: task.abort_handle(),
-    });
-    if let Err(error) = registry.insert(record) {
-        task.abort();
-        return failed("session", error);
-    }
     RdpConnectOutcome::Connected { session: summary }
 }
 
 pub async fn input(
+    app: &AppHandle,
     registry: &RdpRegistry,
     session_id: &str,
     request: RdpInputRequest,
@@ -445,8 +700,36 @@ pub async fn input(
     let record = registry
         .get(session_id)?
         .ok_or_else(|| "RDP session not found.".to_string())?;
-    let mut stdin = record.stdin.lock().await;
-    write_line(&mut stdin, &request).await
+    let result = write_locked_json_line_timeboxed(
+        &record.stdin,
+        &request,
+        SIDECAR_COMMAND_TIMEOUT,
+        "The RDP engine stdin",
+    )
+    .await;
+    if let Err(error) = result {
+        let removed = registry.begin_close_if_current(session_id, record.generation);
+        let _ = record.stop.send(true);
+        match removed {
+            Ok(Some(_)) => {
+                let _ = app.emit(
+                    "rdp://closed",
+                    RdpClosedEvent {
+                        session_id: session_id.to_string(),
+                        reason: format!("The RDP input channel failed: {error}"),
+                    },
+                );
+            }
+            Ok(None) => {}
+            Err(remove_error) => {
+                return Err(format!(
+                    "{error}; the failed RDP session could not be removed: {remove_error}"
+                ));
+            }
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 pub async fn disconnect(
@@ -454,14 +737,25 @@ pub async fn disconnect(
     registry: &RdpRegistry,
     session_id: &str,
 ) -> Result<(), String> {
-    if let Some(record) = registry.remove(session_id)? {
-        let close_failed = {
-            let mut stdin = record.stdin.lock().await;
-            write_line(&mut stdin, &EngineCommand::Close).await.is_err()
-        };
-        if close_failed {
-            record.abort.abort();
+    if let Some(record) = registry.begin_close(session_id)? {
+        let cancellation_guard = SidecarCloseCancellationGuard::new(record.stop.clone());
+        let close_result = write_locked_json_line_timeboxed(
+            &record.stdin,
+            &EngineCommand::Close,
+            SIDECAR_COMMAND_TIMEOUT,
+            "The RDP engine stdin",
+        )
+        .await;
+        if close_result.is_err() {
+            let _ = record.stop.send(true);
+        } else {
+            let stop = record.stop.clone();
+            tokio::spawn(async move {
+                sleep(SIDECAR_EXIT_TIMEOUT).await;
+                let _ = stop.send(true);
+            });
         }
+        cancellation_guard.disarm();
         let _ = app.emit(
             "rdp://closed",
             RdpClosedEvent {
@@ -476,6 +770,28 @@ pub async fn disconnect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_record(
+        session_id: &str,
+        generation: u64,
+        stop: watch::Sender<bool>,
+    ) -> Arc<RdpSessionRecord> {
+        Arc::new(RdpSessionRecord {
+            summary: RdpSessionSummary {
+                session_id: session_id.to_string(),
+                profile_id: format!("profile-{session_id}"),
+                host: "rdp.test".to_string(),
+                port: 3389,
+                username: "tester".to_string(),
+                width: 1280,
+                height: 720,
+                interactive: true,
+            },
+            generation,
+            stdin: AsyncMutex::new(Box::new(tokio::io::sink())),
+            stop,
+        })
+    }
 
     #[test]
     fn rdp_session_ids_are_distinct_and_namespaced() {
@@ -515,5 +831,110 @@ mod tests {
         let encoded = serde_json::to_string(&RdpInputRequest::MouseMove { x: 3, y: 4 })
             .expect("serialize input");
         assert!(encoded.contains("\"kind\":\"mouseMove\""));
+    }
+
+    #[test]
+    fn admission_caps_connecting_and_connected_sidecars() {
+        let registry = Arc::new(RdpRegistry::new());
+        let reservations: Vec<_> = (0..MAX_DESKTOP_SIDECARS)
+            .map(|_| registry.reserve().expect("admission slot"))
+            .collect();
+        let error = registry.reserve().err().expect("the cap rejects overflow");
+        assert!(error.contains("At most 8"));
+        assert_eq!(
+            registry.state.lock().unwrap().pending.len(),
+            MAX_DESKTOP_SIDECARS
+        );
+
+        drop(reservations);
+        assert!(registry.state.lock().unwrap().pending.is_empty());
+        assert_eq!(registry.admission.available_permits(), MAX_DESKTOP_SIDECARS);
+    }
+
+    #[test]
+    fn rdp_and_vnc_share_one_global_sidecar_cap() {
+        let shared = Arc::new(Semaphore::new(MAX_DESKTOP_SIDECARS));
+        let rdp = Arc::new(RdpRegistry::with_admission(Arc::clone(&shared)));
+        let vnc = Arc::new(crate::vnc::VncRegistry::with_admission(Arc::clone(&shared)));
+        let vnc_reservations: Vec<_> = (0..crate::sidecar::MAX_VNC_SIDECARS)
+            .map(|_| vnc.reserve().expect("VNC shared admission slot"))
+            .collect();
+        let rdp_reservations: Vec<_> = (crate::sidecar::MAX_VNC_SIDECARS..MAX_DESKTOP_SIDECARS)
+            .map(|_| rdp.reserve().expect("RDP shared admission slot"))
+            .collect();
+
+        assert_eq!(shared.available_permits(), 0);
+        assert!(rdp.reserve().is_err());
+        assert!(vnc.reserve().is_err());
+
+        drop(vnc_reservations);
+        drop(rdp_reservations);
+        assert_eq!(shared.available_permits(), MAX_DESKTOP_SIDECARS);
+    }
+
+    #[tokio::test]
+    async fn registry_rejects_collisions_and_shutdown_signals_pending_and_live_workers() {
+        let registry = Arc::new(RdpRegistry::new());
+        let mut first = registry.reserve().unwrap();
+        let first_record = test_record("rdp-collision", 1, first.stop.clone());
+        let (_first_permit, mut first_stop) = registry.commit(&mut first, first_record).unwrap();
+
+        let mut duplicate = registry.reserve().unwrap();
+        let duplicate_record = test_record("rdp-collision", 2, duplicate.stop.clone());
+        let error = match registry.commit(&mut duplicate, duplicate_record) {
+            Ok(_) => panic!("a duplicate session id must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("already registered"));
+        assert_eq!(registry.list().len(), 1);
+
+        let closing_record = registry.begin_close("rdp-collision").unwrap().unwrap();
+        assert_eq!(registry.state.lock().unwrap().closing.len(), 1);
+        registry.stop_all();
+        assert!(registry.list().is_empty());
+        first_stop.changed().await.unwrap();
+        assert!(*first_stop.borrow());
+        drop(closing_record);
+        duplicate.stopped().await;
+        assert!(*duplicate.stop_receiver.as_ref().unwrap().borrow());
+        assert!(registry.reserve().err().unwrap().contains("shutting down"));
+    }
+
+    #[test]
+    fn removing_a_record_does_not_release_the_worker_admission_early() {
+        let shared = Arc::new(Semaphore::new(1));
+        let registry = Arc::new(RdpRegistry::with_admission(Arc::clone(&shared)));
+        let mut reservation = registry.reserve().unwrap();
+        let record = test_record("rdp-worker", 7, reservation.stop.clone());
+        let (worker_permit, _stop) = registry.commit(&mut reservation, record).unwrap();
+
+        assert!(registry.begin_close("rdp-worker").unwrap().is_some());
+        assert!(registry.reserve().is_err());
+        drop(worker_permit);
+        assert!(registry.reserve().is_ok());
+    }
+
+    #[test]
+    fn generation_check_allows_only_one_close_owner() {
+        let registry = Arc::new(RdpRegistry::new());
+        let mut reservation = registry.reserve().unwrap();
+        let record = test_record("rdp-owner", 11, reservation.stop.clone());
+        let (_permit, _stop) = registry.commit(&mut reservation, record).unwrap();
+
+        assert!(registry
+            .begin_close_if_current("rdp-owner", 10)
+            .unwrap()
+            .is_none());
+        assert!(registry
+            .begin_close_if_current("rdp-owner", 11)
+            .unwrap()
+            .is_some());
+        assert!(registry
+            .begin_close_if_current("rdp-owner", 11)
+            .unwrap()
+            .is_none());
+        assert_eq!(registry.state.lock().unwrap().closing.len(), 1);
+        assert!(registry.finish_worker("rdp-owner", 11).unwrap().is_none());
+        assert!(registry.state.lock().unwrap().closing.is_empty());
     }
 }

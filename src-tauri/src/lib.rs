@@ -17,6 +17,7 @@ pub mod remote_host;
 pub mod remote_pins;
 pub mod sftp;
 pub mod sftp_transfers;
+mod sidecar;
 pub mod ssh;
 pub mod storage;
 pub mod transcript;
@@ -1543,11 +1544,12 @@ async fn rdp_connect(
 
 #[tauri::command]
 async fn rdp_input(
+    app: AppHandle,
     session_id: String,
     request: RdpInputRequest,
     registry: State<'_, Arc<RdpRegistry>>,
 ) -> Result<(), String> {
-    crate::rdp::input(registry.inner(), &session_id, request).await
+    crate::rdp::input(&app, registry.inner(), &session_id, request).await
 }
 
 #[tauri::command]
@@ -1663,11 +1665,12 @@ async fn vnc_connect(
 
 #[tauri::command]
 async fn vnc_input(
+    app: AppHandle,
     session_id: String,
     request: VncInputRequest,
     registry: State<'_, Arc<VncRegistry>>,
 ) -> Result<(), String> {
-    crate::vnc::input(registry.inner(), &session_id, request).await
+    crate::vnc::input(&app, registry.inner(), &session_id, request).await
 }
 
 #[tauri::command]
@@ -1827,8 +1830,13 @@ pub fn run() {
             app.manage(Arc::new(TransferRegistry::new()));
             app.manage(Arc::new(RemoteRegistry::new()));
             app.manage(Arc::new(RemoteHostRegistry::new()));
-            app.manage(Arc::new(RdpRegistry::new()));
-            app.manage(Arc::new(VncRegistry::new()));
+            let desktop_sidecar_admission = crate::sidecar::desktop_sidecar_admission();
+            app.manage(Arc::new(RdpRegistry::with_admission(Arc::clone(
+                &desktop_sidecar_admission,
+            ))));
+            app.manage(Arc::new(VncRegistry::with_admission(
+                desktop_sidecar_admission,
+            )));
             app.manage(Arc::new(TunnelRegistry::new()));
             app.manage(Arc::new(SensitiveClipboard::default()));
             let agent_registry = AgentRegistry::with_local_reporter(Arc::new(
@@ -1980,6 +1988,8 @@ pub fn run() {
             }
             registry.stop_all();
             handle.state::<Arc<TunnelRegistry>>().stop_all();
+            handle.state::<Arc<RdpRegistry>>().stop_all();
+            handle.state::<Arc<VncRegistry>>().stop_all();
         }
     });
 }

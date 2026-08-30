@@ -9,6 +9,12 @@
 //! so instead of implying otherwise. Use it over trusted networks or an SSH
 //! tunnel — which this app can provide.
 
+use crate::sidecar::{
+    boxed_sidecar_stdin, desktop_sidecar_admission, terminate_sidecar, wait_for_sidecar_exit,
+    wait_for_stop, write_json_line_timeboxed, write_locked_json_line_timeboxed, BoxedSidecarStdin,
+    SidecarCloseCancellationGuard, MAX_DESKTOP_SIDECARS, MAX_VNC_SIDECARS, SIDECAR_COMMAND_TIMEOUT,
+    SIDECAR_EXIT_TIMEOUT,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,13 +23,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::Mutex as AsyncMutex;
-use tokio::task::AbortHandle;
-use tokio::time::timeout;
+use tokio::io::{AsyncBufReadExt as _, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::{watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
+use tokio::time::{sleep, timeout};
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+static NEXT_RESERVATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,13 +143,65 @@ struct VncClosedEvent {
 
 struct VncSessionRecord {
     summary: VncSessionSummary,
-    stdin: AsyncMutex<ChildStdin>,
-    abort: AbortHandle,
+    generation: u64,
+    stdin: AsyncMutex<BoxedSidecarStdin>,
+    stop: watch::Sender<bool>,
 }
 
 #[derive(Default)]
+struct VncRegistryState {
+    sessions: HashMap<String, Arc<VncSessionRecord>>,
+    closing: HashMap<u64, watch::Sender<bool>>,
+    pending: HashMap<u64, watch::Sender<bool>>,
+    shutting_down: bool,
+}
+
 pub struct VncRegistry {
-    sessions: Mutex<HashMap<String, Arc<VncSessionRecord>>>,
+    state: Mutex<VncRegistryState>,
+    admission: Arc<Semaphore>,
+    vnc_admission: Arc<Semaphore>,
+}
+
+impl Default for VncRegistry {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(VncRegistryState::default()),
+            admission: desktop_sidecar_admission(),
+            vnc_admission: Arc::new(Semaphore::new(MAX_VNC_SIDECARS)),
+        }
+    }
+}
+
+pub(crate) struct VncAdmission {
+    _shared: OwnedSemaphorePermit,
+    _vnc: OwnedSemaphorePermit,
+}
+
+pub(crate) struct VncConnectReservation {
+    registry: Arc<VncRegistry>,
+    token: u64,
+    stop: watch::Sender<bool>,
+    stop_receiver: Option<watch::Receiver<bool>>,
+    permit: Option<VncAdmission>,
+}
+
+impl VncConnectReservation {
+    async fn stopped(&mut self) {
+        if let Some(stop) = self.stop_receiver.as_mut() {
+            wait_for_stop(stop).await;
+        }
+    }
+}
+
+impl Drop for VncConnectReservation {
+    fn drop(&mut self) {
+        if self.permit.is_none() {
+            return;
+        }
+        if let Ok(mut state) = self.registry.state.lock() {
+            state.pending.remove(&self.token);
+        }
+    }
 }
 
 impl VncRegistry {
@@ -150,41 +209,203 @@ impl VncRegistry {
         Self::default()
     }
 
-    fn insert(&self, record: Arc<VncSessionRecord>) -> Result<(), String> {
-        self.sessions
+    pub(crate) fn with_admission(admission: Arc<Semaphore>) -> Self {
+        Self {
+            state: Mutex::new(VncRegistryState::default()),
+            admission,
+            vnc_admission: Arc::new(Semaphore::new(MAX_VNC_SIDECARS)),
+        }
+    }
+
+    pub(crate) fn reserve(self: &Arc<Self>) -> Result<VncConnectReservation, String> {
+        if self
+            .state
             .lock()
             .map_err(|error| error.to_string())?
+            .shutting_down
+        {
+            return Err("The VNC runtime is shutting down.".to_string());
+        }
+        let shared = Arc::clone(&self.admission)
+            .try_acquire_owned()
+            .map_err(|_| {
+                format!(
+                    "At most {MAX_DESKTOP_SIDECARS} RDP/VNC sessions can be connecting, connected, or closing at once."
+                )
+            })?;
+        let vnc = Arc::clone(&self.vnc_admission)
+            .try_acquire_owned()
+            .map_err(|_| {
+                format!(
+                    "At most {MAX_VNC_SIDECARS} memory-intensive VNC sessions can be connecting, connected, or closing at once."
+                )
+            })?;
+        let token = NEXT_RESERVATION.fetch_add(1, Ordering::Relaxed);
+        let (stop, stop_receiver) = watch::channel(false);
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        if state.shutting_down {
+            return Err("The VNC runtime is shutting down.".to_string());
+        }
+        state.pending.insert(token, stop.clone());
+        drop(state);
+        Ok(VncConnectReservation {
+            registry: Arc::clone(self),
+            token,
+            stop,
+            stop_receiver: Some(stop_receiver),
+            permit: Some(VncAdmission {
+                _shared: shared,
+                _vnc: vnc,
+            }),
+        })
+    }
+
+    fn commit(
+        &self,
+        reservation: &mut VncConnectReservation,
+        record: Arc<VncSessionRecord>,
+    ) -> Result<(VncAdmission, watch::Receiver<bool>), String> {
+        if !std::ptr::eq(self, Arc::as_ptr(&reservation.registry)) {
+            return Err("The VNC reservation belongs to another registry.".to_string());
+        }
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        if state.shutting_down {
+            return Err("The VNC runtime is shutting down.".to_string());
+        }
+        if !state.pending.contains_key(&reservation.token) {
+            return Err("The VNC connection reservation is no longer active.".to_string());
+        }
+        if state.sessions.contains_key(&record.summary.session_id) {
+            return Err(format!(
+                "VNC session '{}' is already registered.",
+                record.summary.session_id
+            ));
+        }
+        if reservation.permit.is_none() || reservation.stop_receiver.is_none() {
+            return Err("The VNC connection reservation was already committed.".to_string());
+        }
+
+        let permit = reservation.permit.take().expect("permit checked above");
+        let stop_receiver = reservation
+            .stop_receiver
+            .take()
+            .expect("stop receiver checked above");
+        state.pending.remove(&reservation.token);
+        state
+            .sessions
             .insert(record.summary.session_id.clone(), record);
-        Ok(())
+        Ok((permit, stop_receiver))
     }
 
     fn get(&self, session_id: &str) -> Result<Option<Arc<VncSessionRecord>>, String> {
         Ok(self
-            .sessions
+            .state
             .lock()
             .map_err(|error| error.to_string())?
+            .sessions
             .get(session_id)
             .cloned())
     }
 
-    fn remove(&self, session_id: &str) -> Result<Option<Arc<VncSessionRecord>>, String> {
-        Ok(self
+    fn begin_close(&self, session_id: &str) -> Result<Option<Arc<VncSessionRecord>>, String> {
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        let Some(record) = state.sessions.remove(session_id) else {
+            return Ok(None);
+        };
+        state.closing.insert(record.generation, record.stop.clone());
+        Ok(Some(record))
+    }
+
+    fn begin_close_if_current(
+        &self,
+        session_id: &str,
+        generation: u64,
+    ) -> Result<Option<Arc<VncSessionRecord>>, String> {
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        if state
             .sessions
-            .lock()
-            .map_err(|error| error.to_string())?
-            .remove(session_id))
+            .get(session_id)
+            .is_some_and(|record| record.generation == generation)
+        {
+            let record = state
+                .sessions
+                .remove(session_id)
+                .expect("the current VNC record was checked above");
+            state.closing.insert(record.generation, record.stop.clone());
+            Ok(Some(record))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn finish_worker(
+        &self,
+        session_id: &str,
+        generation: u64,
+    ) -> Result<Option<Arc<VncSessionRecord>>, String> {
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        let record = if state
+            .sessions
+            .get(session_id)
+            .is_some_and(|record| record.generation == generation)
+        {
+            state.sessions.remove(session_id)
+        } else {
+            None
+        };
+        state.closing.remove(&generation);
+        Ok(record)
     }
 
     pub fn list(&self) -> Vec<VncSessionSummary> {
-        let Ok(sessions) = self.sessions.lock() else {
+        let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
-        let mut summaries: Vec<_> = sessions
+        let mut summaries: Vec<_> = state
+            .sessions
             .values()
             .map(|record| record.summary.clone())
             .collect();
         summaries.sort_by(|left, right| left.session_id.cmp(&right.session_id));
         summaries
+    }
+
+    /// Permanently seals the registry and signals both handshakes and live
+    /// workers. Commit and shutdown share one lock, so a connection cannot be
+    /// published after the drain.
+    pub fn stop_all(&self) {
+        let (pending, closing, records) = match self.state.lock() {
+            Ok(mut state) => {
+                state.shutting_down = true;
+                let pending: Vec<watch::Sender<bool>> =
+                    state.pending.drain().map(|(_, stop)| stop).collect();
+                let closing: Vec<watch::Sender<bool>> =
+                    state.closing.drain().map(|(_, stop)| stop).collect();
+                let records: Vec<Arc<VncSessionRecord>> =
+                    state.sessions.drain().map(|(_, record)| record).collect();
+                (pending, closing, records)
+            }
+            Err(poisoned) => {
+                let mut state = poisoned.into_inner();
+                state.shutting_down = true;
+                let pending: Vec<watch::Sender<bool>> =
+                    state.pending.drain().map(|(_, stop)| stop).collect();
+                let closing: Vec<watch::Sender<bool>> =
+                    state.closing.drain().map(|(_, stop)| stop).collect();
+                let records: Vec<Arc<VncSessionRecord>> =
+                    state.sessions.drain().map(|(_, record)| record).collect();
+                (pending, closing, records)
+            }
+        };
+        for stop in pending {
+            let _ = stop.send(true);
+        }
+        for stop in closing {
+            let _ = stop.send(true);
+        }
+        for record in records {
+            let _ = record.stop.send(true);
+        }
     }
 }
 
@@ -248,16 +469,6 @@ fn failed(stage: &'static str, detail: impl Into<String>) -> VncConnectOutcome {
     }
 }
 
-async fn write_line<T: Serialize>(stdin: &mut ChildStdin, value: &T) -> Result<(), String> {
-    let mut line = serde_json::to_vec(value).map_err(|error| error.to_string())?;
-    line.push(b'\n');
-    stdin
-        .write_all(&line)
-        .await
-        .map_err(|error| error.to_string())?;
-    stdin.flush().await.map_err(|error| error.to_string())
-}
-
 async fn read_event(
     lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
 ) -> Result<Option<EngineEvent>, String> {
@@ -269,7 +480,7 @@ async fn read_event(
         .map_err(|error| error.to_string())
 }
 
-fn spawn_engine() -> Result<(Child, ChildStdin, tokio::process::ChildStdout), String> {
+fn spawn_engine() -> Result<(Child, BoxedSidecarStdin, tokio::process::ChildStdout), String> {
     let path = engine_path()?;
     let mut child = Command::new(path)
         .stdin(Stdio::piped())
@@ -286,7 +497,7 @@ fn spawn_engine() -> Result<(Child, ChildStdin, tokio::process::ChildStdout), St
         .stdout
         .take()
         .ok_or_else(|| "The VNC engine stdout is unavailable.".to_string())?;
-    Ok((child, stdin, stdout))
+    Ok((child, boxed_sidecar_stdin(stdin), stdout))
 }
 
 pub async fn connect(
@@ -298,6 +509,11 @@ pub async fn connect(
         return failed("connect", "The VNC target is incomplete.");
     }
 
+    let mut reservation = match registry.reserve() {
+        Ok(reservation) => reservation,
+        Err(error) => return failed("session", error),
+    };
+
     let (mut child, mut stdin, stdout) = match spawn_engine() {
         Ok(parts) => parts,
         Err(error) => return failed("engine", error),
@@ -307,18 +523,45 @@ pub async fn connect(
         port: request.port,
         password: request.password,
     };
-    if let Err(error) = write_line(&mut stdin, &command).await {
-        let _ = child.kill().await;
+    let write_result = tokio::select! {
+        biased;
+        _ = reservation.stopped() => {
+            terminate_sidecar(&mut child).await;
+            return failed("session", "The VNC runtime stopped during connection setup.");
+        }
+        result = write_json_line_timeboxed(
+            &mut *stdin,
+            &command,
+            SIDECAR_COMMAND_TIMEOUT,
+            "The VNC engine stdin",
+        ) => result,
+    };
+    if let Err(error) = write_result {
+        terminate_sidecar(&mut child).await;
         return failed("engine", error);
     }
 
     let mut lines = BufReader::new(stdout).lines();
-    let first = match timeout(Duration::from_secs(20), read_event(&mut lines)).await {
+    let first_result = tokio::select! {
+        biased;
+        _ = reservation.stopped() => {
+            terminate_sidecar(&mut child).await;
+            return failed("session", "The VNC runtime stopped during connection setup.");
+        }
+        result = timeout(Duration::from_secs(20), read_event(&mut lines)) => result,
+    };
+    let first = match first_result {
         Ok(Ok(Some(event))) => event,
-        Ok(Ok(None)) => return failed("engine", "The VNC engine exited before connecting."),
-        Ok(Err(error)) => return failed("engine", error),
+        Ok(Ok(None)) => {
+            wait_for_sidecar_exit(&mut child).await;
+            return failed("engine", "The VNC engine exited before connecting.");
+        }
+        Ok(Err(error)) => {
+            terminate_sidecar(&mut child).await;
+            return failed("engine", error);
+        }
         Err(_) => {
-            let _ = child.kill().await;
+            terminate_sidecar(&mut child).await;
             return failed(
                 "connect",
                 "The VNC server did not answer within 20 seconds.",
@@ -329,16 +572,19 @@ pub async fn connect(
     let (width, height) = match first {
         EngineEvent::Connected { width, height } => (width, height),
         EngineEvent::AuthFailed => {
-            let _ = child.kill().await;
+            terminate_sidecar(&mut child).await;
             return VncConnectOutcome::AuthFailed;
         }
         EngineEvent::Failed { stage: _, detail } => {
-            let _ = child.kill().await;
+            terminate_sidecar(&mut child).await;
             return failed("connect", detail);
         }
-        EngineEvent::Closed { reason } => return failed("connect", reason),
+        EngineEvent::Closed { reason } => {
+            terminate_sidecar(&mut child).await;
+            return failed("connect", reason);
+        }
         EngineEvent::Frame { .. } => {
-            let _ = child.kill().await;
+            terminate_sidecar(&mut child).await;
             return failed(
                 "protocol",
                 "The VNC engine sent a frame before it connected.",
@@ -355,12 +601,41 @@ pub async fn connect(
         height,
         interactive: true,
     };
+    let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+    let record = Arc::new(VncSessionRecord {
+        summary: summary.clone(),
+        generation,
+        stdin: AsyncMutex::new(stdin),
+        stop: reservation.stop.clone(),
+    });
+    let (admission, mut stop_receiver) = match registry.commit(&mut reservation, record) {
+        Ok(committed) => committed,
+        Err(error) => {
+            terminate_sidecar(&mut child).await;
+            return failed("session", error);
+        }
+    };
+
     let task_summary = summary.clone();
     let task_registry = Arc::clone(&registry);
     let task_app = app.clone();
-    let task = tokio::spawn(async move {
+    tokio::spawn(async move {
+        // The permit follows the actual worker through process reap, so rapid
+        // connect/disconnect calls cannot bypass the cap.
+        let _admission = admission;
+        let mut reaped = false;
         let reason = loop {
-            match read_event(&mut lines).await {
+            let event = tokio::select! {
+                biased;
+                _ = wait_for_stop(&mut stop_receiver) => None,
+                event = read_event(&mut lines) => Some(event),
+            };
+            let Some(event) = event else {
+                terminate_sidecar(&mut child).await;
+                reaped = true;
+                break "The VNC engine was stopped.".to_string();
+            };
+            match event {
                 Ok(Some(EngineEvent::Frame {
                     frame_id,
                     width,
@@ -392,29 +667,27 @@ pub async fn connect(
                 Err(error) => break error,
             }
         };
-        let _ = child.wait().await;
-        let _ = task_registry.remove(&task_summary.session_id);
-        let _ = task_app.emit(
-            "vnc://closed",
-            VncClosedEvent {
-                session_id: task_summary.session_id,
-                reason,
-            },
-        );
+        if !reaped {
+            wait_for_sidecar_exit(&mut child).await;
+        }
+        if matches!(
+            task_registry.finish_worker(&task_summary.session_id, generation),
+            Ok(Some(_))
+        ) {
+            let _ = task_app.emit(
+                "vnc://closed",
+                VncClosedEvent {
+                    session_id: task_summary.session_id,
+                    reason,
+                },
+            );
+        }
     });
-    let record = Arc::new(VncSessionRecord {
-        summary: summary.clone(),
-        stdin: AsyncMutex::new(stdin),
-        abort: task.abort_handle(),
-    });
-    if let Err(error) = registry.insert(record) {
-        task.abort();
-        return failed("session", error);
-    }
     VncConnectOutcome::Connected { session: summary }
 }
 
 pub async fn input(
+    app: &AppHandle,
     registry: &VncRegistry,
     session_id: &str,
     request: VncInputRequest,
@@ -422,8 +695,36 @@ pub async fn input(
     let record = registry
         .get(session_id)?
         .ok_or_else(|| "VNC session not found.".to_string())?;
-    let mut stdin = record.stdin.lock().await;
-    write_line(&mut stdin, &request).await
+    let result = write_locked_json_line_timeboxed(
+        &record.stdin,
+        &request,
+        SIDECAR_COMMAND_TIMEOUT,
+        "The VNC engine stdin",
+    )
+    .await;
+    if let Err(error) = result {
+        let removed = registry.begin_close_if_current(session_id, record.generation);
+        let _ = record.stop.send(true);
+        match removed {
+            Ok(Some(_)) => {
+                let _ = app.emit(
+                    "vnc://closed",
+                    VncClosedEvent {
+                        session_id: session_id.to_string(),
+                        reason: format!("The VNC input channel failed: {error}"),
+                    },
+                );
+            }
+            Ok(None) => {}
+            Err(remove_error) => {
+                return Err(format!(
+                    "{error}; the failed VNC session could not be removed: {remove_error}"
+                ));
+            }
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 pub async fn disconnect(
@@ -431,14 +732,25 @@ pub async fn disconnect(
     registry: &VncRegistry,
     session_id: &str,
 ) -> Result<(), String> {
-    if let Some(record) = registry.remove(session_id)? {
-        let close_failed = {
-            let mut stdin = record.stdin.lock().await;
-            write_line(&mut stdin, &EngineCommand::Close).await.is_err()
-        };
-        if close_failed {
-            record.abort.abort();
+    if let Some(record) = registry.begin_close(session_id)? {
+        let cancellation_guard = SidecarCloseCancellationGuard::new(record.stop.clone());
+        let close_result = write_locked_json_line_timeboxed(
+            &record.stdin,
+            &EngineCommand::Close,
+            SIDECAR_COMMAND_TIMEOUT,
+            "The VNC engine stdin",
+        )
+        .await;
+        if close_result.is_err() {
+            let _ = record.stop.send(true);
+        } else {
+            let stop = record.stop.clone();
+            tokio::spawn(async move {
+                sleep(SIDECAR_EXIT_TIMEOUT).await;
+                let _ = stop.send(true);
+            });
         }
+        cancellation_guard.disarm();
         let _ = app.emit(
             "vnc://closed",
             VncClosedEvent {
@@ -453,6 +765,27 @@ pub async fn disconnect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_record(
+        session_id: &str,
+        generation: u64,
+        stop: watch::Sender<bool>,
+    ) -> Arc<VncSessionRecord> {
+        Arc::new(VncSessionRecord {
+            summary: VncSessionSummary {
+                session_id: session_id.to_string(),
+                profile_id: format!("profile-{session_id}"),
+                host: "vnc.test".to_string(),
+                port: 5900,
+                width: 1280,
+                height: 720,
+                interactive: true,
+            },
+            generation,
+            stdin: AsyncMutex::new(Box::new(tokio::io::sink())),
+            stop,
+        })
+    }
 
     #[test]
     fn vnc_session_ids_are_distinct_and_namespaced() {
@@ -495,5 +828,89 @@ mod tests {
 
         let auth = serde_json::to_value(VncConnectOutcome::AuthFailed).unwrap();
         assert_eq!(auth["outcome"], "authFailed");
+    }
+
+    #[test]
+    fn admission_caps_connecting_and_connected_sidecars() {
+        let registry = Arc::new(VncRegistry::new());
+        let reservations: Vec<_> = (0..MAX_VNC_SIDECARS)
+            .map(|_| registry.reserve().expect("admission slot"))
+            .collect();
+        let error = registry.reserve().err().expect("the cap rejects overflow");
+        assert!(error.contains("At most 4"));
+        assert_eq!(
+            registry.state.lock().unwrap().pending.len(),
+            MAX_VNC_SIDECARS
+        );
+
+        drop(reservations);
+        assert!(registry.state.lock().unwrap().pending.is_empty());
+        assert_eq!(registry.vnc_admission.available_permits(), MAX_VNC_SIDECARS);
+    }
+
+    #[tokio::test]
+    async fn registry_rejects_collisions_and_shutdown_signals_pending_and_live_workers() {
+        let registry = Arc::new(VncRegistry::new());
+        let mut first = registry.reserve().unwrap();
+        let first_record = test_record("vnc-collision", 1, first.stop.clone());
+        let (_first_permit, mut first_stop) = registry.commit(&mut first, first_record).unwrap();
+
+        let mut duplicate = registry.reserve().unwrap();
+        let duplicate_record = test_record("vnc-collision", 2, duplicate.stop.clone());
+        let error = match registry.commit(&mut duplicate, duplicate_record) {
+            Ok(_) => panic!("a duplicate session id must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("already registered"));
+        assert_eq!(registry.list().len(), 1);
+
+        let closing_record = registry.begin_close("vnc-collision").unwrap().unwrap();
+        assert_eq!(registry.state.lock().unwrap().closing.len(), 1);
+        registry.stop_all();
+        assert!(registry.list().is_empty());
+        first_stop.changed().await.unwrap();
+        assert!(*first_stop.borrow());
+        drop(closing_record);
+        duplicate.stopped().await;
+        assert!(*duplicate.stop_receiver.as_ref().unwrap().borrow());
+        assert!(registry.reserve().err().unwrap().contains("shutting down"));
+    }
+
+    #[test]
+    fn removing_a_record_does_not_release_the_worker_admission_early() {
+        let shared = Arc::new(Semaphore::new(1));
+        let registry = Arc::new(VncRegistry::with_admission(Arc::clone(&shared)));
+        let mut reservation = registry.reserve().unwrap();
+        let record = test_record("vnc-worker", 7, reservation.stop.clone());
+        let (worker_permit, _stop) = registry.commit(&mut reservation, record).unwrap();
+
+        assert!(registry.begin_close("vnc-worker").unwrap().is_some());
+        assert!(registry.reserve().is_err());
+        drop(worker_permit);
+        assert!(registry.reserve().is_ok());
+    }
+
+    #[test]
+    fn generation_check_allows_only_one_close_owner() {
+        let registry = Arc::new(VncRegistry::new());
+        let mut reservation = registry.reserve().unwrap();
+        let record = test_record("vnc-owner", 11, reservation.stop.clone());
+        let (_permit, _stop) = registry.commit(&mut reservation, record).unwrap();
+
+        assert!(registry
+            .begin_close_if_current("vnc-owner", 10)
+            .unwrap()
+            .is_none());
+        assert!(registry
+            .begin_close_if_current("vnc-owner", 11)
+            .unwrap()
+            .is_some());
+        assert!(registry
+            .begin_close_if_current("vnc-owner", 11)
+            .unwrap()
+            .is_none());
+        assert_eq!(registry.state.lock().unwrap().closing.len(), 1);
+        assert!(registry.finish_worker("vnc-owner", 11).unwrap().is_none());
+        assert!(registry.state.lock().unwrap().closing.is_empty());
     }
 }

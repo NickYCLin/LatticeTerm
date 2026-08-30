@@ -8,6 +8,126 @@ export interface SessionClosedNotice extends SessionIdentity {
   at: number;
 }
 
+interface SessionEventReadinessAttempt {
+  ready: () => void;
+  fail: () => void;
+}
+
+interface SessionEventReadinessCycle {
+  promise: Promise<boolean>;
+  settle: (ready: boolean) => void;
+}
+
+function sessionEventReadinessCycle(): SessionEventReadinessCycle {
+  let settled = false;
+  let resolveCycle: (ready: boolean) => void = () => {};
+  const promise = new Promise<boolean>((resolve) => {
+    resolveCycle = resolve;
+  });
+  return {
+    promise,
+    settle: (ready) => {
+      if (settled) return;
+      settled = true;
+      resolveCycle(ready);
+    },
+  };
+}
+
+/**
+ * Gates native connects on the app-wide lifecycle listeners. A React
+ * StrictMode cleanup can fail one generation and immediately replace it;
+ * existing waiters follow the replacement rather than slipping through the
+ * listener gap or hanging forever.
+ */
+export class SessionEventReadinessGate {
+  private current = sessionEventReadinessCycle();
+
+  begin(): SessionEventReadinessAttempt {
+    const previous = this.current;
+    const cycle = sessionEventReadinessCycle();
+    this.current = cycle;
+    previous.settle(false);
+    return {
+      ready: () => {
+        if (this.current === cycle) cycle.settle(true);
+        else cycle.settle(false);
+      },
+      fail: () => {
+        if (this.current !== cycle) {
+          cycle.settle(false);
+          return;
+        }
+        const failed = sessionEventReadinessCycle();
+        this.current = failed;
+        cycle.settle(false);
+        failed.settle(false);
+      },
+    };
+  }
+
+  async wait(): Promise<boolean> {
+    for (;;) {
+      const cycle = this.current;
+      const ready = await cycle.promise;
+      if (this.current !== cycle) continue;
+      return ready;
+    }
+  }
+}
+
+export interface SessionConnectAttempt {
+  finish: () => ReadonlyMap<string, string>;
+  cancel: () => void;
+}
+
+/** Keeps exact close events for every in-flight connect response. */
+export class SessionConnectRaceGuard {
+  private readonly attempts = new Set<Map<string, string>>();
+
+  begin(): SessionConnectAttempt {
+    const closed = new Map<string, string>();
+    this.attempts.add(closed);
+    let finished = false;
+    const settle = () => {
+      if (finished) return false;
+      finished = true;
+      this.attempts.delete(closed);
+      return true;
+    };
+    return {
+      finish: () => {
+        if (!settle()) return new Map();
+        return new Map(closed);
+      },
+      cancel: () => {
+        settle();
+      },
+    };
+  }
+
+  observeClosed(sessionId: string, reason: string): void {
+    for (const attempt of this.attempts) attempt.set(sessionId, reason);
+  }
+}
+
+/**
+ * Copies event ids before a React functional updater captures them. React may
+ * execute that updater after the hydration buffers have already been cleared.
+ */
+export function snapshotSessionIds(
+  sessionIds: ReadonlySet<string>,
+): ReadonlySet<string> {
+  return new Set(sessionIds);
+}
+
+/** Copies hydration event payloads before a deferred updater captures them. */
+export function snapshotHydrationMap<K, V>(
+  entries: ReadonlyMap<K, V>,
+): ReadonlyMap<K, V> {
+  return new Map(entries);
+}
+
 /**
  * Returns whether a closed pane owns the currently visible workspace tab.
  * Background terminal panes remain mounted, so their close callbacks must not

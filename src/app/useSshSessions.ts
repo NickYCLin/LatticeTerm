@@ -12,6 +12,7 @@ import type { HostKeyRecord } from "../domain/security";
 import {
   createSessionClosedNotice,
   reconcileSessionSnapshot,
+  snapshotSessionIds,
   type SessionClosedNotice,
 } from "./sessionSnapshot";
 
@@ -210,12 +211,9 @@ export function useSshSessions(): SshApi {
 
         const existing = await invoke<SessionSummary[]>("ssh_sessions");
         if (!cancelled) {
+          const closedSnapshot = snapshotSessionIds(closedDuringHydration);
           setSessions((current) =>
-            reconcileSessionSnapshot(
-              current,
-              existing,
-              closedDuringHydration,
-            ),
+            reconcileSessionSnapshot(current, existing, closedSnapshot),
           );
           hydrating = false;
           closedDuringHydration.clear();
