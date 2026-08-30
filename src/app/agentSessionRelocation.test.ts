@@ -155,6 +155,52 @@ describe("Agent session folder relocation", () => {
     expect(outcome.closeFailures).toEqual([]);
   });
 
+  it.each([
+    ["an export error", new Error("History is unreadable")],
+    ["a missing transcript", null],
+    ["an empty transcript", ""],
+    ["a whitespace-only transcript", "  \n\t"],
+  ])(
+    "keeps every original session when a handoff has %s",
+    async (_label, transcriptResult) => {
+      const members = [
+        session(),
+        session({
+          sessionId: "agent-old-2",
+          definitionId: "claude",
+          label: "Claude Code",
+          capturedSessionId: null,
+        }),
+      ];
+      const launch = vi.fn();
+      const disconnect = vi.fn();
+      const exportTranscript =
+        transcriptResult instanceof Error
+          ? vi.fn().mockRejectedValue(transcriptResult)
+          : vi.fn().mockResolvedValue(transcriptResult);
+
+      await expect(
+        relocateAgentSessionGroup({
+          sessions: members,
+          definitions: [definition(), definition({ id: "claude" })],
+          activeSessionId: "agent-old-1",
+          workingDirectory: "D:\\new",
+          formatHandoff: (transcript) => `handoff:${transcript}`,
+          api: { launch, disconnect, exportTranscript },
+        }),
+      ).rejects.toThrow(
+        transcriptResult instanceof Error
+          ? "History is unreadable"
+          : "No conversation history could be exported for Claude Code.",
+      );
+
+      expect(exportTranscript).toHaveBeenCalledOnce();
+      expect(exportTranscript).toHaveBeenCalledWith("agent-old-2");
+      expect(launch).not.toHaveBeenCalled();
+      expect(disconnect).not.toHaveBeenCalled();
+    },
+  );
+
   it("rolls back replacements when a later CLI cannot start", async () => {
     const members = [
       session(),

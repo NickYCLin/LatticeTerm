@@ -24,7 +24,8 @@ describe("Agent session relocation dialog", () => {
     expect(markup).toContain("更換「後端重構」的工作目錄？");
     expect(markup).toContain("D:\\project\\old");
     expect(markup).toContain("D:\\project\\new");
-    expect(markup).toContain("直接續接 1 個、嘗試帶入近期對話 1 個");
+    expect(markup).toContain("直接續接 1 個、帶入近期對話 1 個");
+    expect(markup).toContain("若無法匯出，會取消更換並保留全部原工作階段");
     expect(markup).toContain("更換並重開");
   });
 

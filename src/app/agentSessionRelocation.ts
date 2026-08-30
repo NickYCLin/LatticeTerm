@@ -87,12 +87,13 @@ export async function relocateAgentSessionGroup({
   const seeds = await Promise.all(
     sessions.map(async (session, index) => {
       if (continuities[index] !== "handoff") return null;
-      try {
-        const transcript = await api.exportTranscript(session.sessionId);
-        return transcript ? formatHandoff(transcript) : null;
-      } catch {
-        return null;
+      const transcript = await api.exportTranscript(session.sessionId);
+      if (!transcript?.trim()) {
+        throw new Error(
+          `No conversation history could be exported for ${session.label}.`,
+        );
       }
+      return formatHandoff(transcript);
     }),
   );
 

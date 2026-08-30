@@ -633,7 +633,7 @@ export const zhTW = {
   "terminal.directory.current": "目前路徑",
   "terminal.directory.next": "新路徑",
   "terminal.directory.continuityTitle": "原本的工作會盡量接續",
-  "terminal.directory.continuityBody": "直接續接 {native} 個、嘗試帶入近期對話 {handoff} 個、重新開始 {restart} 個。更換前請先保存尚未送出的輸入。",
+  "terminal.directory.continuityBody": "直接續接 {native} 個、帶入近期對話 {handoff} 個、重新開始 {restart} 個。需要帶入的對話若無法匯出，會取消更換並保留全部原工作階段。更換前請先保存尚未送出的輸入。",
   "terminal.directory.unsupportedTitle": "這個分頁目前不能安全更換路徑",
   "terminal.directory.unsupportedBody": "自訂命令或已移除的 CLI 可能含有未保存的啟動參數，因此不會貿然關閉並重啟。",
   "terminal.directory.confirm": "更換並重開",

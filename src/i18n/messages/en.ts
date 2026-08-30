@@ -660,7 +660,7 @@ export const en: Messages = {
   "terminal.directory.current": "Current path",
   "terminal.directory.next": "New path",
   "terminal.directory.continuityTitle": "Existing work will be continued where possible",
-  "terminal.directory.continuityBody": "{native} will resume natively, {handoff} will attempt a recent-conversation handoff, and {restart} will start clean. Save any input you have not sent before changing folders.",
+  "terminal.directory.continuityBody": "{native} will resume natively, {handoff} will carry over recent conversation, and {restart} will start clean. If a required conversation cannot be exported, the change is cancelled and every original session is kept. Save any input you have not sent before changing folders.",
   "terminal.directory.unsupportedTitle": "This tab cannot safely change paths yet",
   "terminal.directory.unsupportedBody": "Custom commands or removed CLIs may rely on launch arguments that are not retained, so LatticeTerm will not close and restart them blindly.",
   "terminal.directory.confirm": "Change and restart",

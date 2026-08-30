@@ -36,7 +36,7 @@ flowchart LR
 - 支援最多 32 個安全啟動項目，也可命名工作區及調整持久化順序。應用程式重啟後，使用者可逐項或整批確認，LatticeTerm 會重新驗證磁碟資料並依保存順序啟動 CLI 程序；每項分別回報成功或失敗。沒有額外參數或舊版明確 Session ID 的 Codex 項目使用 `codex resume --last`，依工作目錄選出最近對話；Cursor 項目使用官方的 `agent --continue` 續接最近對話。
 - 可選擇保存一份工作區共用啟動指示；之後每個全新的非 `custom` CLI 進入互動提示後會先收到這段文字，若同時有跨 CLI handoff 則共用指示排在 handoff 前面。自動還原的舊工作階段、明確原生 Session 續接與 `resume --last`／`--continue` 不會重送共用指示。內建繁中 Commit 範本只是可套用的起始內容，預設留空停用，不會把個人規範強加給其他安裝者。
 - 目錄會從各 CLI 已存在的本機認證 metadata 讀取 Codex、Claude 與 Gemini 的帳號標籤及登入方式；Rust 只回傳非機密字串，access token、refresh token、API Key 與完整 JWT 都不會序列化到 WebView。
-- 版本化內建 Adapter v1 仍可驗證並還原舊工作區中 Codex、Claude Code、Gemini CLI、Hermes Agent 與 Cursor Agent 的原生 Session 項目；介面不再要求使用者手動設定 Session ID。Codex 與 Cursor 的一般保存項目不寫入 Session ID，而是委由各 CLI 自己續接同目錄最近的對話；執行中分頁的「加開 CLI／帶入目前對話」則處理跨 CLI 脈絡接手。交接讀取 Codex 歷程時，有捕捉 ID 就精確比對 `session_meta.payload.id` 並排除 subagent；沒有 ID 才依 canonical 工作目錄選主 CLI rollout。Claude 也從有界 JSONL metadata 精確比對 Session ID 與主工作階段旗標；沒有 ID 時才以 canonical 工作目錄選取，避免資料夾 slug 碰撞。兩者的遞迴搜尋都不跟隨符號連結。
+- 版本化內建 Adapter v1 仍可驗證並還原舊工作區中 Codex、Claude Code、Gemini CLI、Hermes Agent 與 Cursor Agent 的原生 Session 項目；介面不再要求使用者手動設定 Session ID。Codex 與 Cursor 的一般保存項目不寫入 Session ID，而是委由各 CLI 自己續接同目錄最近的對話；執行中分頁的「加開 CLI／帶入目前對話」則處理跨 CLI 脈絡接手。交接讀取 Codex 歷程時，有捕捉 ID 就精確比對 `session_meta.payload.id` 並排除 subagent；沒有 ID 才依 canonical 工作目錄選主 CLI rollout。Claude 也從有界 JSONL metadata 精確比對 Session ID 與主工作階段旗標；沒有 ID 時才以 canonical 工作目錄選取，避免資料夾 slug 碰撞。兩者的遞迴搜尋都不跟隨符號連結。更換工作目錄需要交接對話時，會先完成整組匯出；任一匯出失敗即在啟動替代程序前中止，所有原工作階段都保留。
 
 ### 舊工作區相容層：原生 Session 續接 Adapter v1
 
