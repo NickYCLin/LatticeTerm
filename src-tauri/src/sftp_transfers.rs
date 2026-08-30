@@ -54,7 +54,7 @@ pub struct TransferState {
     /// The file name, for display.
     pub name: String,
     pub remote_path: String,
-    /// Local source for path uploads, or local destination for downloads.
+    /// Local source for path uploads, or the final published download path.
     pub local_path: Option<String>,
     pub bytes_done: u64,
     pub total_bytes: Option<u64>,
@@ -189,28 +189,72 @@ fn safe_local_name(remote_name: &str) -> String {
     }
 }
 
-/// `report.csv` → `report (2).csv` and so on until the name is free, so a new
-/// download never silently replaces an old one.
-fn unoccupied_path(directory: &Path, name: &str, occupied: impl Fn(&Path) -> bool) -> PathBuf {
-    let first = directory.join(name);
-    if !occupied(&first) {
-        return first;
+/// `report.csv` → `report (2).csv` and so on. The caller still has to claim
+/// the returned candidate atomically; checking whether it exists is racy.
+fn numbered_download_path(directory: &Path, name: &str, attempt: u64) -> PathBuf {
+    if attempt <= 1 {
+        return directory.join(name);
     }
-
     let (stem, extension) = match name.rsplit_once('.') {
         Some((stem, extension)) if !stem.is_empty() => (stem, Some(extension)),
         _ => (name, None),
     };
-    for attempt in 2.. {
-        let candidate = match extension {
-            Some(extension) => directory.join(format!("{stem} ({attempt}).{extension}")),
-            None => directory.join(format!("{stem} ({attempt})")),
-        };
-        if !occupied(&candidate) {
-            return candidate;
+    match extension {
+        Some(extension) => directory.join(format!("{stem} ({attempt}).{extension}")),
+        None => directory.join(format!("{stem} ({attempt})")),
+    }
+}
+
+#[derive(Debug)]
+struct DownloadPublishError {
+    detail: String,
+    staging: tempfile::NamedTempFile,
+}
+
+/// Publishes a fully written staging file without replacing any directory
+/// entry. A name that appeared during the transfer simply advances the suffix;
+/// PersistError hands the same private staging file back for the next attempt.
+fn publish_download(
+    mut staging: tempfile::NamedTempFile,
+    directory: &Path,
+    name: &str,
+) -> Result<PathBuf, DownloadPublishError> {
+    let mut attempt = 1u64;
+    loop {
+        let candidate = numbered_download_path(directory, name, attempt);
+        match staging.persist_noclobber(&candidate) {
+            Ok(file) => {
+                drop(file);
+                return Ok(candidate);
+            }
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                staging = error.file;
+                let Some(next) = attempt.checked_add(1) else {
+                    return Err(DownloadPublishError {
+                        detail: "download name counter overflowed".to_string(),
+                        staging,
+                    });
+                };
+                attempt = next;
+            }
+            Err(error) => {
+                return Err(DownloadPublishError {
+                    detail: format!("could not publish the completed download: {}", error.error),
+                    staging: error.file,
+                });
+            }
         }
     }
-    unreachable!("the counter above has no upper bound")
+}
+
+fn close_download_staging(staging: tempfile::NamedTempFile) -> Option<String> {
+    match staging.close() {
+        Ok(()) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => Some(format!(
+            "could not remove the incomplete download staging file: {error}"
+        )),
+    }
 }
 
 fn temporary_remote_path(parent: &str, purpose: &str) -> Result<String, String> {
@@ -244,6 +288,31 @@ fn require_complete_upload(done: u64, total: u64) -> Result<(), String> {
         return Err(format!(
             "the upload ended before every byte arrived ({done} of {total} bytes)"
         ));
+    }
+    Ok(())
+}
+
+fn next_download_size(current: u64, total: Option<u64>, chunk: usize) -> Result<u64, String> {
+    let next = current
+        .checked_add(chunk as u64)
+        .ok_or_else(|| "the download byte count overflowed".to_string())?;
+    if let Some(expected) = total {
+        if next > expected {
+            return Err(format!(
+                "the remote file grew during the download ({next} bytes received, {expected} expected)"
+            ));
+        }
+    }
+    Ok(next)
+}
+
+fn require_complete_download(done: u64, total: Option<u64>) -> Result<(), String> {
+    if let Some(expected) = total {
+        if done != expected {
+            return Err(format!(
+                "the remote file changed during the download ({done} bytes received, {expected} expected)"
+            ));
+        }
     }
     Ok(())
 }
@@ -402,12 +471,17 @@ pub async fn start_download(
 ) -> Result<TransferState, String> {
     let remote_path = validate_path(remote_path)?;
     let session = sessions.session(session_id)?;
-
-    let total = session
-        .metadata(remote_path.clone())
+    // Open first and inspect that exact handle. A path can be replaced between
+    // a STAT and OPEN; FSTAT keeps the expected size tied to the bytes read.
+    let mut remote = session
+        .open(remote_path.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    let total = remote
+        .metadata()
         .await
         .map_err(|error| error.to_string())?
-        .len();
+        .size;
 
     let name = remote_path
         .rsplit('/')
@@ -416,18 +490,22 @@ pub async fn start_download(
         .unwrap_or("download");
     let local_name = safe_local_name(name);
     std::fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
-    let local_path = unoccupied_path(&target_dir, &local_name, |path| path.exists());
+    let staging = tempfile::Builder::new()
+        .prefix(".latticeterm-sftp-")
+        .suffix(".part")
+        .tempfile_in(&target_dir)
+        .map_err(|error| format!("could not create the local download staging file: {error}"))?;
 
     let entry = Arc::new(TransferEntry {
         state: Mutex::new(TransferState {
             transfer_id: transfers.next_id(),
             session_id: session_id.to_string(),
             kind: "download",
-            name: local_name,
+            name: local_name.clone(),
             remote_path: remote_path.clone(),
-            local_path: Some(local_path.display().to_string()),
+            local_path: None,
             bytes_done: 0,
-            total_bytes: Some(total),
+            total_bytes: total,
             state: "running",
             detail: None,
         }),
@@ -437,20 +515,33 @@ pub async fn start_download(
         staging_path: None,
         overwrite: false,
     });
-    transfers.insert(Arc::clone(&entry))?;
-    let snapshot = entry.state.lock().map_err(|e| e.to_string())?.clone();
+    if let Err(error) = transfers.insert(Arc::clone(&entry)) {
+        let cleanup = close_download_staging(staging);
+        return Err(cleanup
+            .map(|cleanup| format!("{error}; {cleanup}"))
+            .unwrap_or(error));
+    }
+    let snapshot = match entry.state.lock() {
+        Ok(state) => state.clone(),
+        Err(error) => {
+            let cleanup = close_download_staging(staging);
+            return Err(cleanup
+                .map(|cleanup| format!("{error}; {cleanup}"))
+                .unwrap_or_else(|| error.to_string()));
+        }
+    };
     sink.update(&snapshot);
 
     let task_entry = Arc::clone(&entry);
     tokio::spawn(async move {
-        let result: Result<(), String> = async {
-            let mut remote = session
-                .open(remote_path.clone())
-                .await
-                .map_err(|error| error.to_string())?;
-            let mut local = tokio::fs::File::create(&local_path)
-                .await
-                .map_err(|error| error.to_string())?;
+        let mut staging = Some(staging);
+        let stream_result: Result<u64, String> = async {
+            let local_file = staging
+                .as_ref()
+                .ok_or_else(|| "the download staging file is unavailable".to_string())?
+                .reopen()
+                .map_err(|error| format!("could not open the download staging file: {error}"))?;
+            let mut local = tokio::fs::File::from_std(local_file);
 
             let mut buffer = vec![0u8; REMOTE_CHUNK];
             let mut done: u64 = 0;
@@ -466,33 +557,63 @@ pub async fn start_download(
                 if read == 0 {
                     break;
                 }
+                let next = next_download_size(done, total, read)?;
                 local
                     .write_all(&buffer[..read])
                     .await
                     .map_err(|error| error.to_string())?;
-                done += read as u64;
+                done = next;
                 if done - last_emitted >= EMIT_EVERY_BYTES {
                     last_emitted = done;
                     task_entry.update(sink.as_ref(), |state| state.bytes_done = done);
                 }
             }
+            if task_entry.cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".to_string());
+            }
+            require_complete_download(done, total)?;
             local.flush().await.map_err(|error| error.to_string())?;
-            task_entry.update(sink.as_ref(), |state| {
-                state.bytes_done = done;
-                state.state = "done";
-            });
-            Ok(())
+            local
+                .sync_all()
+                .await
+                .map_err(|error| format!("could not sync the completed download: {error}"))?;
+            Ok(done)
         }
         .await;
 
-        if let Err(detail) = result {
-            // A partial file is worse than no file: it looks complete.
-            let _ = tokio::fs::remove_file(&local_path).await;
-            let cancelled = detail == "cancelled";
-            task_entry.update(sink.as_ref(), |state| {
-                state.state = if cancelled { "cancelled" } else { "error" };
-                state.detail = (!cancelled).then_some(detail);
-            });
+        let result = match stream_result {
+            Ok(_) if task_entry.cancel.load(Ordering::Relaxed) => Err("cancelled".to_string()),
+            Ok(done) => {
+                let private_file = staging.take().expect("staging checked while streaming");
+                match publish_download(private_file, &target_dir, &local_name) {
+                    Ok(local_path) => Ok((done, local_path)),
+                    Err(error) => {
+                        staging = Some(error.staging);
+                        Err(error.detail)
+                    }
+                }
+            }
+            Err(detail) => Err(detail),
+        };
+
+        match result {
+            Ok((done, local_path)) => task_entry.update(sink.as_ref(), |state| {
+                state.bytes_done = done;
+                state.local_path = Some(local_path.display().to_string());
+                state.state = "done";
+            }),
+            Err(detail) => {
+                let cleanup_error = staging.take().and_then(close_download_staging);
+                let cancelled = detail == "cancelled";
+                task_entry.update(sink.as_ref(), |state| {
+                    state.state = if cancelled { "cancelled" } else { "error" };
+                    state.detail = match cleanup_error {
+                        Some(cleanup) => Some(format!("{detail}; {cleanup}")),
+                        None if cancelled => None,
+                        None => Some(detail),
+                    };
+                });
+            }
         }
     });
 
@@ -919,20 +1040,107 @@ mod tests {
     }
 
     #[test]
-    fn a_taken_name_counts_upward_instead_of_replacing() {
+    fn numbered_download_names_preserve_extensions() {
         let dir = Path::new("/downloads");
-        let taken = [
-            PathBuf::from("/downloads/report.csv"),
-            PathBuf::from("/downloads/report (2).csv"),
-        ];
-        let chosen = unoccupied_path(dir, "report.csv", |p| taken.contains(&p.to_path_buf()));
-        assert_eq!(chosen, PathBuf::from("/downloads/report (3).csv"));
+        assert_eq!(
+            numbered_download_path(dir, "report.csv", 3),
+            PathBuf::from("/downloads/report (3).csv")
+        );
+        assert_eq!(
+            numbered_download_path(dir, "notes.md", 1),
+            PathBuf::from("/downloads/notes.md")
+        );
+        assert_eq!(
+            numbered_download_path(dir, "backup", 2),
+            PathBuf::from("/downloads/backup (2)")
+        );
+    }
 
-        let free = unoccupied_path(dir, "notes.md", |_| false);
-        assert_eq!(free, PathBuf::from("/downloads/notes.md"));
+    #[test]
+    fn concurrent_downloads_atomically_publish_to_different_paths() {
+        use std::io::Write;
 
-        let no_extension = unoccupied_path(dir, "backup", |p| p == Path::new("/downloads/backup"));
-        assert_eq!(no_extension, PathBuf::from("/downloads/backup (2)"));
+        let directory = tempfile::tempdir().unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(32));
+        let threads = (0..32)
+            .map(|index| {
+                let path = directory.path().to_path_buf();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let mut staging = tempfile::NamedTempFile::new_in(&path).unwrap();
+                    let content = format!("download-{index}");
+                    staging.write_all(content.as_bytes()).unwrap();
+                    staging.flush().unwrap();
+                    barrier.wait();
+                    let claimed = publish_download(staging, &path, "report.csv").unwrap();
+                    (claimed, content)
+                })
+            })
+            .collect::<Vec<_>>();
+        let claims = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+
+        let mut paths = claims
+            .iter()
+            .map(|(path, _content)| path.clone())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), 32);
+        assert!(paths.iter().all(|path| path.exists()));
+        for (path, content) in claims {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), content);
+        }
+    }
+
+    #[test]
+    fn an_existing_download_is_preserved_when_the_next_name_is_claimed() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("report.csv");
+        std::fs::write(&original, b"keep me").unwrap();
+        let staging = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+
+        let claimed = publish_download(staging, directory.path(), "report.csv").unwrap();
+
+        assert_eq!(claimed, directory.path().join("report (2).csv"));
+        assert_eq!(std::fs::read(&original).unwrap(), b"keep me");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_is_never_followed_as_a_download_target() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("report.csv");
+        symlink(directory.path().join("missing-target"), &first).unwrap();
+        let staging = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+
+        let claimed = publish_download(staging, directory.path(), "report.csv").unwrap();
+        assert_eq!(claimed, directory.path().join("report (2).csv"));
+        assert!(first.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(!directory.path().join("missing-target").exists());
+        assert_eq!(
+            claimed.metadata().unwrap().permissions().mode() & 0o077,
+            0,
+            "new downloads must not be readable by other local users"
+        );
+    }
+
+    #[test]
+    fn failed_staging_cleanup_never_removes_a_replacement_final_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let staging = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        let staging_path = staging.path().to_path_buf();
+        let replacement = directory.path().join("report.csv");
+        std::fs::write(&replacement, b"new owner").unwrap();
+
+        assert!(close_download_staging(staging).is_none());
+
+        assert!(!staging_path.exists());
+        assert_eq!(std::fs::read(replacement).unwrap(), b"new owner");
     }
 
     #[test]
@@ -1003,6 +1211,17 @@ mod tests {
         assert!(next_upload_size(u64::MAX, u64::MAX, 1).is_err());
         assert!(require_complete_upload(10, 10).is_ok());
         assert!(require_complete_upload(9, 10).is_err());
+    }
+
+    #[test]
+    fn download_sizes_must_match_the_remote_metadata() {
+        assert_eq!(next_download_size(4, Some(10), 6).unwrap(), 10);
+        assert!(next_download_size(4, Some(10), 7).is_err());
+        assert!(next_download_size(u64::MAX, None, 1).is_err());
+        assert!(require_complete_download(10, Some(10)).is_ok());
+        assert!(require_complete_download(9, Some(10)).is_err());
+        assert_eq!(next_download_size(4, None, 7).unwrap(), 11);
+        assert!(require_complete_download(11, None).is_ok());
     }
 
     #[test]
