@@ -813,6 +813,36 @@ where
 const TERMINAL_COLS: u16 = 120;
 const TERMINAL_ROWS: u16 = 32;
 
+/// Owns a PTY child until it has either exited naturally or been terminated
+/// and reaped. `portable-pty::Child` has no process-killing `Drop`, so simply
+/// returning after `spawn_command` can otherwise orphan the shell.
+struct TerminalChildGuard {
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
+}
+
+impl TerminalChildGuard {
+    fn new(child: Box<dyn portable_pty::Child + Send + Sync>) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn terminate_and_wait(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+impl Drop for TerminalChildGuard {
+    fn drop(&mut self) {
+        self.terminate_and_wait();
+    }
+}
+
 fn default_shell() -> String {
     if cfg!(windows) {
         env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string())
@@ -834,6 +864,9 @@ where
 {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
+    // Validate the optional shared root before starting a process. The CLI
+    // validated it earlier, but it can disappear before a viewer connects.
+    let shared_files = file_root.map(SharedFiles::open).transpose()?.map(Arc::new);
     let pty = native_pty_system()
         .openpty(PtySize {
             rows: TERMINAL_ROWS,
@@ -846,10 +879,11 @@ where
     if let Some(home) = env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
         command.cwd(home);
     }
-    let mut child = pty
+    let child = pty
         .slave
         .spawn_command(command)
         .map_err(|error| format!("Cannot start the shell: {error}"))?;
+    let mut child = TerminalChildGuard::new(child);
     drop(pty.slave);
     let master = pty.master;
     let mut pty_reader = master
@@ -857,7 +891,6 @@ where
         .map_err(|error| error.to_string())?;
     let mut pty_writer = master.take_writer().map_err(|error| error.to_string())?;
 
-    let shared_files = file_root.map(SharedFiles::open).transpose()?.map(Arc::new);
     let (mut reader, mut writer_half) = connection.split();
     writer_half
         .send(&RemoteMessage::Hello(RemoteHello {
@@ -946,7 +979,7 @@ where
 
     file_handler.cancel_all();
     drop(keystroke_tx);
-    let _ = child.kill();
+    child.terminate_and_wait();
     drop(master);
     drop(outgoing);
     writer.abort();
@@ -1441,6 +1474,112 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct MockTerminalChildState {
+        running: bool,
+        try_waits: usize,
+        kills: usize,
+        waits: usize,
+    }
+
+    #[derive(Clone, Debug)]
+    struct MockTerminalChild {
+        state: Arc<Mutex<MockTerminalChildState>>,
+    }
+
+    impl portable_pty::ChildKiller for MockTerminalChild {
+        fn kill(&mut self) -> std::io::Result<()> {
+            let mut state = self.state.lock().unwrap();
+            state.kills += 1;
+            state.running = false;
+            Ok(())
+        }
+
+        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+            Box::new(self.clone())
+        }
+    }
+
+    impl portable_pty::Child for MockTerminalChild {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            let mut state = self.state.lock().unwrap();
+            state.try_waits += 1;
+            Ok((!state.running).then(|| portable_pty::ExitStatus::with_exit_code(0)))
+        }
+
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            let mut state = self.state.lock().unwrap();
+            state.waits += 1;
+            state.running = false;
+            Ok(portable_pty::ExitStatus::with_exit_code(0))
+        }
+
+        fn process_id(&self) -> Option<u32> {
+            None
+        }
+
+        #[cfg(windows)]
+        fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
+            None
+        }
+    }
+
+    fn mock_terminal_child(
+        running: bool,
+    ) -> (
+        Box<dyn portable_pty::Child + Send + Sync>,
+        Arc<Mutex<MockTerminalChildState>>,
+    ) {
+        let state = Arc::new(Mutex::new(MockTerminalChildState {
+            running,
+            ..MockTerminalChildState::default()
+        }));
+        (
+            Box::new(MockTerminalChild {
+                state: Arc::clone(&state),
+            }),
+            state,
+        )
+    }
+
+    #[test]
+    fn terminal_child_guard_terminates_and_reaps_on_drop() {
+        let (child, state) = mock_terminal_child(true);
+        {
+            let _guard = TerminalChildGuard::new(child);
+        }
+
+        let state = state.lock().unwrap();
+        assert_eq!(state.try_waits, 1);
+        assert_eq!(state.kills, 1);
+        assert_eq!(state.waits, 1);
+        assert!(!state.running);
+    }
+
+    #[test]
+    fn terminal_child_guard_explicit_cleanup_is_not_repeated_on_drop() {
+        let (child, state) = mock_terminal_child(true);
+        let mut guard = TerminalChildGuard::new(child);
+        guard.terminate_and_wait();
+        drop(guard);
+
+        let state = state.lock().unwrap();
+        assert_eq!(state.try_waits, 1);
+        assert_eq!(state.kills, 1);
+        assert_eq!(state.waits, 1);
+    }
+
+    #[test]
+    fn terminal_child_guard_does_not_kill_an_already_exited_child() {
+        let (child, state) = mock_terminal_child(false);
+        drop(TerminalChildGuard::new(child));
+
+        let state = state.lock().unwrap();
+        assert_eq!(state.try_waits, 1);
+        assert_eq!(state.kills, 0);
+        assert_eq!(state.waits, 0);
+    }
 
     #[test]
     fn downscales_to_the_stream_boundary() {

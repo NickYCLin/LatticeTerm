@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 fn agent_binary() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -22,6 +22,20 @@ fn agent_binary() -> PathBuf {
         "lattice-agent"
     });
     path
+}
+
+async fn wait_for_agent_exit(agent: &mut std::process::Child) -> bool {
+    timeout(Duration::from_secs(10), async {
+        loop {
+            match agent.try_wait() {
+                Ok(Some(_)) => return true,
+                Ok(None) => sleep(Duration::from_millis(25)).await,
+                Err(_) => return false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[cfg(unix)]
@@ -135,12 +149,19 @@ async fn captures_shell_output_emitted_immediately_after_spawn() {
     .unwrap_or(false);
 
     let _ = connection.send(&RemoteMessage::Close("done".into())).await;
-    let _ = agent.kill();
-    let _ = agent.wait();
+    let exited_cleanly = wait_for_agent_exit(&mut agent).await;
+    if !exited_cleanly {
+        let _ = agent.kill();
+        let _ = agent.wait();
+    }
 
     assert!(
         found,
         "shell output emitted at spawn was not delivered; saw: {seen}"
+    );
+    assert!(
+        exited_cleanly,
+        "agent did not finish terminal child cleanup after viewer close"
     );
 }
 
@@ -239,8 +260,15 @@ async fn paired_viewer_types_into_the_remote_shell() {
     .unwrap_or(false);
 
     let _ = connection.send(&RemoteMessage::Close("done".into())).await;
-    let _ = agent.kill();
-    let _ = agent.wait();
+    let exited_cleanly = wait_for_agent_exit(&mut agent).await;
+    if !exited_cleanly {
+        let _ = agent.kill();
+        let _ = agent.wait();
+    }
 
     assert!(found, "shell output never echoed the marker; saw: {seen}");
+    assert!(
+        exited_cleanly,
+        "agent did not finish terminal child cleanup after viewer close"
+    );
 }
