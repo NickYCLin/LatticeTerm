@@ -4,6 +4,67 @@
 
 ---
 
+## [0.29.0](https://github.com/NickYCLin/lattice-term/compare/v0.28.0...v0.29.0) (2026-08-30)
+
+
+### 🚀 新增功能
+
+* **agents:** 以官方 hook 同步 Copilot 狀態 ([e4fad9b](https://github.com/NickYCLin/lattice-term/commit/e4fad9badb29b10b6b8bfae96d77134f30c6c066))
+* **agents:** 以官方 hook 同步 Gemini 狀態 ([048fa43](https://github.com/NickYCLin/lattice-term/commit/048fa437ab476ed616c3714d4ffeae1d60d28ff3))
+* **agents:** 以官方 hook 同步 Qwen 狀態 ([3005c39](https://github.com/NickYCLin/lattice-term/commit/3005c39b8c8100c9b65678b0d3e942e018520e43))
+* **agents:** 以官方事件同步 OpenCode 狀態 ([6ab4931](https://github.com/NickYCLin/lattice-term/commit/6ab4931e0265f2dc887bb4e8690d19aaa5ef52d9))
+* **agents:** 以官方生命週期同步 Hermes 狀態 ([2520999](https://github.com/NickYCLin/lattice-term/commit/2520999cb46000e04225aef7867f3757f488acd3))
+* **agents:** 支援 Cursor 工作階段續接 ([34d7d1a](https://github.com/NickYCLin/lattice-term/commit/34d7d1ac08b6a4f34bf38596a15a65941bdf8de2))
+* **agents:** 顯示 Hermes token 用量 ([defb732](https://github.com/NickYCLin/lattice-term/commit/defb7322363d39f4304ade8a47d8c855bbd9be24))
+
+
+### 🛠️ 問題修正
+
+* **a11y:** 保留手機側欄搜尋狀態 ([afb9005](https://github.com/NickYCLin/lattice-term/commit/afb9005a69284c12303c1993e30afcac3a62fb36))
+* **a11y:** 修正彈出控制鍵盤行為 ([7887af2](https://github.com/NickYCLin/lattice-term/commit/7887af225eaa591b77554c0953ae1a54163208c2))
+* **a11y:** 修正階層清單與命令面板語意 ([45c8405](https://github.com/NickYCLin/lattice-term/commit/45c8405fff62448073963c4e812026ee22ba11dd))
+* **a11y:** 支援分頁鍵盤導覽 ([0cc8da1](https://github.com/NickYCLin/lattice-term/commit/0cc8da1908b044019c8ca42141b865388c124e57))
+* **a11y:** 統一選項群組鍵盤操作 ([3c39008](https://github.com/NickYCLin/lattice-term/commit/3c39008ef22a3f53548a8f16292579c7044d183f))
+* **a11y:** 補齊剩餘視窗焦點管理 ([8b0bb0a](https://github.com/NickYCLin/lattice-term/commit/8b0bb0a46f79fcc4894496a3f8f062980d6451ee))
+* **a11y:** 鎖定執行中的確認視窗 ([ce839b0](https://github.com/NickYCLin/lattice-term/commit/ce839b0ce89df1c837db1b402d9574f664213712))
+* **a11y:** 鎖定手機工作階段側欄焦點 ([5199956](https://github.com/NickYCLin/lattice-term/commit/51999568f9ca9456c834d7b84fd912ed81e8889e))
+* **a11y:** 鎖定核心對話框焦點 ([705caef](https://github.com/NickYCLin/lattice-term/commit/705caefe05b5804d11e1b016d10571f467e112ed))
+* **agents:** 以官方 hook 同步 Claude 狀態 ([924e1dd](https://github.com/NickYCLin/lattice-term/commit/924e1dd2c5a68ee7fab59130beab5e5f152704bb))
+* **agents:** 保留啟動期間的狀態事件 ([a610694](https://github.com/NickYCLin/lattice-term/commit/a6106948885cd35ccfc4eb4e6ab4cec992454327))
+* **agents:** 對話匯出失敗時保留原工作階段 ([3923d56](https://github.com/NickYCLin/lattice-term/commit/3923d56300945124a9767fa26277d3b3b58818e4))
+* **agents:** 清除貼上的暫存圖片 ([4ebd09e](https://github.com/NickYCLin/lattice-term/commit/4ebd09e434f1a1ec6353c5e38f473239a1817208))
+* **agents:** 禁止 Gemini hook 再用完成猜測 ([8f37267](https://github.com/NickYCLin/lattice-term/commit/8f37267168d14a2fc1462d238c7fe159ee8c7299))
+* **agents:** 避免跨封包提示誤標完成 ([b997ee9](https://github.com/NickYCLin/lattice-term/commit/b997ee9cfa38a4084b90a6fa458f822a071344dc))
+* **agents:** 防止快速退出的工作階段復活 ([0a313c5](https://github.com/NickYCLin/lattice-term/commit/0a313c5b5420a687d92757434f3c2c203091dc17))
+* **agents:** 隔離跨 CLI 對話交接 ([78a89bb](https://github.com/NickYCLin/lattice-term/commit/78a89bbaf09e6d90420dd6ccb7231bdab5821eeb))
+* **ci:** 鎖定 Actions 並限縮發版權限 ([0cb483f](https://github.com/NickYCLin/lattice-term/commit/0cb483f8eee3d7bca1c534898031f6e01e042363))
+* **clipboard:** 完整支援 Linux 終端複製貼上 ([0309dfb](https://github.com/NickYCLin/lattice-term/commit/0309dfbff4d50ac9f654e810e4cf04d989c0b311))
+* **mobile:** 依執行環境限制連線能力 ([639f8b8](https://github.com/NickYCLin/lattice-term/commit/639f8b8890f29ceb0456e256fe470c10f1b67523))
+* **mobile:** 修復遠端入口與窄螢幕介面 ([fa889eb](https://github.com/NickYCLin/lattice-term/commit/fa889eb3209fa2be7f64bb1fae9c05195b73a04f))
+* **mobile:** 加入可操作的連線篩選抽屜 ([359e424](https://github.com/NickYCLin/lattice-term/commit/359e424ecffe6e174837fed13487e1f6dbc1e881))
+* **mobile:** 支援遠端檔案與軟體鍵盤 ([b658a43](https://github.com/NickYCLin/lattice-term/commit/b658a4322cc75a68acae67ef3a0a9fed004e6296))
+* **remote:** 保留終端初始輸出 ([01a9a43](https://github.com/NickYCLin/lattice-term/commit/01a9a43aa17081a1aedd415db68606c33b36b8bf))
+* **remote:** 修復遠端畫布鍵鼠與觸控操作 ([18c1f01](https://github.com/NickYCLin/lattice-term/commit/18c1f0106b27574b100709ec6f4997750015b7ab))
+* **remote:** 回收遠端終端子程序 ([99ec77f](https://github.com/NickYCLin/lattice-term/commit/99ec77f5a8025087c50c41c6c891e16252255721))
+* **remote:** 支援 Linux 終端剪貼簿 ([de803e9](https://github.com/NickYCLin/lattice-term/commit/de803e98d7dd6a802c053c3c92f460a4f52f0612))
+* **remote:** 防止配對失敗污染裝置釘選 ([a4981cf](https://github.com/NickYCLin/lattice-term/commit/a4981cf9b46c1569849f2371b0da91fe4f3eaff9))
+* **remote:** 限制並保護遠端檔案工作 ([c7ddc59](https://github.com/NickYCLin/lattice-term/commit/c7ddc59cf510f138dcc85044e5304587382e6eff))
+* **remote:** 限制並回收檢視端連線 ([9eb5a90](https://github.com/NickYCLin/lattice-term/commit/9eb5a908570e3d9c08428a8ab38279efea6c04e7))
+* **remote:** 限制中繼連線與待配對資源 ([5cbde09](https://github.com/NickYCLin/lattice-term/commit/5cbde0947dbc1d2d2e98c007666f90361fcc41d5))
+* **remote:** 限制遠端輸入與終端資源 ([2d27990](https://github.com/NickYCLin/lattice-term/commit/2d27990f7eed9f996360288ddfd28d8292673a3f))
+* **security:** 修補 Linux glib 迭代器未定義行為 ([0850946](https://github.com/NickYCLin/lattice-term/commit/08509460320f57fa4fb032ddd7e6f10e488b75d6))
+* **security:** 將 RDP 憑證核准移出前端 ([a596246](https://github.com/NickYCLin/lattice-term/commit/a596246eb7415b7edfa429353a935533f17ee8e8))
+* **security:** 綁定憑證與實際連線端點 ([50e8551](https://github.com/NickYCLin/lattice-term/commit/50e8551f012f0b1e5301f5a2f6b13edd4d823037))
+* **sessions:** 封住遠端工作階段生命週期競態 ([edc7b6b](https://github.com/NickYCLin/lattice-term/commit/edc7b6ba87b3a032969eadd340767674b83164f4))
+* **sftp:** 防止並行下載覆寫或誤刪檔案 ([f58b001](https://github.com/NickYCLin/lattice-term/commit/f58b001962a89f3e7fc70d3b5b9bce36d19ebb9a))
+* **tunnel:** 修復斷線後無法重新啟動 ([0066cf8](https://github.com/NickYCLin/lattice-term/commit/0066cf8122cf930e6c2ead26404418f04fa4e998))
+* **tunnel:** 避免啟停競態與遠端埠殘留 ([31b12b7](https://github.com/NickYCLin/lattice-term/commit/31b12b732d1580378bacba0a789f17c92ee3b18f))
+* **tunnel:** 限制資源並完整回收連線 ([aa9be9d](https://github.com/NickYCLin/lattice-term/commit/aa9be9d00dc1f1dd0b0b545d4dbe6c432316cbcd))
+* **workspace:** 避免工作中誤標為完成 ([a8d0bb5](https://github.com/NickYCLin/lattice-term/commit/a8d0bb5b4c1fcd91ebd6369395a4469ab836f116))
+* **終端機:** 修復 Linux 文字複製貼上 ([d7c9b96](https://github.com/NickYCLin/lattice-term/commit/d7c9b961cec40633a6fd347d095509f92c84872e))
+* **連線:** 支援選項鍵盤導覽 ([167e8a7](https://github.com/NickYCLin/lattice-term/commit/167e8a742b1c5193588ce4311f5a40ff9f4f2701))
+* **連線:** 鎖定忙碌中的連線視窗 ([fbaab2f](https://github.com/NickYCLin/lattice-term/commit/fbaab2f6c75e43db5c683f9a69c5c9ef69ff622c))
+
 ## [0.28.0](https://github.com/NickYCLin/lattice-term/compare/v0.27.0...v0.28.0) (2026-08-28)
 
 

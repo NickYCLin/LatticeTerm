@@ -2919,7 +2919,7 @@ dependencies = [
 
 [[package]]
 name = "lattice-term"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "arboard",
  "argon2 0.5.3",
