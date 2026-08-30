@@ -10,7 +10,21 @@
 
 use serde_json::Value;
 use std::fs;
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+
+const MAX_CODEX_SESSION_META_BYTES: usize = 256 * 1024;
+const MAX_CLAUDE_SESSION_META_BYTES: u64 = 512 * 1024;
+const MAX_CLAUDE_SESSION_META_LINES: usize = 64;
+const MAX_TRANSCRIPT_FILE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_TRANSCRIPT_LINE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_TRANSCRIPT_SEARCH_DEPTH: usize = 32;
+const MAX_TRANSCRIPT_SEARCH_ENTRIES: usize = 50_000;
 
 /// CLIs whose transcript layout we know how to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +53,7 @@ fn home() -> Option<PathBuf> {
 
 /// Claude names each project folder after its working directory with the path
 /// separators and drive colon flattened to dashes (`C:\Users\me` → `C--Users-me`).
+#[cfg(test)]
 fn claude_slug(working_directory: &str) -> String {
     working_directory
         .chars()
@@ -51,22 +66,56 @@ fn claude_slug(working_directory: &str) -> String {
 
 /// The most recently modified file in `dir` for which `keep` holds.
 fn newest_matching(dir: &Path, keep: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    newest_matching_with_limits(
+        dir,
+        MAX_TRANSCRIPT_SEARCH_ENTRIES,
+        MAX_TRANSCRIPT_SEARCH_DEPTH,
+        keep,
+    )
+}
+
+fn newest_matching_with_limits(
+    dir: &Path,
+    max_entries: usize,
+    max_depth: usize,
+    keep: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(current) = stack.pop() {
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    let mut visited = 0usize;
+    while let Some((current, depth)) = stack.pop() {
         let Ok(entries) = fs::read_dir(&current) else {
             continue;
         };
         for entry in entries.flatten() {
+            visited = visited.saturating_add(1);
+            if visited > max_entries {
+                return None;
+            }
             let path = entry.path();
-            let Ok(meta) = entry.metadata() else { continue };
-            if meta.is_dir() {
-                stack.push(path);
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            // Transcript roots are user-writable. Never let a nested symlink
+            // turn a bounded history search into a scan outside that root.
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                if depth < max_depth {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            if !file_type.is_file() {
                 continue;
             }
             if !keep(&path) {
                 continue;
             }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
             let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
             if best
                 .as_ref()
@@ -79,16 +128,30 @@ fn newest_matching(dir: &Path, keep: impl Fn(&Path) -> bool) -> Option<PathBuf> 
     best.map(|(_, path)| path)
 }
 
-/// Keeps only the last `max_chars` characters, marking the cut so the reader
-/// knows earlier turns were dropped.
-fn tail(mut text: String, max_chars: usize) -> String {
+/// Opens a regular transcript without following a final symlink, then checks
+/// the opened handle rather than trusting path metadata that can race.
+fn open_regular_transcript(path: &Path) -> Option<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    #[cfg(windows)]
+    options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    let file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    (metadata.is_file() && metadata.len() <= MAX_TRANSCRIPT_FILE_BYTES).then_some(file)
+}
+
+/// Keeps only the last `max_chars` characters without allowing the assembled
+/// transcript to grow with the full on-disk history.
+fn trim_tail(text: &mut String, max_chars: usize) -> bool {
     let count = text.chars().count();
     if count <= max_chars {
-        return text;
+        return false;
     }
     let skip = count - max_chars;
-    text = text.chars().skip(skip).collect();
-    format!("…（更早的對話已略過）…\n\n{text}")
+    *text = text.chars().skip(skip).collect();
+    true
 }
 
 /// Flattens a Claude/Codex content value (string, or an array of typed blocks)
@@ -130,16 +193,95 @@ fn push_turn(out: &mut String, role: &str, text: &str) {
     out.push_str("\n\n");
 }
 
+/// Reads one JSONL row while discarding an oversized row in fixed-size reader
+/// buffers. `Some(false)` means a row was present but exceeded the cap.
+fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    max_bytes: usize,
+) -> io::Result<Option<bool>> {
+    line.clear();
+    let mut saw_data = false;
+    let mut oversized = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if !saw_data {
+                return Ok(None);
+            }
+            break;
+        }
+        saw_data = true;
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let data_len = newline.unwrap_or(available.len());
+        if !oversized {
+            if data_len <= max_bytes.saturating_sub(line.len()) {
+                line.extend_from_slice(&available[..data_len]);
+            } else {
+                line.clear();
+                oversized = true;
+            }
+        }
+        reader.consume(data_len + usize::from(newline.is_some()));
+        if newline.is_some() {
+            break;
+        }
+    }
+    if !oversized && line.last() == Some(&b'\r') {
+        line.pop();
+    }
+    Ok(Some(!oversized))
+}
+
+/// Streams a bounded JSONL transcript. The file and each individual row have
+/// independent caps; malformed rows are ignored as before, while oversized
+/// rows are reported so the handoff can disclose that earlier content was cut.
+fn visit_transcript_rows(path: &Path, mut visit: impl FnMut(&Value)) -> Option<bool> {
+    let file = open_regular_transcript(path)?;
+    // The handle may grow after metadata was checked. A `Take` cap keeps the
+    // actual read bounded; one sentinel byte lets us detect and reject growth.
+    let mut reader = BufReader::new(file).take(MAX_TRANSCRIPT_FILE_BYTES + 1);
+    let mut line = Vec::new();
+    let mut skipped_oversized = false;
+    loop {
+        match read_bounded_line(&mut reader, &mut line, MAX_TRANSCRIPT_LINE_BYTES).ok()? {
+            None => break,
+            Some(false) => skipped_oversized = true,
+            Some(true) => {
+                if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+                    visit(&value);
+                }
+            }
+        }
+    }
+    if reader.limit() == 0 {
+        return None;
+    }
+    Some(skipped_oversized)
+}
+
+fn finish_transcript(out: String, truncated: bool) -> Option<String> {
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if truncated {
+        Some(format!("…（更早的對話已略過）…\n\n{trimmed}"))
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 fn parse_claude(path: &Path, max_chars: usize) -> Option<String> {
-    let raw = fs::read_to_string(path).ok()?;
+    if max_chars == 0 {
+        return None;
+    }
     let mut out = String::new();
-    for line in raw.lines() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+    let mut truncated = false;
+    let skipped_oversized = visit_transcript_rows(path, |value| {
         let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
         if kind != "user" && kind != "assistant" {
-            continue;
+            return;
         }
         let message = value.get("message");
         let role = message
@@ -151,70 +293,238 @@ fn parse_claude(path: &Path, max_chars: usize) -> Option<String> {
             .map(content_text)
             .unwrap_or_default();
         push_turn(&mut out, role, &text);
-    }
-    let trimmed = out.trim().to_string();
-    (!trimmed.is_empty()).then(|| tail(trimmed, max_chars))
+        truncated |= trim_tail(&mut out, max_chars);
+    })?;
+    finish_transcript(out, truncated || skipped_oversized)
 }
 
 fn parse_codex(path: &Path, max_chars: usize) -> Option<String> {
-    let raw = fs::read_to_string(path).ok()?;
+    if max_chars == 0 {
+        return None;
+    }
     let mut out = String::new();
-    for line in raw.lines() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+    let mut truncated = false;
+    let skipped_oversized = visit_transcript_rows(path, |value| {
         // Conversation turns live in the payload; skip meta, tool and world rows.
         let Some(payload) = value.get("payload") else {
-            continue;
+            return;
         };
         if payload.get("type").and_then(Value::as_str) != Some("message") {
-            continue;
+            return;
         }
         let role = payload.get("role").and_then(Value::as_str).unwrap_or("");
         if role != "user" && role != "assistant" {
-            continue;
+            return;
         }
         let text = payload.get("content").map(content_text).unwrap_or_default();
         push_turn(&mut out, role, &text);
+        truncated |= trim_tail(&mut out, max_chars);
+    })?;
+    finish_transcript(out, truncated || skipped_oversized)
+}
+
+struct ClaudeSessionMeta {
+    id: String,
+    cwd: String,
+    is_main: bool,
+}
+
+/// Claude's first rows contain the session ID, while `cwd` and sidechain state
+/// normally appear on the first user message a few rows later. Scan a bounded
+/// prefix rather than trusting the lossy project-directory slug, which can
+/// collide for distinct paths.
+fn read_claude_session_meta(path: &Path) -> Option<ClaudeSessionMeta> {
+    let file = open_regular_transcript(path)?;
+    let mut reader = BufReader::new(file).take(MAX_CLAUDE_SESSION_META_BYTES + 1);
+    let mut line = Vec::new();
+    let mut session_id = None;
+    let mut candidate_cwd: Option<String> = None;
+    let mut explicit_main_seen = false;
+    let mut sidechain_seen = false;
+    let mut agent_seen = false;
+
+    for _ in 0..MAX_CLAUDE_SESSION_META_LINES {
+        line.clear();
+        let read = reader.read_until(b'\n', &mut line).ok()?;
+        if read == 0 {
+            break;
+        }
+        if line.len() > MAX_CODEX_SESSION_META_BYTES {
+            return None;
+        }
+        while matches!(line.last(), Some(b'\n' | b'\r')) {
+            line.pop();
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        if let Some(id) = value.get("sessionId").and_then(Value::as_str) {
+            match session_id.as_deref() {
+                Some(existing) if existing != id => return None,
+                None => session_id = Some(id.to_string()),
+                _ => {}
+            }
+        }
+        sidechain_seen |= value.get("isSidechain").and_then(Value::as_bool) == Some(true);
+        agent_seen |= value
+            .get("agentId")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty());
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+        if !matches!(kind, "user" | "assistant") {
+            continue;
+        }
+        let Some(cwd) = value
+            .get("cwd")
+            .and_then(Value::as_str)
+            .filter(|cwd| !cwd.is_empty())
+        else {
+            continue;
+        };
+        let Some(is_sidechain) = value.get("isSidechain").and_then(Value::as_bool) else {
+            // A missing sidechain marker is ambiguous. Keep scanning for a
+            // verified conversation row instead of rejecting too early.
+            continue;
+        };
+        if candidate_cwd.as_deref().is_some_and(|known| known != cwd) {
+            return None;
+        }
+        candidate_cwd.get_or_insert_with(|| cwd.to_string());
+        explicit_main_seen |= !is_sidechain;
     }
-    let trimmed = out.trim().to_string();
-    (!trimmed.is_empty()).then(|| tail(trimmed, max_chars))
+    Some(ClaudeSessionMeta {
+        id: session_id?,
+        cwd: candidate_cwd?,
+        is_main: explicit_main_seen && !sidechain_seen && !agent_seen,
+    })
+}
+
+fn is_jsonl(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "jsonl")
+}
+
+fn locate_claude_in(
+    projects_root: &Path,
+    working_directory: &str,
+    captured: Option<&str>,
+) -> Option<PathBuf> {
+    let projects_root = fs::canonicalize(projects_root).ok()?;
+    if let Some(id) = captured {
+        return newest_matching(&projects_root, |path| {
+            is_jsonl(path)
+                && read_claude_session_meta(path).is_some_and(|meta| meta.is_main && meta.id == id)
+        });
+    }
+
+    let expected_cwd = fs::canonicalize(working_directory).ok()?;
+    newest_matching(&projects_root, |path| {
+        if !is_jsonl(path) {
+            return false;
+        }
+        let Some(meta) = read_claude_session_meta(path) else {
+            return false;
+        };
+        meta.is_main
+            && fs::canonicalize(meta.cwd)
+                .ok()
+                .is_some_and(|cwd| cwd == expected_cwd)
+    })
 }
 
 fn locate_claude(working_directory: &str, captured: Option<&str>) -> Option<PathBuf> {
-    let dir = home()?
-        .join(".claude")
-        .join("projects")
-        .join(claude_slug(working_directory));
-    if let Some(id) = captured {
-        let direct = dir.join(format!("{id}.jsonl"));
-        if direct.is_file() {
-            return Some(direct);
-        }
+    let projects_root = home()?.join(".claude").join("projects");
+    locate_claude_in(&projects_root, working_directory, captured)
+}
+
+struct CodexSessionMeta {
+    id: Option<String>,
+    cwd: Option<String>,
+    source_is_string: bool,
+    source_is_known_main_cli: bool,
+}
+
+/// Codex keeps the session identity in the first JSONL row. Read only a
+/// bounded prefix so a malformed history cannot allocate an unbounded buffer
+/// merely while LatticeTerm is deciding which transcript belongs to a pane.
+fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMeta> {
+    let file = open_regular_transcript(path)?;
+    let mut reader = BufReader::new(file).take((MAX_CODEX_SESSION_META_BYTES + 2) as u64);
+    let mut line = Vec::with_capacity(MAX_CODEX_SESSION_META_BYTES.min(8 * 1024));
+    reader.read_until(b'\n', &mut line).ok()?;
+    if line.last() == Some(&b'\n') {
+        line.pop();
     }
-    // Fall back to the newest top-level session file (a subagents/ child is not
-    // the main conversation, so keep only files that sit directly in the dir).
-    newest_matching(&dir, |path| {
-        path.extension().is_some_and(|ext| ext == "jsonl") && path.parent() == Some(dir.as_path())
+    if line.last() == Some(&b'\r') {
+        line.pop();
+    }
+    if line.len() > MAX_CODEX_SESSION_META_BYTES {
+        return None;
+    }
+    let value = serde_json::from_slice::<Value>(&line).ok()?;
+    if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    let source = payload.get("source").and_then(Value::as_str);
+    let originator = payload.get("originator").and_then(Value::as_str);
+    Some(CodexSessionMeta {
+        id: payload
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        cwd: payload
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        source_is_string: source.is_some(),
+        source_is_known_main_cli: source == Some("cli")
+            || matches!(
+                (source, originator),
+                (Some("unknown"), Some("codex_cli_rs"))
+            ),
     })
 }
 
-fn locate_codex(captured: Option<&str>) -> Option<PathBuf> {
-    let root = home()?.join(".codex").join("sessions");
+fn is_codex_rollout(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("rollout-"))
+        && path.extension().is_some_and(|ext| ext == "jsonl")
+}
+
+fn locate_codex_in(
+    sessions_root: &Path,
+    working_directory: &str,
+    captured: Option<&str>,
+) -> Option<PathBuf> {
+    let root = fs::canonicalize(sessions_root).ok()?;
     if let Some(id) = captured {
-        if let Some(found) = newest_matching(&root, |path| {
-            path.to_string_lossy().contains(id)
-                && path.extension().is_some_and(|ext| ext == "jsonl")
-        }) {
-            return Some(found);
-        }
+        return newest_matching(&root, |path| {
+            is_codex_rollout(path)
+                && read_codex_session_meta(path)
+                    .is_some_and(|meta| meta.source_is_string && meta.id.as_deref() == Some(id))
+        });
     }
+
+    let expected_cwd = fs::canonicalize(working_directory).ok()?;
     newest_matching(&root, |path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("rollout-"))
-            && path.extension().is_some_and(|ext| ext == "jsonl")
+        if !is_codex_rollout(path) {
+            return false;
+        }
+        let Some(meta) = read_codex_session_meta(path) else {
+            return false;
+        };
+        meta.source_is_known_main_cli
+            && meta
+                .cwd
+                .and_then(|cwd| fs::canonicalize(cwd).ok())
+                .is_some_and(|cwd| cwd == expected_cwd)
     })
+}
+
+fn locate_codex(working_directory: &str, captured: Option<&str>) -> Option<PathBuf> {
+    let root = home()?.join(".codex").join("sessions");
+    locate_codex_in(&root, working_directory, captured)
 }
 
 /// Reads the source CLI's most relevant conversation and returns it as plain,
@@ -231,7 +541,7 @@ pub fn export(
             parse_claude(&path, max_chars)
         }
         TranscriptKind::Codex => {
-            let path = locate_codex(captured_session_id)?;
+            let path = locate_codex(working_directory, captured_session_id)?;
             parse_codex(&path, max_chars)
         }
     }
@@ -240,6 +550,69 @@ pub fn export(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn set_modified(path: &Path, seconds: u64) {
+        let times = fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds));
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+    }
+
+    fn write_codex_rollout(
+        path: &Path,
+        id: &str,
+        cwd: &Path,
+        source: Value,
+        originator: &str,
+        modified: u64,
+    ) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let rows = [
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": id,
+                    "cwd": cwd.to_string_lossy(),
+                    "source": source,
+                    "originator": originator,
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": id}],
+                }
+            })
+            .to_string(),
+        ];
+        fs::write(path, rows.join("\n")).unwrap();
+        set_modified(path, modified);
+    }
+
+    fn write_claude_session(path: &Path, id: &str, cwd: &Path, is_sidechain: bool, modified: u64) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let rows = [
+            serde_json::json!({"type": "mode", "sessionId": id}).to_string(),
+            serde_json::json!({"type": "permission-mode", "sessionId": id}).to_string(),
+            serde_json::json!({
+                "type": "user",
+                "sessionId": id,
+                "cwd": cwd.to_string_lossy(),
+                "isSidechain": is_sidechain,
+                "message": {"role": "user", "content": id},
+            })
+            .to_string(),
+        ];
+        fs::write(path, rows.join("\n")).unwrap();
+        set_modified(path, modified);
+    }
 
     #[test]
     fn claude_slug_flattens_windows_paths() {
@@ -259,10 +632,27 @@ mod tests {
     }
 
     #[test]
+    fn recursive_search_fails_closed_when_its_entry_budget_is_exhausted() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("first.jsonl"), b"one").unwrap();
+        fs::write(directory.path().join("second.jsonl"), b"two").unwrap();
+
+        assert_eq!(
+            newest_matching_with_limits(directory.path(), 1, 1, |_| true),
+            None
+        );
+    }
+
+    #[test]
     fn tail_marks_a_truncation() {
-        assert_eq!(tail("abcdef".into(), 10), "abcdef");
-        assert!(tail("abcdef".into(), 3).contains("def"));
-        assert!(tail("abcdef".into(), 3).contains("略過"));
+        let mut short = "abcdef".to_string();
+        assert!(!trim_tail(&mut short, 10));
+        assert_eq!(short, "abcdef");
+
+        let mut long = "abcdef".to_string();
+        assert!(trim_tail(&mut long, 3));
+        assert_eq!(long, "def");
+        assert!(finish_transcript(long, true).unwrap().contains("略過"));
     }
 
     #[test]
@@ -304,5 +694,414 @@ mod tests {
         assert!(text.contains("問題一"));
         assert!(text.contains("答案一"));
         assert!(!text.contains("reasoning"));
+    }
+
+    #[test]
+    fn codex_transcript_skips_oversized_rows_and_rejects_oversized_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript = directory.path().join("rollout-streamed.jsonl");
+        let valid = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "仍能讀到後續訊息"}],
+            }
+        })
+        .to_string();
+        let mut rows = Vec::with_capacity(MAX_TRANSCRIPT_LINE_BYTES + valid.len() + 2);
+        rows.extend(std::iter::repeat_n(b'x', MAX_TRANSCRIPT_LINE_BYTES + 1));
+        rows.push(b'\n');
+        rows.extend_from_slice(valid.as_bytes());
+        fs::write(&transcript, rows).unwrap();
+
+        let text = parse_codex(&transcript, 5_000).unwrap();
+        assert!(text.contains("仍能讀到後續訊息"));
+        assert!(text.contains("略過"));
+
+        let too_large = directory.path().join("rollout-too-large.jsonl");
+        let file = fs::File::create(&too_large).unwrap();
+        file.set_len(MAX_TRANSCRIPT_FILE_BYTES + 1).unwrap();
+        assert_eq!(parse_codex(&too_large, 5_000), None);
+    }
+
+    #[test]
+    fn codex_fallback_stays_in_the_same_cwd_and_ignores_subagents() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let target_cwd = directory.path().join("target");
+        let other_cwd = directory.path().join("other");
+        fs::create_dir_all(&target_cwd).unwrap();
+        fs::create_dir_all(&other_cwd).unwrap();
+
+        let target = root.join("2026/08/30/rollout-target.jsonl");
+        write_codex_rollout(
+            &target,
+            "target-main",
+            &target_cwd,
+            Value::String("cli".to_string()),
+            "codex-tui",
+            10,
+        );
+        write_codex_rollout(
+            &root.join("2026/08/30/rollout-other.jsonl"),
+            "other-main",
+            &other_cwd,
+            Value::String("cli".to_string()),
+            "codex-tui",
+            20,
+        );
+        write_codex_rollout(
+            &root.join("2026/08/30/rollout-subagent.jsonl"),
+            "target-subagent",
+            &target_cwd,
+            serde_json::json!({"subagent": "review"}),
+            "codex-tui",
+            30,
+        );
+
+        assert_eq!(
+            locate_codex_in(&root, target_cwd.to_str().unwrap(), None),
+            Some(target)
+        );
+    }
+
+    #[test]
+    fn codex_captured_id_is_exact_and_survives_a_moved_working_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let old_cwd = directory.path().join("old-location");
+        let current_cwd = directory.path().join("current-location");
+        fs::create_dir_all(&current_cwd).unwrap();
+        let rollout = root.join("2026/08/30/rollout-session-42.jsonl");
+        write_codex_rollout(
+            &rollout,
+            "session-42",
+            &old_cwd,
+            Value::String("exec".to_string()),
+            "codex_exec",
+            10,
+        );
+        write_codex_rollout(
+            &root.join("2026/08/30/rollout-unrelated-fallback.jsonl"),
+            "newer-session",
+            &current_cwd,
+            Value::String("cli".to_string()),
+            "codex-tui",
+            20,
+        );
+
+        assert_eq!(
+            locate_codex_in(&root, current_cwd.to_str().unwrap(), Some("session-42"),),
+            Some(rollout)
+        );
+        assert_eq!(
+            locate_codex_in(&root, current_cwd.to_str().unwrap(), Some("session"),),
+            None
+        );
+        assert_eq!(
+            locate_codex_in(
+                &root,
+                current_cwd.to_str().unwrap(),
+                Some("../../session-42"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_captured_id_rejects_subagent_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let cwd = directory.path().join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+        write_codex_rollout(
+            &root.join("2026/08/30/rollout-subagent.jsonl"),
+            "subagent-session",
+            &cwd,
+            serde_json::json!({"subagent": "review"}),
+            "codex-tui",
+            10,
+        );
+
+        assert_eq!(
+            locate_codex_in(&root, cwd.to_str().unwrap(), Some("subagent-session")),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_fallback_accepts_the_legacy_main_cli_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let cwd = directory.path().join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+        let legacy = root.join("2025/01/01/rollout-legacy.jsonl");
+        write_codex_rollout(
+            &legacy,
+            "legacy-main",
+            &cwd,
+            Value::String("unknown".to_string()),
+            "codex_cli_rs",
+            10,
+        );
+
+        assert_eq!(
+            locate_codex_in(&root, cwd.to_str().unwrap(), None),
+            Some(legacy)
+        );
+
+        let future_cli = root.join("2026/08/30/rollout-future-cli.jsonl");
+        write_codex_rollout(
+            &future_cli,
+            "future-main",
+            &cwd,
+            Value::String("cli".to_string()),
+            "future-codex-tui",
+            20,
+        );
+        assert_eq!(
+            locate_codex_in(&root, cwd.to_str().unwrap(), None),
+            Some(future_cli)
+        );
+    }
+
+    #[test]
+    fn codex_locator_rejects_oversized_or_malformed_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let cwd = directory.path().join("workspace");
+        fs::create_dir_all(root.join("2026/08/30")).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        fs::write(
+            root.join("2026/08/30/rollout-oversized.jsonl"),
+            vec![b'x'; MAX_CODEX_SESSION_META_BYTES + 1],
+        )
+        .unwrap();
+        fs::write(
+            root.join("2026/08/30/rollout-malformed.jsonl"),
+            b"not-json\n",
+        )
+        .unwrap();
+
+        assert_eq!(locate_codex_in(&root, cwd.to_str().unwrap(), None), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_locator_does_not_follow_nested_symlinks() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let outside = directory.path().join("outside");
+        let cwd = directory.path().join("workspace");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        let escaped = outside.join("rollout-escaped.jsonl");
+        write_codex_rollout(
+            &escaped,
+            "escaped",
+            &cwd,
+            Value::String("cli".to_string()),
+            "codex-tui",
+            10,
+        );
+        std::os::unix::fs::symlink(&outside, root.join("linked-outside")).unwrap();
+        std::os::unix::fs::symlink(&escaped, root.join("rollout-linked-file.jsonl")).unwrap();
+
+        assert_eq!(locate_codex_in(&root, cwd.to_str().unwrap(), None), None);
+        assert_eq!(
+            parse_codex(&root.join("rollout-linked-file.jsonl"), 5_000),
+            None
+        );
+    }
+
+    #[test]
+    fn claude_captured_id_cannot_escape_its_project_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let projects_root = directory.path().join(".claude/projects");
+        let working_directory = directory.path().join("workspace");
+        let project = projects_root.join(claude_slug(working_directory.to_str().unwrap()));
+        fs::create_dir_all(&project).unwrap();
+        fs::write(directory.path().join(".claude/escape.jsonl"), b"outside").unwrap();
+
+        assert_eq!(
+            locate_claude_in(
+                &projects_root,
+                working_directory.to_str().unwrap(),
+                Some("../../escape"),
+            ),
+            None
+        );
+
+        let valid = project.join("session-42.jsonl");
+        write_claude_session(&valid, "session-42", &working_directory, false, 10);
+        assert_eq!(
+            locate_claude_in(
+                &projects_root,
+                working_directory.to_str().unwrap(),
+                Some("session-42"),
+            ),
+            Some(valid)
+        );
+    }
+
+    #[test]
+    fn claude_fallback_uses_metadata_to_disambiguate_slug_collisions() {
+        let directory = tempfile::tempdir().unwrap();
+        let projects_root = directory.path().join(".claude/projects");
+        let target_cwd = directory.path().join("a-b/c");
+        let other_cwd = directory.path().join("a/b-c");
+        fs::create_dir_all(&target_cwd).unwrap();
+        fs::create_dir_all(&other_cwd).unwrap();
+        assert_eq!(
+            claude_slug(target_cwd.to_str().unwrap()),
+            claude_slug(other_cwd.to_str().unwrap())
+        );
+        let project = projects_root.join(claude_slug(target_cwd.to_str().unwrap()));
+        let target = project.join("target.jsonl");
+        write_claude_session(&target, "target", &target_cwd, false, 10);
+        write_claude_session(&project.join("other.jsonl"), "other", &other_cwd, false, 20);
+
+        assert_eq!(
+            locate_claude_in(&projects_root, target_cwd.to_str().unwrap(), None),
+            Some(target)
+        );
+    }
+
+    #[test]
+    fn claude_captured_id_survives_a_moved_cwd_but_rejects_sidechains() {
+        let directory = tempfile::tempdir().unwrap();
+        let projects_root = directory.path().join(".claude/projects");
+        let old_cwd = directory.path().join("old-location");
+        let current_cwd = directory.path().join("current-location");
+        fs::create_dir_all(&old_cwd).unwrap();
+        fs::create_dir_all(&current_cwd).unwrap();
+        let old_project = projects_root.join(claude_slug(old_cwd.to_str().unwrap()));
+        let main = old_project.join("main-session.jsonl");
+        write_claude_session(&main, "main-session", &old_cwd, false, 10);
+        write_claude_session(
+            &old_project.join("sidechain-session.jsonl"),
+            "sidechain-session",
+            &old_cwd,
+            true,
+            20,
+        );
+        write_claude_session(
+            &projects_root
+                .join(claude_slug(current_cwd.to_str().unwrap()))
+                .join("newer-session.jsonl"),
+            "newer-session",
+            &current_cwd,
+            false,
+            30,
+        );
+
+        assert_eq!(
+            locate_claude_in(
+                &projects_root,
+                current_cwd.to_str().unwrap(),
+                Some("main-session"),
+            ),
+            Some(main)
+        );
+        assert_eq!(
+            locate_claude_in(
+                &projects_root,
+                current_cwd.to_str().unwrap(),
+                Some("sidechain-session"),
+            ),
+            None
+        );
+
+        let ambiguous = old_project.join("ambiguous-session.jsonl");
+        fs::write(
+            &ambiguous,
+            [
+                serde_json::json!({"type": "mode", "sessionId": "ambiguous-session"}).to_string(),
+                serde_json::json!({
+                    "type": "user",
+                    "sessionId": "ambiguous-session",
+                    "cwd": old_cwd.to_string_lossy(),
+                    "message": {"role": "user", "content": "ambiguous"},
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            locate_claude_in(
+                &projects_root,
+                current_cwd.to_str().unwrap(),
+                Some("ambiguous-session"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn claude_metadata_requires_consistent_ids_and_an_explicit_main_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let projects_root = directory.path().join(".claude/projects");
+        let cwd = directory.path().join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+        let project = projects_root.join("project");
+        fs::create_dir_all(&project).unwrap();
+
+        let verified = project.join("verified.jsonl");
+        fs::write(
+            &verified,
+            [
+                serde_json::json!({"type": "mode", "sessionId": "verified"}).to_string(),
+                serde_json::json!({
+                    "type": "user",
+                    "sessionId": "verified",
+                    "cwd": cwd.to_string_lossy(),
+                    "message": {"role": "user", "content": "ambiguous prefix"},
+                })
+                .to_string(),
+                serde_json::json!({
+                    "type": "assistant",
+                    "sessionId": "verified",
+                    "cwd": cwd.to_string_lossy(),
+                    "isSidechain": false,
+                    "message": {"role": "assistant", "content": "verified row"},
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            locate_claude_in(&projects_root, cwd.to_str().unwrap(), Some("verified")),
+            Some(verified)
+        );
+
+        let conflicting = project.join("conflicting.jsonl");
+        fs::write(
+            &conflicting,
+            [
+                serde_json::json!({"type": "mode", "sessionId": "expected"}).to_string(),
+                serde_json::json!({
+                    "type": "user",
+                    "sessionId": "different",
+                    "cwd": cwd.to_string_lossy(),
+                    "isSidechain": false,
+                    "message": {"role": "user", "content": "wrong session"},
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            locate_claude_in(&projects_root, cwd.to_str().unwrap(), Some("expected")),
+            None
+        );
+        assert_eq!(
+            locate_claude_in(&projects_root, cwd.to_str().unwrap(), Some("different")),
+            None
+        );
     }
 }
