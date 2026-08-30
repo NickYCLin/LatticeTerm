@@ -2,8 +2,9 @@
 //!
 //! Pairing secrets cross IPC for one call and are never placed in the
 //! registry. The registry retains only public session metadata, bounded writer
-//! state, file-transfer progress, and an abort handle. Frames and files are
-//! already encrypted on the wire before they reach here.
+//! state, file-transfer progress, admission permits, and a task supervisor
+//! handle. Frames and files are already encrypted on the wire before they
+//! reach here.
 
 use crate::remote_files::{RemoteDirectory, RemoteFileTransfer, RemoteFilesClient};
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -23,13 +24,16 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::AbortHandle;
+use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+static NEXT_SESSION_GENERATION: AtomicU64 = AtomicU64::new(1);
+static NEXT_RESERVATION: AtomicU64 = AtomicU64::new(1);
 const MAX_REMOTE_SESSIONS: usize = 32;
 const REMOTE_TERMINAL_TAIL_BYTES: usize = 256 * 1024;
+const REMOTE_CLOSE_SEND_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -213,10 +217,22 @@ impl RemoteReaderGate {
 
 struct RemoteSessionRecord {
     summary: RemoteSessionSummary,
-    abort: AbortHandle,
+    generation: u64,
+    supervisor: JoinHandle<()>,
+    shutdown: oneshot::Sender<()>,
     outbound: mpsc::Sender<RemoteMessage>,
     files: Option<Arc<RemoteFilesClient>>,
     terminal_output: Option<RemoteTerminalOutput>,
+    admission: OwnedSemaphorePermit,
+}
+
+struct PendingRemoteSessionRecord {
+    summary: RemoteSessionSummary,
+    generation: u64,
+    supervisor: JoinHandle<()>,
+    shutdown: oneshot::Sender<()>,
+    outbound: mpsc::Sender<RemoteMessage>,
+    files: Option<Arc<RemoteFilesClient>>,
 }
 
 #[derive(Clone)]
@@ -227,8 +243,46 @@ struct RemoteSessionAccess {
 }
 
 #[derive(Default)]
+struct RemoteRegistryState {
+    sessions: HashMap<String, RemoteSessionRecord>,
+    pending_profiles: HashMap<String, u64>,
+}
+
 pub struct RemoteRegistry {
-    sessions: Mutex<HashMap<String, RemoteSessionRecord>>,
+    state: Mutex<RemoteRegistryState>,
+    admission: Arc<Semaphore>,
+}
+
+impl Default for RemoteRegistry {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(RemoteRegistryState::default()),
+            admission: Arc::new(Semaphore::new(MAX_REMOTE_SESSIONS)),
+        }
+    }
+}
+
+struct RemoteConnectReservation {
+    registry: Arc<RemoteRegistry>,
+    profile_id: String,
+    token: u64,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Drop for RemoteConnectReservation {
+    fn drop(&mut self) {
+        if self.permit.is_none() {
+            return;
+        }
+        if let Ok(mut state) = self.registry.state.lock() {
+            if state.pending_profiles.get(&self.profile_id) == Some(&self.token) {
+                state.pending_profiles.remove(&self.profile_id);
+            }
+        }
+        // The owned permit is released after this method returns. Keeping it
+        // until the token-specific pending entry is gone prevents another
+        // attempt from observing a slot without a matching reservation.
+    }
 }
 
 impl RemoteRegistry {
@@ -236,45 +290,122 @@ impl RemoteRegistry {
         Self::default()
     }
 
-    fn insert(
-        &self,
-        summary: RemoteSessionSummary,
-        abort: AbortHandle,
-        outbound: mpsc::Sender<RemoteMessage>,
-        files: Option<Arc<RemoteFilesClient>>,
-    ) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().map_err(|error| error.to_string())?;
-        if sessions.contains_key(&summary.session_id) {
+    fn reserve(self: &Arc<Self>, profile_id: String) -> Result<RemoteConnectReservation, String> {
+        let permit = Arc::clone(&self.admission)
+            .try_acquire_owned()
+            .map_err(|_| {
+                format!(
+                    "At most {MAX_REMOTE_SESSIONS} Lattice Remote sessions can be connecting or connected at once."
+                )
+            })?;
+        let token = NEXT_RESERVATION.fetch_add(1, Ordering::Relaxed);
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        if state.pending_profiles.contains_key(&profile_id)
+            || state
+                .sessions
+                .values()
+                .any(|record| record.summary.profile_id == profile_id)
+        {
             return Err(format!(
-                "Lattice Remote session '{}' is already connected.",
-                summary.session_id
+                "A Lattice Remote session for profile '{profile_id}' is already connecting or connected."
             ));
         }
-        if sessions.len() >= MAX_REMOTE_SESSIONS {
+        state.pending_profiles.insert(profile_id.clone(), token);
+        drop(state);
+        Ok(RemoteConnectReservation {
+            registry: Arc::clone(self),
+            profile_id,
+            token,
+            permit: Some(permit),
+        })
+    }
+
+    fn commit(
+        &self,
+        reservation: &mut RemoteConnectReservation,
+        pending: &mut Option<PendingRemoteSessionRecord>,
+    ) -> Result<(), String> {
+        if !std::ptr::eq(self, Arc::as_ptr(&reservation.registry)) {
+            return Err(
+                "The remote connection reservation belongs to another registry.".to_string(),
+            );
+        }
+        let pending_record = pending
+            .as_ref()
+            .ok_or_else(|| "The remote session has already been registered.".to_string())?;
+        if pending_record.summary.profile_id != reservation.profile_id {
+            return Err("The remote session profile does not match its reservation.".to_string());
+        }
+        if reservation.permit.is_none() {
+            return Err("The remote connection reservation is no longer active.".to_string());
+        }
+
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        if state.pending_profiles.get(&reservation.profile_id) != Some(&reservation.token) {
+            return Err("The remote connection reservation is no longer active.".to_string());
+        }
+        if state
+            .sessions
+            .contains_key(&pending_record.summary.session_id)
+        {
             return Err(format!(
-                "At most {MAX_REMOTE_SESSIONS} Lattice Remote sessions can be connected at once."
+                "Lattice Remote session '{}' is already connected.",
+                pending_record.summary.session_id
+            ));
+        }
+        if state
+            .sessions
+            .values()
+            .any(|record| record.summary.profile_id == reservation.profile_id)
+        {
+            return Err(format!(
+                "A Lattice Remote session for profile '{}' is already connected.",
+                reservation.profile_id
             ));
         }
 
-        let terminal_output = summary.terminal.then(RemoteTerminalOutput::default);
-        sessions.insert(
-            summary.session_id.clone(),
+        let Some(permit) = reservation.permit.take() else {
+            return Err("The remote connection reservation is no longer active.".to_string());
+        };
+        let Some(pending_record) = pending.take() else {
+            reservation.permit = Some(permit);
+            return Err("The remote session has already been registered.".to_string());
+        };
+        state.pending_profiles.remove(&reservation.profile_id);
+        let terminal_output = pending_record
+            .summary
+            .terminal
+            .then(RemoteTerminalOutput::default);
+        state.sessions.insert(
+            pending_record.summary.session_id.clone(),
             RemoteSessionRecord {
-                summary,
-                abort,
-                outbound,
-                files,
+                summary: pending_record.summary,
+                generation: pending_record.generation,
+                supervisor: pending_record.supervisor,
+                shutdown: pending_record.shutdown,
+                outbound: pending_record.outbound,
+                files: pending_record.files,
                 terminal_output,
+                admission: permit,
             },
         );
         Ok(())
     }
 
-    fn append_terminal(&self, session_id: &str, bytes: &[u8]) -> Result<u64, String> {
-        let mut sessions = self.sessions.lock().map_err(|error| error.to_string())?;
-        let record = sessions
+    fn append_terminal(
+        &self,
+        session_id: &str,
+        generation: u64,
+        bytes: &[u8],
+    ) -> Result<u64, String> {
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        let record = state
+            .sessions
             .get_mut(session_id)
             .ok_or_else(|| format!("Lattice Remote session '{session_id}' is not connected."))?;
+        if record.generation != generation {
+            return Err("The remote session was replaced by a newer connection.".to_string());
+        }
         let output = record.terminal_output.as_mut().ok_or_else(|| {
             "The Agent sent terminal data without advertising a terminal session.".to_string()
         })?;
@@ -282,9 +413,10 @@ impl RemoteRegistry {
     }
 
     fn access(&self, session_id: &str) -> Result<RemoteSessionAccess, String> {
-        self.sessions
+        self.state
             .lock()
             .map_err(|error| error.to_string())?
+            .sessions
             .get(session_id)
             .map(|record| RemoteSessionAccess {
                 summary: record.summary.clone(),
@@ -296,17 +428,36 @@ impl RemoteRegistry {
 
     fn remove(&self, session_id: &str) -> Result<Option<RemoteSessionRecord>, String> {
         Ok(self
-            .sessions
+            .state
             .lock()
             .map_err(|error| error.to_string())?
+            .sessions
             .remove(session_id))
     }
 
+    fn remove_if_generation(
+        &self,
+        session_id: &str,
+        generation: u64,
+    ) -> Result<Option<RemoteSessionRecord>, String> {
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        if state
+            .sessions
+            .get(session_id)
+            .is_some_and(|record| record.generation == generation)
+        {
+            Ok(state.sessions.remove(session_id))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn list(&self) -> Vec<RemoteSessionSummary> {
-        let Ok(sessions) = self.sessions.lock() else {
+        let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
-        let mut summaries: Vec<_> = sessions
+        let mut summaries: Vec<_> = state
+            .sessions
             .values()
             .map(|record| record.summary.clone())
             .collect();
@@ -315,8 +466,9 @@ impl RemoteRegistry {
     }
 
     pub fn terminal_snapshots(&self) -> Result<Vec<RemoteTerminalSnapshot>, String> {
-        let sessions = self.sessions.lock().map_err(|error| error.to_string())?;
-        let mut snapshots: Vec<_> = sessions
+        let state = self.state.lock().map_err(|error| error.to_string())?;
+        let mut snapshots: Vec<_> = state
+            .sessions
             .iter()
             .filter_map(|(session_id, record)| {
                 record
@@ -330,10 +482,11 @@ impl RemoteRegistry {
     }
 
     pub fn transfers(&self) -> Vec<RemoteFileTransfer> {
-        let Ok(sessions) = self.sessions.lock() else {
+        let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
-        let mut transfers: Vec<_> = sessions
+        let mut transfers: Vec<_> = state
+            .sessions
             .values()
             .filter_map(|record| record.files.as_ref())
             .flat_map(|files| files.transfers())
@@ -417,6 +570,103 @@ where
     Ok(hello)
 }
 
+fn remote_task_reason(
+    task: &'static str,
+    result: Result<String, tokio::task::JoinError>,
+) -> String {
+    match result {
+        Ok(reason) => reason,
+        Err(error) if error.is_cancelled() => format!("The remote {task} task was cancelled."),
+        Err(error) => format!("The remote {task} task failed: {error}"),
+    }
+}
+
+/// Owns both encrypted halves and gives every shutdown path exactly one place
+/// that aborts and awaits them. `JoinHandle` completion is sticky, so a writer
+/// failure wakes this supervisor even when the reader has no incoming bytes.
+async fn supervise_remote_tasks(
+    mut reader: JoinHandle<String>,
+    mut writer: JoinHandle<String>,
+    mut shutdown: oneshot::Receiver<()>,
+) -> Option<String> {
+    enum RemoteTaskExit {
+        Reader(Result<String, tokio::task::JoinError>),
+        Writer(Result<String, tokio::task::JoinError>),
+        Shutdown,
+    }
+
+    let exit = tokio::select! {
+        result = &mut reader => RemoteTaskExit::Reader(result),
+        result = &mut writer => RemoteTaskExit::Writer(result),
+        _ = &mut shutdown => RemoteTaskExit::Shutdown,
+    };
+    match exit {
+        RemoteTaskExit::Reader(result) => {
+            writer.abort();
+            let _ = writer.await;
+            Some(remote_task_reason("reader", result))
+        }
+        RemoteTaskExit::Writer(result) => {
+            reader.abort();
+            let _ = reader.await;
+            Some(remote_task_reason("writer", result))
+        }
+        RemoteTaskExit::Shutdown => {
+            reader.abort();
+            writer.abort();
+            let _ = reader.await;
+            let _ = writer.await;
+            None
+        }
+    }
+}
+
+async fn stop_pending_remote_session(record: PendingRemoteSessionRecord, reason: &str) {
+    if let Some(files) = &record.files {
+        files.close(reason);
+    }
+    let PendingRemoteSessionRecord {
+        supervisor,
+        shutdown,
+        outbound,
+        files,
+        ..
+    } = record;
+    let _ = shutdown.send(());
+    drop(outbound);
+    drop(files);
+    let _ = supervisor.await;
+}
+
+async fn stop_remote_session(
+    record: RemoteSessionRecord,
+    reason: &str,
+    close_send_timeout: Duration,
+) {
+    if let Some(files) = &record.files {
+        files.close(reason);
+    }
+    let RemoteSessionRecord {
+        supervisor,
+        shutdown,
+        outbound,
+        files,
+        admission,
+        ..
+    } = record;
+    let _ = timeout(
+        close_send_timeout,
+        outbound.send(RemoteMessage::Close(reason.to_string())),
+    )
+    .await;
+    let _ = shutdown.send(());
+    drop(outbound);
+    drop(files);
+    let _ = supervisor.await;
+    // Keep the global slot occupied through the last task join.
+    drop(admission);
+}
+
 pub async fn connect(
     app: AppHandle,
     registry: Arc<RemoteRegistry>,
@@ -437,6 +687,13 @@ pub async fn connect(
     let pairing_code = match normalize_pairing_code(&request.pairing_code) {
         Ok(code) => code,
         Err(error) => return failed("pairing", error.to_string()),
+    };
+    // Admission covers dialing, the Noise handshake, authenticated Hello, and
+    // the live session. Reserving the profile in the same critical section
+    // also preserves the product's one-active-session-per-profile contract.
+    let mut reservation = match registry.reserve(request.profile_id.clone()) {
+        Ok(reservation) => reservation,
+        Err(error) => return failed("session", error),
     };
 
     let mut connection = if let Some(device_id) = &device_id {
@@ -526,12 +783,16 @@ pub async fn connect(
     // Input and file requests share one bounded encrypted writer queue. File
     // access remains available to a view-only display session only when the
     // host advertised its independently authorised shared root.
+    let generation = NEXT_SESSION_GENERATION.fetch_add(1, Ordering::Relaxed);
     let (mut reader, mut writer_half) = connection.split();
     let (outbound, mut outbound_rx) = mpsc::channel::<RemoteMessage>(128);
     let writer = tokio::spawn(async move {
-        while let Some(message) = outbound_rx.recv().await {
-            if writer_half.send(&message).await.is_err() {
-                break;
+        loop {
+            let Some(message) = outbound_rx.recv().await else {
+                break "The local remote writer was closed.".to_string();
+            };
+            if let Err(error) = writer_half.send(&message).await {
+                break format!("The remote writer failed: {error}");
             }
         }
     });
@@ -547,14 +808,13 @@ pub async fn connect(
     let task_registry = Arc::clone(&registry);
     let task_app = app.clone();
     let task_files = files.clone();
-    let writer_abort = writer.abort_handle();
     let (reader_start, reader_gate) = remote_reader_start_gate();
-    let task = tokio::spawn(async move {
+    let reader = tokio::spawn(async move {
         if reader_gate.wait().await.is_err() {
-            return;
+            return "The remote reader was cancelled before registration.".to_string();
         }
         let mut assembler = FrameAssembler::new();
-        let reason = loop {
+        loop {
             match reader.receive().await {
                 Ok(RemoteMessage::Close(reason)) => break reason,
                 Ok(RemoteMessage::KeepAlive) => {}
@@ -577,10 +837,11 @@ pub async fn connect(
                     Err(error) => break format!("Invalid frame stream: {error}"),
                 },
                 Ok(RemoteMessage::TerminalData { bytes }) => {
-                    let offset = match task_registry.append_terminal(&task_session_id, &bytes) {
-                        Ok(offset) => offset,
-                        Err(error) => break error,
-                    };
+                    let offset =
+                        match task_registry.append_terminal(&task_session_id, generation, &bytes) {
+                            Ok(offset) => offset,
+                            Err(error) => break error,
+                        };
                     let payload = RemoteTerminalEvent {
                         session_id: task_session_id.clone(),
                         offset,
@@ -611,36 +872,59 @@ pub async fn connect(
                 }
                 Err(error) => break error.to_string(),
             }
-        };
-        writer_abort.abort();
-        if let Some(files) = &task_files {
-            files.close(&reason);
         }
-        // Only the path that actually removes the live record owns the closed
-        // event. A concurrent local disconnect removes first and emits its own
-        // reason, so the reader must not send a later duplicate.
-        if matches!(task_registry.remove(&task_session_id), Ok(Some(_))) {
-            let _ = task_app.emit(
+    });
+    let supervisor_session_id = session.session_id.clone();
+    let supervisor_registry = Arc::clone(&registry);
+    let supervisor_app = app.clone();
+    let (shutdown, shutdown_receiver) = oneshot::channel();
+    let supervisor = tokio::spawn(async move {
+        let Some(reason) = supervise_remote_tasks(reader, writer, shutdown_receiver).await else {
+            return;
+        };
+
+        // A local disconnect removes first and owns its event. Generation
+        // matching prevents an old task from mutating/removing a newer record
+        // if a session identifier is ever reused.
+        if let Ok(Some(record)) =
+            supervisor_registry.remove_if_generation(&supervisor_session_id, generation)
+        {
+            if let Some(files) = &record.files {
+                files.close(&reason);
+            }
+            let _ = supervisor_app.emit(
                 "remote://closed",
                 RemoteClosedEvent {
-                    session_id: task_session_id,
+                    session_id: supervisor_session_id,
                     reason,
                 },
             );
+            // Both child tasks have already been joined. Dropping this record
+            // releases its own supervisor handle and then the admission slot.
+            drop(record);
         }
     });
-    if let Err(error) = registry.insert(session.clone(), task.abort_handle(), outbound, files) {
-        task.abort();
-        writer.abort();
+    let mut pending = Some(PendingRemoteSessionRecord {
+        summary: session.clone(),
+        generation,
+        supervisor,
+        shutdown,
+        outbound,
+        files,
+    });
+    if let Err(error) = registry.commit(&mut reservation, &mut pending) {
+        if let Some(record) = pending.take() {
+            stop_pending_remote_session(record, &error).await;
+        }
         return failed("session", error);
     }
     if reader_start.open().is_err() {
-        let _ = registry.remove(&session.session_id);
-        task.abort();
-        writer.abort();
-        return failed("session", "The remote reader could not be started.");
+        let reason = "The remote reader could not be started.";
+        if let Ok(Some(record)) = registry.remove_if_generation(&session.session_id, generation) {
+            stop_remote_session(record, reason, Duration::ZERO).await;
+        }
+        return failed("session", reason);
     }
-
     RemoteConnectOutcome::Connected { session }
 }
 
@@ -845,21 +1129,13 @@ pub async fn disconnect(
     session_id: &str,
 ) -> Result<(), String> {
     if let Some(record) = registry.remove(session_id)? {
-        if let Some(files) = &record.files {
-            files.close("Disconnected by the local user.");
-        }
-        let _ = record
-            .outbound
-            .send(RemoteMessage::Close(
-                "Disconnected by the local user.".to_string(),
-            ))
-            .await;
-        record.abort.abort();
+        let reason = "Disconnected by the local user.";
+        stop_remote_session(record, reason, REMOTE_CLOSE_SEND_TIMEOUT).await;
         let _ = app.emit(
             "remote://closed",
             RemoteClosedEvent {
                 session_id: session_id.to_string(),
-                reason: "Disconnected by the local user.".to_string(),
+                reason: reason.to_string(),
             },
         );
     }
@@ -871,6 +1147,7 @@ mod tests {
     use super::*;
     use lattice_remote::relay::DeviceIdentity;
     use std::future::pending;
+    use std::sync::atomic::AtomicBool;
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::Barrier;
 
@@ -888,9 +1165,17 @@ mod tests {
     }
 
     fn remote_summary(session_id: impl Into<String>, terminal: bool) -> RemoteSessionSummary {
+        remote_summary_for_profile("test-profile", session_id, terminal)
+    }
+
+    fn remote_summary_for_profile(
+        profile_id: impl Into<String>,
+        session_id: impl Into<String>,
+        terminal: bool,
+    ) -> RemoteSessionSummary {
         RemoteSessionSummary {
             session_id: session_id.into(),
-            profile_id: "test-profile".to_string(),
+            profile_id: profile_id.into(),
             host: "test-host".to_string(),
             port: 443,
             via_relay: true,
@@ -901,6 +1186,56 @@ mod tests {
             file_transfer: false,
             file_root_label: String::new(),
             terminal,
+        }
+    }
+
+    fn pending_test_record(
+        summary: RemoteSessionSummary,
+        generation: u64,
+        outbound: mpsc::Sender<RemoteMessage>,
+        reader: JoinHandle<String>,
+        writer: JoinHandle<String>,
+    ) -> PendingRemoteSessionRecord {
+        let (shutdown, shutdown_receiver) = oneshot::channel();
+        let supervisor = tokio::spawn(async move {
+            let _ = supervise_remote_tasks(reader, writer, shutdown_receiver).await;
+        });
+        PendingRemoteSessionRecord {
+            summary,
+            generation,
+            supervisor,
+            shutdown,
+            outbound,
+            files: None,
+        }
+    }
+
+    fn idle_test_record(
+        summary: RemoteSessionSummary,
+        generation: u64,
+    ) -> PendingRemoteSessionRecord {
+        let (outbound, outbound_rx) = mpsc::channel(1);
+        let reader = tokio::spawn(pending::<String>());
+        let writer = tokio::spawn(async move {
+            let _outbound_rx = outbound_rx;
+            pending::<String>().await
+        });
+        pending_test_record(summary, generation, outbound, reader, writer)
+    }
+
+    fn register_test_record(registry: &Arc<RemoteRegistry>, record: PendingRemoteSessionRecord) {
+        let profile_id = record.summary.profile_id.clone();
+        let mut reservation = registry.reserve(profile_id).unwrap();
+        let mut pending = Some(record);
+        registry.commit(&mut reservation, &mut pending).unwrap();
+        assert!(pending.is_none());
+    }
+
+    struct Dropped(Arc<AtomicBool>);
+
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
         }
     }
 
@@ -1017,37 +1352,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn registry_enforces_the_remote_session_limit_atomically() {
+    async fn admission_enforces_the_pending_and_live_limit_atomically() {
         let registry = Arc::new(RemoteRegistry::new());
+        register_test_record(
+            &registry,
+            idle_test_record(
+                remote_summary_for_profile("live-profile", "remote-live", true),
+                30,
+            ),
+        );
         let attempts = MAX_REMOTE_SESSIONS + 16;
         let barrier = Arc::new(Barrier::new(attempts));
-        let mut insertions = Vec::with_capacity(attempts);
+        let mut admissions = Vec::with_capacity(attempts);
 
         for index in 0..attempts {
             let registry = Arc::clone(&registry);
             let barrier = Arc::clone(&barrier);
-            insertions.push(tokio::spawn(async move {
-                let worker = tokio::spawn(pending::<()>());
-                let (outbound, _outbound_rx) = mpsc::channel(1);
+            admissions.push(tokio::spawn(async move {
                 barrier.wait().await;
-                let result = registry.insert(
-                    remote_summary(format!("remote-limit-{index}"), true),
-                    worker.abort_handle(),
-                    outbound,
-                    None,
-                );
-                if result.is_err() {
-                    worker.abort();
-                }
-                result
+                registry.reserve(format!("profile-limit-{index}"))
             }));
         }
 
-        let mut connected = 0;
+        let mut admitted = Vec::new();
         let mut rejected = 0;
-        for insertion in insertions {
-            match insertion.await.unwrap() {
-                Ok(()) => connected += 1,
+        for admission in admissions {
+            match admission.await.unwrap() {
+                Ok(reservation) => admitted.push(reservation),
                 Err(error) => {
                     assert!(error.contains("At most 32"));
                     rejected += 1;
@@ -1055,30 +1386,141 @@ mod tests {
             }
         }
 
-        assert_eq!(connected, MAX_REMOTE_SESSIONS);
-        assert_eq!(rejected, attempts - MAX_REMOTE_SESSIONS);
-        assert_eq!(registry.list().len(), MAX_REMOTE_SESSIONS);
+        assert_eq!(admitted.len(), MAX_REMOTE_SESSIONS - 1);
+        assert_eq!(rejected, attempts - (MAX_REMOTE_SESSIONS - 1));
+        assert_eq!(registry.admission.available_permits(), 0);
+        assert_eq!(
+            registry.state.lock().unwrap().pending_profiles.len(),
+            MAX_REMOTE_SESSIONS - 1
+        );
+        assert_eq!(registry.list().len(), 1);
 
-        for record in registry.sessions.lock().unwrap().values() {
-            record.abort.abort();
+        drop(admitted);
+        assert_eq!(
+            registry.admission.available_permits(),
+            MAX_REMOTE_SESSIONS - 1
+        );
+        assert!(registry.state.lock().unwrap().pending_profiles.is_empty());
+        let record = registry.remove("remote-live").unwrap().unwrap();
+        stop_remote_session(record, "test cleanup", Duration::ZERO).await;
+        assert_eq!(registry.admission.available_permits(), MAX_REMOTE_SESSIONS);
+    }
+
+    #[tokio::test]
+    async fn admission_serializes_concurrent_connects_for_one_profile() {
+        let registry = Arc::new(RemoteRegistry::new());
+        let attempts = 16;
+        let barrier = Arc::new(Barrier::new(attempts));
+        let mut admissions = Vec::with_capacity(attempts);
+        for _ in 0..attempts {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            admissions.push(tokio::spawn(async move {
+                barrier.wait().await;
+                registry.reserve("shared-profile".to_string())
+            }));
         }
+
+        let mut winner = None;
+        let mut rejected = 0;
+        for admission in admissions {
+            match admission.await.unwrap() {
+                Ok(reservation) => {
+                    assert!(winner.replace(reservation).is_none());
+                }
+                Err(error) => {
+                    assert!(error.contains("already connecting or connected"));
+                    rejected += 1;
+                }
+            }
+        }
+        assert_eq!(rejected, attempts - 1);
+        drop(winner);
+
+        let record = idle_test_record(
+            remote_summary_for_profile("shared-profile", "remote-shared", true),
+            1,
+        );
+        register_test_record(&registry, record);
+        let error = registry
+            .reserve("shared-profile".to_string())
+            .err()
+            .expect("a live profile rejects another connect");
+        assert!(error.contains("already connecting or connected"));
+
+        let record = registry.remove("remote-shared").unwrap().unwrap();
+        stop_remote_session(record, "test cleanup", Duration::ZERO).await;
+        assert_eq!(registry.admission.available_permits(), MAX_REMOTE_SESSIONS);
+    }
+
+    #[tokio::test]
+    async fn failed_admission_and_registration_return_their_permits() {
+        let registry = Arc::new(RemoteRegistry::new());
+        let reservation = registry.reserve("failed-handshake".to_string()).unwrap();
+        assert_eq!(
+            registry.admission.available_permits(),
+            MAX_REMOTE_SESSIONS - 1
+        );
+        drop(reservation);
+        assert_eq!(registry.admission.available_permits(), MAX_REMOTE_SESSIONS);
+        assert!(registry.state.lock().unwrap().pending_profiles.is_empty());
+
+        let mut reservation = registry.reserve("reserved-profile".to_string()).unwrap();
+        let mut pending = Some(idle_test_record(
+            remote_summary_for_profile("wrong-profile", "remote-failed", true),
+            2,
+        ));
+        let error = registry.commit(&mut reservation, &mut pending).unwrap_err();
+        assert!(error.contains("does not match"));
+        stop_pending_remote_session(pending.take().unwrap(), &error).await;
+        drop(reservation);
+        assert_eq!(registry.admission.available_permits(), MAX_REMOTE_SESSIONS);
+        assert!(registry.state.lock().unwrap().pending_profiles.is_empty());
+    }
+
+    #[test]
+    fn stale_reservation_drop_does_not_clear_a_newer_profile_token() {
+        let registry = Arc::new(RemoteRegistry::new());
+        let reservation = registry.reserve("reused-profile".to_string()).unwrap();
+        let replacement = reservation.token.wrapping_add(1);
+        registry
+            .state
+            .lock()
+            .unwrap()
+            .pending_profiles
+            .insert("reused-profile".to_string(), replacement);
+
+        drop(reservation);
+        assert_eq!(
+            registry
+                .state
+                .lock()
+                .unwrap()
+                .pending_profiles
+                .get("reused-profile"),
+            Some(&replacement)
+        );
+        registry
+            .state
+            .lock()
+            .unwrap()
+            .pending_profiles
+            .remove("reused-profile");
+        assert_eq!(registry.admission.available_permits(), MAX_REMOTE_SESSIONS);
     }
 
     #[tokio::test]
     async fn removing_a_closed_session_drops_its_terminal_snapshot() {
-        let registry = RemoteRegistry::new();
-        let worker = tokio::spawn(pending::<()>());
-        let (outbound, _outbound_rx) = mpsc::channel(1);
-        registry
-            .insert(
-                remote_summary("remote-closed", true),
-                worker.abort_handle(),
-                outbound,
-                None,
-            )
-            .unwrap();
+        let registry = Arc::new(RemoteRegistry::new());
+        let generation = 3;
+        register_test_record(
+            &registry,
+            idle_test_record(remote_summary("remote-closed", true), generation),
+        );
         assert_eq!(
-            registry.append_terminal("remote-closed", b"ready").unwrap(),
+            registry
+                .append_terminal("remote-closed", generation, b"ready")
+                .unwrap(),
             0
         );
         assert_eq!(
@@ -1092,10 +1534,159 @@ mod tests {
         );
 
         let record = registry.remove("remote-closed").unwrap().unwrap();
-        record.abort.abort();
+        stop_remote_session(record, "test cleanup", Duration::ZERO).await;
         assert!(registry.terminal_snapshots().unwrap().is_empty());
-        assert!(registry.append_terminal("remote-closed", b"late").is_err());
-        worker.abort();
+        assert!(registry
+            .append_terminal("remote-closed", generation, b"late")
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn stale_generation_cannot_mutate_or_remove_a_reused_session_id() {
+        let registry = Arc::new(RemoteRegistry::new());
+        register_test_record(
+            &registry,
+            idle_test_record(
+                remote_summary_for_profile("old-profile", "remote-reused", true),
+                10,
+            ),
+        );
+        let old_record = registry.remove("remote-reused").unwrap().unwrap();
+        register_test_record(
+            &registry,
+            idle_test_record(
+                remote_summary_for_profile("new-profile", "remote-reused", true),
+                11,
+            ),
+        );
+
+        assert!(registry
+            .append_terminal("remote-reused", 10, b"stale")
+            .is_err());
+        assert_eq!(
+            registry
+                .append_terminal("remote-reused", 11, b"current")
+                .unwrap(),
+            0
+        );
+        assert!(registry
+            .remove_if_generation("remote-reused", 10)
+            .unwrap()
+            .is_none());
+        assert_eq!(registry.list().len(), 1);
+
+        stop_remote_session(old_record, "old cleanup", Duration::ZERO).await;
+        let current = registry.remove("remote-reused").unwrap().unwrap();
+        stop_remote_session(current, "current cleanup", Duration::ZERO).await;
+        assert_eq!(registry.admission.available_permits(), MAX_REMOTE_SESSIONS);
+    }
+
+    #[tokio::test]
+    async fn writer_completion_wakes_and_stops_an_idle_reader() {
+        let reader_dropped = Arc::new(AtomicBool::new(false));
+        let reader_guard = Dropped(Arc::clone(&reader_dropped));
+        let reader = tokio::spawn(async move {
+            let _guard = reader_guard;
+            pending::<String>().await
+        });
+        let writer = tokio::spawn(async { "writer stopped first".to_string() });
+        let (_shutdown, shutdown_receiver) = oneshot::channel();
+
+        let reason = timeout(
+            Duration::from_secs(1),
+            supervise_remote_tasks(reader, writer, shutdown_receiver),
+        )
+        .await
+        .expect("writer completion wakes the supervisor")
+        .expect("writer completion is a natural stop");
+        assert_eq!(reason, "writer stopped first");
+        assert!(reader_dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn full_outbound_queue_does_not_block_disconnect_or_task_cleanup() {
+        let registry = Arc::new(RemoteRegistry::new());
+        let (outbound, outbound_rx) = mpsc::channel(1);
+        outbound.send(RemoteMessage::KeepAlive).await.unwrap();
+        let channel_probe = outbound.clone();
+
+        let reader_dropped = Arc::new(AtomicBool::new(false));
+        let writer_dropped = Arc::new(AtomicBool::new(false));
+        let reader_guard = Dropped(Arc::clone(&reader_dropped));
+        let writer_guard = Dropped(Arc::clone(&writer_dropped));
+        let reader = tokio::spawn(async move {
+            let _guard = reader_guard;
+            pending::<String>().await
+        });
+        let writer = tokio::spawn(async move {
+            let _guard = writer_guard;
+            let _outbound_rx = outbound_rx;
+            pending::<String>().await
+        });
+        let pending = pending_test_record(
+            remote_summary_for_profile("blocked-profile", "remote-blocked", true),
+            20,
+            outbound,
+            reader,
+            writer,
+        );
+        register_test_record(&registry, pending);
+
+        let record = registry.remove("remote-blocked").unwrap().unwrap();
+        timeout(
+            Duration::from_secs(1),
+            stop_remote_session(record, "test disconnect", Duration::from_millis(10)),
+        )
+        .await
+        .expect("a full outbound queue must not hang disconnect");
+
+        assert!(reader_dropped.load(Ordering::SeqCst));
+        assert!(writer_dropped.load(Ordering::SeqCst));
+        assert!(matches!(
+            channel_probe.try_send(RemoteMessage::KeepAlive),
+            Err(mpsc::error::TrySendError::Closed(_))
+        ));
+        assert_eq!(registry.admission.available_permits(), MAX_REMOTE_SESSIONS);
+    }
+
+    #[tokio::test]
+    async fn admission_slot_is_held_until_closing_supervisor_finishes() {
+        let registry = Arc::new(RemoteRegistry::new());
+        let (outbound, _outbound_rx) = mpsc::channel(1);
+        let (shutdown, shutdown_receiver) = oneshot::channel();
+        let (closing, closing_receiver) = oneshot::channel();
+        let (release, release_receiver) = oneshot::channel();
+        let supervisor = tokio::spawn(async move {
+            let _ = shutdown_receiver.await;
+            let _ = closing.send(());
+            let _ = release_receiver.await;
+        });
+        let pending = PendingRemoteSessionRecord {
+            summary: remote_summary_for_profile("closing-profile", "remote-closing", true),
+            generation: 21,
+            supervisor,
+            shutdown,
+            outbound,
+            files: None,
+        };
+        register_test_record(&registry, pending);
+
+        let record = registry.remove("remote-closing").unwrap().unwrap();
+        let cleanup = tokio::spawn(async move {
+            stop_remote_session(record, "test closing", Duration::ZERO).await;
+        });
+        timeout(Duration::from_secs(1), closing_receiver)
+            .await
+            .expect("cleanup reached the supervisor")
+            .unwrap();
+        assert_eq!(
+            registry.admission.available_permits(),
+            MAX_REMOTE_SESSIONS - 1
+        );
+
+        release.send(()).unwrap();
+        cleanup.await.unwrap();
+        assert_eq!(registry.admission.available_permits(), MAX_REMOTE_SESSIONS);
     }
 
     #[test]
