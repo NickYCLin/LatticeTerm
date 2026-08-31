@@ -4,6 +4,14 @@
 
 ---
 
+## [0.29.2](https://github.com/NickYCLin/lattice-term/compare/v0.29.1...v0.29.2) (2026-08-31)
+
+
+### 🛠️ 問題修正
+
+* **agents:** 移除 CLI 卡片警告徽章 ([9f33b0b](https://github.com/NickYCLin/lattice-term/commit/9f33b0bd6d8c09a05dd37fc4c857d0cebce165b7))
+* **agent:** 修正工作中誤顯示待確認 ([7c9505a](https://github.com/NickYCLin/lattice-term/commit/7c9505ad3f24aaeda5e73f1fb08d924b2f3ae13a))
+
 ## [0.29.1](https://github.com/NickYCLin/lattice-term/compare/v0.29.0...v0.29.1) (2026-08-31)
 
 
