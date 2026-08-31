@@ -49,6 +49,12 @@ const STARTUP_SEED_MIN_WAIT: Duration = Duration::from_millis(1800);
 const STARTUP_SEED_OUTPUT_QUIET: Duration = Duration::from_millis(550);
 const STARTUP_SEED_TIMEOUT: Duration = Duration::from_secs(20);
 const STARTUP_CONTROL_WINDOW_BYTES: usize = 64;
+/// How often a session is checked for a terminal that has gone completely
+/// silent while the interface still claims it is working.
+const SILENT_WORKING_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+/// Every interactive CLI redraws an elapsed-time or token counter while it
+/// works, so a PTY this quiet is parked at its prompt.
+const SILENT_WORKING_TIMEOUT: Duration = Duration::from_secs(600);
 
 const AGENT_ADAPTER_VERSION: u32 = 1;
 
@@ -536,6 +542,9 @@ struct AgentSessionEntry {
     output: Mutex<OutputBuffer>,
     startup_gate: StartupGate,
     completion_gate: Mutex<CompletionReadiness>,
+    /// When this PTY last produced output, used to release a heuristic
+    /// "working" guess that no lifecycle integration ever confirmed.
+    last_output_at: Mutex<Instant>,
     /// An official CLI lifecycle hook will report completion for this session,
     /// so prompt-rendering control codes must never guess that it is done.
     integrated_completion: AtomicBool,
@@ -696,17 +705,71 @@ impl StartupReadiness {
     }
 }
 
+/// Splits a keystroke chunk into "carries prompt text" and "ends with Enter".
+/// Escape sequences are skipped so arrow keys, function keys and bracketed
+/// paste markers never look like typed characters.
+fn prompt_input_shape(bytes: &[u8]) -> (bool, bool) {
+    let mut typed = false;
+    let mut submitted = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == 0x1b {
+            index += 1;
+            if matches!(bytes.get(index), Some(b'[') | Some(b'O')) {
+                index += 1;
+                while index < bytes.len() && !(0x40..=0x7e).contains(&bytes[index]) {
+                    index += 1;
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(byte, b'\r' | b'\n') {
+            submitted = true;
+        } else if byte >= 0x20 && byte != 0x7f {
+            typed = true;
+        }
+        index += 1;
+    }
+    (typed, submitted)
+}
+
+/// What one keystroke chunk did to the CLI's prompt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PromptSubmission {
+    /// Editing keys only; the prompt was not sent.
+    #[default]
+    None,
+    /// Enter with an empty prompt: a dialog answer, not a new task.
+    BareEnter,
+    /// Enter after the user typed something.
+    Text,
+}
+
 #[derive(Debug, Default)]
 struct CompletionReadiness {
     submitted: bool,
+    typed: bool,
     control_window: Vec<u8>,
 }
 
 impl CompletionReadiness {
-    fn observe_input(&mut self, bytes: &[u8]) {
-        if bytes.iter().any(|byte| matches!(byte, b'\r' | b'\n')) {
-            self.submitted = true;
-            self.control_window.clear();
+    /// Records one keystroke chunk and reports how it left the prompt.
+    fn observe_input(&mut self, bytes: &[u8]) -> PromptSubmission {
+        let (typed, submitted) = prompt_input_shape(bytes);
+        self.typed |= typed;
+        if !submitted {
+            return PromptSubmission::None;
+        }
+        let carried_text = self.typed;
+        self.typed = false;
+        self.submitted = true;
+        self.control_window.clear();
+        if carried_text {
+            PromptSubmission::Text
+        } else {
+            PromptSubmission::BareEnter
         }
     }
 
@@ -761,6 +824,20 @@ impl CompletionReadiness {
         self.submitted = false;
         self.control_window.clear();
     }
+}
+
+/// Decides whether a session that only *looks* busy should be released. The
+/// state must be this process's own guess from submitted input: an integration
+/// verdict is authoritative and is never second-guessed, and "idle" is used
+/// instead of "done" because nothing observed a result.
+fn should_settle_silent_working(
+    state: AgentLifecycle,
+    source: AgentStateSource,
+    silent_for: Duration,
+) -> bool {
+    state == AgentLifecycle::Working
+        && source == AgentStateSource::Heuristic
+        && silent_for >= SILENT_WORKING_TIMEOUT
 }
 
 fn heuristic_state_from_output(
@@ -1439,12 +1516,29 @@ impl AgentRegistry {
         true
     }
 
-    /// User input starts a new lifecycle turn, even when the previous turn was
-    /// completed by an authoritative integration event.
-    fn mark_working_from_input(&self, session_id: &str) -> bool {
+    /// Submitted user input starts a new lifecycle turn, even when the previous
+    /// turn was completed by an authoritative integration event.
+    ///
+    /// `submission` separates a real prompt from a bare Enter. Accepting a
+    /// folder-trust dialog or clearing an empty prompt is not new work, and a
+    /// CLI whose integration reports only turn ends would otherwise stay on
+    /// "working" until it is restarted. Answering an open question still
+    /// resumes the turn that asked it.
+    fn mark_working_from_input(&self, session_id: &str, submission: PromptSubmission) -> bool {
+        if submission == PromptSubmission::None {
+            return false;
+        }
         let Ok(entry) = self.get(session_id) else {
             return false;
         };
+        if submission == PromptSubmission::BareEnter {
+            let Ok(summary) = entry.summary.lock() else {
+                return false;
+            };
+            if summary.state != AgentLifecycle::NeedsAttention {
+                return false;
+            }
+        }
         if let Some(activity) = &entry.copilot_activity {
             if let Ok(mut activity) = activity.lock() {
                 activity.begin_turn();
@@ -1465,6 +1559,26 @@ impl AgentRegistry {
         }
         summary.state = AgentLifecycle::Working;
         summary.state_source = AgentStateSource::Heuristic;
+        true
+    }
+
+    /// Releases a heuristic "working" guess for a PTY that has produced no
+    /// output for long enough that no CLI could still be running a turn.
+    fn settle_silent_working(&self, session_id: &str) -> bool {
+        let Ok(entry) = self.get(session_id) else {
+            return false;
+        };
+        let silent_for = match entry.last_output_at.lock() {
+            Ok(at) => at.elapsed(),
+            Err(_) => return false,
+        };
+        let Ok(mut summary) = entry.summary.lock() else {
+            return false;
+        };
+        if !should_settle_silent_working(summary.state, summary.state_source, silent_for) {
+            return false;
+        }
+        summary.state = AgentLifecycle::Idle;
         true
     }
 
@@ -4581,6 +4695,7 @@ pub fn launch_with_replay(
         )),
         startup_gate: StartupGate::default(),
         completion_gate: Mutex::new(CompletionReadiness::default()),
+        last_output_at: Mutex::new(launched_at),
         integrated_completion: AtomicBool::new(integrated_completion),
         copilot_activity,
         hermes_activity,
@@ -4609,6 +4724,9 @@ pub fn launch_with_replay(
                 Ok(0) => break,
                 Ok(count) => {
                     let bytes = &buffer[..count];
+                    if let Ok(mut last_output_at) = reader_entry.last_output_at.lock() {
+                        *last_output_at = Instant::now();
+                    }
                     reader_entry.startup_gate.observe(bytes);
                     let Ok(offset) = reader_registry.record_output(&reader_id, bytes) else {
                         break;
@@ -4645,6 +4763,26 @@ pub fn launch_with_replay(
         }
     });
 
+    // A CLI whose lifecycle integration never reports leaves the sidebar on
+    // "working" for the rest of the session. Watch for a terminal that has
+    // gone completely silent and release only this process's own guess.
+    let watchdog_id = session_id.clone();
+    let watchdog_registry = Arc::clone(&registry);
+    let watchdog_sink = Arc::clone(&sink);
+    std::thread::spawn(move || loop {
+        std::thread::sleep(SILENT_WORKING_CHECK_INTERVAL);
+        if watchdog_registry.get(&watchdog_id).is_err() {
+            return;
+        }
+        if watchdog_registry.settle_silent_working(&watchdog_id) {
+            watchdog_sink.state(
+                &watchdog_id,
+                AgentLifecycle::Idle,
+                AgentStateSource::Heuristic,
+            );
+        }
+    });
+
     if let Some(seed) = request
         .seed_input
         .clone()
@@ -4661,7 +4799,7 @@ pub fn launch_with_replay(
             let payload = startup_seed_payload(&seed);
             if let Ok(entry) = seed_registry.get(&seed_id) {
                 if let Ok(mut completion) = entry.completion_gate.lock() {
-                    completion.observe_input(&payload);
+                    let _ = completion.observe_input(&payload);
                 }
                 if let Ok(mut capture) = entry.model_capture.lock() {
                     capture.input(&payload);
@@ -4712,11 +4850,15 @@ fn send_bytes(
         .write_all(bytes)
         .and_then(|_| writer.flush())
         .map_err(|error| format!("Cannot write to the agent terminal: {error}"))?;
-    if let Ok(mut completion) = entry.completion_gate.lock() {
-        completion.observe_input(bytes);
-    }
-    let submitted = bytes.iter().any(|byte| matches!(byte, b'\r' | b'\n'));
-    if submitted && registry.mark_working_from_input(session_id) {
+    let submission = match entry.completion_gate.lock() {
+        Ok(mut completion) => completion.observe_input(bytes),
+        Err(_) => match prompt_input_shape(bytes) {
+            (_, false) => PromptSubmission::None,
+            (true, true) => PromptSubmission::Text,
+            (false, true) => PromptSubmission::BareEnter,
+        },
+    };
+    if registry.mark_working_from_input(session_id, submission) {
         sink.state(
             session_id,
             AgentLifecycle::Working,
@@ -5143,6 +5285,31 @@ session id: 0199aa11-"
         assert_eq!(
             String::from_utf8(payload).unwrap(),
             format!("\u{1b}[200~{seed}\u{1b}[201~\r")
+        );
+    }
+
+    #[test]
+    fn a_bare_enter_is_not_a_submitted_prompt() {
+        let mut readiness = CompletionReadiness::default();
+
+        // Accepting a folder-trust dialog: arrow keys and Enter, no text.
+        assert_eq!(readiness.observe_input(b"\x1b[B"), PromptSubmission::None);
+        assert_eq!(readiness.observe_input(b"\r"), PromptSubmission::BareEnter);
+
+        // Editing keys alone still do not submit anything.
+        assert_eq!(readiness.observe_input(b"\x1b[A\x7f"), PromptSubmission::None);
+        assert_eq!(readiness.observe_input(b"\r"), PromptSubmission::BareEnter);
+
+        // Text typed across several reads is remembered until Enter arrives.
+        assert_eq!(readiness.observe_input(b"review "), PromptSubmission::None);
+        assert_eq!(readiness.observe_input(b"this"), PromptSubmission::None);
+        assert_eq!(readiness.observe_input(b"\r"), PromptSubmission::Text);
+        assert_eq!(readiness.observe_input(b"\r"), PromptSubmission::BareEnter);
+
+        // A pasted prompt carries its own bracketed-paste markers.
+        assert_eq!(
+            readiness.observe_input(b"\x1b[200~pasted\x1b[201~\r"),
+            PromptSubmission::Text
         );
     }
 
@@ -6663,6 +6830,95 @@ notify = ["notify.exe", "turn-ended"]"#,
             plugin._file.path().to_string_lossy().as_ref()
         );
         assert!(config.get("permission").is_none());
+    }
+
+    #[test]
+    fn a_silent_terminal_only_releases_this_process_own_guess() {
+        let long_silence = SILENT_WORKING_TIMEOUT + Duration::from_secs(1);
+
+        assert!(should_settle_silent_working(
+            AgentLifecycle::Working,
+            AgentStateSource::Heuristic,
+            long_silence,
+        ));
+        // A CLI still redrawing its elapsed-time counter is genuinely working.
+        assert!(!should_settle_silent_working(
+            AgentLifecycle::Working,
+            AgentStateSource::Heuristic,
+            SILENT_WORKING_TIMEOUT - Duration::from_secs(1),
+        ));
+        // An official lifecycle event outranks any silence.
+        assert!(!should_settle_silent_working(
+            AgentLifecycle::Working,
+            AgentStateSource::Integration,
+            long_silence,
+        ));
+        // Waiting for an answer is not something silence can resolve.
+        assert!(!should_settle_silent_working(
+            AgentLifecycle::NeedsAttention,
+            AgentStateSource::Heuristic,
+            long_silence,
+        ));
+    }
+
+    #[test]
+    fn dismissing_a_dialog_does_not_put_a_fresh_cli_to_work() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        #[cfg(unix)]
+        let (executable, arguments) = ("/bin/cat".to_string(), Vec::new());
+        #[cfg(windows)]
+        let (executable, arguments) = ("cmd.exe".to_string(), vec!["/Q".to_string()]);
+        let request = AgentLaunchRequest {
+            definition_id: "custom".to_string(),
+            label: "Trust dialog test".to_string(),
+            executable,
+            arguments,
+            resume_session_id: None,
+            group_id: None,
+            seed_input: None,
+            restore_existing_session: false,
+            working_directory: std::env::current_dir().unwrap().display().to_string(),
+            cols: 80,
+            rows: 24,
+        };
+        let session = launch(sink.clone(), registry.clone(), request).unwrap();
+        assert_eq!(registry.list()[0].state, AgentLifecycle::Idle);
+
+        // Accepting a first-run folder-trust prompt is not new work.
+        send_bytes(sink.as_ref(), &registry, &session.session_id, b"\r").unwrap();
+        assert_eq!(registry.list()[0].state, AgentLifecycle::Idle);
+
+        // Answering an open question resumes the turn that asked it.
+        registry.update_state(
+            &session.session_id,
+            AgentLifecycle::NeedsAttention,
+            AgentStateSource::Heuristic,
+        );
+        send_bytes(sink.as_ref(), &registry, &session.session_id, b"\r").unwrap();
+        assert_eq!(registry.list()[0].state, AgentLifecycle::Working);
+
+        // A prompt the user actually typed always starts a turn.
+        registry.update_state(
+            &session.session_id,
+            AgentLifecycle::Done,
+            AgentStateSource::Integration,
+        );
+        send_bytes(sink.as_ref(), &registry, &session.session_id, b"review this\r").unwrap();
+        assert_eq!(registry.list()[0].state, AgentLifecycle::Working);
+
+        // A terminal that has said nothing for long enough is parked, not busy.
+        let entry = registry.get(&session.session_id).unwrap();
+        assert!(!registry.settle_silent_working(&session.session_id));
+        *entry.last_output_at.lock().unwrap() = Instant::now() - SILENT_WORKING_TIMEOUT;
+        assert!(registry.settle_silent_working(&session.session_id));
+        assert_eq!(registry.list()[0].state, AgentLifecycle::Idle);
+        // Nothing observed a result, so the sidebar must not claim completion.
+        assert_ne!(registry.list()[0].state, AgentLifecycle::Done);
+        assert!(!registry.settle_silent_working(&session.session_id));
+
+        registry.stop_all();
     }
 
     #[test]
