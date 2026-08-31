@@ -4,6 +4,18 @@
 
 ---
 
+## [0.29.1](https://github.com/NickYCLin/lattice-term/compare/v0.29.0...v0.29.1) (2026-08-31)
+
+
+### 🛠️ 問題修正
+
+* **agent:** 修正 CLI 偵測與初始狀態 ([e1a54ef](https://github.com/NickYCLin/lattice-term/commit/e1a54efc745b74600d010ce8b03f9a3f941fcc94))
+* **notifications:** 依序播放完成提示音 ([1bfdb72](https://github.com/NickYCLin/lattice-term/commit/1bfdb7212101ba4f28a7e3c6dae6215e05e756b3))
+* **workspace:** 保留還原失敗的工作階段 ([5ecd397](https://github.com/NickYCLin/lattice-term/commit/5ecd397a4b60de23e68f542cb09931fa7c701553))
+* **workspace:** 修正多 CLI 工作階段名稱顯示 ([749c295](https://github.com/NickYCLin/lattice-term/commit/749c295f75295e80c1bd9db85dce05b0024bea15))
+* **workspace:** 在側邊欄展開多個 CLI ([180f1bc](https://github.com/NickYCLin/lattice-term/commit/180f1bcaec85d41b0bfb919e8df7a2f143bbc43b))
+* **workspace:** 改善狀態提示與匯出位置 ([d0d332d](https://github.com/NickYCLin/lattice-term/commit/d0d332d1cc5100b3fcd5d73cec5cb87570a43ed6))
+
 ## [0.29.0](https://github.com/NickYCLin/lattice-term/compare/v0.28.0...v0.29.0) (2026-08-30)
 
 
