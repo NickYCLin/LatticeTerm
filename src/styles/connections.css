@@ -1399,7 +1399,8 @@
   color: var(--text-subtle);
 }
 
-.session-tree__folder-row .is-collapsed {
+.session-tree__folder-row .is-collapsed,
+.session-tree__project .is-collapsed {
   transform: rotate(-90deg);
 }
 

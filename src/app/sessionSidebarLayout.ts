@@ -119,8 +119,11 @@ export function sanitizeSessionSidebarLayout(
     version: 1,
     folders,
     placements,
-    collapsedFolderIds: [...new Set(collapsedFolderIds as string[])].filter((id) =>
-      folderIds.has(id),
+    // The field name is retained for v1 compatibility, but project branches
+    // are collapsible too. Reconciliation below removes projects that no
+    // longer exist in the live workspace.
+    collapsedFolderIds: [...new Set(collapsedFolderIds as string[])].filter(
+      (id) => folderIds.has(id) || id.startsWith("project:"),
     ),
   };
 }
@@ -239,11 +242,19 @@ export function reconcileSessionSidebarLayout(
     nextOrder.set(placement.parentId, placement.order + 1);
   }
 
+  const projectIds = new Set(
+    liveNodes
+      .map((node) => node.id)
+      .filter((id) => id.startsWith("project:")),
+  );
+
   return {
     version: 1,
     folders: [...layout.folders],
     placements: reindexPlacements(placements),
-    collapsedFolderIds: layout.collapsedFolderIds.filter((id) => folderIds.has(id)),
+    collapsedFolderIds: layout.collapsedFolderIds.filter(
+      (id) => folderIds.has(id) || projectIds.has(id),
+    ),
   };
 }
 

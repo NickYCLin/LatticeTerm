@@ -9,6 +9,7 @@ import {
   sessionSidebarChildren,
   sessionSidebarDropPlacement,
   sessionSidebarSessionNodeId,
+  toggleSessionSidebarFolder,
 } from "./sessionSidebarLayout";
 
 const project = { id: "project:local:latticeterm", defaultParentId: null };
@@ -184,6 +185,20 @@ describe("session sidebar layout", () => {
     layout = removeSessionSidebarFolder(layout, "folder:work");
 
     expect(sessionSidebarChildren(layout, null)).toEqual([project.id]);
+  });
+
+  it("keeps a live project branch collapsed across reconciliation", () => {
+    let layout = reconcileSessionSidebarLayout(emptySessionSidebarLayout, [
+      project,
+      session,
+    ]);
+    layout = toggleSessionSidebarFolder(layout, project.id);
+
+    expect(layout.collapsedFolderIds).toEqual([project.id]);
+    expect(
+      reconcileSessionSidebarLayout(layout, [project, session]).collapsedFolderIds,
+    ).toEqual([project.id]);
+    expect(reconcileSessionSidebarLayout(layout, []).collapsedFolderIds).toEqual([]);
   });
 
   it("fails closed for malformed or oversized persisted data", () => {

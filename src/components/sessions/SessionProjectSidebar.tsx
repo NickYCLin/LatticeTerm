@@ -635,6 +635,7 @@ export function SessionProjectSidebar({
     // the same way a folder nests its children. Without this the sessions of a
     // project have nowhere to render, which also hides their remove button.
     const children = sessionSidebarChildren(layout, project.nodeId);
+    const collapsed = layout.collapsedFolderIds.includes(project.nodeId);
     return (
       <div
         className="session-tree__project-branch"
@@ -653,14 +654,31 @@ export function SessionProjectSidebar({
           <button
             type="button"
             className="session-tree__project-select"
-            onClick={() => project.sessions[0] && onSelect(project.sessions[0].sessionId)}
+            onClick={() => onToggleFolder(project.nodeId)}
             title={project.workingDirectory ?? project.label}
+            aria-expanded={!collapsed}
           >
             <FolderIcon size={13} />
             <span className="truncate">{project.label}</span>
           </button>
+          {children.length > 0 && (
+            <button
+              type="button"
+              className="icon-button icon-button--sm"
+              onClick={() => onToggleFolder(project.nodeId)}
+              aria-label={t("terminal.projects.toggle")}
+              aria-expanded={!collapsed}
+              title={t("terminal.projects.toggle")}
+              data-tree-action="true"
+            >
+              <ChevronDownIcon
+                size={12}
+                className={collapsed ? "is-collapsed" : undefined}
+              />
+            </button>
+          )}
         </div>
-        {children.length > 0 && (
+        {!collapsed && children.length > 0 && (
           <div role="list">
             {children.map((id) => renderNode(id, depth + 1))}
           </div>
