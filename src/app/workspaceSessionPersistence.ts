@@ -170,6 +170,54 @@ export function saveWorkspaceSessionSnapshot(
   storage.setItem(WORKSPACE_SESSIONS_KEY, JSON.stringify(snapshot));
 }
 
+function sameSavedSession(
+  left: SavedWorkspaceSession,
+  right: SavedWorkspaceSession,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "ssh" && right.kind === "ssh") {
+    return left.profileId === right.profileId;
+  }
+  return (
+    left.kind === "agent" &&
+    right.kind === "agent" &&
+    left.groupKey === right.groupKey &&
+    left.definitionId === right.definitionId &&
+    left.executable === right.executable &&
+    left.workingDirectory === right.workingDirectory
+  );
+}
+
+/**
+ * Keep entries whose automatic restoration failed. Otherwise a transient CLI,
+ * directory, or credential error would replace the only restorable snapshot
+ * with an empty workspace on the next render.
+ */
+export function preserveUnrestoredWorkspaceSessions(
+  live: WorkspaceSessionSnapshot,
+  unrestored: readonly SavedWorkspaceSession[],
+  previousActive: SavedActiveSession,
+): WorkspaceSessionSnapshot {
+  const sessions = [...live.sessions];
+  for (const saved of unrestored) {
+    if (!sessions.some((current) => sameSavedSession(current, saved))) {
+      sessions.push(saved);
+    }
+  }
+  const active =
+    live.active ??
+    (previousActive && sessions.some((session) =>
+      previousActive.kind === "agent"
+        ? session.kind === "agent" &&
+          session.groupKey === previousActive.groupKey &&
+          session.definitionId === previousActive.definitionId
+        : session.kind === "ssh" && session.profileId === previousActive.profileId,
+    )
+      ? previousActive
+      : null);
+  return { version: 1, sessions, active };
+}
+
 export function snapshotLiveWorkspaceSessions(
   agents: readonly AgentSessionSummary[],
   ssh: readonly SshSessionSummary[],

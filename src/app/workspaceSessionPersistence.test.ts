@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentRestoreArguments,
   loadWorkspaceSessionSnapshot,
+  preserveUnrestoredWorkspaceSessions,
   saveWorkspaceSessionSnapshot,
   sanitizeWorkspaceSessionSnapshot,
   snapshotLiveWorkspaceSessions,
@@ -78,6 +79,32 @@ describe("workspace session persistence", () => {
 
     expect(loadWorkspaceSessionSnapshot(target)).toEqual(snapshot);
     expect(target.values.has(WORKSPACE_SESSIONS_KEY)).toBe(true);
+  });
+
+  it("keeps sessions whose automatic restoration did not succeed", () => {
+    const live = snapshotLiveWorkspaceSessions(
+      [agent({ sessionId: "agent-new", groupId: "group-new" })],
+      [],
+      null,
+    );
+    const unresolved = snapshotLiveWorkspaceSessions(
+      [agent({ sessionId: "agent-old", groupId: "group-old" })],
+      [],
+      "agent-old",
+    );
+
+    const merged = preserveUnrestoredWorkspaceSessions(
+      live,
+      unresolved.sessions,
+      unresolved.active,
+    );
+
+    expect(merged.sessions).toHaveLength(2);
+    expect(merged.active).toEqual({
+      kind: "agent",
+      groupKey: "group-old",
+      definitionId: "codex",
+    });
   });
 
   it("fails closed for malformed or oversized state", () => {

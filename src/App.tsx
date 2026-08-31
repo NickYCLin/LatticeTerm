@@ -66,8 +66,10 @@ import { useAppUpdater } from "./app/useAppUpdater";
 import {
   agentRestoreArguments,
   loadWorkspaceSessionSnapshot,
+  preserveUnrestoredWorkspaceSessions,
   saveWorkspaceSessionSnapshot,
   snapshotLiveWorkspaceSessions,
+  type SavedWorkspaceSession,
 } from "./app/workspaceSessionPersistence";
 import { loadAuthPref } from "./app/authPreferences";
 import {
@@ -329,6 +331,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const storedSessionSnapshotRef = useRef(
     loadWorkspaceSessionSnapshot(window.localStorage),
   );
+  const unrestoredSessionsRef = useRef<readonly SavedWorkspaceSession[]>([]);
   const restoreStartedRef = useRef(false);
   const [sessionRestoreComplete, setSessionRestoreComplete] = useState(false);
 
@@ -345,6 +348,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     void (async () => {
       try {
         const snapshot = storedSessionSnapshotRef.current;
+        const unrestored: SavedWorkspaceSession[] = [];
         const restoredAgents = [...agents.sessions];
         const restoredSsh = [...ssh.sessions];
 
@@ -373,7 +377,10 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
               }
             } catch {
               // A removed directory/CLI or an expired provider entitlement must
-              // not block the remaining workspace from coming back.
+              // not block the remaining workspace from coming back. Keep the
+              // entry for a later retry instead of overwriting it with an
+              // empty workspace snapshot below.
+              unrestored.push(saved);
             }
           }
         }
@@ -417,6 +424,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
             } catch {
               // A missing OS credential or an unavailable host should not
               // prevent the rest of the saved workspace from restoring.
+              unrestored.push(saved);
             }
           }
         }
@@ -440,6 +448,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           setView("terminal");
           setTerminalMounted(true);
         }
+        unrestoredSessionsRef.current = unrestored;
       } finally {
         // Even a provider-specific failure must release persistence so new
         // sessions opened during this run become the next restore snapshot.
@@ -451,12 +460,17 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   useEffect(() => {
     if (!sessionRestoreComplete) return;
     try {
-      saveWorkspaceSessionSnapshot(
-        window.localStorage,
-        snapshotLiveWorkspaceSessions(
+      const live = snapshotLiveWorkspaceSessions(
           agents.sessions,
           ssh.sessions,
           activeSessionId,
+        );
+      saveWorkspaceSessionSnapshot(
+        window.localStorage,
+        preserveUnrestoredWorkspaceSessions(
+          live,
+          unrestoredSessionsRef.current,
+          storedSessionSnapshotRef.current?.active ?? null,
         ),
       );
     } catch {
