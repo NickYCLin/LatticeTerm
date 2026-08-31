@@ -154,6 +154,77 @@ describe("workspace session persistence", () => {
     ]);
   });
 
+  it("never writes more entries than a later start will accept", () => {
+    const agents = Array.from({ length: 40 }, (_, index) =>
+      agent({
+        sessionId: `agent-${index}`,
+        groupId: `group-${index}`,
+        capturedSessionId: `native-${index}`,
+      }),
+    );
+    const unrestored = Array.from({ length: 40 }, (_, index) => ({
+      kind: "ssh" as const,
+      profileId: `profile-${index}`,
+    }));
+
+    const snapshot = preserveUnrestoredWorkspaceSessions(
+      snapshotLiveWorkspaceSessions(agents, [], "agent-3"),
+      unrestored,
+      null,
+    );
+
+    expect(snapshot.sessions).toHaveLength(64);
+    // Sessions still open outrank entries that already failed to restore.
+    expect(
+      snapshot.sessions.filter((session) => session.kind === "agent"),
+    ).toHaveLength(40);
+    expect(snapshot.active).toEqual({
+      kind: "agent",
+      groupKey: "group-3",
+      definitionId: "codex",
+    });
+    // The reader must accept exactly what the writer produced.
+    expect(sanitizeWorkspaceSessionSnapshot(snapshot)).toEqual(snapshot);
+  });
+
+  it("drops an active pointer that did not survive the size limit", () => {
+    const agents = Array.from({ length: 70 }, (_, index) =>
+      agent({
+        sessionId: `agent-${index}`,
+        groupId: `group-${index}`,
+        capturedSessionId: `native-${index}`,
+      }),
+    );
+
+    const snapshot = snapshotLiveWorkspaceSessions(agents, [], "agent-69");
+
+    expect(snapshot.sessions).toHaveLength(64);
+    expect(snapshot.active).toBeNull();
+    expect(sanitizeWorkspaceSessionSnapshot(snapshot)).toEqual(snapshot);
+  });
+
+  it("rejects a snapshot whose argument list is not an array", () => {
+    expect(
+      sanitizeWorkspaceSessionSnapshot({
+        version: 1,
+        sessions: [
+          {
+            kind: "agent",
+            groupKey: "group",
+            groupLabel: "LatticeTerm",
+            definitionId: "codex",
+            label: "OpenAI Codex",
+            executable: "/usr/bin/codex",
+            launchArguments: "--model gpt-5.6-sol",
+            workingDirectory: "/workspace",
+            resumeSessionId: null,
+          },
+        ],
+        active: null,
+      }),
+    ).toBeNull();
+  });
+
   it("preserves explicit CLI arguments when no native session id exists", () => {
     const saved = snapshotLiveWorkspaceSessions(
       [
