@@ -3343,6 +3343,7 @@ fn detect_agent_account(definition_id: &str) -> AgentAccountInfo {
 
 fn find_agent_executable(agent: &AgentSpec) -> Option<PathBuf> {
     find_executable(agent.executable)
+        .or_else(|| find_npm_global_agent_executable(agent.executable))
         .or_else(|| find_well_known_agent_executable(agent))
         .or_else(|| {
             (agent.id == "cursor")
@@ -3372,6 +3373,33 @@ fn find_well_known_agent_executable(agent: &AgentSpec) -> Option<PathBuf> {
 
 #[cfg(not(windows))]
 fn find_well_known_agent_executable(_agent: &AgentSpec) -> Option<PathBuf> {
+    None
+}
+
+/// npm installs global command shims in `%APPDATA%\npm` on Windows. Explorer
+/// does not refresh an already-running process's environment when that folder
+/// is added to PATH, so the desktop app must also inspect the stable shim
+/// directory directly.
+#[cfg(windows)]
+fn find_npm_global_agent_executable(command: &str) -> Option<PathBuf> {
+    let app_data = std::env::var_os("APPDATA").map(PathBuf::from)?;
+    find_npm_global_agent_executable_in(command, &app_data)
+}
+
+#[cfg(windows)]
+fn find_npm_global_agent_executable_in(command: &str, app_data: &Path) -> Option<PathBuf> {
+    if command.trim().is_empty() || Path::new(command).extension().is_some() {
+        return None;
+    }
+    ["cmd", "bat"].into_iter().find_map(|extension| {
+        let candidate = app_data.join("npm").join(command).with_extension(extension);
+        is_executable(&candidate)
+            .then(|| plain_win32_path(candidate.canonicalize().unwrap_or(candidate)))
+    })
+}
+
+#[cfg(not(windows))]
+fn find_npm_global_agent_executable(_command: &str) -> Option<PathBuf> {
     None
 }
 
@@ -4495,7 +4523,10 @@ pub fn launch_with_replay(
         executable: executable.display().to_string(),
         launch_arguments,
         working_directory: working_directory.display().to_string(),
-        state: AgentLifecycle::Working,
+        // Opening a CLI only creates an interactive prompt; it does not mean
+        // the CLI has received work. Mark it idle until a submitted prompt or
+        // a trusted lifecycle integration reports actual activity.
+        state: AgentLifecycle::Idle,
         state_source: AgentStateSource::Heuristic,
         process_id,
         token_usage: None,
@@ -5596,6 +5627,29 @@ model = "gpt-5.3-codex"
         assert!(well_known_agent_path("custom", Path::new(r"C:\Temp")).is_none());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn detects_npm_global_shims_when_the_process_path_is_stale() {
+        let app_data = tempfile::tempdir().unwrap();
+        let npm = app_data.path().join("npm");
+        std::fs::create_dir_all(&npm).unwrap();
+        let codex = npm.join("codex.cmd");
+        let claude = npm.join("claude.bat");
+        std::fs::write(&codex, "@echo off\r\n").unwrap();
+        std::fs::write(&claude, "@echo off\r\n").unwrap();
+
+        assert_eq!(
+            find_npm_global_agent_executable_in("codex", app_data.path()),
+            Some(codex)
+        );
+        assert_eq!(
+            find_npm_global_agent_executable_in("claude", app_data.path()),
+            Some(claude)
+        );
+        assert!(find_npm_global_agent_executable_in("", app_data.path()).is_none());
+        assert!(find_npm_global_agent_executable_in("codex.exe", app_data.path()).is_none());
+    }
+
     #[test]
     fn attention_prompts_are_detected_conservatively() {
         assert_eq!(
@@ -6615,7 +6669,8 @@ notify = ["notify.exe", "turn-ended"]"#,
             AgentLifecycle::NeedsAttention,
         )
         .is_err());
-        assert_eq!(registry.list()[0].state, AgentLifecycle::Working);
+        // A newly opened CLI is waiting for input, not processing a task.
+        assert_eq!(registry.list()[0].state, AgentLifecycle::Idle);
         assert!(!entry.integrated_completion.load(Ordering::Acquire));
 
         send_report(address, &session.session_id, &token, AgentLifecycle::Done).unwrap();
