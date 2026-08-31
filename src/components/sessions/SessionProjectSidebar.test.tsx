@@ -80,6 +80,7 @@ describe("session project sidebar", () => {
           onRenameFolder={vi.fn()}
           onDeleteFolder={vi.fn()}
           onToggleFolder={vi.fn()}
+          onRevealNode={vi.fn()}
           onMove={vi.fn()}
         />
       </I18nProvider>,

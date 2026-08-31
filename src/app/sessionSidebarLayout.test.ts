@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSessionSidebarFolder,
   emptySessionSidebarLayout,
+  expandSessionSidebarAncestors,
   moveSessionSidebarNode,
   reconcileSessionSidebarLayout,
   removeSessionSidebarFolder,
@@ -199,6 +200,50 @@ describe("session sidebar layout", () => {
       reconcileSessionSidebarLayout(layout, [project, session]).collapsedFolderIds,
     ).toEqual([project.id]);
     expect(reconcileSessionSidebarLayout(layout, []).collapsedFolderIds).toEqual([]);
+  });
+
+  it("reveals a node by expanding every collapsed ancestor", () => {
+    let layout = reconcileSessionSidebarLayout(emptySessionSidebarLayout, [
+      project,
+      session,
+    ]);
+    layout = createSessionSidebarFolder(
+      layout,
+      { id: "folder:work", name: "工作" },
+      null,
+    );
+    layout = moveSessionSidebarNode(layout, project.id, "folder:work");
+    layout = toggleSessionSidebarFolder(layout, "folder:work");
+    layout = toggleSessionSidebarFolder(layout, project.id);
+
+    const revealed = expandSessionSidebarAncestors(layout, session.id);
+
+    expect(revealed.collapsedFolderIds).toEqual([]);
+    // The node itself keeps its own collapsed state; only the path is opened.
+    expect(
+      expandSessionSidebarAncestors(revealed, session.id),
+    ).toBe(revealed);
+  });
+
+  it("keeps a drop into a collapsed branch and reveals it in one sequence", () => {
+    const otherProject = {
+      id: "project:local:mysqlpunk",
+      defaultParentId: null,
+    };
+    let layout = reconcileSessionSidebarLayout(emptySessionSidebarLayout, [
+      project,
+      session,
+      otherProject,
+    ]);
+    layout = toggleSessionSidebarFolder(layout, otherProject.id);
+
+    layout = moveSessionSidebarNode(layout, session.id, otherProject.id);
+    layout = expandSessionSidebarAncestors(layout, session.id);
+
+    expect(sessionSidebarChildren(layout, otherProject.id)).toEqual([
+      session.id,
+    ]);
+    expect(layout.collapsedFolderIds).toEqual([]);
   });
 
   it("fails closed for malformed or oversized persisted data", () => {
