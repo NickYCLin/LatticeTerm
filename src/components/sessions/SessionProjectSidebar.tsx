@@ -11,7 +11,6 @@ import {
 import { createPortal } from "react-dom";
 import type { AgentDefinition } from "../../app/useAgentSessions";
 import {
-  aggregateSessionSidebarStatus,
   type SessionSidebarStatus,
 } from "../../app/sessionStatus";
 import { fuzzySearch } from "../../app/fuzzySearch";
@@ -180,6 +179,7 @@ export function SessionProjectSidebar({
     useState<SessionSidebarSessionItem | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [statusLegendOpen, setStatusLegendOpen] = useState(false);
   const [activeSearchResult, setActiveSearchResult] = useState(0);
   const launchMenuRef = useRef<HTMLElement>(null);
   const menuAnchorRef = useRef<HTMLButtonElement | null>(null);
@@ -341,34 +341,6 @@ export function SessionProjectSidebar({
     return null;
   }
 
-  function projectStatus(
-    project: SessionSidebarProjectItem,
-  ): SessionSidebarStatus {
-    return aggregateSessionSidebarStatus(
-      project.sessions.map((session) => session.status),
-    );
-  }
-
-  function nodeStatus(
-    nodeId: string,
-    visited = new Set<string>(),
-  ): SessionSidebarStatus {
-    if (visited.has(nodeId)) return "connected";
-    const nextVisited = new Set(visited).add(nodeId);
-    const session = sessionByNode.get(nodeId);
-    if (session) return session.status;
-    const project = projectByNode.get(nodeId);
-    if (project) return projectStatus(project);
-    if (folders.has(nodeId)) {
-      return aggregateSessionSidebarStatus(
-        sessionSidebarChildren(layout, nodeId).map((childId) =>
-          nodeStatus(childId, nextVisited),
-        ),
-      );
-    }
-    return "connected";
-  }
-
   // HTML5 drag-and-drop never fires inside the Tauri webview on Windows while
   // the native drag handler (needed by the SFTP file drop) is enabled, so the
   // tree implements its own pointer-based drag. A small movement threshold
@@ -520,7 +492,7 @@ export function SessionProjectSidebar({
     );
   }
 
-  function statusMark(status: SessionSidebarStatus, compact = false) {
+  function statusMark(status: SessionSidebarStatus) {
     if (status === "connected") return null;
     const label = t(statusKeys[status]);
     return (
@@ -530,7 +502,7 @@ export function SessionProjectSidebar({
         aria-label={label}
       >
         <span aria-hidden="true" />
-        {!compact && (status === "done" || status === "attention") && label}
+        {(status === "done" || status === "attention") && label}
       </span>
     );
   }
@@ -663,7 +635,6 @@ export function SessionProjectSidebar({
     // the same way a folder nests its children. Without this the sessions of a
     // project have nowhere to render, which also hides their remove button.
     const children = sessionSidebarChildren(layout, project.nodeId);
-    const status = projectStatus(project);
     return (
       <div
         className="session-tree__project-branch"
@@ -673,9 +644,7 @@ export function SessionProjectSidebar({
         <div
           className={`session-tree__project${selected ? " is-active" : ""}${
             dropTargetNodeId === project.nodeId ? " is-drop-target" : ""
-          }${draggedNodeId === project.nodeId ? " is-dragging" : ""}${
-            status === "connected" ? "" : ` status-${status}`
-          }`}
+          }${draggedNodeId === project.nodeId ? " is-dragging" : ""}`}
           style={treeStyle(depth)}
           data-tree-node={project.nodeId}
           aria-grabbed={draggedNodeId === project.nodeId}
@@ -689,7 +658,6 @@ export function SessionProjectSidebar({
           >
             <FolderIcon size={13} />
             <span className="truncate">{project.label}</span>
-            {statusMark(status)}
           </button>
         </div>
         {children.length > 0 && (
@@ -703,7 +671,6 @@ export function SessionProjectSidebar({
 
   function renderFolder(folder: SessionSidebarFolder, depth: number) {
     const collapsed = layout.collapsedFolderIds.includes(folder.id);
-    const status = nodeStatus(folder.id);
     return (
       <div
         className="session-tree__folder"
@@ -713,9 +680,7 @@ export function SessionProjectSidebar({
         <div
           className={`session-tree__folder-row${
             dropTargetNodeId === folder.id ? " is-drop-target" : ""
-          }${draggedNodeId === folder.id ? " is-dragging" : ""}${
-            status === "connected" ? "" : ` status-${status}`
-          }`}
+          }${draggedNodeId === folder.id ? " is-dragging" : ""}`}
           style={treeStyle(depth)}
           data-tree-node={folder.id}
           aria-grabbed={draggedNodeId === folder.id}
@@ -730,7 +695,6 @@ export function SessionProjectSidebar({
           >
             <FolderIcon size={13} />
             <span className="truncate">{folder.name}</span>
-            {statusMark(status, true)}
           </button>
           <button
             type="button"
@@ -830,6 +794,17 @@ export function SessionProjectSidebar({
         <span>{t("terminal.projects")}</span>
         <button
           type="button"
+          className="icon-button icon-button--sm session-projects__status-help"
+          onClick={() => setStatusLegendOpen((open) => !open)}
+          aria-label={t("terminal.projects.statusGuide")}
+          aria-expanded={statusLegendOpen}
+          aria-controls="session-project-status-guide"
+          title={t("terminal.projects.statusGuide")}
+        >
+          ?
+        </button>
+        <button
+          type="button"
           className="icon-button icon-button--sm session-projects__folder-add"
           onClick={() => onCreateFolder(null)}
           aria-label={t("terminal.projects.addFolder")}
@@ -871,6 +846,31 @@ export function SessionProjectSidebar({
           <PlusIcon size={12} />
         </button>
       </div>
+      {statusLegendOpen && (
+        <section
+          className="session-projects__status-guide"
+          id="session-project-status-guide"
+          aria-label={t("terminal.projects.statusGuide")}
+        >
+          <strong>{t("terminal.projects.statusGuide")}</strong>
+          <span>
+            <i className="status-working" aria-hidden="true" />
+            {t("terminal.projects.statusGuideWorking")}
+          </span>
+          <span>
+            <i className="status-attention" aria-hidden="true" />
+            {t("terminal.projects.statusGuideAttention")}
+          </span>
+          <span>
+            <i className="status-idle" aria-hidden="true" />
+            {t("terminal.projects.statusGuideIdle")}
+          </span>
+          <span>
+            <i className="status-done" aria-hidden="true" />
+            {t("terminal.projects.statusGuideDone")}
+          </span>
+        </section>
+      )}
       {chooseError && (
         <div className="session-projects__error" role="alert">
           {t("terminal.projects.chooseFailed")}

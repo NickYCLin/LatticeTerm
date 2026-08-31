@@ -91,8 +91,12 @@ describe("session project sidebar", () => {
     expect(markup).toContain("OpenAI Codex");
     expect(markup).toContain("gpt-5.6-sol");
     expect(markup.match(/CLI 預設模型/g)).toHaveLength(2);
-    expect(markup).toContain('class="session-tree__project is-active status-working"');
+    expect(markup).toContain('class="session-tree__project is-active"');
+    expect(markup).not.toContain("session-tree__project is-active status-working");
+    expect(markup.match(/session-tree__status status-working/g)).toHaveLength(1);
     expect(markup).toContain('class="session-tree__session is-active status-idle"');
+    expect(markup).toContain('aria-label="工作階段狀態說明"');
+    expect(markup).toContain('aria-controls="session-project-status-guide"');
     expect(markup).toContain("移除「Codex」工作階段");
     expect(markup).toContain('placeholder="搜尋專案或工作階段"');
     expect(markup).toContain('role="combobox"');

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { homeDir } from "@tauri-apps/api/path";
+import { downloadDir, homeDir, join } from "@tauri-apps/api/path";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
 import type { VncApi } from "../app/useVncSessions";
@@ -135,14 +135,26 @@ function workspaceItemSignature(
   ]);
 }
 
-function downloadWorkspaceFile(content: string) {
+function workspaceExportFilename(exportedAt = new Date()) {
+  return `latticeterm-workspace-${exportedAt
+    .toISOString()
+    .replace(/[:.]/g, "-")}.json`;
+}
+
+async function downloadWorkspaceFile(content: string) {
+  const filename = workspaceExportFilename();
   const blob = new Blob([content], { type: "application/json;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `latticeterm-workspace-${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+  try {
+    return { filename, path: await join(await downloadDir(), filename) };
+  } catch {
+    return { filename, path: filename };
+  }
 }
 
 interface ClosedNoticeSource {
@@ -553,7 +565,7 @@ export function SessionsView({
     return { pending, unavailableCount, existingCount };
   }
 
-  function exportWorkspaceItems() {
+  async function exportWorkspaceItems() {
     setWorkspaceTransferNotice(null);
     if (agents.sessions.length === 0 && reconciledSidebarLayout.folders.length === 0) {
       setWorkspaceTransferNotice({
@@ -563,13 +575,13 @@ export function SessionsView({
       });
       return;
     }
-    downloadWorkspaceFile(
+    const exported = await downloadWorkspaceFile(
       serializeWorkspaceTransfer(agents.sessions, reconciledSidebarLayout),
     );
     setWorkspaceTransferNotice({
       tone: "info",
       title: t("terminal.projects.exportedTitle"),
-      body: t("terminal.projects.exported", {
+      body: `${t("terminal.projects.exported", {
         projects: new Set(
           agents.sessions.map((session) =>
             normalizeDirectory(session.workingDirectory),
@@ -577,7 +589,7 @@ export function SessionsView({
         ).size,
         sessions: agents.sessions.length,
         folders: reconciledSidebarLayout.folders.length,
-      }),
+      })} ${t("terminal.projects.exportedLocation", exported)}`,
     });
   }
 
@@ -1539,7 +1551,7 @@ export function SessionsView({
           }}
           onExportWorkspace={() => {
             setMobileTreeOpen(false);
-            exportWorkspaceItems();
+            void exportWorkspaceItems();
           }}
           onImportWorkspace={() => {
             setMobileTreeOpen(false);

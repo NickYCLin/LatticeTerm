@@ -1543,20 +1543,72 @@
   color: var(--ok);
 }
 
-.session-tree__folder-row.status-working .session-tree__folder-select > svg,
-.session-tree__project.status-working .session-tree__project-select > svg,
+.session-projects__status-help {
+  margin-left: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.session-projects__status-guide {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.32rem 0.7rem;
+  margin: 0 var(--space-2) var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 0.66rem;
+}
+
+.session-projects__status-guide > strong {
+  grid-column: 1 / -1;
+  color: var(--text);
+  font-size: 0.7rem;
+}
+
+.session-projects__status-guide > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  min-width: 0;
+}
+
+.session-projects__status-guide i {
+  width: 0.42rem;
+  height: 0.42rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.session-projects__status-guide .status-working {
+  color: var(--info);
+}
+
+.session-projects__status-guide .status-attention {
+  color: var(--warn);
+}
+
+.session-projects__status-guide .status-idle {
+  color: var(--text-faint);
+}
+
+.session-projects__status-guide .status-done {
+  color: var(--ok);
+}
+
 .session-tree__session.status-working .session-tree__session-select > svg {
   color: var(--info);
 }
 
-.session-tree__folder-row.status-done .session-tree__folder-select > svg,
-.session-tree__project.status-done .session-tree__project-select > svg,
 .session-tree__session.status-done .session-tree__session-select > svg {
   color: var(--ok);
 }
 
-.session-tree__folder-row.status-attention .session-tree__folder-select > svg,
-.session-tree__project.status-attention .session-tree__project-select > svg,
 .session-tree__session.status-attention .session-tree__session-select > svg {
   color: var(--warn);
 }
