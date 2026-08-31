@@ -717,6 +717,15 @@ impl CompletionReadiness {
     ) -> Option<AgentLifecycle> {
         self.control_window.extend_from_slice(bytes);
 
+        // Codex renders an explicit working footer while a foreground turn or
+        // a background terminal is still active. A stale conversational
+        // question must not leave the sidebar on "needs attention" after
+        // this authoritative-looking activity signal arrives.
+        if has_explicit_working_status(bytes) {
+            self.control_window.clear();
+            return Some(AgentLifecycle::Working);
+        }
+
         // PTY reads may split a human-input prompt anywhere, including in the
         // middle of "permission required". Inspect the bounded tail instead
         // of only the newest read, and let an attention prompt win when the
@@ -4345,6 +4354,11 @@ fn lifecycle_from_output(bytes: &[u8]) -> AgentLifecycle {
     }
 }
 
+fn has_explicit_working_status(bytes: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(bytes).to_lowercase();
+    text.contains("working (") || text.contains("background terminal running")
+}
+
 pub fn launch(
     sink: Arc<dyn AgentSink>,
     registry: Arc<AgentRegistry>,
@@ -5189,6 +5203,24 @@ session id: 0199aa11-"
             Some(AgentLifecycle::NeedsAttention)
         );
         assert_eq!(readiness.observe_output(b"\x1b[?2004h", false), None);
+    }
+
+    #[test]
+    fn codex_working_footer_clears_a_stale_attention_prompt() {
+        let mut readiness = CompletionReadiness::default();
+
+        assert_eq!(
+            readiness.observe_output(b"Do you want to continue?", false),
+            Some(AgentLifecycle::NeedsAttention)
+        );
+        assert_eq!(
+            readiness.observe_output(
+                b"Working (1s; esc to interrupt) 1 background terminal running",
+                false,
+            ),
+            Some(AgentLifecycle::Working)
+        );
+        assert_eq!(readiness.observe_output(b"still compiling", false), None);
     }
 
     #[test]
