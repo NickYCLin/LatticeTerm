@@ -2,6 +2,7 @@ import type {
   AgentDefinition,
   AgentSessionSummary,
 } from "./useAgentSessions";
+import { sessionSidebarSessionNodeId } from "./sessionSidebarLayout";
 
 export interface AgentSessionGroupPresentation {
   /** Group name shown in the project sidebar. */
@@ -12,6 +13,8 @@ export interface AgentSessionGroupPresentation {
   headerMemberLabel: string | null;
   /** Current visible group name used to seed the rename editor. */
   renameLabel: string;
+  /** Whether the persisted group name was authored by the user. */
+  hasCustomGroupLabel: boolean;
 }
 
 function normalizedLabel(label: string): string {
@@ -82,5 +85,50 @@ export function presentAgentSessionGroup(
     headerLabel,
     headerMemberLabel,
     renameLabel: groupLabel || headerLabel,
+    hasCustomGroupLabel,
   };
+}
+
+type AgentSidebarIdentity = Pick<
+  AgentSessionSummary,
+  "definitionId" | "executable" | "label" | "launchArguments" | "sessionId"
+>;
+
+function sidebarIdentity(member: AgentSidebarIdentity): string {
+  return JSON.stringify([
+    member.definitionId,
+    member.label,
+    member.executable,
+    member.launchArguments,
+  ]);
+}
+
+function stableSidebarHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/**
+ * Keeps each CLI member independently addressable in the sidebar while using
+ * launch identity instead of the runtime process id across application restarts.
+ */
+export function agentSessionSidebarMemberNodeId(
+  groupId: string,
+  members: readonly AgentSidebarIdentity[],
+  memberIndex: number,
+): string {
+  const member = members[memberIndex];
+  if (!member) throw new RangeError("Agent sidebar member index is out of range.");
+  const identity = sidebarIdentity(member);
+  const occurrence = members
+    .slice(0, memberIndex)
+    .filter((candidate) => sidebarIdentity(candidate) === identity).length;
+  const persistentId = `${groupId}:member:${stableSidebarHash(
+    `${identity}:${occurrence}`,
+  )}`;
+  return sessionSidebarSessionNodeId("agent", member.sessionId, persistentId);
 }

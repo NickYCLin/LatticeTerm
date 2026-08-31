@@ -3,7 +3,10 @@ import type {
   AgentDefinition,
   AgentSessionSummary,
 } from "./useAgentSessions";
-import { presentAgentSessionGroup } from "./agentSessionPresentation";
+import {
+  agentSessionSidebarMemberNodeId,
+  presentAgentSessionGroup,
+} from "./agentSessionPresentation";
 
 const definitions: Pick<AgentDefinition, "id" | "label">[] = [
   { id: "codex", label: "OpenAI Codex" },
@@ -51,6 +54,7 @@ describe("agent session group presentation", () => {
       headerLabel: "Claude Code",
       headerMemberLabel: null,
       renameLabel: "Claude Code",
+      hasCustomGroupLabel: false,
     });
   });
 
@@ -71,6 +75,7 @@ describe("agent session group presentation", () => {
     expect(presentation.groupLabel).toBe("OpenAI Codex + Claude Code");
     expect(presentation.headerLabel).toBe("Claude Code");
     expect(presentation.headerMemberLabel).toBeNull();
+    expect(presentation.hasCustomGroupLabel).toBe(false);
   });
 
   it("preserves a custom group name and identifies its active CLI", () => {
@@ -93,6 +98,34 @@ describe("agent session group presentation", () => {
       headerLabel: "StoryVoice",
       headerMemberLabel: "Claude Code",
       renameLabel: "StoryVoice",
+      hasCustomGroupLabel: true,
     });
+  });
+
+  it("gives every CLI a stable and distinct sidebar identity", () => {
+    const members = [
+      member(),
+      member({ sessionId: "agent-codex-two" }),
+      member({
+        sessionId: "agent-claude",
+        definitionId: "claude",
+        label: "Claude Code",
+        executable: "claude",
+      }),
+    ];
+    const restored = members.map((entry, index) => ({
+      ...entry,
+      sessionId: `restored-${index}`,
+    }));
+
+    const nodeIds = members.map((_, index) =>
+      agentSessionSidebarMemberNodeId("group-storyvoice", members, index),
+    );
+    const restoredNodeIds = restored.map((_, index) =>
+      agentSessionSidebarMemberNodeId("group-storyvoice", restored, index),
+    );
+
+    expect(new Set(nodeIds).size).toBe(3);
+    expect(restoredNodeIds).toEqual(nodeIds);
   });
 });

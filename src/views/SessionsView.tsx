@@ -20,7 +20,10 @@ import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
 import { agentGroupSidebarStatus } from "../app/sessionStatus";
-import { presentAgentSessionGroup } from "../app/agentSessionPresentation";
+import {
+  agentSessionSidebarMemberNodeId,
+  presentAgentSessionGroup,
+} from "../app/agentSessionPresentation";
 import { disconnectAgentSessionMembers } from "../app/agentSessionRemoval";
 import {
   relocateAgentSessionGroup,
@@ -54,6 +57,7 @@ import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import {
   SessionProjectSidebar,
   type SessionSidebarProjectItem,
+  type SessionSidebarSessionItem,
 } from "../components/sessions/SessionProjectSidebar";
 import { AgentSessionRelocationDialog } from "../components/sessions/AgentSessionRelocationDialog";
 import { WorkspaceImportDialog } from "../components/sessions/WorkspaceImportDialog";
@@ -87,6 +91,7 @@ type SessionRef =
       headerLabel: string;
       headerMemberLabel: string | null;
       renameLabel: string;
+      hasCustomGroupLabel: boolean;
       groupId: string;
       members: AgentSessionSummary[];
     }
@@ -819,6 +824,7 @@ export function SessionsView({
         headerLabel: presentation.headerLabel,
         headerMemberLabel: presentation.headerMemberLabel,
         renameLabel: presentation.renameLabel,
+        hasCustomGroupLabel: presentation.hasCustomGroupLabel,
         groupId: group.groupId,
         members: group.members,
       };
@@ -1071,26 +1077,40 @@ export function SessionsView({
     projectId: project.id,
     label: project.label,
     workingDirectory: project.workingDirectory,
-    sessions: project.sessions.map((session) => ({
-      nodeId: sidebarSessionNodeId(session),
-      sessionId: session.sessionId,
-      label: session.label,
-      kind: session.kind,
-      searchText:
-        session.kind === "agent"
-          ? session.members
-              .flatMap((member) => [
-                member.label,
-                member.definitionId,
-                member.model ?? "",
-              ])
-              .join(" ")
-          : session.label,
-      status:
-        session.kind === "agent"
-          ? agentGroupSidebarStatus(session.members)
-          : "connected",
-    })),
+    sessions: project.sessions.flatMap<SessionSidebarSessionItem>((session) => {
+      if (session.kind !== "agent") {
+        return [
+          {
+            nodeId: sidebarSessionNodeId(session),
+            sessionId: session.sessionId,
+            label: session.label,
+            kind: session.kind,
+            searchText: session.label,
+            status: "connected" as const,
+          },
+        ];
+      }
+      return session.members.map((member, memberIndex) => ({
+        nodeId: agentSessionSidebarMemberNodeId(
+          session.groupId,
+          session.members,
+          memberIndex,
+        ),
+        sessionId: member.sessionId,
+        label: session.hasCustomGroupLabel
+          ? `${session.label} · ${member.label}`
+          : member.label,
+        detail: member.model ?? t("terminal.model.pending"),
+        kind: "agent" as const,
+        searchText: [
+          session.label,
+          member.label,
+          member.definitionId,
+          member.model ?? "",
+        ].join(" "),
+        status: agentGroupSidebarStatus([member]),
+      }));
+    }),
   }));
   const liveSidebarNodes: LiveSessionSidebarNode[] = sidebarProjects.flatMap(
     (project) => [
@@ -1420,18 +1440,7 @@ export function SessionsView({
   }
 
   async function removeSession(session: SessionRef) {
-    if (session.kind !== "agent") {
-      await close(session);
-      return;
-    }
-    const wasActive = session.members.some(
-      (member) => member.sessionId === active.sessionId,
-    );
-    await disconnectAgentSessionMembers(
-      session.members.map((member) => member.sessionId),
-      agents.disconnect,
-    );
-    if (wasActive) onSelect(null);
+    await close(session);
   }
 
   return (
@@ -1497,16 +1506,32 @@ export function SessionsView({
           onChooseProject={() => void chooseProjectDirectory()}
           onSelect={(sessionId) => {
             setMobileTreeOpen(false);
-            onSelect(sessionId);
+            const group = agentGroups.find((candidate) =>
+              candidate.members.some((member) => member.sessionId === sessionId),
+            );
+            if (group) selectMember(group.groupId, sessionId);
+            else onSelect(sessionId);
           }}
           onRemove={(sidebarSession) => {
             const session = sessions.find(
               (candidate) =>
-                sidebarSessionNodeId(candidate) === sidebarSession.nodeId,
+                candidate.kind === "agent"
+                  ? candidate.members.some(
+                      (member) => member.sessionId === sidebarSession.sessionId,
+                    )
+                  : sidebarSessionNodeId(candidate) === sidebarSession.nodeId,
             );
             if (!session) return;
             setRemoveSessionError(null);
-            setPendingRemoveSession(session);
+            setPendingRemoveSession(
+              session.kind === "agent"
+                ? {
+                    ...session,
+                    sessionId: sidebarSession.sessionId,
+                    label: sidebarSession.label,
+                  }
+                : session,
+            );
           }}
           onQuickLaunch={(definition) => {
             setMobileTreeOpen(false);

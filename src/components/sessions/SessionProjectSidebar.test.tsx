@@ -12,13 +12,17 @@ afterEach(() => {
 });
 
 describe("session project sidebar", () => {
-  it("renders a project's child session with its remove action", () => {
+  it("renders every CLI member as an independent project child", () => {
     vi.stubGlobal("window", { innerWidth: 1200, innerHeight: 800 });
     const projectNodeId = "project:local:latticeterm";
     const sessionNodeId = "session:agent:codex";
+    const claudeNodeId = "session:agent:claude";
+    const secondCodexNodeId = "session:agent:codex-default";
     const layout = reconcileSessionSidebarLayout(emptySessionSidebarLayout, [
       { id: projectNodeId, defaultParentId: null },
       { id: sessionNodeId, defaultParentId: projectNodeId },
+      { id: claudeNodeId, defaultParentId: projectNodeId },
+      { id: secondCodexNodeId, defaultParentId: projectNodeId },
     ]);
 
     const markup = renderToStaticMarkup(
@@ -35,14 +39,31 @@ describe("session project sidebar", () => {
                   nodeId: sessionNodeId,
                   sessionId: "agent-codex",
                   label: "Codex",
+                  detail: "gpt-5.6-sol",
                   kind: "agent",
                   status: "working",
+                },
+                {
+                  nodeId: claudeNodeId,
+                  sessionId: "agent-claude",
+                  label: "Claude Code",
+                  detail: "CLI 預設模型",
+                  kind: "agent",
+                  status: "idle",
+                },
+                {
+                  nodeId: secondCodexNodeId,
+                  sessionId: "agent-codex-default",
+                  label: "OpenAI Codex",
+                  detail: "CLI 預設模型",
+                  kind: "agent",
+                  status: "idle",
                 },
               ],
             },
           ]}
           layout={layout}
-          activeSessionId="agent-codex"
+          activeSessionId="agent-claude"
           choosingProject={false}
           chooseError={false}
           installedAgents={[]}
@@ -66,12 +87,17 @@ describe("session project sidebar", () => {
 
     expect(markup).toContain("LatticeTerm");
     expect(markup).toContain("Codex");
+    expect(markup).toContain("Claude Code");
+    expect(markup).toContain("OpenAI Codex");
+    expect(markup).toContain("gpt-5.6-sol");
+    expect(markup.match(/CLI 預設模型/g)).toHaveLength(2);
     expect(markup).toContain('class="session-tree__project is-active status-working"');
+    expect(markup).toContain('class="session-tree__session is-active status-idle"');
     expect(markup).toContain("移除「Codex」工作階段");
     expect(markup).toContain('placeholder="搜尋專案或工作階段"');
     expect(markup).toContain('role="combobox"');
     expect(markup).toContain('role="list" aria-label="專案與工作階段"');
-    expect(markup.match(/role="listitem"/g)).toHaveLength(2);
+    expect(markup.match(/role="listitem"/g)).toHaveLength(4);
     expect(markup).not.toContain('role="tree"');
     expect(markup).not.toContain('role="treeitem"');
     expect(markup).toContain('id="session-project-sidebar"');

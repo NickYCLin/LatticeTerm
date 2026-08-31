@@ -54,6 +54,7 @@ export interface SessionSidebarSessionItem {
   nodeId: string;
   sessionId: string;
   label: string;
+  detail?: string;
   kind: SessionSidebarKind;
   status: SessionSidebarStatus;
   searchText?: string;
@@ -605,7 +606,14 @@ export function SessionProjectSidebar({
           title={`${session.label} · ${t("terminal.projects.dragHint")}`}
         >
           <Glyph size={12} />
-          <span className="truncate">{session.label}</span>
+          <span className="session-tree__session-identity">
+            <span className="truncate">{session.label}</span>
+            {session.detail && (
+              <span className="session-tree__session-detail truncate">
+                {session.detail}
+              </span>
+            )}
+          </span>
           {statusMark(session.status)}
         </button>
         <span className="session-tree__session-actions">
