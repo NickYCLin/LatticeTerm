@@ -164,6 +164,7 @@ fn render_wave(sound: &str) -> Result<Vec<u8>, String> {
 #[cfg(target_os = "windows")]
 fn play_wave(wave: &[u8]) -> Result<bool, String> {
     use std::ffi::c_void;
+    use std::sync::{Mutex, OnceLock};
 
     const SND_NODEFAULT: u32 = 0x0002;
     const SND_MEMORY: u32 = 0x0004;
@@ -176,6 +177,14 @@ fn play_wave(wave: &[u8]) -> Result<bool, String> {
     if wave.is_empty() {
         return Ok(true);
     }
+    // PlaySound with SND_MEMORY must remain synchronous so the in-memory wave
+    // stays valid. Serializing requests also stops a completion cue and a
+    // Settings preview from replacing one another on Windows' shared player.
+    static PLAYBACK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _playback = PLAYBACK_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // SND_SYNC is zero and keeps the in-memory WAV alive until playback ends.
     let played = unsafe {
         PlaySoundA(

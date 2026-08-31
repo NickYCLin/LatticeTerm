@@ -61,6 +61,10 @@ export function notificationToneSequence(
 }
 
 let sharedContext: AudioContext | null = null;
+// Completion events and Settings previews can arrive together. Keep their
+// short cues distinct instead of asking a platform mixer to replace one with
+// another mid-playback.
+let notificationPlaybackQueue: Promise<void> = Promise.resolve();
 
 function audioContext(): AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -121,7 +125,7 @@ async function playWebAudioSound(
   }
 }
 
-export async function playNotificationSound(
+async function playNotificationSoundNow(
   sound: NotificationSoundChoice,
 ): Promise<NotificationPlaybackResult> {
   const tones = notificationToneSequence(sound);
@@ -141,4 +145,22 @@ export async function playNotificationSound(
   }
 
   return (await playWebAudioSound(tones)) ? "webAudio" : "unavailable";
+}
+
+export function playNotificationSound(
+  sound: NotificationSoundChoice,
+): Promise<NotificationPlaybackResult> {
+  if (notificationToneSequence(sound).length === 0) {
+    return Promise.resolve("disabled");
+  }
+
+  const playback = notificationPlaybackQueue.then(
+    () => playNotificationSoundNow(sound),
+    () => playNotificationSoundNow(sound),
+  );
+  notificationPlaybackQueue = playback.then(
+    () => undefined,
+    () => undefined,
+  );
+  return playback;
 }

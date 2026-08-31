@@ -34,6 +34,29 @@ describe("notification sounds", () => {
     });
   });
 
+  it("queues simultaneous native cues instead of overlapping them", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    let releaseFirst: ((value: boolean) => void) | undefined;
+    vi.mocked(invoke)
+      .mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            releaseFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(true);
+
+    const first = playNotificationSound("clear");
+    const second = playNotificationSound("double");
+    await Promise.resolve();
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    releaseFirst?.(true);
+    await expect(first).resolves.toBe("native");
+    await expect(second).resolves.toBe("native");
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
   it("reports when neither native nor Web Audio playback is available", async () => {
     vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
     vi.mocked(invoke).mockResolvedValue(false);
