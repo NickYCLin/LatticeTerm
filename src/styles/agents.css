@@ -240,43 +240,6 @@
   white-space: nowrap;
 }
 
-.agent-card.has-notice .agent-card__title {
-  padding-right: 1.75rem;
-}
-
-.agent-card__migration-button {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  display: grid;
-  place-items: center;
-  width: 1.65rem;
-  height: 1.65rem;
-  border: 1px solid color-mix(in srgb, var(--warn) 48%, var(--line));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--warn) 13%, var(--surface-raised));
-  color: var(--warn);
-  cursor: pointer;
-}
-
-.agent-card__migration-button:hover,
-.agent-card__migration-button:focus-visible,
-.agent-card__migration-button[aria-expanded="true"] {
-  border-color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 22%, var(--surface-raised));
-  outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 18%, transparent);
-}
-
-.agent-migration-card {
-  position: fixed;
-  z-index: 120;
-  width: min(20rem, calc(100vw - 1.5rem));
-  border-radius: var(--radius-lg);
-  background: var(--surface-solid);
-  box-shadow: var(--shadow-lg);
-}
-
 .agent-card code,
 .agent-card__path {
   overflow: hidden;
