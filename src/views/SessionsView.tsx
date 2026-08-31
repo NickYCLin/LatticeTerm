@@ -20,6 +20,7 @@ import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
 import { agentGroupSidebarStatus } from "../app/sessionStatus";
+import { presentAgentSessionGroup } from "../app/agentSessionPresentation";
 import { disconnectAgentSessionMembers } from "../app/agentSessionRemoval";
 import {
   relocateAgentSessionGroup,
@@ -83,6 +84,9 @@ type SessionRef =
       kind: "agent";
       sessionId: string;
       label: string;
+      headerLabel: string;
+      headerMemberLabel: string | null;
+      renameLabel: string;
       groupId: string;
       members: AgentSessionSummary[];
     }
@@ -803,13 +807,18 @@ export function SessionsView({
   const sessions: SessionRef[] = [
     ...agentGroups.map((group) => {
       const memberId = activeMemberId(group);
-      const member =
-        group.members.find((entry) => entry.sessionId === memberId) ??
-        group.members[0];
+      const presentation = presentAgentSessionGroup(
+        group.members,
+        agents.catalog,
+        memberId,
+      );
       return {
         kind: "agent" as const,
         sessionId: memberId,
-        label: member.groupLabel,
+        label: presentation.groupLabel,
+        headerLabel: presentation.headerLabel,
+        headerMemberLabel: presentation.headerMemberLabel,
+        renameLabel: presentation.renameLabel,
         groupId: group.groupId,
         members: group.members,
       };
@@ -1596,13 +1605,30 @@ export function SessionsView({
                       className="session-header__label"
                       onDoubleClick={
                         active.kind === "agent"
-                          ? () => beginRename(active.sessionId, active.label)
+                          ? () => beginRename(active.sessionId, active.renameLabel)
                           : undefined
                       }
                       title={active.kind === "agent" ? t("terminal.renameHint") : undefined}
                     >
                       <ActiveGlyph size={13} />
-                      <span className="truncate">{active.label}</span>
+                      <span className="truncate">
+                        {active.kind === "agent"
+                          ? active.headerLabel
+                          : active.label}
+                      </span>
+                      {active.kind === "agent" && active.headerMemberLabel && (
+                        <>
+                          <span
+                            className="session-header__member-sep"
+                            aria-hidden="true"
+                          >
+                            ·
+                          </span>
+                          <span className="session-header__member truncate">
+                            {active.headerMemberLabel}
+                          </span>
+                        </>
+                      )}
                     </span>
                   )}
                 </div>
@@ -1622,7 +1648,9 @@ export function SessionsView({
                       <button
                         type="button"
                         className="icon-button icon-button--sm"
-                        onClick={() => beginRename(active.sessionId, active.label)}
+                        onClick={() =>
+                          beginRename(active.sessionId, active.renameLabel)
+                        }
                         aria-label={t("terminal.rename")}
                         data-tooltip={t("terminal.rename")}
                       >
