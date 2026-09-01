@@ -35,6 +35,7 @@ flowchart LR
 - 支援使用者明確勾選執行中的 Agent，經二次確認後將同一段提示送進最多 32 個獨立 PTY；每個目標逐一回報成功或失敗，提示內容不會保存。執行中分頁加開 CLI 時，也會詢問是否帶入目前脈絡；Codex、Claude Code、Gemini CLI 與 Google Antigravity CLI 的來源對話可讀時，任何新 CLI 都會收到一次性交接內容。目標 Claude 在其預設、可驗證的自動記憶設定下，另會更新專案 `MEMORY.md` 的 LatticeTerm 專屬區塊，保留使用者原有記憶。其他目標或未知格式不改寫私有 session 檔；勾選帶入但匯出失敗時會中止加開並顯示原因，不會悄悄開啟空白 CLI。
 - 支援最多 32 個安全啟動項目，也可命名工作區及調整持久化順序。應用程式重啟後，使用者可逐項或整批確認，LatticeTerm 會重新驗證磁碟資料並依保存順序啟動 CLI 程序；每項分別回報成功或失敗。沒有額外參數或舊版明確 Session ID 的 Codex 項目使用 `codex resume --last`，依工作目錄選出最近對話；Cursor 項目使用官方的 `agent --continue` 續接最近對話。
 - 可選擇保存一份工作區共用啟動指示；之後每個全新的非 `custom` CLI 進入互動提示後會先收到這段文字，若同時有跨 CLI handoff 則共用指示排在 handoff 前面。自動還原的舊工作階段、明確原生 Session 續接與 `resume --last`／`--continue` 不會重送共用指示。內建繁中 Commit 範本只是可套用的起始內容，預設留空停用，不會把個人規範強加給其他安裝者。
+- 提供專案共用規則編輯器，以根目錄 `AGENTS.md` 為唯一真實來源。Codex 直接讀取該檔；LatticeTerm 只在 `CLAUDE.md` 管理 `@AGENTS.md`、在 `GEMINI.md` 管理 `@./AGENTS.md` 的標記區塊，保留區塊外的 CLI 專屬內容。寫入前會用三個檔案的 SHA-256 revision 偵測外部變更，拒絕符號連結、非 UTF-8、超限或標記毀損的檔案，並以同目錄暫存檔與回滾備份替換；不會同步任何 CLI 的原生對話、登入資料或私有資料庫。
 - 目錄會從各 CLI 已存在的本機認證 metadata 讀取 Codex、Claude 與 Gemini 的帳號標籤及登入方式；Rust 只回傳非機密字串，access token、refresh token、API Key 與完整 JWT 都不會序列化到 WebView。
 - 版本化內建 Adapter v1 仍可驗證並還原舊工作區中 Codex、Claude Code、Gemini CLI、Hermes Agent 與 Cursor Agent 的原生 Session 項目；介面不再要求使用者手動設定 Session ID。Codex 與 Cursor 的一般保存項目不寫入 Session ID，而是委由各 CLI 自己續接同目錄最近的對話；執行中分頁的「加開 CLI／帶入目前對話」則處理跨 CLI 脈絡接手。交接讀取 Codex 歷程時，有捕捉 ID 就精確比對 `session_meta.payload.id` 並排除 subagent；沒有 ID 才依 canonical 工作目錄選主 CLI rollout。Claude 也從有界 JSONL metadata 精確比對 Session ID 與主工作階段旗標；沒有 ID 時才以 canonical 工作目錄選取，避免資料夾 slug 碰撞。Gemini 依精確啟動目錄、程序 hook 回報的 Session ID 與 JSONL rewind state 選取有效對話；Antigravity 使用程序限定暫存 log 捕捉 Conversation ID，再只讀該 conversation 的明確使用者輸入及最終回覆。所有歷程讀取都有限額，且不跟隨最終符號連結。更換工作目錄需要交接對話時，會先完成整組匯出；任一匯出失敗即在啟動替代程序前中止，所有原工作階段都保留。
 
@@ -86,6 +87,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態或用量訊息。Registr
 - 狀態只在有依據時才說「執行中」。官方 lifecycle hook／plugin 事件是唯一權威來源；heuristic 僅在使用者實際送出打好的提示時標記執行中，單獨的 Enter（接受資料夾信任對話框、清空提示）不算新工作，只有目前為待確認時才視為回答並恢復該輪。若某工作階段的整合始終沒有回報，而 PTY 連續 10 分鐘沒有任何輸出（每個互動式 CLI 都會持續重畫計時或 token 計數），該 heuristic 猜測會退回「閒置」而不是「完成」：沒有任何東西觀察到結果，也不會觸發完成提示音。
 - Agent 終端的圖片貼上只在目標工作階段仍存在時讀取系統剪貼簿；原生層拒絕超限或不一致的像素資料，並以擁有者限定權限建立工作階段專屬暫存檔。每個 PTY 最多保留 32 張／256 MiB，工作階段停止、程序自然結束或應用程式離開時全部刪除。
 - 執行中的工作階段只存在記憶體，Rust registry 最多接受 32 個活躍 session；每個 PTY 保留最近 256 KiB 有界輸出與單調 byte offset，因此重播尾端總上限為 8 MiB。WebView 重新載入可重新 attach 並避免快照／即時事件重複。使用者停止或應用程式結束／重啟時仍會終止已登記的 CLI。
+- CLI 自行退出時，WebView 會把該項標成完成、保留唯讀分頁與已收到的終端輸出，直到使用者明確關閉；即使程序早於啟動回應結束，也會在取得工作階段資料後建立這個可檢視分頁。退出項目不會寫入跨重啟工作階段快照；只有無法對應任何既有或進行中啟動要求的關閉事件才使用全域通知，且 `code 0` 會標為正常結束而非連線中斷。
 - 安全啟動工作區使用獨立的版本化 JSON；v4 可無損讀取 v1／v2／v3，並保存工作區名稱、共用啟動指示、項目順序、CLI 類型、標籤、可執行檔、明確參數、工作目錄與選填備註。原生 Session ID 或標題只在使用者明確保存續接項目時寫入；備註為選填的純文字（最多 200 bytes、去除前後空白、拒絕控制字元）。共用啟動指示最多 8 KiB，留空即停用。密碼、Token、API Key、Passphrase、Secret 參數會被拒絕；讀不到或版本不相容的原檔會先移到復原檔，不會直接覆寫。
 - 除使用者明確保存的共用啟動指示外，不把單次提示、輸入歷史、程序 ID、Reporter 權杖或模型憑證寫入工作區 JSON。重新 attach 用的每個 Agent 最近 256 KiB 輸出尾端在正常關閉時會以裝置金鑰加密保存，金鑰只留在 OS 安全儲存區；安全儲存區不可用時維持只存在該桌面程序記憶體。
 - Reporter 只監聽 loopback，訊息限制 4 KiB 且有讀寫逾時；每個工作階段使用獨立高熵權杖。權杖會存在該 CLI 的環境中，因此相同作業系統使用者權限的程序仍屬於信任邊界，但即使權杖外洩也只能變更該工作階段的顯示狀態與有界用量數字。

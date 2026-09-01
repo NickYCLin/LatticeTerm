@@ -1,12 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
   createSessionClosedNotice,
+  isSuccessfulProcessExit,
   reconcileSessionSnapshot,
   reconcileSingletonSnapshot,
   snapshotHydrationMap,
   snapshotSessionIds,
   shouldClearSessionSelection,
 } from "./sessionSnapshot";
+
+describe("isSuccessfulProcessExit", () => {
+  it("distinguishes a clean CLI exit from an interrupted session", () => {
+    expect(
+      isSuccessfulProcessExit(
+        "Process exited: ExitStatus { code: 0, signal: None }",
+      ),
+    ).toBe(true);
+    expect(
+      isSuccessfulProcessExit(
+        "Process exited: ExitStatus { code: 1, signal: None }",
+      ),
+    ).toBe(false);
+    expect(isSuccessfulProcessExit("Connection reset")).toBe(false);
+  });
+});
 
 interface TestSession {
   sessionId: string;

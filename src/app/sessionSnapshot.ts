@@ -140,6 +140,13 @@ export function shouldClearSessionSelection(
   return activeSessionId === closedSessionId;
 }
 
+/** Exit code 0 is a completed local process, not a dropped connection. */
+export function isSuccessfulProcessExit(reason: string): boolean {
+  return /Process exited:\s*ExitStatus\s*\{\s*code:\s*0(?:,|\s*})/i.test(
+    reason,
+  );
+}
+
 /**
  * Builds the durable notice shown after a session pane has already unmounted.
  * The id fallback matters during initial hydration, where a close event can

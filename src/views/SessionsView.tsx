@@ -7,6 +7,7 @@ import type { RemoteApi } from "../app/useRemoteSessions";
 import type { RdpApi } from "../app/useRdpSessions";
 import type { VncApi } from "../app/useVncSessions";
 import {
+  isSuccessfulProcessExit,
   shouldClearSessionSelection,
   type SessionClosedNotice,
 } from "../app/sessionSnapshot";
@@ -360,6 +361,9 @@ export function SessionsView({
   const [newProjectDirectory, setNewProjectDirectory] = useState<string | null>(
     null,
   );
+  const [selectedProjectCliId, setSelectedProjectCliId] = useState<string | null>(
+    null,
+  );
   const [choosingProject, setChoosingProject] = useState(false);
   const [launchingProjectCli, setLaunchingProjectCli] = useState<string | null>(
     null,
@@ -459,7 +463,10 @@ export function SessionsView({
         multiple: false,
         title: t("terminal.projects.choose"),
       });
-      if (typeof selected === "string") setNewProjectDirectory(selected);
+      if (typeof selected === "string") {
+        setNewProjectDirectory(selected);
+        setSelectedProjectCliId(installedAgents[0]?.id ?? null);
+      }
     } catch (reason) {
       setNewProjectError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -743,6 +750,7 @@ export function SessionsView({
   function closeNewProjectDialog() {
     if (launchingProjectCli) return;
     setNewProjectDirectory(null);
+    setSelectedProjectCliId(null);
     setNewProjectError(null);
   }
 
@@ -951,7 +959,11 @@ export function SessionsView({
     <div className="session-notice">
       <Callout
         tone="warn"
-        title={t("terminal.sessionClosed.title")}
+        title={t(
+          isSuccessfulProcessExit(latestClosed.notice.reason)
+            ? "terminal.sessionEnded.title"
+            : "terminal.sessionClosed.title",
+        )}
         actions={
           <button
             type="button"
@@ -970,8 +982,12 @@ export function SessionsView({
     </div>
   ) : null;
 
-  async function launchNewProject(definition: AgentDefinition) {
+  async function launchNewProject() {
     if (!newProjectDirectory) return;
+    const definition = installedAgents.find(
+      (candidate) => candidate.id === selectedProjectCliId,
+    );
+    if (!definition) return;
     setLaunchingProjectCli(definition.id);
     setNewProjectError(null);
     try {
@@ -988,6 +1004,7 @@ export function SessionsView({
         rows: 32,
       });
       setNewProjectDirectory(null);
+      setSelectedProjectCliId(null);
       setPendingRevealSessionId(launched.sessionId);
       onSelect(launched.sessionId);
     } catch (reason) {
@@ -1034,17 +1051,15 @@ export function SessionsView({
                 <button
                   key={definition.id}
                   type="button"
-                  className="button button--ghost project-launcher__cli"
+                  className={`button button--ghost project-launcher__cli${
+                    selectedProjectCliId === definition.id ? " is-selected" : ""
+                  }`}
+                  aria-pressed={selectedProjectCliId === definition.id}
                   disabled={launchingProjectCli !== null}
-                  onClick={() => void launchNewProject(definition)}
+                  onClick={() => setSelectedProjectCliId(definition.id)}
                 >
                   <AgentIcon size={15} />
                   <span>{definition.label}</span>
-                  {launchingProjectCli === definition.id && (
-                    <span className="project-launcher__status">
-                      {t("terminal.projects.launching")}
-                    </span>
-                  )}
                 </button>
               ))}
               {installedAgents.length === 0 && (
@@ -1066,6 +1081,16 @@ export function SessionsView({
               onClick={closeNewProjectDialog}
             >
               {t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={launchingProjectCli !== null || !selectedProjectCliId}
+              onClick={() => void launchNewProject()}
+            >
+              {launchingProjectCli
+                ? t("terminal.projects.launching")
+                : t("terminal.projects.launch")}
             </button>
           </div>
         </div>
@@ -2054,16 +2079,6 @@ export function SessionsView({
                       sessionId={member.sessionId}
                       agents={agents}
                       theme={theme}
-                      onClosed={() => {
-                        if (
-                          shouldClearSessionSelection(
-                            active.sessionId,
-                            member.sessionId,
-                          )
-                        ) {
-                          onSelect(null);
-                        }
-                      }}
                     />
                   </div>
                 ))}
