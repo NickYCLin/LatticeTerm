@@ -43,6 +43,9 @@ export interface RemoteHostStartRequest {
 }
 
 export interface RemoteHostApi {
+  /** Permanent public ID used for relay connections, available before sharing starts. */
+  deviceId: string | null;
+  deviceIdError: string | null;
   status: RemoteHostStatus | null;
   closedReason: string | null;
   start: (request: RemoteHostStartRequest) => Promise<RemoteHostStatus>;
@@ -55,6 +58,8 @@ async function core() {
 }
 
 export function useRemoteHost(): RemoteHostApi {
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [deviceIdError, setDeviceIdError] = useState<string | null>(null);
   const [status, setStatus] = useState<RemoteHostStatus | null>(null);
   const [closedReason, setClosedReason] = useState<string | null>(null);
   const intentionalStops = useRef(new Set<string>());
@@ -86,6 +91,10 @@ export function useRemoteHost(): RemoteHostApi {
           "remote-host://status",
           (event) => {
             statusRevision.current += 1;
+            if (event.payload.deviceId) {
+              setDeviceId(event.payload.deviceId);
+              setDeviceIdError(null);
+            }
             setStatus(event.payload);
           },
         );
@@ -123,6 +132,22 @@ export function useRemoteHost(): RemoteHostApi {
           hydrating = false;
           closedDuringHydration.clear();
         }
+
+        try {
+          const permanentDeviceId = await invoke<string>(
+            "remote_host_device_id",
+          );
+          if (!cancelled) {
+            setDeviceId(permanentDeviceId);
+            setDeviceIdError(null);
+          }
+        } catch (reason) {
+          if (!cancelled) {
+            setDeviceIdError(
+              reason instanceof Error ? reason.message : String(reason),
+            );
+          }
+        }
       } catch {
         hydrating = false;
         closedDuringHydration.clear();
@@ -144,6 +169,10 @@ export function useRemoteHost(): RemoteHostApi {
       request,
     });
     statusRevision.current += 1;
+    if (started.deviceId) {
+      setDeviceId(started.deviceId);
+      setDeviceIdError(null);
+    }
     setStatus(started);
     return started;
   }, []);
@@ -164,5 +193,13 @@ export function useRemoteHost(): RemoteHostApi {
 
   const clearClosedReason = useCallback(() => setClosedReason(null), []);
 
-  return { status, closedReason, start, stop, clearClosedReason };
+  return {
+    deviceId,
+    deviceIdError,
+    status,
+    closedReason,
+    start,
+    stop,
+    clearClosedReason,
+  };
 }

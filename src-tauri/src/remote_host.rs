@@ -343,6 +343,29 @@ fn emit_status(app: &AppHandle, status: &RemoteHostStatus) {
     let _ = app.emit("remote-host://status", status.clone());
 }
 
+fn identity_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Cannot locate the app data folder: {error}"))?;
+    std::fs::create_dir_all(&base)
+        .map_err(|error| format!("Cannot prepare the app data folder: {error}"))?;
+    Ok(base.join("remote-identity.json"))
+}
+
+fn permanent_device_id_at(path: &Path) -> Result<String, String> {
+    lattice_remote::relay::DeviceIdentity::load_or_create(path)
+        .map(|identity| identity.device_id)
+        .map_err(|error| format!("Cannot load the permanent device identity: {error}"))
+}
+
+/// Returns only the public nine-digit ID. The relay authentication token and
+/// Noise private key never cross the native IPC boundary into the WebView.
+pub async fn device_id(app: &AppHandle, registry: &RemoteHostRegistry) -> Result<String, String> {
+    let _start_guard = registry.start_lock.lock().await;
+    permanent_device_id_at(&identity_path(app)?)
+}
+
 pub async fn start(
     app: AppHandle,
     registry: Arc<RemoteHostRegistry>,
@@ -373,13 +396,9 @@ pub async fn start(
         None
     };
     let identity_path = if relay_mode {
-        let base = app
-            .path()
-            .app_data_dir()
-            .map_err(|error| format!("Cannot locate the app data folder: {error}"))?;
-        std::fs::create_dir_all(&base)
-            .map_err(|error| format!("Cannot prepare the app data folder: {error}"))?;
-        Some(base.join("remote-identity.json"))
+        let path = identity_path(&app)?;
+        permanent_device_id_at(&path)?;
+        Some(path)
     } else {
         None
     };
@@ -654,5 +673,23 @@ mod tests {
             })
             .is_err());
         }
+    }
+
+    #[test]
+    fn permanent_device_id_is_reused_from_the_identity_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "latticeterm-host-identity-{}-{}",
+            std::process::id(),
+            now_seconds()
+        ));
+        let path = directory.join("remote-identity.json");
+        let first = permanent_device_id_at(&path).unwrap();
+        let second = permanent_device_id_at(&path).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 9);
+        assert!(first.bytes().all(|byte| byte.is_ascii_digit()));
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

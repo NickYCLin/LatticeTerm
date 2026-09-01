@@ -1618,6 +1618,14 @@ async fn remote_host_start(
 }
 
 #[tauri::command]
+async fn remote_host_device_id(
+    app: AppHandle,
+    registry: State<'_, Arc<RemoteHostRegistry>>,
+) -> Result<String, String> {
+    crate::remote_host::device_id(&app, registry.inner()).await
+}
+
+#[tauri::command]
 async fn remote_host_stop(
     app: AppHandle,
     registry: State<'_, Arc<RemoteHostRegistry>>,
@@ -2142,6 +2150,7 @@ pub fn run() {
             remote_file_transfer_cancel,
             remote_file_transfer_dismiss,
             remote_file_transfers,
+            remote_host_device_id,
             remote_host_start,
             remote_host_stop,
             remote_host_status,

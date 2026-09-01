@@ -600,6 +600,24 @@
   letter-spacing: 0.1em;
 }
 
+.remote-host-identity {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.remote-host-identity > small,
+.remote-host-identity--loading {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.remote-host-identity--loading {
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
 .remote-host-share-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

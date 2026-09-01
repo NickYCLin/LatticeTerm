@@ -354,6 +354,35 @@ export function RemoteHostDialog({
             </div>
           ) : (
             <form onSubmit={submit}>
+              {host.deviceId ? (
+                <div className="remote-host-identity">
+                  <div className="remote-host-value remote-host-value--device">
+                    <span>{t("remote.host.permanentDeviceId")}</span>
+                    <code>{formatDeviceId(host.deviceId)}</code>
+                    <button
+                      type="button"
+                      className="icon-button icon-button--sm"
+                      onClick={() => void copy("deviceId", host.deviceId ?? "")}
+                      aria-label={t("remote.host.copyDeviceId")}
+                    >
+                      <CopyIcon size={13} />
+                    </button>
+                  </div>
+                  <small>{t("remote.host.permanentDeviceIdHint")}</small>
+                </div>
+              ) : host.deviceIdError ? (
+                <Callout
+                  tone="warn"
+                  title={t("remote.host.deviceIdUnavailable")}
+                >
+                  {host.deviceIdError}
+                </Callout>
+              ) : (
+                <div className="remote-host-identity remote-host-identity--loading">
+                  {t("remote.host.deviceIdLoading")}
+                </div>
+              )}
+
               <div
                 className="remote-host-mode"
                 role="radiogroup"
