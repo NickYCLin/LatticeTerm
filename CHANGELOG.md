@@ -4,6 +4,20 @@
 
 ---
 
+## [0.32.0](https://github.com/NickYCLin/lattice-term/compare/v0.31.0...v0.32.0) (2026-09-01)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** 統一三套 CLI 的專案規則 ([44ff85d](https://github.com/NickYCLin/lattice-term/commit/44ff85d5c0375706edc6d603fd53beff7327da94))
+* **Agent Fleet:** 統一三套 CLI 的專案規則 ([#104](https://github.com/NickYCLin/lattice-term/issues/104)) ([641fd4f](https://github.com/NickYCLin/lattice-term/commit/641fd4f52fb76ffba3c80d5ce8beece939c2015f))
+
+
+### 🛠️ 問題修正
+
+* **Agent Fleet:** 通過共用規則的 Rust lint ([29f23ca](https://github.com/NickYCLin/lattice-term/commit/29f23cab39d573b199e5095582b20fe382524e2f))
+* **工作階段:** 保留已結束的 CLI 畫面 ([3f6ddca](https://github.com/NickYCLin/lattice-term/commit/3f6ddcaac67af6e8575f70d2241896d465b744ff))
+
 ## [0.31.0](https://github.com/NickYCLin/lattice-term/compare/v0.30.1...v0.31.0) (2026-09-01)
 
 
