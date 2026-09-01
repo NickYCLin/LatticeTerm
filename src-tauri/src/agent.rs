@@ -5297,7 +5297,10 @@ session id: 0199aa11-"
         assert_eq!(readiness.observe_input(b"\r"), PromptSubmission::BareEnter);
 
         // Editing keys alone still do not submit anything.
-        assert_eq!(readiness.observe_input(b"\x1b[A\x7f"), PromptSubmission::None);
+        assert_eq!(
+            readiness.observe_input(b"\x1b[A\x7f"),
+            PromptSubmission::None
+        );
         assert_eq!(readiness.observe_input(b"\r"), PromptSubmission::BareEnter);
 
         // Text typed across several reads is remembered until Enter arrives.
@@ -6905,7 +6908,13 @@ notify = ["notify.exe", "turn-ended"]"#,
             AgentLifecycle::Done,
             AgentStateSource::Integration,
         );
-        send_bytes(sink.as_ref(), &registry, &session.session_id, b"review this\r").unwrap();
+        send_bytes(
+            sink.as_ref(),
+            &registry,
+            &session.session_id,
+            b"review this\r",
+        )
+        .unwrap();
         assert_eq!(registry.list()[0].state, AgentLifecycle::Working);
 
         // A terminal that has said nothing for long enough is parked, not busy.
