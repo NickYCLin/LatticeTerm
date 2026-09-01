@@ -4,6 +4,18 @@
 
 ---
 
+## [0.30.1](https://github.com/NickYCLin/lattice-term/compare/v0.30.0...v0.30.1) (2026-09-01)
+
+
+### 🛠️ 問題修正
+
+* 修正工作階段狀態誤判與側邊欄隱藏 ([02b0943](https://github.com/NickYCLin/lattice-term/commit/02b09432f280af8c1a26cf64b27cc6dd307ab91f))
+
+
+### 🎨 介面與視覺調整
+
+* **agent:** 套用 Rust 格式 ([212f4b1](https://github.com/NickYCLin/lattice-term/commit/212f4b1619760c98d961c343568595438708e0e6))
+
 ## [0.30.0](https://github.com/NickYCLin/lattice-term/compare/v0.29.2...v0.30.0) (2026-09-01)
 
 
