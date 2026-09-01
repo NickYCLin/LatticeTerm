@@ -773,12 +773,28 @@ export function SessionsView({
     const workingDirectory = group.members[0]?.workingDirectory ?? "";
     let seedInput: string | null = null;
     if (carryContext) {
-      // Read the CLI you are leaving and hand its conversation to the new one.
+      // Read the CLI being left. Only targets with a documented editable
+      // memory format receive a direct write; all other CLIs get the existing
+      // one-time terminal handoff.
       const sourceId = activeMemberId(group);
+      const source = group.members.find(
+        (member) => member.sessionId === sourceId,
+      );
       try {
         const transcript = await agents.exportTranscript(sourceId);
         if (transcript) {
-          seedInput = t("terminal.handoff.frame", { transcript });
+          let imported = false;
+          try {
+            imported = await agents.importMemoryHandoff({
+              targetDefinitionId: definition.id,
+              workingDirectory,
+              sourceLabel: source?.label ?? "",
+              transcript,
+            });
+          } catch {
+            // A direct-memory failure must not lose the transfer.
+          }
+          if (!imported) seedInput = t("terminal.handoff.frame", { transcript });
         }
       } catch {
         // No transcript available; fall through to a clean launch.
@@ -1937,16 +1953,21 @@ export function SessionsView({
                           tabIndex={-1}
                         >
                           {canCarry ? (
-                            <label className="cli-switch__carry">
-                              <input
-                                type="checkbox"
-                                checked={carryContext}
-                                onChange={(event) =>
-                                  setCarryContext(event.currentTarget.checked)
-                                }
-                              />
-                              <span>{t("terminal.handoff.carry")}</span>
-                            </label>
+                            <>
+                              <label className="cli-switch__carry">
+                                <input
+                                  type="checkbox"
+                                  checked={carryContext}
+                                  onChange={(event) =>
+                                    setCarryContext(event.currentTarget.checked)
+                                  }
+                                />
+                                <span>{t("terminal.handoff.carry")}</span>
+                              </label>
+                              <span className="cli-switch__menu-empty">
+                                {t("terminal.handoff.directOrBrief")}
+                              </span>
+                            </>
                           ) : (
                             <span className="cli-switch__menu-empty">
                               {t("terminal.handoff.unsupported")}

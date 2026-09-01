@@ -779,7 +779,8 @@ export const en: Messages = {
   "terminal.projects.generalChat": "General chats",
   "terminal.cliSummary": "{count} CLIs · {running} running",
   "terminal.empty.quickChat": "Or start chatting without picking a folder:",
-  "terminal.handoff.carry": "Carry the current conversation (let the new CLI continue)",
+  "terminal.handoff.carry": "Bring current memory to the new CLI",
+  "terminal.handoff.directOrBrief": "When its settings can be verified, Claude uses its documented project memory; other CLIs receive a one-time handoff brief.",
   "terminal.handoff.unsupported": "This CLI's conversation can't be exported",
   "terminal.handoff.frame":
     "Below is my full earlier conversation with another AI assistant. Please read it for context, then take over and keep helping me — I'll give you my next instruction shortly.\n\n===== earlier conversation start =====\n{transcript}\n===== earlier conversation end =====",

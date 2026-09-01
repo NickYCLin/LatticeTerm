@@ -749,7 +749,8 @@ export const zhTW = {
   "terminal.projects.generalChat": "一般對話",
   "terminal.cliSummary": "{count} 個 CLI · {running} 個執行中",
   "terminal.empty.quickChat": "或不選資料夾，直接開始對話：",
-  "terminal.handoff.carry": "帶入目前對話（讓新 CLI 接續脈絡）",
+  "terminal.handoff.carry": "將目前記憶帶到新 CLI",
+  "terminal.handoff.directOrBrief": "Claude 設定可確認時會寫入其已知的專案記憶；其他 CLI 會以一次性交接內容帶入。",
   "terminal.handoff.unsupported": "目前這個 CLI 無法匯出對話",
   "terminal.handoff.frame":
     "以下是我和另一個 AI 助理先前的完整對話。請先讀懂脈絡，接著接手繼續協助我，我馬上會給你下一個指示。\n\n===== 先前對話開始 =====\n{transcript}\n===== 先前對話結束 =====",

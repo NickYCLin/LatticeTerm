@@ -533,6 +533,24 @@ fn agent_export_transcript(
     ))
 }
 
+/// Persists an opt-in handoff only when the target CLI has a documented,
+/// editable memory format. A false result tells the frontend to keep using the
+/// one-time terminal handoff instead.
+#[tauri::command]
+fn agent_import_memory_handoff(
+    target_definition_id: String,
+    working_directory: String,
+    source_label: String,
+    transcript: String,
+) -> Result<bool, String> {
+    crate::transcript::import_handoff_into_memory(
+        &target_definition_id,
+        &working_directory,
+        &source_label,
+        &transcript,
+    )
+}
+
 #[tauri::command]
 fn agent_resize(
     session_id: String,
@@ -2031,6 +2049,7 @@ pub fn run() {
             agent_broadcast,
             agent_paste_clipboard_image,
             agent_export_transcript,
+            agent_import_memory_handoff,
             agent_resize,
             agent_disconnect,
             agent_sessions,
