@@ -28,6 +28,7 @@ const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 64;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 const MAX_RESUME_SESSION_ID_BYTES: usize = 512;
+const MAX_ANTIGRAVITY_CAPTURE_LOG_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PLAN_NOTE_BYTES: usize = 200;
 const MAX_BROADCAST_TARGETS: usize = 32;
 pub const MAX_AGENT_SESSIONS: usize = 32;
@@ -603,11 +604,17 @@ impl StagedAgentImages {
 }
 
 enum AgentIntegrationSettings {
+    Antigravity(AntigravityCaptureLog),
     Copilot(CopilotReporterPlugin),
     Gemini(tempfile::NamedTempFile),
     Hermes(HermesReporterPlugin),
     Qwen(tempfile::NamedTempFile),
     OpenCode(OpenCodeReporterPlugin),
+}
+
+struct AntigravityCaptureLog {
+    _directory: tempfile::TempDir,
+    path: PathBuf,
 }
 
 struct CopilotReporterPlugin {
@@ -1080,6 +1087,8 @@ struct ReporterMessage {
     token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     state: Option<AgentLifecycle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     copilot_event: Option<CopilotReporterEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1589,6 +1598,11 @@ impl AgentRegistry {
         let entry = self.get(session_id).ok()?;
         let found = entry.capture.lock().ok()?.feed(bytes)?;
 
+        self.set_captured_session_id(session_id, found)
+    }
+
+    fn set_captured_session_id(&self, session_id: &str, found: String) -> Option<String> {
+        let entry = self.get(session_id).ok()?;
         let mut summary = entry.summary.lock().ok()?;
         if summary.captured_session_id.as_deref() == Some(found.as_str()) {
             return None;
@@ -1633,17 +1647,33 @@ impl AgentRegistry {
         session_id: &str,
         token: &str,
         next: AgentLifecycle,
-    ) -> Result<bool, String> {
+        native_session_id: Option<&str>,
+    ) -> Result<(bool, Option<String>), String> {
         let entry = self.get(session_id)?;
         if entry.report_token.as_deref() != Some(token) {
             return Err("Reporter authentication failed.".to_string());
         }
+        let native_session_id = native_session_id
+            .map(|value| validate_text(value, "Native session ID", MAX_RESUME_SESSION_ID_BYTES))
+            .transpose()?;
         // A real authenticated report proves the child integration is active.
         // From this point onward prompt-control rendering must not guess that
         // the turn completed, even for integrations whose config can be
         // disabled by a higher-precedence user mode.
         entry.integrated_completion.store(true, Ordering::Release);
-        Ok(self.update_state(session_id, next, AgentStateSource::Integration))
+        let state_changed = self.update_state(session_id, next, AgentStateSource::Integration);
+        let captured = if let Some(native_session_id) = native_session_id {
+            let mut summary = entry.summary.lock().map_err(|error| error.to_string())?;
+            if summary.captured_session_id.as_deref() == Some(native_session_id.as_str()) {
+                None
+            } else {
+                summary.captured_session_id = Some(native_session_id.clone());
+                Some(native_session_id)
+            }
+        } else {
+            None
+        };
+        Ok((state_changed, captured))
     }
 
     fn update_reported_usage(
@@ -1937,28 +1967,59 @@ fn handle_report_connection(mut stream: TcpStream, registry: &AgentRegistry, sin
     };
     let update = match (
         message.state,
+        message.native_session_id.as_deref(),
         message.copilot_event.as_ref(),
         message.hermes_event.as_ref(),
         message.usage.as_ref(),
     ) {
-        (Some(state), None, None, None) => registry
-            .update_reported_state(&message.session_id, &message.token, state)
-            .map(|changed| Some(ReporterUpdate::State { changed, state })),
-        (None, Some(event), None, None) => registry
+        (Some(state), native_session_id, None, None, None) => registry
+            .update_reported_state(
+                &message.session_id,
+                &message.token,
+                state,
+                native_session_id,
+            )
+            .map(|(changed, captured)| {
+                Some(ReporterUpdate::State {
+                    changed,
+                    state,
+                    captured,
+                })
+            }),
+        (None, None, Some(event), None, None) => registry
             .update_copilot_event(&message.session_id, &message.token, event)
-            .map(|update| update.map(|(changed, state)| ReporterUpdate::State { changed, state })),
-        (None, None, Some(event), None) => registry
+            .map(|update| {
+                update.map(|(changed, state)| ReporterUpdate::State {
+                    changed,
+                    state,
+                    captured: None,
+                })
+            }),
+        (None, None, None, Some(event), None) => registry
             .update_hermes_event(&message.session_id, &message.token, event)
-            .map(|update| update.map(|(changed, state)| ReporterUpdate::State { changed, state })),
-        (None, None, None, Some(usage)) => registry
+            .map(|update| {
+                update.map(|(changed, state)| ReporterUpdate::State {
+                    changed,
+                    state,
+                    captured: None,
+                })
+            }),
+        (None, None, None, None, Some(usage)) => registry
             .update_reported_usage(&message.session_id, &message.token, usage)
             .map(|usage| usage.map(ReporterUpdate::Usage)),
         _ => Err("Reporter message must contain exactly one update.".to_string()),
     };
     let accepted = match update {
-        Ok(Some(ReporterUpdate::State { changed, state })) => {
+        Ok(Some(ReporterUpdate::State {
+            changed,
+            state,
+            captured,
+        })) => {
             if changed {
                 sink.state(&message.session_id, state, AgentStateSource::Integration);
+            }
+            if let Some(native_session_id) = captured {
+                sink.captured(&message.session_id, &native_session_id);
             }
             true
         }
@@ -1976,6 +2037,7 @@ enum ReporterUpdate {
     State {
         changed: bool,
         state: AgentLifecycle,
+        captured: Option<String>,
     },
     Usage(AgentTokenUsage),
 }
@@ -1985,6 +2047,7 @@ fn send_report_once(
     session_id: &str,
     token: &str,
     state: Option<AgentLifecycle>,
+    native_session_id: Option<&str>,
     copilot_event: Option<&CopilotReporterEvent>,
     hermes_event: Option<&HermesReporterEvent>,
 ) -> Result<(), String> {
@@ -2003,6 +2066,7 @@ fn send_report_once(
         session_id: session_id.to_string(),
         token: token.to_string(),
         state,
+        native_session_id: native_session_id.map(str::to_string),
         copilot_event: copilot_event.cloned(),
         hermes_event: hermes_event.cloned(),
         usage: None,
@@ -2048,6 +2112,7 @@ fn send_usage_once(
         session_id: session_id.to_string(),
         token: token.to_string(),
         state: None,
+        native_session_id: None,
         copilot_event: None,
         hermes_event: None,
         usage: Some(usage.clone()),
@@ -2072,15 +2137,24 @@ fn send_usage_once(
     }
 }
 
-fn send_report(
+fn send_report_with_native_session(
     address: SocketAddr,
     session_id: &str,
     token: &str,
     state: AgentLifecycle,
+    native_session_id: Option<&str>,
 ) -> Result<(), String> {
     let mut last_error = None;
     for attempt in 0..REPORT_RETRIES {
-        match send_report_once(address, session_id, token, Some(state), None, None) {
+        match send_report_once(
+            address,
+            session_id,
+            token,
+            Some(state),
+            native_session_id,
+            None,
+            None,
+        ) {
             Ok(()) => return Ok(()),
             Err(error) => last_error = Some(error),
         }
@@ -2099,7 +2173,7 @@ fn send_copilot_event(
 ) -> Result<(), String> {
     let mut last_error = None;
     for attempt in 0..REPORT_RETRIES {
-        match send_report_once(address, session_id, token, None, Some(event), None) {
+        match send_report_once(address, session_id, token, None, None, Some(event), None) {
             Ok(()) => return Ok(()),
             Err(error) => last_error = Some(error),
         }
@@ -2118,7 +2192,7 @@ fn send_hermes_event(
 ) -> Result<(), String> {
     let mut last_error = None;
     for attempt in 0..REPORT_RETRIES {
-        match send_report_once(address, session_id, token, None, None, Some(event)) {
+        match send_report_once(address, session_id, token, None, None, None, Some(event)) {
             Ok(()) => return Ok(()),
             Err(error) => last_error = Some(error),
         }
@@ -2339,6 +2413,27 @@ fn gemini_reporter_settings_file() -> Result<Option<tempfile::NamedTempFile>, St
     file.flush()
         .map_err(|error| format!("Cannot finish Gemini hook settings: {error}"))?;
     Ok(Some(file))
+}
+
+fn antigravity_capture_log(
+    arguments: &mut Vec<String>,
+) -> Result<Option<AntigravityCaptureLog>, String> {
+    if arguments.iter().any(|argument| {
+        argument == "--log-file" || argument.trim_start().starts_with("--log-file=")
+    }) {
+        return Ok(None);
+    }
+    let directory = tempfile::Builder::new()
+        .prefix("latticeterm-antigravity-")
+        .tempdir()
+        .map_err(|error| format!("Cannot create the Antigravity capture directory: {error}"))?;
+    let path = directory.path().join("agy.log");
+    arguments.insert(0, path.display().to_string());
+    arguments.insert(0, "--log-file".to_string());
+    Ok(Some(AntigravityCaptureLog {
+        _directory: directory,
+        path,
+    }))
 }
 
 #[cfg(windows)]
@@ -2770,21 +2865,31 @@ fn report_claude_hook_from_stdin() -> Result<(), String> {
 #[derive(Debug, Deserialize)]
 struct GeminiHookPayload {
     hook_event_name: String,
+    session_id: String,
     #[serde(default)]
     notification_type: Option<String>,
 }
 
-fn lifecycle_from_gemini_hook_payload(raw: &[u8]) -> Result<Option<AgentLifecycle>, String> {
+fn report_from_gemini_hook_payload(raw: &[u8]) -> Result<Option<(AgentLifecycle, String)>, String> {
     let payload: GeminiHookPayload =
         serde_json::from_slice(raw).map_err(|_| "Gemini hook payload is invalid.".to_string())?;
-    Ok(match payload.hook_event_name.as_str() {
+    let state = match payload.hook_event_name.as_str() {
         "BeforeAgent" => Some(AgentLifecycle::Working),
         "AfterAgent" => Some(AgentLifecycle::Done),
         "Notification" if payload.notification_type.as_deref() == Some("ToolPermission") => {
             Some(AgentLifecycle::NeedsAttention)
         }
         _ => None,
-    })
+    };
+    let Some(state) = state else {
+        return Ok(None);
+    };
+    let native_session_id = validate_text(
+        &payload.session_id,
+        "Gemini session ID",
+        MAX_RESUME_SESSION_ID_BYTES,
+    )?;
+    Ok(Some((state, native_session_id)))
 }
 
 fn report_gemini_hook_from_stdin() -> Result<(), String> {
@@ -2796,8 +2901,8 @@ fn report_gemini_hook_from_stdin() -> Result<(), String> {
     if payload.len() as u64 > MAX_LIFECYCLE_HOOK_BYTES {
         return Err("Gemini hook payload is too large.".to_string());
     }
-    if let Some(state) = lifecycle_from_gemini_hook_payload(&payload)? {
-        report_from_environment(state)?;
+    if let Some((state, native_session_id)) = report_from_gemini_hook_payload(&payload)? {
+        report_from_environment_with_native_session(state, Some(&native_session_id))?;
     }
     Ok(())
 }
@@ -3083,6 +3188,13 @@ fn report_copilot_hook_from_stdin(event: &str) -> Result<(), String> {
 }
 
 fn report_from_environment(state: AgentLifecycle) -> Result<(), String> {
+    report_from_environment_with_native_session(state, None)
+}
+
+fn report_from_environment_with_native_session(
+    state: AgentLifecycle,
+    native_session_id: Option<&str>,
+) -> Result<(), String> {
     let address: SocketAddr = std::env::var("LATTICETERM_AGENT_REPORT_ADDR")
         .map_err(|_| "Agent reporter environment is unavailable.".to_string())?
         .parse()
@@ -3091,7 +3203,7 @@ fn report_from_environment(state: AgentLifecycle) -> Result<(), String> {
         .map_err(|_| "Agent reporter session is unavailable.".to_string())?;
     let token = std::env::var("LATTICETERM_AGENT_REPORT_TOKEN")
         .map_err(|_| "Agent reporter token is unavailable.".to_string())?;
-    send_report(address, &session_id, &token, state)
+    send_report_with_native_session(address, &session_id, &token, state, native_session_id)
 }
 
 fn report_copilot_event_from_environment(event: &CopilotReporterEvent) -> Result<(), String> {
@@ -4268,6 +4380,54 @@ fn is_uuid_shaped(candidate: &[char]) -> bool {
     })
 }
 
+fn find_antigravity_conversation_id(text: &str) -> Option<String> {
+    const MARKER: &str = "Created conversation ";
+    for (index, _) in text.match_indices(MARKER) {
+        let candidate = text[index + MARKER.len()..]
+            .chars()
+            .take(36)
+            .collect::<Vec<_>>();
+        if is_uuid_shaped(&candidate) {
+            return Some(
+                candidate
+                    .into_iter()
+                    .collect::<String>()
+                    .to_ascii_lowercase(),
+            );
+        }
+    }
+    None
+}
+
+fn watch_antigravity_conversation_id(
+    path: PathBuf,
+    session_id: String,
+    registry: Arc<AgentRegistry>,
+    sink: Arc<dyn AgentSink>,
+) {
+    std::thread::spawn(move || loop {
+        if registry.get(&session_id).is_err() {
+            return;
+        }
+        if let Ok(metadata) = std::fs::metadata(&path) {
+            if !metadata.is_file() || metadata.len() > MAX_ANTIGRAVITY_CAPTURE_LOG_BYTES {
+                return;
+            }
+            if let Ok(log) = std::fs::read_to_string(&path) {
+                if let Some(native_session_id) = find_antigravity_conversation_id(&log) {
+                    if let Some(captured) =
+                        registry.set_captured_session_id(&session_id, native_session_id)
+                    {
+                        sink.captured(&session_id, &captured);
+                    }
+                    return;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    });
+}
+
 /// Finds a CLI session id announced in output: a UUID with the word
 /// "session" shortly before it. The word requirement is what keeps this
 /// conservative — agents print plenty of UUIDs that are not session ids.
@@ -4510,6 +4670,14 @@ pub fn launch_with_replay(
             integrated_completion = adapted != arguments;
             arguments = adapted;
         }
+    } else if definition_id == "antigravity" {
+        // Antigravity does not expose a new interactive conversation id on
+        // stdout. Its process-scoped log does, so use an isolated temporary
+        // log unless the caller explicitly selected their own log file.
+        integration_settings = antigravity_capture_log(&mut arguments)
+            .ok()
+            .flatten()
+            .map(AgentIntegrationSettings::Antigravity);
     } else if definition_id == "claude" {
         if let Some(endpoint) = reporter.as_ref() {
             let adapted = claude_reporter_arguments(arguments.clone(), &endpoint.executable);
@@ -4590,6 +4758,11 @@ pub fn launch_with_replay(
     }
     if let Some(settings) = integration_settings.as_ref() {
         match settings {
+            AgentIntegrationSettings::Antigravity(log) => {
+                // The path is already present in --log-file; retaining the
+                // temporary directory keeps it available to the watcher.
+                let _ = &log.path;
+            }
             AgentIntegrationSettings::Copilot(plugin) => {
                 // The path is already present in --plugin-dir; retaining and
                 // touching the TempDir here documents its launch-time lifetime.
@@ -4662,6 +4835,10 @@ pub fn launch_with_replay(
         // fresh announcement in the output still overwrites it.
         captured_session_id: request.resume_session_id.clone(),
     };
+    let antigravity_capture_path = match integration_settings.as_ref() {
+        Some(AgentIntegrationSettings::Antigravity(log)) => Some(log.path.clone()),
+        _ => None,
+    };
     let copilot_activity = matches!(
         integration_settings.as_ref(),
         Some(AgentIntegrationSettings::Copilot(_))
@@ -4706,6 +4883,15 @@ pub fn launch_with_replay(
     if let Err(error) = registry.insert(&summary, Arc::clone(&entry)) {
         let _ = terminate_agent_entry(entry.as_ref());
         return Err(error);
+    }
+
+    if let Some(path) = antigravity_capture_path {
+        watch_antigravity_conversation_id(
+            path,
+            session_id.clone(),
+            Arc::clone(&registry),
+            Arc::clone(&sink),
+        );
     }
 
     if let Some(bytes) = restored_output.as_deref().filter(|bytes| !bytes.is_empty()) {
@@ -5038,6 +5224,34 @@ mod tests {
                 .as_deref(),
             Some("0199aa11-bb22-4c33-8d44-ee55ff667788")
         );
+    }
+
+    #[test]
+    fn antigravity_log_capture_requires_the_created_conversation_record() {
+        assert_eq!(
+            find_antigravity_conversation_id(
+                "I0901 server.go:1153] Created conversation 0199AA11-BB22-4C33-8D44-EE55FF667788"
+            )
+            .as_deref(),
+            Some("0199aa11-bb22-4c33-8d44-ee55ff667788")
+        );
+        assert!(find_antigravity_conversation_id(
+            "Loading project 0199aa11-bb22-4c33-8d44-ee55ff667788"
+        )
+        .is_none());
+        assert!(find_antigravity_conversation_id("Created conversation not-a-uuid").is_none());
+    }
+
+    #[test]
+    fn antigravity_capture_log_preserves_an_explicit_log_file() {
+        let mut arguments = vec!["--model".to_string(), "auto".to_string()];
+        let log = antigravity_capture_log(&mut arguments).unwrap().unwrap();
+        assert_eq!(arguments[0], "--log-file");
+        assert_eq!(PathBuf::from(&arguments[1]), log.path);
+
+        let mut explicit = vec!["--log-file=chosen.log".to_string()];
+        assert!(antigravity_capture_log(&mut explicit).unwrap().is_none());
+        assert_eq!(explicit, vec!["--log-file=chosen.log"]);
     }
 
     #[test]
@@ -6251,24 +6465,34 @@ notify = ["notify.exe", "turn-ended"]"#,
 
     #[test]
     fn gemini_hooks_distinguish_work_done_and_permission() {
-        let state = |payload: &str| lifecycle_from_gemini_hook_payload(payload.as_bytes()).unwrap();
+        let state = |payload: &str| report_from_gemini_hook_payload(payload.as_bytes()).unwrap();
         assert_eq!(
-            state(r#"{"hook_event_name":"BeforeAgent"}"#),
-            Some(AgentLifecycle::Working)
+            state(r#"{"hook_event_name":"BeforeAgent","session_id":"gemini-1"}"#),
+            Some((AgentLifecycle::Working, "gemini-1".to_string()))
         );
         assert_eq!(
-            state(r#"{"hook_event_name":"AfterAgent"}"#),
-            Some(AgentLifecycle::Done)
+            state(r#"{"hook_event_name":"AfterAgent","session_id":"gemini-1"}"#),
+            Some((AgentLifecycle::Done, "gemini-1".to_string()))
         );
         assert_eq!(
-            state(r#"{"hook_event_name":"Notification","notification_type":"ToolPermission"}"#),
-            Some(AgentLifecycle::NeedsAttention)
+            state(
+                r#"{"hook_event_name":"Notification","notification_type":"ToolPermission","session_id":"gemini-1"}"#
+            ),
+            Some((AgentLifecycle::NeedsAttention, "gemini-1".to_string()))
         );
         assert_eq!(
-            state(r#"{"hook_event_name":"Notification","notification_type":"Info"}"#),
+            state(
+                r#"{"hook_event_name":"Notification","notification_type":"Info","session_id":"gemini-1"}"#
+            ),
             None
         );
-        assert!(lifecycle_from_gemini_hook_payload(b"not-json").is_err());
+        assert!(report_from_gemini_hook_payload(b"not-json").is_err());
+        assert!(report_from_gemini_hook_payload(br#"{"hook_event_name":"BeforeAgent"}"#).is_err());
+        let oversized = serde_json::json!({
+            "hook_event_name": "BeforeAgent",
+            "session_id": "x".repeat(MAX_RESUME_SESSION_ID_BYTES + 1)
+        });
+        assert!(report_from_gemini_hook_payload(oversized.to_string().as_bytes()).is_err());
     }
 
     #[test]
@@ -6959,18 +7183,35 @@ notify = ["notify.exe", "turn-ended"]"#,
         let entry = registry.get(&session.session_id).unwrap();
         assert!(!entry.integrated_completion.load(Ordering::Acquire));
 
-        assert!(send_report(
+        assert!(send_report_with_native_session(
             address,
             &session.session_id,
             "wrong-token",
             AgentLifecycle::NeedsAttention,
+            None,
+        )
+        .is_err());
+        assert!(send_report_with_native_session(
+            address,
+            &session.session_id,
+            "wrong-token",
+            AgentLifecycle::NeedsAttention,
+            Some("must-not-be-captured"),
         )
         .is_err());
         // A newly opened CLI is waiting for input, not processing a task.
         assert_eq!(registry.list()[0].state, AgentLifecycle::Idle);
+        assert!(registry.list()[0].captured_session_id.is_none());
         assert!(!entry.integrated_completion.load(Ordering::Acquire));
 
-        send_report(address, &session.session_id, &token, AgentLifecycle::Done).unwrap();
+        send_report_with_native_session(
+            address,
+            &session.session_id,
+            &token,
+            AgentLifecycle::Done,
+            None,
+        )
+        .unwrap();
         assert!(entry.integrated_completion.load(Ordering::Acquire));
         let summary = &registry.list()[0];
         assert_eq!(summary.state, AgentLifecycle::Done);
@@ -6981,6 +7222,23 @@ notify = ["notify.exe", "turn-ended"]"#,
             AgentStateSource::Heuristic,
         ));
         assert_eq!(registry.list()[0].state, AgentLifecycle::Done);
+
+        send_report_with_native_session(
+            address,
+            &session.session_id,
+            &token,
+            AgentLifecycle::Done,
+            Some("gemini-native-session"),
+        )
+        .unwrap();
+        assert_eq!(
+            registry.list()[0].captured_session_id.as_deref(),
+            Some("gemini-native-session")
+        );
+        assert!(collector.captured.lock().unwrap().iter().any(
+            |(reported_session_id, native_session_id)| reported_session_id == &session.session_id
+                && native_session_id == "gemini-native-session"
+        ));
 
         send_bytes(sink.as_ref(), &registry, &session.session_id, b"\x1b[1;1R").unwrap();
         assert_eq!(registry.list()[0].state, AgentLifecycle::Done);
@@ -6995,7 +7253,14 @@ notify = ["notify.exe", "turn-ended"]"#,
         let summary = &registry.list()[0];
         assert_eq!(summary.state, AgentLifecycle::Working);
         assert_eq!(summary.state_source, AgentStateSource::Heuristic);
-        send_report(address, &session.session_id, &token, AgentLifecycle::Done).unwrap();
+        send_report_with_native_session(
+            address,
+            &session.session_id,
+            &token,
+            AgentLifecycle::Done,
+            None,
+        )
+        .unwrap();
         let summary = &registry.list()[0];
         assert_eq!(summary.state, AgentLifecycle::Done);
         assert_eq!(summary.state_source, AgentStateSource::Integration);
