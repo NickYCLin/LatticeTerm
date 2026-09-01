@@ -4,6 +4,13 @@
 
 ---
 
+## [0.31.0](https://github.com/NickYCLin/lattice-term/compare/v0.30.1...v0.31.0) (2026-09-01)
+
+
+### 🚀 新增功能
+
+* **工作階段:** 支援新 CLI 記憶交接 ([#102](https://github.com/NickYCLin/lattice-term/issues/102)) ([d1c0837](https://github.com/NickYCLin/lattice-term/commit/d1c08370fdfb286e7520ac777cbbce0a0e2af7ea))
+
 ## [0.30.1](https://github.com/NickYCLin/lattice-term/compare/v0.30.0...v0.30.1) (2026-09-01)
 
 
