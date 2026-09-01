@@ -4,6 +4,7 @@ import type {
   WorkspaceTransferFile,
 } from "../../app/workspaceTransfer";
 import { useI18n } from "../../i18n/context";
+import { displayPath } from "../../app/displayPath";
 import { Callout } from "../common/Callout";
 import { ImportIcon } from "../icons";
 import { useModalFocus } from "../overlays/modalFocus";
@@ -110,8 +111,8 @@ export function WorkspaceImportDialog({
             {groups.map((group) => (
               <div className="workspace-import__item" key={group.groupKey}>
                 <strong className="truncate">{group.groupLabel}</strong>
-                <span className="mono truncate" title={group.workingDirectory}>
-                  {group.workingDirectory}
+                <span className="mono truncate" title={displayPath(group.workingDirectory)}>
+                  {displayPath(group.workingDirectory)}
                 </span>
                 <small>
                   {group.items.map((item) => item.label).join(" · ")}

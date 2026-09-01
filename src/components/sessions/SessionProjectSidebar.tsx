@@ -14,6 +14,7 @@ import {
   type SessionSidebarStatus,
 } from "../../app/sessionStatus";
 import { fuzzySearch } from "../../app/fuzzySearch";
+import { displayPath } from "../../app/displayPath";
 import {
   sessionSidebarDropPlacement,
   sessionSidebarChildren,
@@ -223,7 +224,9 @@ export function SessionProjectSidebar({
                 id: `project:${project.projectId}`,
                 kind: "project",
                 label: project.label,
-                hint: project.workingDirectory ?? project.label,
+                hint: project.workingDirectory
+                  ? displayPath(project.workingDirectory)
+                  : project.label,
                 nodeId: firstSession.nodeId,
                 sessionId: firstSession.sessionId,
               },
@@ -243,7 +246,10 @@ export function SessionProjectSidebar({
         return [
           ...projectResult.map((result) => ({
             value: result,
-            texts: [project.label, project.workingDirectory ?? ""],
+            texts: [
+              project.label,
+              project.workingDirectory ? displayPath(project.workingDirectory) : "",
+            ],
           })),
           ...sessionResults.map((result, index) => ({
             value: result,
@@ -251,7 +257,7 @@ export function SessionProjectSidebar({
               result.label,
               project.sessions[index]?.searchText ?? "",
               project.label,
-              project.workingDirectory ?? "",
+              project.workingDirectory ? displayPath(project.workingDirectory) : "",
             ],
           })),
         ];
@@ -655,7 +661,11 @@ export function SessionProjectSidebar({
             type="button"
             className="session-tree__project-select"
             onClick={() => onToggleFolder(project.nodeId)}
-            title={project.workingDirectory ?? project.label}
+            title={
+              project.workingDirectory
+                ? displayPath(project.workingDirectory)
+                : project.label
+            }
             aria-expanded={!collapsed}
           >
             <FolderIcon size={13} />

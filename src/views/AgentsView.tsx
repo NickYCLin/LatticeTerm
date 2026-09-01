@@ -7,6 +7,7 @@ import type {
 } from "../app/useAgentSessions";
 import { agentCatalogForDisplay } from "../app/useAgentSessions";
 import { copyTextToClipboard } from "../app/clipboardText";
+import { displayPath } from "../app/displayPath";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import {
   MAX_AGENT_BROADCAST_TARGETS,
@@ -618,9 +619,11 @@ export function AgentsView({
                     )}
                   </span>
                 </div>
-                <code>{definition.executable}</code>
+                <code>{displayPath(definition.executable)}</code>
                 <span className="agent-card__path">
-                  {definition.installedPath ?? t("agents.path.missing")}
+                  {definition.installedPath
+                    ? displayPath(definition.installedPath)
+                    : t("agents.path.missing")}
                 </span>
                 {definition.installed && (
                   <div className="agent-card__account">
@@ -806,7 +809,7 @@ export function AgentsView({
           <Callout tone="warn" title={t("agents.workspace.recoveryTitle")}>
             {t("agents.workspace.recoveryBody", {
               detail: agents.planRecovery.reason,
-              path: agents.planRecovery.backupPath,
+              path: displayPath(agents.planRecovery.backupPath),
             })}
           </Callout>
         )}
@@ -857,7 +860,7 @@ export function AgentsView({
                   {plan.note && (
                     <span className="agent-plan-row__note">{plan.note}</span>
                   )}
-                  <span className="mono">{plan.workingDirectory}</span>
+                  <span className="mono">{displayPath(plan.workingDirectory)}</span>
                   <small>
                     {plan.resumeSessionId
                       ? t("agents.workspace.nativeResumeCommand", {
@@ -1017,7 +1020,7 @@ export function AgentsView({
                 </span>
                 <span className="agents-broadcast__target-label">
                   <strong>{session.label}</strong>
-                  <span className="mono">{session.workingDirectory}</span>
+                  <span className="mono">{displayPath(session.workingDirectory)}</span>
                 </span>
               </label>
             ))}
@@ -1086,7 +1089,7 @@ export function AgentsView({
                 />
                 <div className="agent-session-row__main">
                   <strong>{session.label}</strong>
-                  <span className="mono">{session.workingDirectory}</span>
+                  <span className="mono">{displayPath(session.workingDirectory)}</span>
                   {session.tokenUsage && (
                     <span
                       className="agent-token-usage"

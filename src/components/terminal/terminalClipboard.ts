@@ -70,8 +70,12 @@ export function attachTerminalClipboard(
   });
 
   // Callers attach after `terminal.open()`, so the element exists here.
+  // Register in capture phase: xterm registers its own bubble-phase handler
+  // while opening the terminal. Letting both see the right click prepares
+  // xterm's native clipboard path as well as ours, which can paste twice.
   terminal.element?.addEventListener("contextmenu", (event) => {
     event.preventDefault();
+    event.stopImmediatePropagation();
     if (terminal.hasSelection()) {
       const selection = terminal.getSelection();
       if (selection) {
@@ -86,7 +90,7 @@ export function attachTerminalClipboard(
         options.onImagePaste,
       );
     }
-  });
+  }, true);
 }
 
 async function writeClipboardText(

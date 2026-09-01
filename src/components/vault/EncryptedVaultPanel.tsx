@@ -9,6 +9,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import type { VaultApi } from "../../app/useVault";
+import { displayPath } from "../../app/displayPath";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { Chip } from "../common/Badge";
@@ -287,7 +288,7 @@ export function EncryptedVaultPanel({ vault }: { vault: VaultApi }) {
       </div>
 
       <p className="text-faint mono" style={{ fontSize: "var(--text-2xs)", margin: 0 }}>
-        {status.path}
+        {displayPath(status.path)}
       </p>
     </div>
   );

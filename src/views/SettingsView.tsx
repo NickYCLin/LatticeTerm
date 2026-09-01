@@ -16,6 +16,7 @@ import { themeCatalog } from "../app/themes";
 import type { RuntimeState } from "../app/useRuntimeSummary";
 import type { StorageState } from "../app/useStorageStatus";
 import { useI18n } from "../i18n/context";
+import { displayPath } from "../app/displayPath";
 import { localeCatalog, type Locale } from "../i18n/catalog";
 import type { MessageKey } from "../i18n/context";
 import { Chip } from "../components/common/Badge";
@@ -360,7 +361,7 @@ export function SettingsView({
         {storage.status?.recoveredReason && (
           <Callout tone="warn" title={t("settings.storage.recovered.title")}>
             {t("settings.storage.recovered.body", {
-              path: storage.status.recoveredBackupPath ?? "",
+              path: displayPath(storage.status.recoveredBackupPath ?? ""),
               reason: storage.status.recoveredReason,
             })}
           </Callout>

@@ -10,6 +10,7 @@ import { useI18n } from "../../i18n/context";
 import { Kbd } from "../common/Callout";
 import type { StorageState } from "../../app/useStorageStatus";
 import type { AppUpdater } from "../../app/useAppUpdater";
+import { displayPath } from "../../app/displayPath";
 
 function updaterLabel(updater: AppUpdater, t: ReturnType<typeof useI18n>["t"]) {
   switch (updater.status) {
@@ -68,7 +69,7 @@ export function StatusBar({
 
       <span
         className="statusbar__item statusbar__item--quiet"
-        title={storage.status?.path}
+        title={storage.status?.path ? displayPath(storage.status.path) : undefined}
       >
         {storage.mode === "persistent"
           ? t("status.savedLocally")
