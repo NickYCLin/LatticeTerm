@@ -646,6 +646,9 @@ struct OpenCodeReporterPlugin {
 struct StartupReadiness {
     saw_output: bool,
     prompt_ready: bool,
+    interactive_gate_open: bool,
+    cancelled: bool,
+    restarted_at: Option<Instant>,
     last_output_at: Option<Instant>,
     control_window: Vec<u8>,
 }
@@ -662,13 +665,43 @@ impl StartupReadiness {
         {
             self.prompt_ready = true;
         }
+        // Codex enables bracketed paste before it finishes deciding whether a
+        // new project needs an explicit trust decision. Treating that first
+        // mode switch as the chat prompt can paste startup instructions into
+        // the selector; Codex then exits successfully instead of opening the
+        // session. Keep the seed behind the dialog until the user submits a
+        // choice and fresh prompt output has settled.
+        if self
+            .control_window
+            .windows(b"Do you trust the contents of this directory?".len())
+            .any(|window| window == b"Do you trust the contents of this directory?")
+        {
+            self.interactive_gate_open = true;
+            self.prompt_ready = false;
+        }
         if self.control_window.len() > STARTUP_CONTROL_WINDOW_BYTES {
             let overflow = self.control_window.len() - STARTUP_CONTROL_WINDOW_BYTES;
             self.control_window.drain(..overflow);
         }
     }
 
+    fn observe_input(&mut self, bytes: &[u8], now: Instant) {
+        if !self.interactive_gate_open || !prompt_input_shape(bytes).1 {
+            return;
+        }
+        self.interactive_gate_open = false;
+        self.saw_output = false;
+        self.prompt_ready = false;
+        self.restarted_at = Some(now);
+        self.last_output_at = None;
+        self.control_window.clear();
+    }
+
     fn should_deliver(&self, started_at: Instant, now: Instant) -> bool {
+        if self.cancelled || self.interactive_gate_open {
+            return false;
+        }
+        let started_at = self.restarted_at.unwrap_or(started_at);
         let elapsed = now.saturating_duration_since(started_at);
         if elapsed >= STARTUP_SEED_TIMEOUT {
             return true;
@@ -678,7 +711,7 @@ impl StartupReadiness {
         };
         let quiet_for = now.saturating_duration_since(last_output_at);
         if self.prompt_ready {
-            quiet_for >= STARTUP_SEED_PROMPT_SETTLE
+            elapsed >= STARTUP_SEED_MIN_WAIT && quiet_for >= STARTUP_SEED_PROMPT_SETTLE
         } else {
             self.saw_output
                 && elapsed >= STARTUP_SEED_MIN_WAIT
@@ -687,6 +720,12 @@ impl StartupReadiness {
     }
 
     fn wait_duration(&self, started_at: Instant, now: Instant) -> Duration {
+        if self.interactive_gate_open {
+            // Output, user input, or process cancellation wakes the condition
+            // variable. The finite wait is only a guard against a lost wakeup.
+            return Duration::from_secs(60);
+        }
+        let started_at = self.restarted_at.unwrap_or(started_at);
         let until_timeout =
             STARTUP_SEED_TIMEOUT.saturating_sub(now.saturating_duration_since(started_at));
         if let Some(last_output_at) = self.last_output_at {
@@ -697,11 +736,8 @@ impl StartupReadiness {
             };
             let until_quiet =
                 quiet_target.saturating_sub(now.saturating_duration_since(last_output_at));
-            let until_min_wait = if self.prompt_ready {
-                Duration::ZERO
-            } else {
-                STARTUP_SEED_MIN_WAIT.saturating_sub(now.saturating_duration_since(started_at))
-            };
+            let until_min_wait =
+                STARTUP_SEED_MIN_WAIT.saturating_sub(now.saturating_duration_since(started_at));
             return until_timeout
                 .min(until_quiet.max(until_min_wait))
                 .max(Duration::from_millis(1));
@@ -869,18 +905,35 @@ impl StartupGate {
         }
     }
 
-    fn wait_until_ready(&self, started_at: Instant) {
+    fn observe_input(&self, bytes: &[u8]) {
+        if let Ok(mut readiness) = self.readiness.lock() {
+            readiness.observe_input(bytes, Instant::now());
+            self.changed.notify_all();
+        }
+    }
+
+    fn cancel(&self) {
+        if let Ok(mut readiness) = self.readiness.lock() {
+            readiness.cancelled = true;
+            self.changed.notify_all();
+        }
+    }
+
+    fn wait_until_ready(&self, started_at: Instant) -> bool {
         let Ok(mut readiness) = self.readiness.lock() else {
-            return;
+            return false;
         };
         loop {
+            if readiness.cancelled {
+                return false;
+            }
             let now = Instant::now();
             if readiness.should_deliver(started_at, now) {
-                return;
+                return true;
             }
             let duration = readiness.wait_duration(started_at, now);
             let Ok((next, _)) = self.changed.wait_timeout(readiness, duration) else {
-                return;
+                return false;
             };
             readiness = next;
         }
@@ -1494,6 +1547,7 @@ impl AgentRegistry {
 
     fn remove(&self, session_id: &str) -> Option<Arc<AgentSessionEntry>> {
         let entry = self.sessions.lock().ok()?.remove(session_id)?;
+        entry.startup_gate.cancel();
         if let Ok(mut images) = entry.staged_images.lock() {
             images.clear();
         }
@@ -2329,6 +2383,12 @@ fn claude_reporter_arguments(
         "hooks": {
             "UserPromptSubmit": [hook(None)],
             "PermissionRequest": [hook(None)],
+            "PermissionDenied": [hook(None)],
+            "PostToolUse": [hook(None)],
+            "PostToolUseFailure": [hook(None)],
+            "PostToolBatch": [hook(None)],
+            "PreCompact": [hook(None)],
+            "PostCompact": [hook(None)],
             "Elicitation": [hook(None)],
             "Stop": [hook(None)],
             "StopFailure": [hook(None)],
@@ -2824,6 +2884,8 @@ fn lifecycle_from_claude_hook_payload(raw: &[u8]) -> Result<Option<AgentLifecycl
         serde_json::from_slice(raw).map_err(|_| "Claude hook payload is invalid.".to_string())?;
     let state = match payload.hook_event_name.as_str() {
         "UserPromptSubmit" => Some(AgentLifecycle::Working),
+        "PermissionDenied" | "PostToolUse" | "PostToolUseFailure" | "PostToolBatch"
+        | "PreCompact" | "PostCompact" => Some(AgentLifecycle::Working),
         "PermissionRequest" | "Elicitation" | "StopFailure" => Some(AgentLifecycle::NeedsAttention),
         "Stop" if !payload.background_tasks.is_empty() => Some(AgentLifecycle::Working),
         "Stop" if !payload.session_crons.is_empty() => Some(AgentLifecycle::Idle),
@@ -4981,7 +5043,9 @@ pub fn launch_with_replay(
             // Each terminal starts at a different speed, especially when the
             // user launches several CLIs together. Wait for this PTY to enable
             // bracketed paste or for its own startup output to settle.
-            seed_entry.startup_gate.wait_until_ready(launched_at);
+            if !seed_entry.startup_gate.wait_until_ready(launched_at) {
+                return;
+            }
             let payload = startup_seed_payload(&seed);
             if let Ok(entry) = seed_registry.get(&seed_id) {
                 if let Ok(mut completion) = entry.completion_gate.lock() {
@@ -5030,6 +5094,7 @@ fn send_bytes(
     bytes: &[u8],
 ) -> Result<(), String> {
     let entry = registry.get(session_id)?;
+    entry.startup_gate.observe_input(bytes);
     registry.mark_model_input(session_id, bytes);
     let mut writer = entry.writer.lock().map_err(|error| error.to_string())?;
     writer
@@ -5468,14 +5533,43 @@ session id: 0199aa11-"
             started_at,
             prompt_at + STARTUP_SEED_PROMPT_SETTLE - Duration::from_millis(1)
         ));
-        assert!(fast.should_deliver(started_at, prompt_at + STARTUP_SEED_PROMPT_SETTLE));
+        assert!(!fast.should_deliver(started_at, prompt_at + STARTUP_SEED_PROMPT_SETTLE));
+        assert!(fast.should_deliver(started_at, started_at + STARTUP_SEED_MIN_WAIT));
         assert!(!slow.should_deliver(started_at, started_at + STARTUP_SEED_MIN_WAIT));
 
         let mut noisy = StartupReadiness::default();
         let mut prompt_then_screen = b"\x1b[?2004h".to_vec();
         prompt_then_screen.extend(vec![b'x'; STARTUP_CONTROL_WINDOW_BYTES * 2]);
         noisy.observe(&prompt_then_screen, prompt_at);
-        assert!(noisy.should_deliver(started_at, prompt_at + STARTUP_SEED_PROMPT_SETTLE));
+        assert!(noisy.should_deliver(started_at, started_at + STARTUP_SEED_MIN_WAIT));
+    }
+
+    #[test]
+    fn startup_seed_waits_for_a_folder_trust_decision() {
+        let started_at = Instant::now();
+        let mut readiness = StartupReadiness::default();
+        readiness.observe(b"\x1b[?2004h", started_at + Duration::from_millis(100));
+        readiness.observe(
+            b"Do you trust the contents of this directory?",
+            started_at + Duration::from_millis(400),
+        );
+
+        assert!(!readiness.should_deliver(
+            started_at,
+            started_at + STARTUP_SEED_TIMEOUT + Duration::from_secs(1)
+        ));
+
+        let answered_at = started_at + Duration::from_secs(22);
+        readiness.observe_input(b"\r", answered_at);
+        readiness.observe(
+            b"Ask Codex to do anything",
+            answered_at + Duration::from_millis(100),
+        );
+        assert!(!readiness.should_deliver(
+            started_at,
+            answered_at + STARTUP_SEED_MIN_WAIT - Duration::from_millis(1)
+        ));
+        assert!(readiness.should_deliver(started_at, answered_at + STARTUP_SEED_MIN_WAIT));
     }
 
     #[test]
@@ -6404,6 +6498,16 @@ notify = ["notify.exe", "turn-ended"]"#,
             r"C:\Program Files\LatticeTerm\lattice-term.exe"
         );
         assert_eq!(stop["args"], serde_json::json!(["agent-claude-hook"]));
+        for event in [
+            "PermissionDenied",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PostToolBatch",
+            "PreCompact",
+            "PostCompact",
+        ] {
+            assert_eq!(settings["hooks"][event][0]["hooks"][0], *stop);
+        }
         assert_eq!(&arguments[2..], &["--model", "sonnet"]);
 
         let explicit = vec!["--settings=/tmp/claude.json".to_string()];
@@ -6444,6 +6548,19 @@ notify = ["notify.exe", "turn-ended"]"#,
             state(r#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#),
             None
         );
+        for event in [
+            "PermissionDenied",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PostToolBatch",
+            "PreCompact",
+            "PostCompact",
+        ] {
+            assert_eq!(
+                state(&format!(r#"{{"hook_event_name":"{event}"}}"#)),
+                Some(AgentLifecycle::Working)
+            );
+        }
         assert!(lifecycle_from_claude_hook_payload(b"not-json").is_err());
     }
 
