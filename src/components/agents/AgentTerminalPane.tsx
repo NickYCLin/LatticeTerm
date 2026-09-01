@@ -19,21 +19,17 @@ export function AgentTerminalPane({
   sessionId,
   agents,
   theme,
-  onClosed,
 }: {
   sessionId: string;
   agents: AgentApi;
   theme: ThemeId;
-  onClosed: (reason: string) => void;
 }) {
   const { t } = useI18n();
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const agentsRef = useRef(agents);
-  const closedRef = useRef(onClosed);
   const errorRef = useRef(t("agents.terminal.inputFailed"));
   agentsRef.current = agents;
-  closedRef.current = onClosed;
   errorRef.current = t("agents.terminal.inputFailed");
 
   useEffect(() => {
@@ -133,10 +129,17 @@ export function AgentTerminalPane({
     const stopData = agentsRef.current.onData(sessionId, (bytes) => {
       terminal.write(bytes);
     });
-    const stopClosed = agentsRef.current.onClosed(sessionId, (reason) => {
-      terminal.write(`\r\n\x1b[2m— ${reason} —\x1b[0m\r\n`);
-      closedRef.current(reason);
-    });
+    const showClosed = (reason: string) => {
+      terminal.options.disableStdin = true;
+      terminal.write(
+        `\r\n\x1b[2m— ${t("terminal.closed", { reason })} —\x1b[0m\r\n`,
+      );
+    };
+    const initialClosedReason = agentsRef.current.sessions.find(
+      (session) => session.sessionId === sessionId,
+    )?.closedReason;
+    if (initialClosedReason) showClosed(initialClosedReason);
+    const stopClosed = agentsRef.current.onClosed(sessionId, showClosed);
 
     const observer = new ResizeObserver(scheduleFit);
     observer.observe(host);

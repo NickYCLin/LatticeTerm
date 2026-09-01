@@ -728,6 +728,7 @@ export const en: Messages = {
   "terminal.projects.launchTitle": "Launch a CLI in this project",
   "terminal.projects.directory": "Project folder",
   "terminal.projects.cli": "Choose a CLI to launch",
+  "terminal.projects.launch": "Launch session",
   "terminal.projects.launching": "Launching…",
   "terminal.projects.launchFailed": "This project could not be launched",
   "terminal.projects.addFolder": "Create custom folder",
@@ -798,6 +799,7 @@ export const en: Messages = {
   "terminal.empty.body":
     "Choose a local project folder and launch a CLI, or pick a host to open its session here.",
   "terminal.sessionClosed.title": "Session disconnected",
+  "terminal.sessionEnded.title": "Session ended",
   "terminal.sessionClosed.body": "{name} stopped unexpectedly: {reason}",
 
   // AI Agent Fleet --------------------------------------------------------

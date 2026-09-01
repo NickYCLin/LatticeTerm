@@ -81,6 +81,23 @@ describe("workspace session persistence", () => {
     expect(target.values.has(WORKSPACE_SESSIONS_KEY)).toBe(true);
   });
 
+  it("does not restore a CLI that already exited but is kept for inspection", () => {
+    const snapshot = snapshotLiveWorkspaceSessions(
+      [
+        agent({
+          state: "done",
+          processId: null,
+          closedReason: "Process exited: ExitStatus { code: 0, signal: None }",
+        }),
+      ],
+      [],
+      "agent-live-1",
+    );
+
+    expect(snapshot.sessions).toEqual([]);
+    expect(snapshot.active).toBeNull();
+  });
+
   it("keeps sessions whose automatic restoration did not succeed", () => {
     const live = snapshotLiveWorkspaceSessions(
       [agent({ sessionId: "agent-new", groupId: "group-new" })],

@@ -1877,10 +1877,10 @@
   width: 100%;
 }
 
-.project-launcher__status {
-  margin-left: auto;
-  color: var(--text-faint);
-  font-size: var(--text-2xs);
+.project-launcher__cli.is-selected {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--text);
 }
 
 .terminal-project-workspace {

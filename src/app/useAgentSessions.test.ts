@@ -9,6 +9,7 @@ import {
   buildAgentBroadcastPayload,
   decodeAgentPayload,
   encodeAgentPayload,
+  markAgentSessionClosed,
   moveAgentLaunchPlan,
   reconcileAgentOutputSnapshot,
   splitAgentArguments,
@@ -21,12 +22,15 @@ describe("agent session transport", () => {
     const guard = new AgentLaunchRaceGuard();
     const attempt = guard.begin();
 
+    expect(guard.hasPendingAttempt()).toBe(true);
+
     guard.observeClosed("agent-fast", "Process exited: code 0");
 
     expect(attempt.finish().closed.get("agent-fast")).toBe(
       "Process exited: code 0",
     );
     expect(attempt.finish().closed.size).toBe(0);
+    expect(guard.hasPendingAttempt()).toBe(false);
   });
 
   it("keeps concurrent launch tombstones until the matching attempt settles", () => {
@@ -370,5 +374,37 @@ describe("agent session transport", () => {
     expect(moved.map((plan) => plan.id)).toEqual(["two", "one", "three"]);
     expect(plans.map((plan) => plan.id)).toEqual(["one", "two", "three"]);
     expect(moveAgentLaunchPlan(plans, "one", -1)).toBe(plans);
+  });
+
+  it("keeps an exited CLI visible with a read-only close reason", () => {
+    const session = {
+      sessionId: "agent-ended",
+      groupId: "agent-ended",
+      groupLabel: "OpenAI Codex",
+      definitionId: "codex",
+      label: "OpenAI Codex",
+      model: "gpt-5.6-terra",
+      executable: "codex",
+      launchArguments: [],
+      workingDirectory: "D:/project/demo",
+      state: "idle" as const,
+      stateSource: "heuristic" as const,
+      processId: 42,
+      tokenUsage: null,
+      capturedSessionId: null,
+    };
+
+    const result = markAgentSessionClosed(
+      [session],
+      session.sessionId,
+      "Process exited: ExitStatus { code: 0, signal: None }",
+    );
+
+    expect(result[0]).toEqual({
+      ...session,
+      state: "done",
+      processId: null,
+      closedReason: "Process exited: ExitStatus { code: 0, signal: None }",
+    });
   });
 });

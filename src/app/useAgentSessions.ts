@@ -109,6 +109,8 @@ export interface AgentSessionSummary {
   tokenUsage: AgentTokenUsage | null;
   /** The CLI's own session id, once its output announced one. */
   capturedSessionId: string | null;
+  /** Frontend-only close state retained so terminal output does not disappear. */
+  closedReason?: string | null;
 }
 
 export interface AgentLaunchRequest {
@@ -228,6 +230,23 @@ export function applyAgentUsageEvent(
   );
 }
 
+export function markAgentSessionClosed(
+  sessions: AgentSessionSummary[],
+  sessionId: string,
+  reason: string,
+): AgentSessionSummary[] {
+  return sessions.map((session) =>
+    session.sessionId === sessionId
+      ? {
+          ...session,
+          state: "done",
+          processId: null,
+          closedReason: reason,
+        }
+      : session,
+  );
+}
+
 const FALLBACK_CATALOG_SOURCE: [string, string, string, boolean][] = [
   ["codex", "OpenAI Codex", "codex", true],
   ["claude", "Claude Code", "claude", true],
@@ -327,6 +346,10 @@ function cloneAgentLaunchEvents(
  */
 export class AgentLaunchRaceGuard {
   private readonly activeAttempts = new Set<MutableAgentLaunchEvents>();
+
+  hasPendingAttempt(): boolean {
+    return this.activeAttempts.size > 0;
+  }
 
   begin(): AgentLaunchAttempt {
     const eventsDuringAttempt = emptyAgentLaunchEvents();
@@ -674,7 +697,11 @@ export function useAgentSessions(): AgentApi {
             event.payload.reason,
           );
           const intentional = intentionalDisconnects.current.delete(sessionId);
-          if (!intentional) {
+          const knownSession = sessionsRef.current.some(
+            (session) => session.sessionId === sessionId,
+          );
+          const pendingLaunch = launchRaceGuard.current.hasPendingAttempt();
+          if (!intentional && !knownSession && !pendingLaunch) {
             setLastClosed(
               createSessionClosedNotice(
                 sessionsRef.current,
@@ -684,13 +711,19 @@ export function useAgentSessions(): AgentApi {
               ),
             );
           }
-          setSessions((current) =>
-            current.filter((session) => session.sessionId !== sessionId),
-          );
+          setSessions((current) => {
+            const next = intentional
+              ? current.filter((session) => session.sessionId !== sessionId)
+              : markAgentSessionClosed(current, sessionId, event.payload.reason);
+            sessionsRef.current = next;
+            return next;
+          });
           outputDuringHydration.delete(sessionId);
-          pendingOutput.current.delete(sessionId);
-          pendingBytes.current.delete(sessionId);
-          outputOffsets.current.delete(sessionId);
+          if (intentional || (!knownSession && !pendingLaunch)) {
+            pendingOutput.current.delete(sessionId);
+            pendingBytes.current.delete(sessionId);
+            outputOffsets.current.delete(sessionId);
+          }
           closeHandlers.current
             .get(sessionId)
             ?.forEach((handler) => handler(event.payload.reason));
@@ -907,19 +940,34 @@ export function useAgentSessions(): AgentApi {
       });
       const launchEvents = attempt.finish();
       const closedReason = launchEvents.closed.get(session.sessionId) ?? null;
-      if (closedReason !== null) {
-        setLastClosed((current) =>
-          current?.sessionId === session.sessionId
-            ? { ...current, label: session.label, reason: closedReason }
-            : current,
-        );
-        throw new Error(agentStartupExitMessage(session.label, closedReason));
-      }
       const settledSession = applyAgentLaunchEvents(session, launchEvents);
-      setSessions((current) => [
-        ...current.filter((entry) => entry.sessionId !== session.sessionId),
-        settledSession,
-      ]);
+      if (closedReason !== null) {
+        const closedSession = markAgentSessionClosed(
+          [settledSession],
+          session.sessionId,
+          closedReason,
+        )[0];
+        setSessions((current) => {
+          const next = [
+            ...current.filter((entry) => entry.sessionId !== session.sessionId),
+            closedSession,
+          ];
+          sessionsRef.current = next;
+          return next;
+        });
+        setLastClosed((current) =>
+          current?.sessionId === session.sessionId ? null : current,
+        );
+        return closedSession;
+      }
+      setSessions((current) => {
+        const next = [
+          ...current.filter((entry) => entry.sessionId !== session.sessionId),
+          settledSession,
+        ];
+        sessionsRef.current = next;
+        return next;
+      });
       return settledSession;
     } finally {
       attempt.cancel();
@@ -1006,6 +1054,13 @@ export function useAgentSessions(): AgentApi {
   }, []);
 
   const send = useCallback(async (sessionId: string, data: string) => {
+    if (
+      sessionsRef.current.some(
+        (session) => session.sessionId === sessionId && session.closedReason,
+      )
+    ) {
+      throw new Error("This agent session has already ended.");
+    }
     const { invoke } = await core();
     await invoke("agent_send", {
       sessionId,
@@ -1051,6 +1106,13 @@ export function useAgentSessions(): AgentApi {
 
   const resize = useCallback(
     async (sessionId: string, cols: number, rows: number) => {
+      if (
+        sessionsRef.current.some(
+          (session) => session.sessionId === sessionId && session.closedReason,
+        )
+      ) {
+        return;
+      }
       const { invoke } = await core();
       await invoke("agent_resize", { sessionId, cols, rows });
     },
@@ -1058,6 +1120,22 @@ export function useAgentSessions(): AgentApi {
   );
 
   const disconnect = useCallback(async (sessionId: string) => {
+    const closed = sessionsRef.current.some(
+      (session) => session.sessionId === sessionId && session.closedReason,
+    );
+    if (closed) {
+      setSessions((current) => {
+        const next = current.filter((session) => session.sessionId !== sessionId);
+        sessionsRef.current = next;
+        return next;
+      });
+      pendingOutput.current.delete(sessionId);
+      pendingBytes.current.delete(sessionId);
+      outputOffsets.current.delete(sessionId);
+      dataHandlers.current.delete(sessionId);
+      closeHandlers.current.delete(sessionId);
+      return;
+    }
     intentionalDisconnects.current.add(sessionId);
     try {
       const { invoke } = await core();

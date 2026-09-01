@@ -244,9 +244,12 @@ export function snapshotLiveWorkspaceSessions(
   ssh: readonly SshSessionSummary[],
   activeSessionId: string | null,
 ): WorkspaceSessionSnapshot {
-  const activeAgent = agents.find((session) => session.sessionId === activeSessionId);
+  const liveAgents = agents.filter((session) => !session.closedReason);
+  const activeAgent = liveAgents.find(
+    (session) => session.sessionId === activeSessionId,
+  );
   const activeSsh = ssh.find((session) => session.sessionId === activeSessionId);
-  const sessions: SavedWorkspaceSession[] = agents.map((session) => ({
+  const sessions: SavedWorkspaceSession[] = liveAgents.map((session) => ({
     kind: "agent",
     groupKey: session.groupId || session.sessionId,
     groupLabel: session.groupLabel,

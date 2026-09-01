@@ -701,6 +701,7 @@ export const zhTW = {
   "terminal.projects.launchTitle": "從這個專案啟動 CLI",
   "terminal.projects.directory": "專案資料夾",
   "terminal.projects.cli": "選擇要啟動的 CLI",
+  "terminal.projects.launch": "啟動工作階段",
   "terminal.projects.launching": "啟動中…",
   "terminal.projects.launchFailed": "無法啟動這個專案",
   "terminal.projects.addFolder": "新增自訂資料夾",
@@ -766,6 +767,7 @@ export const zhTW = {
   "terminal.empty.title": "目前沒有進行中的工作階段",
   "terminal.empty.body": "選擇本機專案資料夾並啟動 CLI，或在連線清單挑一台主機，工作階段就會在這裡開啟。",
   "terminal.sessionClosed.title": "工作階段已中斷",
+  "terminal.sessionEnded.title": "工作階段已結束",
   "terminal.sessionClosed.body": "「{name}」已停止連線：{reason}",
 
   // AI Agent Fleet --------------------------------------------------------
