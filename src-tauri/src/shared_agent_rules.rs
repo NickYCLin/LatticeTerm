@@ -277,7 +277,7 @@ fn normalize_rules(value: &str) -> Result<String, String> {
     if value.is_empty() {
         return Err("AGENTS.md cannot be empty.".to_string());
     }
-    if value.as_bytes().len().saturating_add(1) > MAX_SHARED_RULES_BYTES {
+    if value.len().saturating_add(1) > MAX_SHARED_RULES_BYTES {
         return Err(format!(
             "AGENTS.md is too large (maximum {MAX_SHARED_RULES_BYTES} bytes)."
         ));
@@ -332,15 +332,14 @@ fn update_adapter(existing: Option<&str>, adapter: Adapter) -> Result<String, St
     if has_import(existing, adapter.import()) {
         return Ok(existing.to_string());
     }
-    let separator = if existing.is_empty() {
-        String::new()
-    } else if existing.ends_with("\n\n") || existing.ends_with("\r\n\r\n") {
-        String::new()
-    } else if existing.ends_with('\n') {
-        newline.to_string()
-    } else {
-        format!("{newline}{newline}")
-    };
+    let separator =
+        if existing.is_empty() || existing.ends_with("\n\n") || existing.ends_with("\r\n\r\n") {
+            String::new()
+        } else if existing.ends_with('\n') {
+            newline.to_string()
+        } else {
+            format!("{newline}{newline}")
+        };
     Ok(format!("{existing}{separator}{block}{newline}"))
 }
 
