@@ -4,6 +4,18 @@
 
 ---
 
+## [0.30.0](https://github.com/NickYCLin/lattice-term/compare/v0.29.2...v0.30.0) (2026-09-01)
+
+
+### 🚀 新增功能
+
+* **workspace:** 支援收合專案工作階段 ([2cde682](https://github.com/NickYCLin/lattice-term/commit/2cde6829394dbbe6acaeb63b87b4d168c8281d42))
+
+
+### 🛠️ 問題修正
+
+* **terminal:** 修正右鍵貼上與路徑顯示 ([23c29ff](https://github.com/NickYCLin/lattice-term/commit/23c29ff5ddcd15733a3837cf07d961fb503f4429))
+
 ## [0.29.2](https://github.com/NickYCLin/lattice-term/compare/v0.29.1...v0.29.2) (2026-08-31)
 
 
