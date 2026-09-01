@@ -256,6 +256,13 @@ export const FolderIcon: Glyph = (props) => (
   </Icon>
 );
 
+export const FolderOpenIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M2 5.5v-1A1.5 1.5 0 0 1 3.5 3h2.6l1.5 1.5h4.9A1.5 1.5 0 0 1 14 6" />
+    <path d="M2 5.5h12l-1.1 6.4a1.5 1.5 0 0 1-1.5 1.1H3.5A1.5 1.5 0 0 1 2 11.2z" />
+  </Icon>
+);
+
 export const FileIcon: Glyph = (props) => (
   <Icon {...props}>
     <path d="M4 1.75h5l3 3v9.5H4z" />

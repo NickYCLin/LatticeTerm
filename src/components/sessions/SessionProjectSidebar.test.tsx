@@ -93,6 +93,8 @@ describe("session project sidebar", () => {
     expect(markup).toContain("gpt-5.6-sol");
     expect(markup.match(/CLI 預設模型/g)).toHaveLength(2);
     expect(markup).toContain('class="session-tree__project is-active"');
+    expect(markup).toContain('data-folder-state="open"');
+    expect(markup).toContain("session-tree__branch-toggle");
     expect(markup).not.toContain("session-tree__project is-active status-working");
     expect(markup.match(/session-tree__status status-working/g)).toHaveLength(1);
     expect(markup).toContain('class="session-tree__session is-active status-idle"');
