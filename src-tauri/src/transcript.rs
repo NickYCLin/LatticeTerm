@@ -5,10 +5,16 @@
 //! new CLI as an opening brief is the closest thing to "carrying the memory
 //! over": the target sees the actual exchange and can continue from it.
 //!
+//! Claude's auto-memory is the one exception we support for a direct import:
+//! its documented, per-project `MEMORY.md` is plain Markdown. Every supported
+//! source can still hand its context to every new CLI; we deliberately never
+//! write a Codex, Gemini, Antigravity, or another CLI's private session store.
+//!
 //! Only CLIs whose on-disk format is verified are supported; everything else
-//! returns `None` so the caller can fall back to a plain, memory-less launch.
+//! returns `None` so the caller can stop an opt-in transfer safely.
 
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -25,21 +31,36 @@ const MAX_TRANSCRIPT_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_TRANSCRIPT_LINE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TRANSCRIPT_SEARCH_DEPTH: usize = 32;
 const MAX_TRANSCRIPT_SEARCH_ENTRIES: usize = 50_000;
+const MAX_CLAUDE_MEMORY_IMPORT_BYTES: usize = 8 * 1024;
+const MAX_CLAUDE_MEMORY_STARTUP_BYTES: usize = 24 * 1024;
+const MAX_CLAUDE_SETTINGS_BYTES: u64 = 1024 * 1024;
+const MAX_GEMINI_PROJECT_ROOT_BYTES: usize = 8 * 1024;
+const MAX_GEMINI_MESSAGE_ID_BYTES: usize = 256;
+const MAX_GEMINI_MESSAGE_RECORDS: usize = 50_000;
+const MAX_GEMINI_TRANSCRIPT_TEXT_BYTES: usize = 16 * 1024 * 1024;
+const LATTICETERM_MEMORY_START: &str = "<!-- LatticeTerm imported context: start -->";
+const LATTICETERM_MEMORY_END: &str = "<!-- LatticeTerm imported context: end -->";
 
 /// CLIs whose transcript layout we know how to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranscriptKind {
+    /// `~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/logs/transcript.jsonl`
+    Antigravity,
     /// `~/.claude/projects/<cwd-slug>/<session>.jsonl`
     Claude,
     /// `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session>.jsonl`
     Codex,
+    /// `~/.gemini/tmp/<project-hash>/chats/session-*.jsonl`
+    Gemini,
 }
 
 impl TranscriptKind {
     pub fn from_definition(definition_id: &str) -> Option<Self> {
         match definition_id {
+            "antigravity" => Some(Self::Antigravity),
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
+            "gemini" => Some(Self::Gemini),
             _ => None,
         }
     }
@@ -53,7 +74,6 @@ fn home() -> Option<PathBuf> {
 
 /// Claude names each project folder after its working directory with the path
 /// separators and drive colon flattened to dashes (`C:\Users\me` → `C--Users-me`).
-#[cfg(test)]
 fn claude_slug(working_directory: &str) -> String {
     working_directory
         .chars()
@@ -62,6 +82,167 @@ fn claude_slug(working_directory: &str) -> String {
             other => other,
         })
         .collect()
+}
+
+fn claude_config_root() -> Option<PathBuf> {
+    if let Some(config_dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        let config_dir = PathBuf::from(config_dir);
+        return config_dir.is_absolute().then_some(config_dir);
+    }
+    Some(home()?.join(".claude"))
+}
+
+/// Claude scopes auto memory to the repository, including all of its
+/// worktrees. Outside a Git checkout it scopes it to the working directory.
+fn claude_memory_project_root(working_directory: &str) -> Option<PathBuf> {
+    let working_directory = fs::canonicalize(working_directory).ok()?;
+    let mut current = working_directory.as_path();
+    loop {
+        if current.join(".git").exists() {
+            return Some(current.to_path_buf());
+        }
+        let Some(parent) = current.parent() else {
+            return Some(working_directory);
+        };
+        current = parent;
+    }
+}
+
+fn safe_memory_file(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err("Claude memory file is a symbolic link.".to_string())
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            Err("Claude memory path is not a regular file.".to_string())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Cannot inspect Claude memory file: {error}")),
+    }
+}
+
+fn claude_uses_default_auto_memory(config_root: &Path) -> Result<bool, String> {
+    let settings = config_root.join("settings.json");
+    let metadata = match fs::metadata(&settings) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(format!("Cannot inspect Claude settings: {error}")),
+    };
+    if !metadata.is_file() || metadata.len() > MAX_CLAUDE_SETTINGS_BYTES {
+        return Ok(false);
+    }
+    let contents = fs::read_to_string(&settings)
+        .map_err(|error| format!("Cannot read Claude settings: {error}"))?;
+    let settings: Value = serde_json::from_str(&contents).map_err(|_| {
+        "Claude settings cannot be verified for a direct memory import.".to_string()
+    })?;
+    Ok(settings.get("autoMemoryDirectory").is_none())
+}
+
+fn trim_utf8_bytes(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
+/// Replaces only the blocks that LatticeTerm previously wrote. A malformed
+/// marker fails closed instead of risking removal of user-authored memory.
+fn without_latticeterm_imports(existing: &str) -> Result<String, String> {
+    let mut retained = String::with_capacity(existing.len());
+    let mut remainder = existing;
+    while let Some(start) = remainder.find(LATTICETERM_MEMORY_START) {
+        retained.push_str(&remainder[..start]);
+        let after_start = &remainder[start + LATTICETERM_MEMORY_START.len()..];
+        let Some(end) = after_start.find(LATTICETERM_MEMORY_END) else {
+            return Err("Claude memory has an incomplete LatticeTerm import marker.".to_string());
+        };
+        remainder = &after_start[end + LATTICETERM_MEMORY_END.len()..];
+    }
+    retained.push_str(remainder);
+    Ok(retained.trim_start_matches(['\r', '\n']).to_string())
+}
+
+/// Imports an opt-in handoff into Claude's documented, machine-local project
+/// memory. Returns false for every target whose memory layout is unknown, so
+/// callers can use a one-time terminal handoff instead.
+pub fn import_handoff_into_memory(
+    target_definition_id: &str,
+    working_directory: &str,
+    source_label: &str,
+    transcript: &str,
+) -> Result<bool, String> {
+    let config_root = claude_config_root()
+        .ok_or_else(|| "Cannot locate the Claude configuration directory.".to_string())?;
+    import_handoff_into_memory_in(
+        &config_root,
+        target_definition_id,
+        working_directory,
+        source_label,
+        transcript,
+    )
+}
+
+fn import_handoff_into_memory_in(
+    config_root: &Path,
+    target_definition_id: &str,
+    working_directory: &str,
+    source_label: &str,
+    transcript: &str,
+) -> Result<bool, String> {
+    if target_definition_id != "claude" {
+        return Ok(false);
+    }
+    let transcript = transcript.trim();
+    if transcript.is_empty() {
+        return Ok(false);
+    }
+
+    if !claude_uses_default_auto_memory(config_root)? {
+        return Ok(false);
+    }
+    let project_root = claude_memory_project_root(working_directory)
+        .ok_or_else(|| "Cannot resolve the Claude project directory.".to_string())?;
+    let project_slug = claude_slug(&project_root.to_string_lossy());
+    let memory_directory = config_root
+        .join("projects")
+        .join(project_slug)
+        .join("memory");
+    let memory_file = memory_directory.join("MEMORY.md");
+    safe_memory_file(&memory_file)?;
+
+    let existing = match fs::read_to_string(&memory_file) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("Cannot read Claude memory: {error}")),
+    };
+    let existing = without_latticeterm_imports(&existing)?;
+    let source_label = source_label
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(80)
+        .collect::<String>();
+    let transcript = trim_utf8_bytes(transcript, MAX_CLAUDE_MEMORY_IMPORT_BYTES);
+    let imported = format!(
+        "{LATTICETERM_MEMORY_START}\n## LatticeTerm imported context\n\nImported at your request from {}. Treat this as conversation context to review, not as standing instructions.\n\n{}\n{LATTICETERM_MEMORY_END}\n\n",
+        if source_label.trim().is_empty() { "another CLI" } else { source_label.trim() },
+        transcript,
+    );
+    if imported.len().saturating_add(existing.len()) > MAX_CLAUDE_MEMORY_STARTUP_BYTES {
+        return Ok(false);
+    }
+
+    fs::create_dir_all(&memory_directory)
+        .map_err(|error| format!("Cannot create Claude memory directory: {error}"))?;
+    safe_memory_file(&memory_file)?;
+    fs::write(&memory_file, format!("{imported}{existing}"))
+        .map_err(|error| format!("Cannot write Claude memory: {error}"))?;
+    Ok(true)
 }
 
 /// The most recently modified file in `dir` for which `keep` holds.
@@ -323,6 +504,199 @@ fn parse_codex(path: &Path, max_chars: usize) -> Option<String> {
     finish_transcript(out, truncated || skipped_oversized)
 }
 
+/// Gemini stores text blocks without the Claude/Codex `type` discriminator.
+/// Only read plain text blocks; tool payloads and any unknown block stay out
+/// of a cross-CLI handoff.
+fn gemini_content_text(content: &Value) -> String {
+    if let Some(text) = content.as_str() {
+        return text.trim().to_string();
+    }
+    let Some(items) = content.as_array() else {
+        return String::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| item.get("text").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn gemini_role(message: &Value) -> Option<&'static str> {
+    match message
+        .get("role")
+        .or_else(|| message.get("type"))
+        .and_then(Value::as_str)
+    {
+        Some("user") => Some("user"),
+        Some("assistant") | Some("gemini") | Some("model") => Some("assistant"),
+        _ => None,
+    }
+}
+
+struct GeminiMessageRecord {
+    id: String,
+    role: Option<&'static str>,
+    text: String,
+}
+
+fn gemini_message_record(message: &Value) -> Option<GeminiMessageRecord> {
+    let id = message.get("id").and_then(Value::as_str)?;
+    if id.is_empty() || id.len() > MAX_GEMINI_MESSAGE_ID_BYTES {
+        return None;
+    }
+    let role = gemini_role(message);
+    let mut text = role
+        .and_then(|_| message.get("content"))
+        .map(gemini_content_text)
+        .unwrap_or_default();
+    let trimmed = text.trim_start();
+    if role == Some("user")
+        && (trimmed.starts_with("<session_context>")
+            || trimmed.starts_with("<hook_context>")
+            || trimmed.starts_with('/'))
+    {
+        text.clear();
+    }
+    Some(GeminiMessageRecord {
+        id: id.to_string(),
+        role,
+        text,
+    })
+}
+
+fn upsert_gemini_message(
+    records: &mut Vec<GeminiMessageRecord>,
+    positions: &mut HashMap<String, usize>,
+    text_bytes: &mut usize,
+    message: &Value,
+) -> bool {
+    let Some(record) = gemini_message_record(message) else {
+        return false;
+    };
+    if let Some(index) = positions.get(&record.id).copied() {
+        *text_bytes = text_bytes
+            .saturating_sub(records[index].text.len())
+            .saturating_add(record.text.len());
+        records[index] = record;
+    } else {
+        if records.len() >= MAX_GEMINI_MESSAGE_RECORDS {
+            return false;
+        }
+        *text_bytes = text_bytes.saturating_add(record.text.len());
+        positions.insert(record.id.clone(), records.len());
+        records.push(record);
+    }
+    *text_bytes <= MAX_GEMINI_TRANSCRIPT_TEXT_BYTES
+}
+
+fn reset_gemini_messages(
+    records: &mut Vec<GeminiMessageRecord>,
+    positions: &mut HashMap<String, usize>,
+    text_bytes: &mut usize,
+    messages: &[Value],
+) -> bool {
+    records.clear();
+    positions.clear();
+    *text_bytes = 0;
+    messages
+        .iter()
+        .all(|message| upsert_gemini_message(records, positions, text_bytes, message))
+}
+
+fn rewind_gemini_messages(
+    records: &mut Vec<GeminiMessageRecord>,
+    positions: &mut HashMap<String, usize>,
+    text_bytes: &mut usize,
+    rewind_to: &str,
+) {
+    let Some(index) = positions.get(rewind_to).copied() else {
+        records.clear();
+        positions.clear();
+        *text_bytes = 0;
+        return;
+    };
+    records.truncate(index);
+    positions.clear();
+    *text_bytes = 0;
+    for (index, record) in records.iter().enumerate() {
+        positions.insert(record.id.clone(), index);
+        *text_bytes = text_bytes.saturating_add(record.text.len());
+    }
+}
+
+fn parse_gemini(path: &Path, max_chars: usize) -> Option<String> {
+    if max_chars == 0 {
+        return None;
+    }
+    let mut records = Vec::new();
+    let mut positions = HashMap::new();
+    let mut text_bytes = 0usize;
+    let mut valid = true;
+    let skipped_oversized = visit_transcript_rows(path, |value| {
+        if !valid {
+            return;
+        }
+        if let Some(rewind_to) = value.get("$rewindTo").and_then(Value::as_str) {
+            rewind_gemini_messages(&mut records, &mut positions, &mut text_bytes, rewind_to);
+        } else if value.get("id").and_then(Value::as_str).is_some() {
+            valid = upsert_gemini_message(&mut records, &mut positions, &mut text_bytes, value);
+        } else if let Some(messages) = value
+            .get("$set")
+            .and_then(|set| set.get("messages"))
+            .and_then(Value::as_array)
+        {
+            valid = reset_gemini_messages(&mut records, &mut positions, &mut text_bytes, messages);
+        } else if let Some(messages) = value.get("messages").and_then(Value::as_array) {
+            valid = messages.iter().all(|message| {
+                upsert_gemini_message(&mut records, &mut positions, &mut text_bytes, message)
+            });
+        }
+    })?;
+    // An oversized row could be a rewind or replacement operation. Returning
+    // partial state would hand the wrong conversation to another CLI.
+    if !valid || skipped_oversized {
+        return None;
+    }
+    let mut out = String::new();
+    let mut truncated = false;
+    for record in records {
+        if let Some(role) = record.role {
+            push_turn(&mut out, role, &record.text);
+            truncated |= trim_tail(&mut out, max_chars);
+        }
+    }
+    finish_transcript(out, truncated)
+}
+
+fn parse_antigravity(path: &Path, max_chars: usize) -> Option<String> {
+    if max_chars == 0 {
+        return None;
+    }
+    let mut out = String::new();
+    let mut truncated = false;
+    let skipped_oversized = visit_transcript_rows(path, |value| {
+        if value.get("status").and_then(Value::as_str) != Some("DONE") {
+            return;
+        }
+        let role = match (
+            value.get("source").and_then(Value::as_str),
+            value.get("type").and_then(Value::as_str),
+        ) {
+            (Some("USER_EXPLICIT"), Some("USER_INPUT")) => "user",
+            (Some("MODEL"), Some("PLANNER_RESPONSE")) => "assistant",
+            _ => return,
+        };
+        let Some(text) = value.get("content").and_then(Value::as_str) else {
+            return;
+        };
+        push_turn(&mut out, role, text);
+        truncated |= trim_tail(&mut out, max_chars);
+    })?;
+    finish_transcript(out, truncated || skipped_oversized)
+}
+
 struct ClaudeSessionMeta {
     id: String,
     cwd: String,
@@ -527,6 +901,114 @@ fn locate_codex(working_directory: &str, captured: Option<&str>) -> Option<PathB
     locate_codex_in(&root, working_directory, captured)
 }
 
+fn is_gemini_session(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("session-"))
+        && path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+}
+
+/// Gemini records the project root beside each hashed chat directory. Read a
+/// small, regular file only, then canonicalize it before matching a session.
+fn read_gemini_project_root(path: &Path) -> Option<PathBuf> {
+    let file = open_regular_transcript(path)?;
+    let mut contents = String::new();
+    file.take((MAX_GEMINI_PROJECT_ROOT_BYTES + 1) as u64)
+        .read_to_string(&mut contents)
+        .ok()?;
+    if contents.len() > MAX_GEMINI_PROJECT_ROOT_BYTES || contents.contains('\0') {
+        return None;
+    }
+    fs::canonicalize(contents.trim()).ok()
+}
+
+fn read_gemini_session_id(path: &Path) -> Option<String> {
+    let file = open_regular_transcript(path)?;
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    if !read_bounded_line(&mut reader, &mut line, MAX_TRANSCRIPT_LINE_BYTES)
+        .ok()?
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    serde_json::from_slice::<Value>(&line)
+        .ok()?
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn gemini_project_root(working_directory: &str) -> Option<PathBuf> {
+    // Gemini's Storage project root is the exact target directory passed at
+    // launch, unlike Claude auto-memory which deliberately scopes to the Git
+    // repository. Matching a parent repository here would select the wrong
+    // chat when Gemini was launched from a subdirectory.
+    fs::canonicalize(working_directory).ok()
+}
+
+fn gemini_session_matches(path: &Path, expected_root: &Path, captured: Option<&str>) -> bool {
+    if captured.is_some_and(|id| read_gemini_session_id(path).as_deref() != Some(id)) {
+        return false;
+    }
+    let Some(project_root_file) = path
+        .parent()
+        .and_then(Path::parent)
+        .map(|directory| directory.join(".project_root"))
+    else {
+        return false;
+    };
+    read_gemini_project_root(&project_root_file).is_some_and(|root| root == expected_root)
+}
+
+fn locate_gemini_in(
+    sessions_root: &Path,
+    working_directory: &str,
+    captured: Option<&str>,
+) -> Option<PathBuf> {
+    let root = fs::canonicalize(sessions_root).ok()?;
+    let expected_root = gemini_project_root(working_directory)?;
+    newest_matching(&root, |path| {
+        is_gemini_session(path) && gemini_session_matches(path, &expected_root, captured)
+    })
+}
+
+fn locate_gemini(working_directory: &str, captured: Option<&str>) -> Option<PathBuf> {
+    let root = home()?.join(".gemini").join("tmp");
+    locate_gemini_in(&root, working_directory, captured)
+}
+
+fn antigravity_conversation_id(value: &str) -> bool {
+    value.len() == 36
+        && value.chars().enumerate().all(|(index, character)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                character == '-'
+            } else {
+                character.is_ascii_hexdigit()
+            }
+        })
+}
+
+fn locate_antigravity_in(root: &Path, captured: Option<&str>) -> Option<PathBuf> {
+    let captured = captured.filter(|value| antigravity_conversation_id(value))?;
+    let root = fs::canonicalize(root).ok()?;
+    let transcript = root
+        .join("brain")
+        .join(captured)
+        .join(".system_generated")
+        .join("logs")
+        .join("transcript.jsonl");
+    let canonical = fs::canonicalize(&transcript).ok()?;
+    canonical.starts_with(&root).then_some(canonical)
+}
+
+fn locate_antigravity(captured: Option<&str>) -> Option<PathBuf> {
+    let root = home()?.join(".gemini").join("antigravity-cli");
+    locate_antigravity_in(&root, captured)
+}
+
 /// Reads the source CLI's most relevant conversation and returns it as plain,
 /// role-labelled text capped at `max_chars`, or `None` when nothing is found.
 pub fn export(
@@ -536,6 +1018,10 @@ pub fn export(
     max_chars: usize,
 ) -> Option<String> {
     match kind {
+        TranscriptKind::Antigravity => {
+            let path = locate_antigravity(captured_session_id)?;
+            parse_antigravity(&path, max_chars)
+        }
         TranscriptKind::Claude => {
             let path = locate_claude(working_directory, captured_session_id)?;
             parse_claude(&path, max_chars)
@@ -543,6 +1029,10 @@ pub fn export(
         TranscriptKind::Codex => {
             let path = locate_codex(working_directory, captured_session_id)?;
             parse_codex(&path, max_chars)
+        }
+        TranscriptKind::Gemini => {
+            let path = locate_gemini(working_directory, captured_session_id)?;
+            parse_gemini(&path, max_chars)
         }
     }
 }
@@ -621,6 +1111,84 @@ mod tests {
     }
 
     #[test]
+    fn imported_claude_memory_is_bounded_and_prepended() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join(".claude");
+        let project = directory.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join(".git"), "gitdir: nowhere").unwrap();
+
+        let imported = import_handoff_into_memory_in(
+            &config,
+            "claude",
+            &project.to_string_lossy(),
+            "Codex",
+            "keep this",
+        )
+        .unwrap();
+
+        assert!(imported);
+        let memory = fs::read_to_string(
+            config
+                .join("projects")
+                .join(claude_slug(&project.to_string_lossy()))
+                .join("memory")
+                .join("MEMORY.md"),
+        )
+        .unwrap();
+        assert!(memory.starts_with(LATTICETERM_MEMORY_START));
+        assert!(memory.contains("## LatticeTerm imported context"));
+        assert!(memory.contains("keep this"));
+        assert!(!import_handoff_into_memory_in(
+            &config,
+            "codex",
+            &project.to_string_lossy(),
+            "Claude",
+            "nope",
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn imported_claude_memory_replaces_only_its_previous_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join(".claude");
+        let project = directory.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join(".git"), "gitdir: nowhere").unwrap();
+        let memory_file = config
+            .join("projects")
+            .join(claude_slug(&project.to_string_lossy()))
+            .join("memory")
+            .join("MEMORY.md");
+        fs::create_dir_all(memory_file.parent().unwrap()).unwrap();
+        fs::write(&memory_file, "# Personal notes\n\nKeep this.").unwrap();
+
+        import_handoff_into_memory_in(
+            &config,
+            "claude",
+            &project.to_string_lossy(),
+            "Codex",
+            "first",
+        )
+        .unwrap();
+        import_handoff_into_memory_in(
+            &config,
+            "claude",
+            &project.to_string_lossy(),
+            "Claude",
+            "second",
+        )
+        .unwrap();
+
+        let memory = fs::read_to_string(memory_file).unwrap();
+        assert!(memory.contains("# Personal notes"));
+        assert!(memory.contains("second"));
+        assert!(!memory.contains("first"));
+        assert_eq!(memory.matches(LATTICETERM_MEMORY_START).count(), 1);
+    }
+
+    #[test]
     fn content_text_reads_strings_and_text_blocks() {
         assert_eq!(content_text(&Value::String("hi".into())), "hi");
         let blocks = serde_json::json!([
@@ -694,6 +1262,145 @@ mod tests {
         assert!(text.contains("問題一"));
         assert!(text.contains("答案一"));
         assert!(!text.contains("reasoning"));
+    }
+
+    #[test]
+    fn gemini_transcript_exports_the_matching_project_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = directory.path().join("repository");
+        let project = repository.join("packages").join("desktop");
+        let gemini_root = directory.path().join(".gemini").join("tmp");
+        let session = gemini_root
+            .join("project-hash")
+            .join("chats")
+            .join("session-2026-09-01.jsonl");
+        fs::create_dir_all(session.parent().unwrap()).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        fs::write(repository.join(".git"), "gitdir: nowhere").unwrap();
+        fs::write(
+            session
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join(".project_root"),
+            project.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        let rows = [
+            serde_json::json!({"sessionId": "gemini-session", "projectHash": "project-hash"})
+                .to_string(),
+            serde_json::json!({
+                "id": "outdated",
+                "type": "user",
+                "content": [{"text": "discard this old branch"}]
+            })
+            .to_string(),
+            serde_json::json!({
+                "$set": {
+                    "messages": [
+                        {"id": "context", "type": "user", "content": [{"text": "<session_context>ignore</session_context>"}]},
+                        {"id": "user-1", "type": "user", "content": [{"text": "remember red panda"}]},
+                        {"id": "model-1", "type": "gemini", "content": [{"text": "outdated answer"}]},
+                        {"id": "tool-1", "type": "tool", "content": [{"text": "must not transfer"}]}
+                    ]
+                }
+            })
+            .to_string(),
+            serde_json::json!({"$rewindTo": "model-1"}).to_string(),
+            serde_json::json!({
+                "id": "model-2",
+                "type": "gemini",
+                "content": [{"text": "I will remember it"}]
+            })
+            .to_string(),
+        ];
+        fs::write(&session, rows.join("\n")).unwrap();
+
+        let located = locate_gemini_in(
+            &gemini_root,
+            &project.to_string_lossy(),
+            Some("gemini-session"),
+        )
+        .unwrap();
+        assert_eq!(located, session);
+
+        let text = parse_gemini(&located, 5000).unwrap();
+        assert!(text.contains("remember red panda"));
+        assert!(text.contains("I will remember it"));
+        assert!(!text.contains("discard this old branch"));
+        assert!(!text.contains("outdated answer"));
+        assert!(!text.contains("session_context"));
+        assert!(!text.contains("must not transfer"));
+    }
+
+    #[test]
+    fn antigravity_transcript_uses_only_user_prompts_and_final_answers() {
+        let directory = tempfile::tempdir().unwrap();
+        let conversation_id = "0199aa11-bb22-4c33-8d44-ee55ff667788";
+        let transcript = directory
+            .path()
+            .join("brain")
+            .join(conversation_id)
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        let rows = [
+            serde_json::json!({
+                "step_index": 0,
+                "source": "USER_EXPLICIT",
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "content": "remember the blue folder"
+            }),
+            serde_json::json!({
+                "step_index": 1,
+                "source": "MODEL",
+                "type": "GENERIC",
+                "status": "DONE",
+                "content": "private tool planning"
+            }),
+            serde_json::json!({
+                "step_index": 2,
+                "source": "SYSTEM",
+                "type": "SYSTEM_MESSAGE",
+                "status": "DONE",
+                "content": "tool output"
+            }),
+            serde_json::json!({
+                "step_index": 3,
+                "source": "MODEL",
+                "type": "PLANNER_RESPONSE",
+                "status": "RUNNING",
+                "content": "unfinished answer"
+            }),
+            serde_json::json!({
+                "step_index": 4,
+                "source": "MODEL",
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "content": "I will remember the blue folder"
+            }),
+        ];
+        fs::write(
+            &transcript,
+            rows.iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+
+        let located = locate_antigravity_in(directory.path(), Some(conversation_id)).unwrap();
+        assert_eq!(located, fs::canonicalize(&transcript).unwrap());
+        let text = parse_antigravity(&located, 5000).unwrap();
+        assert!(text.contains("remember the blue folder"));
+        assert!(text.contains("I will remember the blue folder"));
+        assert!(!text.contains("private tool planning"));
+        assert!(!text.contains("tool output"));
+        assert!(!text.contains("unfinished answer"));
+        assert!(locate_antigravity_in(directory.path(), Some("../outside")).is_none());
     }
 
     #[test]

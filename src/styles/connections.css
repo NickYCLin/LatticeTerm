@@ -1389,10 +1389,20 @@
 .session-tree__folder-select,
 .session-tree__project-select {
   flex: 1;
+  min-width: 0;
   gap: var(--space-2);
   padding: var(--space-2);
   font-size: var(--text-xs);
   font-weight: 650;
+}
+
+/* Keep the disclosure control a fixed, compact column. Its focus ring must
+ * not make a tree row's label area appear to grow or shrink while expanding. */
+.session-tree__branch-toggle {
+  flex: 0 0 1.5rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-right: 0.125rem;
 }
 
 .session-tree__folder-select {

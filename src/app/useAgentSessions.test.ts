@@ -209,6 +209,7 @@ describe("agent session transport", () => {
         id: "antigravity",
         label: "Google Antigravity CLI",
         executable: "agy",
+        transcriptSupported: true,
       },
     ];
 
@@ -219,6 +220,7 @@ describe("agent session transport", () => {
     ]);
     expect(displayed[0]).toMatchObject({
       label: "Google Antigravity CLI",
+      transcriptSupported: true,
       account: {
         state: "signedIn",
         label: "user@example.com",

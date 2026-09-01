@@ -30,6 +30,7 @@ import {
   EditIcon,
   ExportIcon,
   FolderIcon,
+  FolderOpenIcon,
   ImportIcon,
   MoreIcon,
   PlusIcon,
@@ -650,6 +651,8 @@ export function SessionProjectSidebar({
     // project have nowhere to render, which also hides their remove button.
     const children = sessionSidebarChildren(layout, project.nodeId);
     const collapsed = layout.collapsedFolderIds.includes(project.nodeId);
+    const expanded = children.length > 0 && !collapsed;
+    const FolderGlyph = expanded ? FolderOpenIcon : FolderIcon;
     return (
       <div
         className="session-tree__project-branch"
@@ -674,18 +677,18 @@ export function SessionProjectSidebar({
                 ? displayPath(project.workingDirectory)
                 : project.label
             }
-            aria-expanded={!collapsed}
+            aria-expanded={expanded}
           >
-            <FolderIcon size={13} />
+            <FolderGlyph size={13} data-folder-state={expanded ? "open" : "closed"} />
             <span className="truncate">{project.label}</span>
           </button>
           {children.length > 0 && (
             <button
               type="button"
-              className="icon-button icon-button--sm"
+              className="icon-button icon-button--sm session-tree__branch-toggle"
               onClick={() => onToggleFolder(project.nodeId)}
               aria-label={t("terminal.projects.toggle")}
-              aria-expanded={!collapsed}
+              aria-expanded={expanded}
               title={t("terminal.projects.toggle")}
               data-tree-action="true"
             >
@@ -706,7 +709,10 @@ export function SessionProjectSidebar({
   }
 
   function renderFolder(folder: SessionSidebarFolder, depth: number) {
+    const children = sessionSidebarChildren(layout, folder.id);
     const collapsed = layout.collapsedFolderIds.includes(folder.id);
+    const expanded = children.length > 0 && !collapsed;
+    const FolderGlyph = expanded ? FolderOpenIcon : FolderIcon;
     return (
       <div
         className="session-tree__folder"
@@ -727,17 +733,17 @@ export function SessionProjectSidebar({
             className="session-tree__folder-select"
             onClick={() => onToggleFolder(folder.id)}
             title={`${folder.name} · ${t("terminal.projects.dragHint")}`}
-            aria-expanded={!collapsed}
+            aria-expanded={expanded}
           >
-            <FolderIcon size={13} />
+            <FolderGlyph size={13} data-folder-state={expanded ? "open" : "closed"} />
             <span className="truncate">{folder.name}</span>
           </button>
           <button
             type="button"
-            className="icon-button icon-button--sm"
+            className="icon-button icon-button--sm session-tree__branch-toggle"
             onClick={() => onToggleFolder(folder.id)}
             aria-label={t("terminal.projects.toggle")}
-            aria-expanded={!collapsed}
+            aria-expanded={expanded}
             title={t("terminal.projects.toggle")}
             data-tree-action="true"
           >
@@ -776,9 +782,9 @@ export function SessionProjectSidebar({
             </button>
           </div>
         </div>
-        {!collapsed && (
+        {expanded && (
           <div role="list">
-            {sessionSidebarChildren(layout, folder.id).map((id) => renderNode(id, depth + 1))}
+            {children.map((id) => renderNode(id, depth + 1))}
           </div>
         )}
       </div>

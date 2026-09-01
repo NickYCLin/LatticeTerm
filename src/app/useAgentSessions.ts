@@ -128,6 +128,13 @@ export interface AgentLaunchRequest {
   rows: number;
 }
 
+export interface AgentMemoryHandoffRequest {
+  targetDefinitionId: string;
+  workingDirectory: string;
+  sourceLabel: string;
+  transcript: string;
+}
+
 export type AgentLaunchPlanDraft = Omit<
   AgentLaunchRequest,
   "cols" | "rows" | "restoreExistingSession"
@@ -246,7 +253,11 @@ const FALLBACK_CATALOG: AgentDefinition[] = FALLBACK_CATALOG_SOURCE.map(
     resumeSupported,
     resumeLatestSupported:
       id === "codex" || id === "antigravity" || id === "cursor",
-    transcriptSupported: id === "codex" || id === "claude",
+    transcriptSupported:
+      id === "codex" ||
+      id === "claude" ||
+      id === "gemini" ||
+      id === "antigravity",
     installed: false,
     installedPath: null,
     consumerOauthDeprecated: id === "gemini",
@@ -522,6 +533,8 @@ export interface AgentApi {
   pasteClipboardImage: (sessionId: string) => Promise<string | null>;
   /** Reads a CLI's conversation as text for a handoff, or null if unavailable. */
   exportTranscript: (sessionId: string) => Promise<string | null>;
+  /** Writes an opt-in handoff to a target's known memory format, if supported. */
+  importMemoryHandoff: (request: AgentMemoryHandoffRequest) => Promise<boolean>;
   broadcast: (
     sessionIds: string[],
     prompt: string,
@@ -1018,6 +1031,14 @@ export function useAgentSessions(): AgentApi {
     [],
   );
 
+  const importMemoryHandoff = useCallback(
+    async (request: AgentMemoryHandoffRequest): Promise<boolean> => {
+      const { invoke } = await core();
+      return invoke<boolean>("agent_import_memory_handoff", { ...request });
+    },
+    [],
+  );
+
   const broadcast = useCallback(async (sessionIds: string[], prompt: string) => {
     const payload = buildAgentBroadcastPayload(prompt);
     if (!payload) throw new Error("A broadcast prompt is required.");
@@ -1109,6 +1130,7 @@ export function useAgentSessions(): AgentApi {
     send,
     pasteClipboardImage,
     exportTranscript,
+    importMemoryHandoff,
     broadcast,
     resize,
     disconnect,
