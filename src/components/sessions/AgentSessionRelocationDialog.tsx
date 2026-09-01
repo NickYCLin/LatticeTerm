@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { AgentRelocationSummary } from "../../app/agentSessionRelocation";
+import { displayPath } from "../../app/displayPath";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { FolderIcon } from "../icons";
@@ -77,7 +78,7 @@ export function AgentSessionRelocationDialog({
                 {t("terminal.directory.current")}
               </span>
               <p className="dialog__body mono project-launcher__path">
-                {fromDirectory}
+                {displayPath(fromDirectory)}
               </p>
             </div>
             <div>
@@ -85,7 +86,7 @@ export function AgentSessionRelocationDialog({
                 {t("terminal.directory.next")}
               </span>
               <p className="dialog__body mono project-launcher__path">
-                {toDirectory}
+                {displayPath(toDirectory)}
               </p>
             </div>
           </div>

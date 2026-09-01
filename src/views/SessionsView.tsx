@@ -16,6 +16,7 @@ import type {
   AgentSessionSummary,
 } from "../app/useAgentSessions";
 import { agentCatalogForDisplay } from "../app/useAgentSessions";
+import { displayPath } from "../app/displayPath";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
@@ -172,19 +173,18 @@ interface SessionProject {
 }
 
 function localProjectId(workingDirectory: string): string {
-  return `local:${workingDirectory.replace(/^\\\\\?\\/, "").toLocaleLowerCase()}`;
+  return `local:${displayPath(workingDirectory).toLocaleLowerCase()}`;
 }
 
 /** Comparable form for "is this the same folder" checks across separators. */
 function normalizeDirectory(path: string): string {
-  return path
-    .replace(/^\\\\\?\\/, "")
+  return displayPath(path)
     .replace(/[\\/]+$/, "")
     .toLocaleLowerCase();
 }
 
 function localProjectLabel(workingDirectory: string): string {
-  const plain = workingDirectory.replace(/^\\\\\?\\/, "").replace(/[\\/]+$/, "");
+  const plain = displayPath(workingDirectory).replace(/[\\/]+$/, "");
   const segments = plain.split(/[\\/]/).filter(Boolean);
   return segments[segments.length - 1] ?? plain;
 }
@@ -596,7 +596,10 @@ export function SessionsView({
         ).size,
         sessions: agents.sessions.length,
         folders: reconciledSidebarLayout.folders.length,
-      })} ${t("terminal.projects.exportedLocation", exported)}`,
+      })} ${t("terminal.projects.exportedLocation", {
+        ...exported,
+        path: displayPath(exported.path),
+      })}`,
     });
   }
 
@@ -988,7 +991,7 @@ export function SessionsView({
           <div>
             <span className="field__label">{t("terminal.projects.directory")}</span>
             <p className="dialog__body mono project-launcher__path">
-              {newProjectDirectory}
+              {displayPath(newProjectDirectory)}
             </p>
           </div>
           <div>
@@ -1656,7 +1659,11 @@ export function SessionsView({
                 <div className="session-header__crumbs">
                   <span
                     className="session-header__project truncate"
-                    title={activeProject.workingDirectory ?? activeProject.label}
+                    title={
+                      activeProject.workingDirectory
+                        ? displayPath(activeProject.workingDirectory)
+                        : activeProject.label
+                    }
                   >
                     {activeProject.label}
                   </span>

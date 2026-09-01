@@ -4,6 +4,7 @@ import { attachTerminalClipboard } from "./terminalClipboard";
 
 function fakeTerminal(selection: string | null) {
   const listeners: Record<string, (event: Event) => void> = {};
+  const listenerOptions: Record<string, boolean | AddEventListenerOptions | undefined> = {};
   let keyEventHandler: ((event: KeyboardEvent) => boolean) | undefined;
   const terminal = {
     attachCustomKeyEventHandler: (
@@ -12,8 +13,13 @@ function fakeTerminal(selection: string | null) {
       keyEventHandler = handler;
     },
     element: {
-      addEventListener: (type: string, handler: (event: Event) => void) => {
+      addEventListener: (
+        type: string,
+        handler: (event: Event) => void,
+        options?: boolean | AddEventListenerOptions,
+      ) => {
         listeners[type] = handler;
+        listenerOptions[type] = options;
       },
     },
     hasSelection: () => selection !== null,
@@ -25,12 +31,16 @@ function fakeTerminal(selection: string | null) {
     terminal: terminal as unknown as Terminal,
     mock: terminal,
     listeners,
+    listenerOptions,
     keyEventHandler: () => keyEventHandler,
   };
 }
 
 function fakeContextMenuEvent(): Event {
-  return { preventDefault: vi.fn() } as unknown as Event;
+  return {
+    preventDefault: vi.fn(),
+    stopImmediatePropagation: vi.fn(),
+  } as unknown as Event;
 }
 
 function fakePasteKeyEvent(): KeyboardEvent {
@@ -104,15 +114,20 @@ describe("terminal right-click", () => {
     expect(mock.paste).not.toHaveBeenCalled();
   });
 
-  it("pastes clipboard text when nothing is selected", async () => {
+  it("handles the right click before xterm's native clipboard path", async () => {
     const readText = vi.fn().mockResolvedValue("pasted text");
     vi.stubGlobal("navigator", { clipboard: { readText } });
     const onImagePaste = vi.fn();
-    const { terminal, mock, listeners } = fakeTerminal(null);
+    const { terminal, mock, listeners, listenerOptions } = fakeTerminal(null);
     attachTerminalClipboard(terminal, { onImagePaste });
 
-    listeners.contextmenu(fakeContextMenuEvent());
+    const event = fakeContextMenuEvent();
+    listeners.contextmenu(event);
     await vi.waitFor(() => expect(mock.paste).toHaveBeenCalledWith("pasted text"));
+    expect(mock.paste).toHaveBeenCalledOnce();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(event.stopImmediatePropagation).toHaveBeenCalledOnce();
+    expect(listenerOptions.contextmenu).toBe(true);
     expect(onImagePaste).not.toHaveBeenCalled();
   });
 
