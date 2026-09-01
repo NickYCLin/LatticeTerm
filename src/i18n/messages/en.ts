@@ -842,6 +842,31 @@ export const en: Messages = {
     "Saved; every new CLI will receive it first.",
   "agents.startupInstructions.useCommitTemplate": "Use zh-TW commit template",
   "agents.startupInstructions.save": "Save startup instructions",
+  "agents.sharedRules.title": "Shared project AI rules",
+  "agents.sharedRules.hint":
+    "Keep AGENTS.md at the project root as the source of truth, then let CLAUDE.md and GEMINI.md import the same rules.",
+  "agents.sharedRules.inspect": "Load rules",
+  "agents.sharedRules.loading": "Loading…",
+  "agents.sharedRules.inspectHint":
+    "Confirm the working directory above, then load it. LatticeTerm does not change files while loading.",
+  "agents.sharedRules.status.synced": "Synced",
+  "agents.sharedRules.status.needsSync": "Needs sync",
+  "agents.sharedRules.status.manualReview": "Manual review",
+  "agents.sharedRules.status.missing": "Not created",
+  "agents.sharedRules.manualReview.title":
+    "The managed adapter block needs manual review",
+  "agents.sharedRules.manualReview.body":
+    "LatticeTerm markers in CLAUDE.md or GEMINI.md are incomplete or duplicated. Repair them externally and reload so existing content is not overwritten.",
+  "agents.sharedRules.placeholder":
+    "Enter project rules that Codex, Claude, and Gemini must all follow…",
+  "agents.sharedRules.byteCount": "{used} / {max} bytes",
+  "agents.sharedRules.useTemplate": "Use recommended template",
+  "agents.sharedRules.save": "Save and sync all three CLIs",
+  "agents.sharedRules.saving": "Syncing…",
+  "agents.sharedRules.saved": "All three CLIs are synced",
+  "agents.sharedRules.error.title": "Shared rules could not be updated",
+  "agents.sharedRules.boundary":
+    "This syncs project rules only. It does not move native conversations, sign-in data, or databases from Codex, Claude, or Gemini. Adapter-specific content is preserved, and saving stops if a file changed externally.",
   "agents.installed": "Installed",
   "agents.notInstalled": "Not detected",
   "agents.path.missing": "No directly executable program was found on PATH",

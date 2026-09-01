@@ -15,6 +15,7 @@ import {
   moveAgentLaunchPlan,
 } from "../app/useAgentSessions";
 import { AgentRemoteDelivery } from "../components/agents/AgentRemoteDelivery";
+import { SharedAgentRulesPanel } from "../components/agents/SharedAgentRulesPanel";
 import { Callout } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import {
@@ -596,6 +597,11 @@ export function AgentsView({
             </button>
           </div>
         </section>
+
+        <SharedAgentRulesPanel
+          projectDirectory={workingDirectory}
+          disabled={agents.mode !== "ready"}
+        />
 
         <div className="agent-grid">
           {displayCatalog.map((definition) => (

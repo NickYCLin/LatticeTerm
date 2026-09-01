@@ -17,6 +17,7 @@ pub mod remote_host;
 pub mod remote_pins;
 pub mod sftp;
 pub mod sftp_transfers;
+pub mod shared_agent_rules;
 mod sidecar;
 pub mod ssh;
 pub mod storage;
@@ -50,6 +51,7 @@ use crate::sftp::{
     SftpConnectOutcome, SftpConnectRequest, SftpDirectory, SftpRegistry, SftpSessionSummary,
 };
 use crate::sftp_transfers::{TransferRegistry, TransferState};
+use crate::shared_agent_rules::SharedAgentRulesSnapshot;
 use crate::ssh::{ConnectOutcome, ConnectRequest, EventSink, SessionSummary, SshRegistry};
 use crate::storage::{FileStorage, Storage};
 use crate::tunnel::{StartTunnelRequest, TunnelRegistry, TunnelStatus, TunnelStatusSummary};
@@ -587,6 +589,22 @@ fn agent_rename(
 #[tauri::command]
 fn agent_output_snapshots(registry: State<'_, Arc<AgentRegistry>>) -> Vec<AgentOutputSnapshot> {
     registry.output_snapshots()
+}
+
+#[tauri::command]
+fn agent_shared_rules_inspect(
+    project_directory: String,
+) -> Result<SharedAgentRulesSnapshot, String> {
+    crate::shared_agent_rules::inspect(&project_directory)
+}
+
+#[tauri::command]
+fn agent_shared_rules_save(
+    project_directory: String,
+    content: String,
+    expected_revision: String,
+) -> Result<SharedAgentRulesSnapshot, String> {
+    crate::shared_agent_rules::save(&project_directory, &content, &expected_revision)
 }
 
 #[tauri::command]
@@ -2055,6 +2073,8 @@ pub fn run() {
             agent_sessions,
             agent_rename,
             agent_output_snapshots,
+            agent_shared_rules_inspect,
+            agent_shared_rules_save,
             agent_plan_snapshot,
             agent_plan_save,
             agent_plan_delete,
