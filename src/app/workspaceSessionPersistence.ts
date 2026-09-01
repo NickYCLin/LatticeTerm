@@ -94,9 +94,14 @@ export function sanitizeWorkspaceSessionSnapshot(
     const definitionId = safeText(entry.definitionId, 64);
     const label = safeText(entry.label, 80);
     const executable = safeText(entry.executable, 4096);
-    const launchArguments = Array.isArray(entry.launchArguments)
-      ? entry.launchArguments.map(safeArgument)
-      : [];
+    // A corrupted argument list must not silently relaunch the CLI with
+    // different arguments than the user saved.
+    const launchArguments =
+      entry.launchArguments === undefined
+        ? []
+        : Array.isArray(entry.launchArguments)
+          ? entry.launchArguments.map(safeArgument)
+          : [null];
     const workingDirectory = safeText(entry.workingDirectory, 4096);
     const resumeSessionId = optionalResumeId(entry.resumeSessionId);
     if (
@@ -170,6 +175,31 @@ export function saveWorkspaceSessionSnapshot(
   storage.setItem(WORKSPACE_SESSIONS_KEY, JSON.stringify(snapshot));
 }
 
+/**
+ * Keeps a snapshot inside the size the reader accepts. Writing more entries
+ * than `sanitizeWorkspaceSessionSnapshot` allows would make the next start
+ * discard the whole workspace instead of restoring most of it, so the surplus
+ * is dropped here and the active pointer follows what survived.
+ */
+function boundedSnapshot(
+  sessions: readonly SavedWorkspaceSession[],
+  active: SavedActiveSession,
+): WorkspaceSessionSnapshot {
+  const kept = sessions.slice(0, MAX_RESTORABLE_SESSIONS);
+  const keptActive =
+    active &&
+    kept.some((session) =>
+      active.kind === "agent"
+        ? session.kind === "agent" &&
+          session.groupKey === active.groupKey &&
+          session.definitionId === active.definitionId
+        : session.kind === "ssh" && session.profileId === active.profileId,
+    )
+      ? active
+      : null;
+  return { version: 1, sessions: kept, active: keptActive };
+}
+
 function sameSavedSession(
   left: SavedWorkspaceSession,
   right: SavedWorkspaceSession,
@@ -204,18 +234,9 @@ export function preserveUnrestoredWorkspaceSessions(
       sessions.push(saved);
     }
   }
-  const active =
-    live.active ??
-    (previousActive && sessions.some((session) =>
-      previousActive.kind === "agent"
-        ? session.kind === "agent" &&
-          session.groupKey === previousActive.groupKey &&
-          session.definitionId === previousActive.definitionId
-        : session.kind === "ssh" && session.profileId === previousActive.profileId,
-    )
-      ? previousActive
-      : null);
-  return { version: 1, sessions, active };
+  // Live sessions are listed first, so a snapshot at the size limit keeps the
+  // ones still open in preference to entries that already failed to restore.
+  return boundedSnapshot(sessions, live.active ?? previousActive);
 }
 
 export function snapshotLiveWorkspaceSessions(
@@ -253,7 +274,7 @@ export function snapshotLiveWorkspaceSessions(
     : activeSsh
       ? { kind: "ssh", profileId: activeSsh.profileId }
       : null;
-  return { version: 1, sessions, active };
+  return boundedSnapshot(sessions, active);
 }
 
 export function agentRestoreArguments(session: SavedAgentSession): string[] {

@@ -427,6 +427,31 @@ export function toggleSessionSidebarFolder(
 }
 
 /**
+ * Reveals a node by expanding every collapsed ancestor, custom folders and
+ * project branches alike. A search hit or a drop into a collapsed branch must
+ * never leave the affected row invisible.
+ */
+export function expandSessionSidebarAncestors(
+  layout: SessionSidebarLayout,
+  nodeId: string,
+): SessionSidebarLayout {
+  const ancestors = new Set<string>();
+  const visited = new Set<string>([nodeId]);
+  let cursor = layout.placements[nodeId]?.parentId ?? null;
+  while (cursor && !visited.has(cursor)) {
+    visited.add(cursor);
+    ancestors.add(cursor);
+    cursor = layout.placements[cursor]?.parentId ?? null;
+  }
+  const collapsedFolderIds = layout.collapsedFolderIds.filter(
+    (id) => !ancestors.has(id),
+  );
+  return collapsedFolderIds.length === layout.collapsedFolderIds.length
+    ? layout
+    : { ...layout, collapsedFolderIds };
+}
+
+/**
  * Adds portable folders and placements without rearranging anything already
  * organized on this computer. Imported node ids fill only missing positions.
  */

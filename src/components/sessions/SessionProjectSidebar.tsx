@@ -129,6 +129,7 @@ export function SessionProjectSidebar({
   onRenameFolder,
   onDeleteFolder,
   onToggleFolder,
+  onRevealNode,
   onMove,
 }: {
   projects: SessionSidebarProjectItem[];
@@ -150,6 +151,7 @@ export function SessionProjectSidebar({
   onRenameFolder: (folder: SessionSidebarFolder) => void;
   onDeleteFolder: (folder: SessionSidebarFolder) => void;
   onToggleFolder: (folderId: string) => void;
+  onRevealNode: (nodeId: string) => void;
   onMove: (
     nodeId: string,
     parentId: string | null,
@@ -320,24 +322,43 @@ export function SessionProjectSidebar({
     };
   }, [launchMenu]);
 
+  // A destination label spells out the whole branch so two folders or projects
+  // sharing a name stay distinguishable in the move dialog.
+  function destinationPath(nodeId: string, ownName: string) {
+    const path = [ownName];
+    const visited = new Set([nodeId]);
+    let parentId = layout.placements[nodeId]?.parentId ?? null;
+    while (parentId && !visited.has(parentId)) {
+      const parent = folders.get(parentId);
+      const parentName = parent?.name ?? projectByNode.get(parentId)?.label;
+      if (!parentName) break;
+      visited.add(parentId);
+      path.unshift(parentName);
+      parentId = layout.placements[parentId]?.parentId ?? null;
+    }
+    return path.join(" / ");
+  }
   const folderDestinations = useMemo(
     () =>
       layout.folders
-        .map((folder) => {
-          const path = [folder.name];
-          const visited = new Set([folder.id]);
-          let parentId = layout.placements[folder.id]?.parentId ?? null;
-          while (parentId) {
-            const parent = folders.get(parentId);
-            if (!parent || visited.has(parent.id)) break;
-            visited.add(parent.id);
-            path.unshift(parent.name);
-            parentId = layout.placements[parent.id]?.parentId ?? null;
-          }
-          return { id: folder.id, label: path.join(" / ") };
-        })
+        .map((folder) => ({
+          id: folder.id,
+          label: destinationPath(folder.id, folder.name),
+        }))
         .sort((left, right) => left.label.localeCompare(right.label)),
-    [folders, layout.folders, layout.placements],
+    [folders, layout.folders, layout.placements, projectByNode],
+  );
+  // Projects own their sessions in the layout, so a session moved to the top
+  // level needs a way back without dragging it there.
+  const projectDestinations = useMemo(
+    () =>
+      projects
+        .map((project) => ({
+          id: project.nodeId,
+          label: destinationPath(project.nodeId, project.label),
+        }))
+        .sort((left, right) => left.label.localeCompare(right.label)),
+    [folders, layout.placements, projects, projectByNode],
   );
 
   function nodeKind(nodeId: string): "folder" | "project" | "session" | null {
@@ -456,12 +477,10 @@ export function SessionProjectSidebar({
       );
       if (!placement) return;
       onMove(press.nodeId, placement.parentId, placement.beforeNodeId);
-      if (
-        targetKind === "folder" &&
-        layoutRef.current.collapsedFolderIds.includes(drop.nodeId)
-      ) {
-        onToggleFolder(drop.nodeId);
-      }
+      // Projects are collapsible containers too, and a destination may itself
+      // sit inside a collapsed branch, so reveal the whole chain rather than
+      // toggling the drop target alone.
+      if (placement.parentId) onRevealNode(press.nodeId);
     };
 
     const cancel = (cancelEvent: PointerEvent) => {
@@ -514,18 +533,7 @@ export function SessionProjectSidebar({
   }
 
   function selectSearchResult(result: SidebarSearchResult) {
-    let parentId = layout.placements[result.nodeId]?.parentId ?? null;
-    const visited = new Set<string>();
-    while (parentId && !visited.has(parentId)) {
-      visited.add(parentId);
-      if (
-        folders.has(parentId) &&
-        layout.collapsedFolderIds.includes(parentId)
-      ) {
-        onToggleFolder(parentId);
-      }
-      parentId = layout.placements[parentId]?.parentId ?? null;
-    }
+    onRevealNode(result.nodeId);
     setSearchQuery("");
     setSearchOpen(false);
     onSelect(result.sessionId);
@@ -1171,6 +1179,7 @@ export function SessionProjectSidebar({
                       id: null,
                       label: t("terminal.projects.sessionMoveRoot"),
                     },
+                    ...projectDestinations,
                     ...folderDestinations,
                   ].map((destination) => {
                     const currentParentId =
@@ -1184,6 +1193,7 @@ export function SessionProjectSidebar({
                         disabled={current}
                         onClick={() => {
                           onMove(movingSession.nodeId, destination.id);
+                          if (destination.id) onRevealNode(movingSession.nodeId);
                           setMovingSession(null);
                         }}
                       >

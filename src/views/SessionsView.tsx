@@ -33,6 +33,7 @@ import {
 import {
   createSessionSidebarFolder,
   emptySessionSidebarLayout,
+  expandSessionSidebarAncestors,
   loadSessionSidebarLayout,
   mergeSessionSidebarLayouts,
   moveSessionSidebarNode,
@@ -44,6 +45,7 @@ import {
   toggleSessionSidebarFolder,
   type LiveSessionSidebarNode,
   type SessionSidebarFolder,
+  type SessionSidebarLayout,
 } from "../app/sessionSidebarLayout";
 import {
   MAX_WORKSPACE_TRANSFER_BYTES,
@@ -333,6 +335,11 @@ export function SessionsView({
   const [sidebarLayout, setSidebarLayout] = useState(() =>
     loadSessionSidebarLayout(window.localStorage),
   );
+  // A session launched into a collapsed project or folder has no sidebar row
+  // yet, so the branch is opened once reconciliation gives it a node.
+  const [pendingRevealSessionId, setPendingRevealSessionId] = useState<
+    string | null
+  >(null);
   const [folderEditor, setFolderEditor] = useState<{
     parentId: string | null;
     folder: SessionSidebarFolder | null;
@@ -662,8 +669,8 @@ export function SessionsView({
           );
         }
       }
-      setSidebarLayout(
-        mergeSessionSidebarLayouts(reconciledSidebarLayout, transfer.sidebar),
+      updateSidebarLayout((layout) =>
+        mergeSessionSidebarLayouts(layout, transfer.sidebar),
       );
       setWorkspaceImport(null);
       const skipped =
@@ -677,7 +684,10 @@ export function SessionsView({
           failed: failures.length,
         })}${failures.length > 0 ? ` ${failures.slice(0, 3).join("；")}` : ""}`,
       });
-      if (launched[0]) onSelect(launched[0].sessionId);
+      if (launched[0]) {
+        setPendingRevealSessionId(launched[0].sessionId);
+        onSelect(launched[0].sessionId);
+      }
     } catch (reason) {
       setWorkspaceImportError(
         reason instanceof Error ? reason.message : String(reason),
@@ -787,6 +797,7 @@ export function SessionsView({
         cols: 80,
         rows: 24,
       });
+      setPendingRevealSessionId(session.sessionId);
       selectMember(group.groupId, session.sessionId);
     } catch {
       // A failed launch leaves the current CLIs untouched.
@@ -944,6 +955,7 @@ export function SessionsView({
         rows: 32,
       });
       setNewProjectDirectory(null);
+      setPendingRevealSessionId(launched.sessionId);
       onSelect(launched.sessionId);
     } catch (reason) {
       setNewProjectError(reason instanceof Error ? reason.message : String(reason));
@@ -1143,6 +1155,28 @@ export function SessionsView({
   const liveSidebarKey = liveSidebarNodes
     .map((node) => `${node.id}>${node.defaultParentId ?? "root"}`)
     .join("|");
+  const liveSidebarNodesRef = useRef(liveSidebarNodes);
+  liveSidebarNodesRef.current = liveSidebarNodes;
+  // Layout edits queued in the same event must each see the previous result.
+  // Handing `setSidebarLayout` an already computed layout let a second call
+  // (a drop that also has to expand its destination) discard the first.
+  function updateSidebarLayout(
+    update: (layout: SessionSidebarLayout) => SessionSidebarLayout,
+  ) {
+    setSidebarLayout((current) => {
+      const reconciled = reconcileSessionSidebarLayout(
+        current,
+        liveSidebarNodesRef.current,
+      );
+      const next = update(reconciled);
+      // A reveal that had nothing collapsed must not churn state or rewrite
+      // the saved layout.
+      return next === reconciled &&
+        JSON.stringify(next) === JSON.stringify(current)
+        ? current
+        : next;
+    });
+  }
   useEffect(() => {
     if (!sessionRestoreComplete) return;
     setSidebarLayout((current) => {
@@ -1150,6 +1184,17 @@ export function SessionsView({
       return JSON.stringify(next) === JSON.stringify(current) ? current : next;
     });
   }, [liveSidebarKey, sessionRestoreComplete]);
+  useEffect(() => {
+    if (!pendingRevealSessionId) return;
+    const revealed = sidebarProjects
+      .flatMap((project) => project.sessions)
+      .find((session) => session.sessionId === pendingRevealSessionId);
+    if (!revealed) return;
+    updateSidebarLayout((layout) =>
+      expandSessionSidebarAncestors(layout, revealed.nodeId),
+    );
+    setPendingRevealSessionId(null);
+  }, [liveSidebarKey, pendingRevealSessionId]);
   useEffect(() => {
     if (!sessionRestoreComplete) return;
     try {
@@ -1170,21 +1215,18 @@ export function SessionsView({
   function saveFolder() {
     if (!folderEditor || !folderDraft.trim()) return;
     if (folderEditor.folder) {
-      setSidebarLayout(
-        renameSessionSidebarFolder(
-          reconciledSidebarLayout,
-          folderEditor.folder.id,
-          folderDraft,
-        ),
+      const folderId = folderEditor.folder.id;
+      updateSidebarLayout((layout) =>
+        renameSessionSidebarFolder(layout, folderId, folderDraft),
       );
     } else {
       const suffix =
         typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()
           : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      setSidebarLayout(
+      updateSidebarLayout((layout) =>
         createSessionSidebarFolder(
-          reconciledSidebarLayout,
+          layout,
           { id: `folder:${suffix}`, name: folderDraft },
           folderEditor.parentId,
         ),
@@ -1422,6 +1464,7 @@ export function SessionsView({
         cols: 120,
         rows: 32,
       });
+      setPendingRevealSessionId(launched.sessionId);
       onSelect(launched.sessionId);
     } catch {
       // A failed quick chat leaves the workspace untouched.
@@ -1573,18 +1616,18 @@ export function SessionsView({
           }
           onDeleteFolder={setPendingDeleteFolder}
           onToggleFolder={(folderId) =>
-            setSidebarLayout(
-              toggleSessionSidebarFolder(reconciledSidebarLayout, folderId),
+            updateSidebarLayout((layout) =>
+              toggleSessionSidebarFolder(layout, folderId),
+            )
+          }
+          onRevealNode={(nodeId) =>
+            updateSidebarLayout((layout) =>
+              expandSessionSidebarAncestors(layout, nodeId),
             )
           }
           onMove={(nodeId, parentId, beforeNodeId) =>
-            setSidebarLayout(
-              moveSessionSidebarNode(
-                reconciledSidebarLayout,
-                nodeId,
-                parentId,
-                beforeNodeId,
-              ),
+            updateSidebarLayout((layout) =>
+              moveSessionSidebarNode(layout, nodeId, parentId, beforeNodeId),
             )
           }
         />
@@ -2083,11 +2126,8 @@ export function SessionsView({
           cancelLabel={t("common.cancel")}
           onCancel={() => setPendingDeleteFolder(null)}
           onConfirm={() => {
-            setSidebarLayout(
-              removeSessionSidebarFolder(
-                reconciledSidebarLayout,
-                pendingDeleteFolder.id,
-              ),
+            updateSidebarLayout((layout) =>
+              removeSessionSidebarFolder(layout, pendingDeleteFolder.id),
             );
             setPendingDeleteFolder(null);
           }}
