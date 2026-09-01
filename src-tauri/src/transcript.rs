@@ -6,8 +6,9 @@
 //! over": the target sees the actual exchange and can continue from it.
 //!
 //! Claude's auto-memory is the one exception we support for a direct import:
-//! its documented, per-project `MEMORY.md` is plain Markdown. We deliberately
-//! never write a Codex rollout JSONL or another CLI's private session store.
+//! its documented, per-project `MEMORY.md` is plain Markdown. Every supported
+//! source can still hand its context to every new CLI; we deliberately never
+//! write a Codex, Gemini, or another CLI's private session store.
 //!
 //! Only CLIs whose on-disk format is verified are supported; everything else
 //! returns `None` so the caller can fall back to a plain, memory-less launch.
@@ -32,6 +33,7 @@ const MAX_TRANSCRIPT_SEARCH_ENTRIES: usize = 50_000;
 const MAX_CLAUDE_MEMORY_IMPORT_BYTES: usize = 8 * 1024;
 const MAX_CLAUDE_MEMORY_STARTUP_BYTES: usize = 24 * 1024;
 const MAX_CLAUDE_SETTINGS_BYTES: u64 = 1024 * 1024;
+const MAX_GEMINI_PROJECT_ROOT_BYTES: usize = 8 * 1024;
 const LATTICETERM_MEMORY_START: &str = "<!-- LatticeTerm imported context: start -->";
 const LATTICETERM_MEMORY_END: &str = "<!-- LatticeTerm imported context: end -->";
 
@@ -42,6 +44,8 @@ pub enum TranscriptKind {
     Claude,
     /// `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session>.jsonl`
     Codex,
+    /// `~/.gemini/tmp/<project-hash>/chats/session-*.jsonl`
+    Gemini,
 }
 
 impl TranscriptKind {
@@ -49,6 +53,7 @@ impl TranscriptKind {
         match definition_id {
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
+            "gemini" => Some(Self::Gemini),
             _ => None,
         }
     }
@@ -492,6 +497,74 @@ fn parse_codex(path: &Path, max_chars: usize) -> Option<String> {
     finish_transcript(out, truncated || skipped_oversized)
 }
 
+/// Gemini stores text blocks without the Claude/Codex `type` discriminator.
+/// Only read plain text blocks; tool payloads and any unknown block stay out
+/// of a cross-CLI handoff.
+fn gemini_content_text(content: &Value) -> String {
+    if let Some(text) = content.as_str() {
+        return text.trim().to_string();
+    }
+    let Some(items) = content.as_array() else {
+        return String::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| item.get("text").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn gemini_role(message: &Value) -> Option<&str> {
+    match message
+        .get("role")
+        .or_else(|| message.get("type"))
+        .and_then(Value::as_str)
+    {
+        Some("user") => Some("user"),
+        Some("assistant") | Some("gemini") | Some("model") => Some("assistant"),
+        _ => None,
+    }
+}
+
+fn parse_gemini(path: &Path, max_chars: usize) -> Option<String> {
+    if max_chars == 0 {
+        return None;
+    }
+    let mut out = String::new();
+    let mut truncated = false;
+    let skipped_oversized = visit_transcript_rows(path, |value| {
+        // Gemini's JSONL rows are state changes. Conversation turns are the
+        // `messages` array in a `$set` patch, not the session metadata row.
+        let Some(messages) = value
+            .get("$set")
+            .and_then(|set| set.get("messages"))
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        for message in messages {
+            let Some(role) = gemini_role(message) else {
+                continue;
+            };
+            let text = message
+                .get("content")
+                .map(gemini_content_text)
+                .unwrap_or_default();
+            // Gemini adds this local environment preamble when creating a
+            // session. It is not user conversation and must not be handed to
+            // another CLI as if it were an instruction.
+            if text.starts_with("<session_context>") {
+                continue;
+            }
+            push_turn(&mut out, role, &text);
+            truncated |= trim_tail(&mut out, max_chars);
+        }
+    })?;
+    finish_transcript(out, truncated || skipped_oversized)
+}
+
 struct ClaudeSessionMeta {
     id: String,
     cwd: String,
@@ -696,6 +769,91 @@ fn locate_codex(working_directory: &str, captured: Option<&str>) -> Option<PathB
     locate_codex_in(&root, working_directory, captured)
 }
 
+fn is_gemini_session(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("session-"))
+        && path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+}
+
+/// Gemini records the project root beside each hashed chat directory. Read a
+/// small, regular file only, then canonicalize it before matching a session.
+fn read_gemini_project_root(path: &Path) -> Option<PathBuf> {
+    let file = open_regular_transcript(path)?;
+    let mut contents = String::new();
+    file.take((MAX_GEMINI_PROJECT_ROOT_BYTES + 1) as u64)
+        .read_to_string(&mut contents)
+        .ok()?;
+    if contents.len() > MAX_GEMINI_PROJECT_ROOT_BYTES || contents.contains('\0') {
+        return None;
+    }
+    fs::canonicalize(contents.trim()).ok()
+}
+
+fn read_gemini_session_id(path: &Path) -> Option<String> {
+    let file = open_regular_transcript(path)?;
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    if !read_bounded_line(&mut reader, &mut line, MAX_TRANSCRIPT_LINE_BYTES)
+        .ok()?
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    serde_json::from_slice::<Value>(&line)
+        .ok()?
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn gemini_project_root(working_directory: &str) -> Option<PathBuf> {
+    let working_directory = fs::canonicalize(working_directory).ok()?;
+    let mut current = working_directory.as_path();
+    loop {
+        if current.join(".git").exists() {
+            return Some(current.to_path_buf());
+        }
+        let Some(parent) = current.parent() else {
+            return Some(working_directory);
+        };
+        current = parent;
+    }
+}
+
+fn gemini_session_matches(path: &Path, expected_root: &Path, captured: Option<&str>) -> bool {
+    if captured.is_some_and(|id| read_gemini_session_id(path).as_deref() != Some(id)) {
+        return false;
+    }
+    let Some(project_root_file) = path
+        .parent()
+        .and_then(Path::parent)
+        .map(|directory| directory.join(".project_root"))
+    else {
+        return false;
+    };
+    read_gemini_project_root(&project_root_file).is_some_and(|root| root == expected_root)
+}
+
+fn locate_gemini_in(
+    sessions_root: &Path,
+    working_directory: &str,
+    captured: Option<&str>,
+) -> Option<PathBuf> {
+    let root = fs::canonicalize(sessions_root).ok()?;
+    let expected_root = gemini_project_root(working_directory)?;
+    newest_matching(&root, |path| {
+        is_gemini_session(path) && gemini_session_matches(path, &expected_root, captured)
+    })
+}
+
+fn locate_gemini(working_directory: &str, captured: Option<&str>) -> Option<PathBuf> {
+    let root = home()?.join(".gemini").join("tmp");
+    locate_gemini_in(&root, working_directory, captured)
+}
+
 /// Reads the source CLI's most relevant conversation and returns it as plain,
 /// role-labelled text capped at `max_chars`, or `None` when nothing is found.
 pub fn export(
@@ -712,6 +870,10 @@ pub fn export(
         TranscriptKind::Codex => {
             let path = locate_codex(working_directory, captured_session_id)?;
             parse_codex(&path, max_chars)
+        }
+        TranscriptKind::Gemini => {
+            let path = locate_gemini(working_directory, captured_session_id)?;
+            parse_gemini(&path, max_chars)
         }
     }
 }
@@ -941,6 +1103,59 @@ mod tests {
         assert!(text.contains("問題一"));
         assert!(text.contains("答案一"));
         assert!(!text.contains("reasoning"));
+    }
+
+    #[test]
+    fn gemini_transcript_exports_the_matching_project_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        let gemini_root = directory.path().join(".gemini").join("tmp");
+        let session = gemini_root
+            .join("project-hash")
+            .join("chats")
+            .join("session-2026-09-01.jsonl");
+        fs::create_dir_all(session.parent().unwrap()).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            session
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join(".project_root"),
+            project.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        let rows = [
+            serde_json::json!({"sessionId": "gemini-session", "projectHash": "project-hash"})
+                .to_string(),
+            serde_json::json!({
+                "$set": {
+                    "messages": [
+                        {"type": "user", "content": [{"text": "<session_context>ignore</session_context>"}]},
+                        {"type": "user", "content": [{"text": "remember red panda"}]},
+                        {"type": "gemini", "content": [{"text": "I will remember it"}]},
+                        {"type": "tool", "content": [{"text": "must not transfer"}]}
+                    ]
+                }
+            })
+            .to_string(),
+        ];
+        fs::write(&session, rows.join("\n")).unwrap();
+
+        let located = locate_gemini_in(
+            &gemini_root,
+            &project.to_string_lossy(),
+            Some("gemini-session"),
+        )
+        .unwrap();
+        assert_eq!(located, session);
+
+        let text = parse_gemini(&located, 5000).unwrap();
+        assert!(text.contains("remember red panda"));
+        assert!(text.contains("I will remember it"));
+        assert!(!text.contains("session_context"));
+        assert!(!text.contains("must not transfer"));
     }
 
     #[test]

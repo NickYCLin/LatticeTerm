@@ -253,7 +253,7 @@ const FALLBACK_CATALOG: AgentDefinition[] = FALLBACK_CATALOG_SOURCE.map(
     resumeSupported,
     resumeLatestSupported:
       id === "codex" || id === "antigravity" || id === "cursor",
-    transcriptSupported: id === "codex" || id === "claude",
+    transcriptSupported: id === "codex" || id === "claude" || id === "gemini",
     installed: false,
     installedPath: null,
     consumerOauthDeprecated: id === "gemini",
