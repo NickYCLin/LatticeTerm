@@ -294,6 +294,13 @@ export function snapshotLiveWorkspaceSessions(
 
 export function agentRestoreArguments(session: SavedAgentSession): string[] {
   if (session.resumeSessionId) return [];
+  // Claude's --continue resumes the most recent conversation in this working
+  // directory and still accepts ordinary startup flags such as --model.
+  // Putting it first avoids silently turning a restored Claude tab into a
+  // fresh conversation just because the user picked a model.
+  if (session.definitionId === "claude") {
+    return ["--continue", ...session.launchArguments];
+  }
   if (session.launchArguments.length > 0) return session.launchArguments;
   if (session.definitionId === "codex") return ["resume", "--last"];
   if (

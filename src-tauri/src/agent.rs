@@ -111,7 +111,10 @@ const AGENTS: [AgentSpec; 13] = [
         label: "Claude Code",
         executable: "claude",
         resume_recipe: Some(AgentResumeRecipe::Flag),
-        resume_latest_recipe: None,
+        // Claude keeps its recent conversations per working directory. Use
+        // its documented --continue path when an older LatticeTerm snapshot
+        // predates the hook-based native session-id capture.
+        resume_latest_recipe: Some(AgentResumeLatestRecipe::Continue),
     },
     AgentSpec {
         id: "gemini",
@@ -2398,6 +2401,7 @@ fn claude_reporter_arguments(
             "PreCompact": [hook(None)],
             "PostCompact": [hook(None)],
             "Elicitation": [hook(None)],
+            "SessionStart": [hook(None)],
             "Stop": [hook(None)],
             "StopFailure": [hook(None)],
             "Notification": [hook(None)]
@@ -2879,6 +2883,10 @@ fn opencode_reporter_plugin(
 #[derive(Debug, Deserialize)]
 struct ClaudeHookPayload {
     hook_event_name: String,
+    /// Claude sends this common hook field for both a new and resumed
+    /// conversation. It is opaque application data, never terminal output.
+    #[serde(default)]
+    session_id: Option<String>,
     #[serde(default)]
     notification_type: Option<String>,
     #[serde(default)]
@@ -2887,10 +2895,12 @@ struct ClaudeHookPayload {
     session_crons: Vec<serde_json::Value>,
 }
 
-fn lifecycle_from_claude_hook_payload(raw: &[u8]) -> Result<Option<AgentLifecycle>, String> {
-    let payload: ClaudeHookPayload =
-        serde_json::from_slice(raw).map_err(|_| "Claude hook payload is invalid.".to_string())?;
-    let state = match payload.hook_event_name.as_str() {
+fn lifecycle_from_claude_hook(payload: &ClaudeHookPayload) -> Option<AgentLifecycle> {
+    match payload.hook_event_name.as_str() {
+        // SessionStart runs for both a fresh CLI and a resumed conversation.
+        // It captures the native id early while accurately representing the
+        // prompt as ready for input.
+        "SessionStart" => Some(AgentLifecycle::Idle),
         "UserPromptSubmit" => Some(AgentLifecycle::Working),
         "PermissionDenied" | "PostToolUse" | "PostToolUseFailure" | "PostToolBatch"
         | "PreCompact" | "PostCompact" => Some(AgentLifecycle::Working),
@@ -2913,8 +2923,30 @@ fn lifecycle_from_claude_hook_payload(raw: &[u8]) -> Result<Option<AgentLifecycl
             _ => None,
         },
         _ => None,
+    }
+}
+
+#[cfg(test)]
+fn lifecycle_from_claude_hook_payload(raw: &[u8]) -> Result<Option<AgentLifecycle>, String> {
+    let payload: ClaudeHookPayload =
+        serde_json::from_slice(raw).map_err(|_| "Claude hook payload is invalid.".to_string())?;
+    Ok(lifecycle_from_claude_hook(&payload))
+}
+
+fn report_from_claude_hook_payload(
+    raw: &[u8],
+) -> Result<Option<(AgentLifecycle, Option<String>)>, String> {
+    let payload: ClaudeHookPayload =
+        serde_json::from_slice(raw).map_err(|_| "Claude hook payload is invalid.".to_string())?;
+    let Some(state) = lifecycle_from_claude_hook(&payload) else {
+        return Ok(None);
     };
-    Ok(state)
+    let native_session_id = payload
+        .session_id
+        .as_deref()
+        .map(|value| validate_text(value, "Claude session ID", MAX_RESUME_SESSION_ID_BYTES))
+        .transpose()?;
+    Ok(Some((state, native_session_id)))
 }
 
 fn report_claude_hook_from_stdin() -> Result<(), String> {
@@ -2926,8 +2958,8 @@ fn report_claude_hook_from_stdin() -> Result<(), String> {
     if payload.len() as u64 > MAX_LIFECYCLE_HOOK_BYTES {
         return Err("Claude hook payload is too large.".to_string());
     }
-    if let Some(state) = lifecycle_from_claude_hook_payload(&payload)? {
-        report_from_environment(state)?;
+    if let Some((state, native_session_id)) = report_from_claude_hook_payload(&payload)? {
+        report_from_environment_with_native_session(state, native_session_id.as_deref())?;
     }
     Ok(())
 }
@@ -4247,14 +4279,29 @@ pub fn launch_request_from_plan(
     // directory, so LatticeTerm does not need to persist a session id or read
     // the CLI's private transcript store. Explicit legacy resume ids still win.
     let mut restore_existing_session = validated.resume_session_id.is_some();
-    let arguments = if validated.resume_session_id.is_none() && validated.arguments.is_empty() {
+    let arguments = if validated.resume_session_id.is_none() {
         let resume_arguments = AGENTS
             .iter()
             .find(|agent| agent.id == validated.definition_id)
             .and_then(|agent| agent.resume_latest_recipe)
             .map(AgentResumeLatestRecipe::arguments);
-        restore_existing_session = resume_arguments.is_some();
-        resume_arguments.unwrap_or_default()
+        if validated.definition_id == "claude" {
+            if let Some(mut resume_arguments) = resume_arguments {
+                // --continue is compatible with normal Claude startup flags.
+                // Preserve an explicit model or permission preference while
+                // resuming the project's latest native conversation.
+                resume_arguments.extend(validated.arguments);
+                restore_existing_session = true;
+                resume_arguments
+            } else {
+                validated.arguments
+            }
+        } else if validated.arguments.is_empty() {
+            restore_existing_session = resume_arguments.is_some();
+            resume_arguments.unwrap_or_default()
+        } else {
+            validated.arguments
+        }
     } else {
         validated.arguments
     };
@@ -5931,7 +5978,7 @@ model = "gpt-5.3-codex"
             .collect();
         assert_eq!(
             latest_supported,
-            HashSet::from(["codex", "antigravity", "cursor"])
+            HashSet::from(["codex", "claude", "antigravity", "cursor"])
         );
         assert_eq!(
             AGENTS[0].resume_latest_recipe.unwrap().arguments(),
@@ -5943,6 +5990,11 @@ model = "gpt-5.3-codex"
             .unwrap();
         assert_eq!(
             antigravity.resume_latest_recipe.unwrap().arguments(),
+            vec!["--continue"]
+        );
+        let claude = AGENTS.iter().find(|agent| agent.id == "claude").unwrap();
+        assert_eq!(
+            claude.resume_latest_recipe.unwrap().arguments(),
             vec!["--continue"]
         );
         let cursor = AGENTS.iter().find(|agent| agent.id == "cursor").unwrap();
@@ -6367,6 +6419,26 @@ model = "gpt-5.3-codex"
         assert!(request.resume_session_id.is_none());
         assert!(request.restore_existing_session);
 
+        let claude = normalize_launch_plan(
+            "agent-plan-latest-claude".to_string(),
+            AgentLaunchPlanDraft {
+                definition_id: "claude".to_string(),
+                label: String::new(),
+                executable: String::new(),
+                arguments: vec!["--model".to_string(), "sonnet".to_string()],
+                resume_session_id: None,
+                note: String::new(),
+                working_directory: directory.display().to_string(),
+            },
+        )
+        .unwrap();
+        let claude_request = launch_request_from_plan(&claude, 80, 24).unwrap();
+        assert_eq!(
+            claude_request.arguments,
+            vec!["--continue", "--model", "sonnet"]
+        );
+        assert!(claude_request.restore_existing_session);
+
         let antigravity = normalize_launch_plan(
             "agent-plan-latest-antigravity".to_string(),
             AgentLaunchPlanDraft {
@@ -6539,6 +6611,7 @@ notify = ["notify.exe", "turn-ended"]"#,
         );
         assert_eq!(stop["args"], serde_json::json!(["agent-claude-hook"]));
         for event in [
+            "SessionStart",
             "PermissionDenied",
             "PostToolUse",
             "PostToolUseFailure",
@@ -6575,6 +6648,10 @@ notify = ["notify.exe", "turn-ended"]"#,
         assert_eq!(
             state(r#"{"hook_event_name":"UserPromptSubmit"}"#),
             Some(AgentLifecycle::Working)
+        );
+        assert_eq!(
+            state(r#"{"hook_event_name":"SessionStart"}"#),
+            Some(AgentLifecycle::Idle)
         );
         assert_eq!(
             state(r#"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[]}"#),
@@ -6614,6 +6691,28 @@ notify = ["notify.exe", "turn-ended"]"#,
             );
         }
         assert!(lifecycle_from_claude_hook_payload(b"not-json").is_err());
+    }
+
+    #[test]
+    fn claude_hooks_report_the_native_session_id() {
+        let report = |payload: &str| report_from_claude_hook_payload(payload.as_bytes()).unwrap();
+        assert_eq!(
+            report(
+                r#"{"hook_event_name":"SessionStart","session_id":"0199aa11-bb22-4c33-8d44-ee55ff667788"}"#
+            ),
+            Some((
+                AgentLifecycle::Idle,
+                Some("0199aa11-bb22-4c33-8d44-ee55ff667788".to_string()),
+            ))
+        );
+        assert_eq!(
+            report(r#"{"hook_event_name":"UserPromptSubmit"}"#),
+            Some((AgentLifecycle::Working, None))
+        );
+        assert!(report_from_claude_hook_payload(
+            br#"{"hook_event_name":"SessionStart","session_id":"bad\nvalue"}"#,
+        )
+        .is_err());
     }
 
     #[test]

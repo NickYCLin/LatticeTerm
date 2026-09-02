@@ -199,6 +199,17 @@ describe("workspace session persistence", () => {
       [],
       null,
     ).sessions[0];
+    const claude = snapshotLiveWorkspaceSessions(
+      [
+        agent({
+          definitionId: "claude",
+          capturedSessionId: null,
+          launchArguments: ["--model", "sonnet"],
+        }),
+      ],
+      [],
+      null,
+    ).sessions[0];
     const cursor = snapshotLiveWorkspaceSessions(
       [agent({ definitionId: "cursor", capturedSessionId: null })],
       [],
@@ -212,6 +223,11 @@ describe("workspace session persistence", () => {
     expect(
       antigravity.kind === "agent" && agentRestoreArguments(antigravity),
     ).toEqual(["--continue"]);
+    expect(claude.kind === "agent" && agentRestoreArguments(claude)).toEqual([
+      "--continue",
+      "--model",
+      "sonnet",
+    ]);
     expect(cursor.kind === "agent" && agentRestoreArguments(cursor)).toEqual([
       "--continue",
     ]);
