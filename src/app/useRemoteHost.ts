@@ -46,6 +46,13 @@ export interface RemoteHostApi {
   /** Permanent public ID used for relay connections, available before sharing starts. */
   deviceId: string | null;
   deviceIdError: string | null;
+  /**
+   * Reads the relay device ID, creating the identity file on first use.
+   * Call this only once the user has chosen relay sharing: the file holds a
+   * registration token and a Noise private key, so opening the application
+   * must not mint one for someone who never uses Lattice Remote.
+   */
+  ensureDeviceId: () => Promise<void>;
   status: RemoteHostStatus | null;
   closedReason: string | null;
   start: (request: RemoteHostStartRequest) => Promise<RemoteHostStatus>;
@@ -132,22 +139,6 @@ export function useRemoteHost(): RemoteHostApi {
           hydrating = false;
           closedDuringHydration.clear();
         }
-
-        try {
-          const permanentDeviceId = await invoke<string>(
-            "remote_host_device_id",
-          );
-          if (!cancelled) {
-            setDeviceId(permanentDeviceId);
-            setDeviceIdError(null);
-          }
-        } catch (reason) {
-          if (!cancelled) {
-            setDeviceIdError(
-              reason instanceof Error ? reason.message : String(reason),
-            );
-          }
-        }
       } catch {
         hydrating = false;
         closedDuringHydration.clear();
@@ -191,11 +182,33 @@ export function useRemoteHost(): RemoteHostApi {
     }
   }, [status?.hostId]);
 
+  const deviceIdRequest = useRef<Promise<void> | null>(null);
+  const ensureDeviceId = useCallback(async () => {
+    if (deviceIdRequest.current) return deviceIdRequest.current;
+    const request = (async () => {
+      try {
+        const { invoke } = await core();
+        const permanentDeviceId = await invoke<string>("remote_host_device_id");
+        setDeviceId(permanentDeviceId);
+        setDeviceIdError(null);
+      } catch (reason) {
+        // A failed read may be transient, so let the next attempt retry.
+        deviceIdRequest.current = null;
+        setDeviceIdError(
+          reason instanceof Error ? reason.message : String(reason),
+        );
+      }
+    })();
+    deviceIdRequest.current = request;
+    return request;
+  }, []);
+
   const clearClosedReason = useCallback(() => setClosedReason(null), []);
 
   return {
     deviceId,
     deviceIdError,
+    ensureDeviceId,
     status,
     closedReason,
     start,
