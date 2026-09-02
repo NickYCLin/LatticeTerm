@@ -8,13 +8,18 @@
 use futures_util::{SinkExt as _, StreamExt as _};
 use std::io;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::error::ProtocolError;
+use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::{Message, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Error as WsError;
-use tokio_tungstenite::{accept_async_with_config, connect_async_with_config, WebSocketStream};
+use tokio_tungstenite::{
+    accept_async_with_config, accept_hdr_async_with_config, connect_async_with_config,
+    WebSocketStream,
+};
 
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 128 * 1024;
 const MAX_WEBSOCKET_WRITE_BUFFER_BYTES: usize = 256 * 1024;
@@ -67,6 +72,55 @@ impl Transport {
             .map_err(handshake_error)?;
         Ok(Self::WebSocket(Box::new(WebSocketByteStream::new(socket))))
     }
+
+    /// Accepts an upgrade and reports one request header alongside the stream.
+    ///
+    /// A relay behind HTTPS ingress sees every public client as loopback, and
+    /// the real address exists only in a header the proxy adds during the
+    /// handshake. Nothing above this layer can recover it afterwards, so the
+    /// value is captured while the request is still in hand.
+    pub async fn accept_websocket_with_header(
+        stream: TcpStream,
+        header_name: &str,
+    ) -> io::Result<(Self, Option<String>)> {
+        stream.set_nodelay(true)?;
+        let captured = Arc::new(Mutex::new(None));
+        let sink = Arc::clone(&captured);
+        let wanted = header_name.to_owned();
+        let socket = accept_hdr_async_with_config(
+            stream,
+            move |request: &Request, response: Response| {
+                if let Ok(mut slot) = sink.lock() {
+                    *slot = last_header_element(request, &wanted);
+                }
+                Ok(response)
+            },
+            Some(websocket_config()),
+        )
+        .await
+        .map_err(handshake_error)?;
+        let forwarded = captured.lock().ok().and_then(|mut slot| slot.take());
+        Ok((
+            Self::WebSocket(Box::new(WebSocketByteStream::new(socket))),
+            forwarded,
+        ))
+    }
+}
+
+/// Reads the value a trusted proxy contributed to one request header.
+///
+/// A proxy that appends to an existing chain writes its own value last, so
+/// taking the final element of the final occurrence keeps a client from
+/// choosing the value by sending the header itself.
+fn last_header_element(request: &Request, header_name: &str) -> Option<String> {
+    let raw = request
+        .headers()
+        .get_all(header_name)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .next_back()?;
+    let element = raw.rsplit(',').next()?.trim();
+    (!element.is_empty()).then(|| element.to_owned())
 }
 
 impl From<TcpStream> for Transport {
@@ -241,6 +295,77 @@ mod tests {
     use tokio::io::{duplex, AsyncReadExt as _};
     use tokio_tungstenite::tungstenite::error::CapacityError;
     use tokio_tungstenite::tungstenite::protocol::Role;
+
+    /// Runs a real upgrade against `accept_websocket_with_header` and reports
+    /// what the server captured. The request is written by hand so a test can
+    /// send header shapes a well-behaved client library would not.
+    async fn captured_header(header_name: &str, request_headers: &str) -> Option<String> {
+        use tokio::io::AsyncWriteExt as _;
+        use tokio::net::{TcpListener, TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let name = header_name.to_owned();
+        let server = tokio::spawn(async move {
+            let (stream, _peer) = listener.accept().await.unwrap();
+            Transport::accept_websocket_with_header(stream, &name)
+                .await
+                .map(|(_transport, forwarded)| forwarded)
+        });
+
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(
+                format!(
+                    "GET / HTTP/1.1\r\nHost: relay.test\r\nUpgrade: websocket\r\n\
+                     Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                     Sec-WebSocket-Version: 13\r\n{request_headers}\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        // Hold the socket open until the handshake completes.
+        let captured = server.await.unwrap().unwrap();
+        drop(client);
+        captured
+    }
+
+    #[tokio::test]
+    async fn the_forwarded_client_address_survives_the_handshake() {
+        assert_eq!(
+            captured_header("Cf-Connecting-Ip", "Cf-Connecting-Ip: 203.0.113.9\r\n").await,
+            Some("203.0.113.9".to_string())
+        );
+        // Header lookup is case-insensitive, as HTTP requires.
+        assert_eq!(
+            captured_header("Cf-Connecting-Ip", "cf-connecting-ip: 203.0.113.9\r\n").await,
+            Some("203.0.113.9".to_string())
+        );
+        assert_eq!(captured_header("Cf-Connecting-Ip", "").await, None);
+    }
+
+    #[tokio::test]
+    async fn an_appending_proxy_overrides_what_the_client_sent() {
+        // A client that writes its own chain first cannot outrank the value a
+        // proxy appends, whether it arrives in the same header or another.
+        assert_eq!(
+            captured_header(
+                "X-Forwarded-For",
+                "X-Forwarded-For: 198.51.100.4, 203.0.113.9\r\n"
+            )
+            .await,
+            Some("203.0.113.9".to_string())
+        );
+        assert_eq!(
+            captured_header(
+                "X-Forwarded-For",
+                "X-Forwarded-For: 198.51.100.4\r\nX-Forwarded-For: 203.0.113.9\r\n"
+            )
+            .await,
+            Some("203.0.113.9".to_string())
+        );
+    }
 
     #[test]
     fn websocket_config_caps_frames_and_messages_without_loosening_defaults() {

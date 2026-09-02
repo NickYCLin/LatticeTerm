@@ -2,6 +2,11 @@
 # Installed by scripts/deploy-relay.sh; adjust the bind address or state path
 # here and run `systemctl daemon-reload && systemctl restart lattice-relay`.
 # The secure default expects an HTTPS/WebSocket ingress on the same host.
+# That ingress makes every public client look like 127.0.0.1, which exempts
+# them all from the per-IP connection limit. Append --client-ip-header with
+# the header your ingress sets to the real client address (Cf-Connecting-Ip
+# behind Cloudflare, X-Real-Ip behind nginx) to charge them properly, but
+# only if that proxy overwrites the header rather than trusting the client's.
 [Unit]
 Description=Lattice Remote relay server
 After=network-online.target
