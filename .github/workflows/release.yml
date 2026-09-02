@@ -3,7 +3,21 @@ name: Release
 on:
   push:
     branches: [main]
+  # Release Please only opens the PR; something has to merge it or nothing
+  # ever ships. This daily pass publishes it when it is due — see
+  # scripts/decide-release.mjs for what "due" means.
+  schedule:
+    - cron: "0 18 * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: >-
+          Publish the pending Release PR even below the accumulation
+          threshold. This is the maintainer decision the release policy
+          reserves for urgent fixes; it still refuses a version whose
+          changelog would hold nothing for the user.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -20,10 +34,12 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+    # A release can be cut by either pass: the first when a human merged the
+    # Release PR, the second when this run merged it itself.
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      sha: ${{ steps.release.outputs.sha }}
+      release_created: ${{ steps.release.outputs.release_created == 'true' && 'true' || steps.publish.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.release_created == 'true' && steps.release.outputs.tag_name || steps.publish.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.release_created == 'true' && steps.release.outputs.sha || steps.publish.outputs.sha }}
 
     steps:
       - name: Create or update the Release PR
@@ -74,6 +90,70 @@ jobs:
       # Each source commit has already passed the single-runner CI. The steps
       # above validate generated version files, so the Release PR does not
       # dispatch another copy of the source CI.
+
+      # Deciding needs the tags and the commits since the last one, which the
+      # Release PR branch checked out above does not describe.
+      - name: Check out main for the release decision
+        if: steps.release.outputs.release_created != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Decide whether the pending release is due
+        if: steps.release.outputs.release_created != 'true'
+        id: due
+        env:
+          RELEASE_FORCE: ${{ inputs.force }}
+        run: node scripts/decide-release.mjs
+
+      - name: Find the pending Release PR
+        if: steps.due.outputs.release == 'true'
+        id: pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          number="$(gh pr list --state open --label 'autorelease: pending' \
+            --json number,headRefName \
+            --jq '[.[] | select(.headRefName | startswith("release-please--"))][0].number // empty')"
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+          if [ -z "$number" ]; then
+            echo "No pending Release PR to publish."
+          else
+            echo "Publishing Release PR #${number}: ${{ steps.due.outputs.reason }}"
+          fi
+
+      # The PR is opened as a draft so a human decides; publishing it here is
+      # that decision, made by the rule instead.
+      - name: Publish the pending Release PR
+        if: steps.pending.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          number="${{ steps.pending.outputs.number }}"
+          # Already-ready is not a failure: a human may have marked it.
+          gh pr ready "$number" || true
+          gh pr merge "$number" --squash --delete-branch
+          # The next step asks Release Please to cut the tag, which only works
+          # once GitHub reports the merge, so wait for it rather than racing.
+          for _ in $(seq 1 30); do
+            state="$(gh pr view "$number" --json state --jq .state)"
+            [ "$state" = "MERGED" ] && exit 0
+            sleep 2
+          done
+          echo "Release PR #${number} did not reach MERGED in time." >&2
+          exit 1
+
+      # A merge made with GITHUB_TOKEN does not start another workflow run, so
+      # the tag and GitHub Release have to be cut here rather than waiting for
+      # a push event that will never arrive.
+      - name: Cut the release for the PR just published
+        if: steps.pending.outputs.number != ''
+        id: publish
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   build-release:
     name: Build & upload (${{ matrix.name }})
