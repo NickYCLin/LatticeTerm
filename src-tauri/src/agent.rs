@@ -7535,8 +7535,22 @@ notify = ["notify.exe", "turn-ended"]"#,
         // A terminal that has said nothing for long enough is parked, not busy.
         let entry = registry.get(&session.session_id).unwrap();
         assert!(!registry.settle_silent_working(&session.session_id));
-        *entry.last_output_at.lock().unwrap() = Instant::now() - SILENT_WORKING_TIMEOUT;
-        assert!(registry.settle_silent_working(&session.session_id));
+        let settle_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            *entry.last_output_at.lock().unwrap() = Instant::now() - SILENT_WORKING_TIMEOUT;
+            if registry.settle_silent_working(&session.session_id)
+                || registry.list()[0].state == AgentLifecycle::Idle
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < settle_deadline,
+                "silent heuristic state never settled"
+            );
+            // The PTY reader may publish an input echo concurrently and refresh
+            // last_output_at after the test backdates it. Retry after it drains.
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert_eq!(registry.list()[0].state, AgentLifecycle::Idle);
         // Nothing observed a result, so the sidebar must not claim completion.
         assert_ne!(registry.list()[0].state, AgentLifecycle::Done);
