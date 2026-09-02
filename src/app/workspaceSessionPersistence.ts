@@ -248,10 +248,14 @@ export function snapshotLiveWorkspaceSessions(
   // the CLI's native conversation id, it is still safe to reopen with the
   // provider's resume flow after an application restart. Dropping it here made
   // completed conversations disappear even though they remained visible in the
-  // current window. An exited session without that id is deliberately omitted:
-  // reopening it would create an unrelated new conversation.
+  // current window. A failed resume is deliberately omitted even when it has
+  // a captured id: replaying the same rejected identifier at every startup
+  // would trap the project in a permanently read-only tab.
   const restorableAgents = agents.filter(
-    (session) => !session.closedReason || session.capturedSessionId !== null,
+    (session) =>
+      !session.closedReason ||
+      (session.capturedSessionId !== null &&
+        /\bcode:\s*0\b/.test(session.closedReason)),
   );
   const activeAgent = restorableAgents.find(
     (session) => session.sessionId === activeSessionId,

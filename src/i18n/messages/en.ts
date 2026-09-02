@@ -785,6 +785,7 @@ export const en: Messages = {
   "terminal.handoff.carry": "Bring current memory to the new CLI",
   "terminal.handoff.directOrBrief": "Every supported CLI receives the handoff; when its settings can be verified, Claude also uses its documented project memory.",
   "terminal.handoff.unsupported": "This CLI's conversation can't be exported",
+  "terminal.handoff.closed": "This session has ended. You can still open a new CLI.",
   "terminal.handoff.exportFailedTitle": "Could not carry the current memory",
   "terminal.handoff.exportFailed":
     "The current CLI conversation has not been saved yet or could not be read, so no new CLI was opened. Let the current task finish and try again, or turn off “Bring current memory to the new CLI.”",

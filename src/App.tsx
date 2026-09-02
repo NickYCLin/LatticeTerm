@@ -375,6 +375,42 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 rows: 32,
               });
               restoredAgents.push(launched);
+              if (saved.resumeSessionId && launched.closedReason) {
+                // A provider can reject an expired native conversation id.
+                // Keep that diagnostic tab for inspection, then immediately
+                // give the project a fresh interactive CLI instead of
+                // restoring it into a permanently read-only state.
+                try {
+                  const fallback = await agents.launch({
+                    definitionId: saved.definitionId,
+                    label: saved.label,
+                    executable: saved.executable,
+                    arguments: saved.launchArguments,
+                    resumeSessionId: null,
+                    groupId: saved.groupKey,
+                    seedInput: null,
+                    restoreExistingSession: false,
+                    workingDirectory: saved.workingDirectory,
+                    cols: 120,
+                    rows: 32,
+                  });
+                  restoredAgents.push(fallback);
+                  if (!fallback.closedReason && !renamedGroups.has(saved.groupKey)) {
+                    renamedGroups.add(saved.groupKey);
+                    try {
+                      await agents.rename(fallback.sessionId, saved.groupLabel);
+                    } catch {
+                      // The fresh terminal remains usable even if its saved
+                      // tab label cannot be restored right now.
+                    }
+                  }
+                } catch {
+                  // Do not retry the same known-bad native id on the next
+                  // restart. Keep a fresh launch intent for a later retry.
+                  unrestored.push({ ...saved, resumeSessionId: null });
+                }
+                continue;
+              }
               if (!renamedGroups.has(saved.groupKey)) {
                 renamedGroups.add(saved.groupKey);
                 await agents.rename(launched.sessionId, saved.groupLabel);
@@ -435,11 +471,13 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
 
         const savedActive = snapshot?.active;
         if (savedActive?.kind === "agent") {
-          const match = restoredAgents.find(
+          const matching = restoredAgents.filter(
             (session) =>
               session.groupId === savedActive.groupKey &&
               session.definitionId === savedActive.definitionId,
           );
+          const match =
+            matching.find((session) => !session.closedReason) ?? matching[0];
           if (match) setActiveSessionId(match.sessionId);
         } else if (savedActive?.kind === "ssh") {
           const match = restoredSsh.find(

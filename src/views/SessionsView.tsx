@@ -2070,7 +2070,7 @@ export function SessionsView({
                         (definition) =>
                           definition.id === source?.definitionId &&
                           definition.transcriptSupported,
-                      );
+                      ) && !source?.closedReason;
                       const carry = canCarry && carryContext;
                       return (
                         <div
@@ -2099,7 +2099,9 @@ export function SessionsView({
                             </>
                           ) : (
                             <span className="cli-switch__menu-empty">
-                              {t("terminal.handoff.unsupported")}
+                              {source?.closedReason
+                                ? t("terminal.handoff.closed")
+                                : t("terminal.handoff.unsupported")}
                             </span>
                           )}
                           <div className="cli-switch__menu-sep" />

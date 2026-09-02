@@ -755,6 +755,7 @@ export const zhTW = {
   "terminal.handoff.carry": "將目前記憶帶到新 CLI",
   "terminal.handoff.directOrBrief": "所有支援的 CLI 都會收到交接內容；Claude 設定可確認時另會寫入其已知的專案記憶。",
   "terminal.handoff.unsupported": "目前這個 CLI 無法匯出對話",
+  "terminal.handoff.closed": "這個工作階段已結束，仍可直接加開新的 CLI。",
   "terminal.handoff.exportFailedTitle": "無法帶入目前記憶",
   "terminal.handoff.exportFailed":
     "目前 CLI 的對話尚未寫入或無法讀取，因此沒有開啟新的 CLI。請讓目前工作完成後再試一次，或取消「將目前記憶帶到新 CLI」。",

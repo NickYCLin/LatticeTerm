@@ -108,6 +108,24 @@ describe("workspace session persistence", () => {
     });
   });
 
+  it("does not save a failed native resume for another restart", () => {
+    const snapshot = snapshotLiveWorkspaceSessions(
+      [
+        agent({
+          state: "done",
+          processId: null,
+          closedReason: "Process exited: ExitStatus { code: 1, signal: None }",
+          capturedSessionId: "expired-native-chat",
+        }),
+      ],
+      [],
+      "agent-live-1",
+    );
+
+    expect(snapshot.sessions).toEqual([]);
+    expect(snapshot.active).toBeNull();
+  });
+
   it("does not reopen an exited CLI with no native conversation id", () => {
     const snapshot = snapshotLiveWorkspaceSessions(
       [
