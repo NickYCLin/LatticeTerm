@@ -19,12 +19,13 @@ pub mod transport;
 mod wire;
 
 pub use protocol::{
-    frame_messages, CompleteFrame, FrameAssembler, FrameDescriptor, FrameFormat, PointerButton,
-    ProtocolError, RemoteFileEntry, RemoteFileKind, RemoteFileRequest, RemoteFileResponse,
-    RemoteHello, RemoteInput, RemoteMessage, DEFAULT_PORT, FILE_CHUNK_SIZE, FRAME_CHUNK_SIZE,
-    MAX_AGENT_NAME_BYTES, MAX_CLOSE_REASON_BYTES, MAX_DIRECTORY_ENTRIES, MAX_FILE_ERROR_BYTES,
-    MAX_FILE_ROOT_LABEL_BYTES, MAX_FRAME_BYTES, MAX_FRAME_DIMENSION, MAX_FRAME_PIXELS,
-    MAX_REMOTE_PATH_BYTES, MAX_WHEEL_UNITS, PROTOCOL_VERSION,
+    frame_messages, negotiate_protocol_version, CompleteFrame, FrameAssembler, FrameDescriptor,
+    FrameFormat, PointerButton, ProtocolError, ProtocolMismatch, RemoteFileEntry, RemoteFileKind,
+    RemoteFileRequest, RemoteFileResponse, RemoteHello, RemoteInput, RemoteMessage, DEFAULT_PORT,
+    FILE_CHUNK_SIZE, FRAME_CHUNK_SIZE, MAX_AGENT_NAME_BYTES, MAX_CLOSE_REASON_BYTES,
+    MAX_DIRECTORY_ENTRIES, MAX_FILE_ERROR_BYTES, MAX_FILE_ROOT_LABEL_BYTES, MAX_FRAME_BYTES,
+    MAX_FRAME_DIMENSION, MAX_FRAME_PIXELS, MAX_REMOTE_PATH_BYTES, MAX_WHEEL_UNITS,
+    MIN_COMPATIBLE_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 pub use secure::{
     generate_pairing_code, normalize_pairing_code, RemoteError, SecureConnection, SecureReader,

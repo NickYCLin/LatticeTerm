@@ -13,8 +13,8 @@ use lattice_remote::relay::{
     dial, format_device_id, normalize_device_id, normalize_relay_endpoint, RelayError,
 };
 use lattice_remote::{
-    normalize_pairing_code, FrameAssembler, PointerButton, RemoteHello, RemoteInput, RemoteMessage,
-    SecureConnection, MAX_WHEEL_UNITS, PROTOCOL_VERSION,
+    negotiate_protocol_version, normalize_pairing_code, FrameAssembler, PointerButton, RemoteHello,
+    RemoteInput, RemoteMessage, SecureConnection, MAX_WHEEL_UNITS,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -566,11 +566,12 @@ where
             ))
         }
     };
-    if hello.protocol_version != PROTOCOL_VERSION {
-        return Err((
-            "protocol",
-            "The Agent uses an incompatible protocol.".to_string(),
-        ));
+    // Talk down to an older Agent rather than refusing it. A machine that is
+    // behind has to stay reachable, or nobody can connect to it to update it.
+    // The message names which side to update, since "incompatible" alone
+    // leaves the operator guessing.
+    if let Err(mismatch) = negotiate_protocol_version(hello.protocol_version) {
+        return Err(("protocol", mismatch.to_string()));
     }
 
     if let Some(candidate) = relay_pin {
@@ -1171,6 +1172,7 @@ pub async fn disconnect(
 mod tests {
     use super::*;
     use lattice_remote::relay::DeviceIdentity;
+    use lattice_remote::{MIN_COMPATIBLE_PROTOCOL_VERSION, PROTOCOL_VERSION};
     use std::future::pending;
     use std::sync::atomic::AtomicBool;
     use tokio::net::{TcpListener, TcpStream};
@@ -1855,6 +1857,62 @@ mod tests {
             crate::remote_pins::verify_or_pin(&pins_path, "123456789", &presented_key).unwrap(),
             crate::remote_pins::PinOutcome::Matched
         );
+    }
+
+    /// Runs one handshake against an Agent announcing `announced`, and reports
+    /// what the viewer made of it.
+    async fn viewer_meets_agent(announced: u16) -> Result<RemoteHello, (&'static str, String)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let identity = DeviceIdentity::generate().unwrap();
+        let key = identity.noise_private_bytes().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut connection = SecureConnection::accept_with_static_key(stream, "12345678", &key)
+                .await
+                .unwrap();
+            connection
+                .send(&RemoteMessage::Hello(hello(announced)))
+                .await
+                .unwrap();
+        });
+
+        let stream = TcpStream::connect(address).await.unwrap();
+        let mut viewer = SecureConnection::initiate(stream, "12345678")
+            .await
+            .unwrap();
+        let outcome = receive_authenticated_hello(&mut viewer, None).await;
+        server.await.unwrap();
+        outcome
+    }
+
+    #[tokio::test]
+    async fn an_older_agent_stays_reachable() {
+        // The machine that is behind is exactly the one someone needs to
+        // connect to in order to update it, so a newer viewer talks down
+        // instead of refusing.
+        for announced in MIN_COMPATIBLE_PROTOCOL_VERSION..=PROTOCOL_VERSION {
+            let hello = viewer_meets_agent(announced)
+                .await
+                .unwrap_or_else(|error| panic!("protocol {announced} was refused: {error:?}"));
+            assert_eq!(hello.protocol_version, announced);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_peer_on_either_side_of_the_supported_range_is_named_in_the_error() {
+        let (stage, detail) = viewer_meets_agent(PROTOCOL_VERSION + 1).await.unwrap_err();
+        assert_eq!(stage, "protocol");
+        // The operator has to learn which machine to update.
+        assert!(detail.contains("this machine"), "{detail}");
+
+        if MIN_COMPATIBLE_PROTOCOL_VERSION > 0 {
+            let (stage, detail) = viewer_meets_agent(MIN_COMPATIBLE_PROTOCOL_VERSION - 1)
+                .await
+                .unwrap_err();
+            assert_eq!(stage, "protocol");
+            assert!(detail.contains("that machine"), "{detail}");
+        }
     }
 
     #[tokio::test]

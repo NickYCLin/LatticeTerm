@@ -1,6 +1,13 @@
 use std::fmt;
 
 pub const PROTOCOL_VERSION: u16 = 2;
+/// The oldest peer this build still knows how to talk to.
+///
+/// Two machines running different LatticeTerm releases must be able to
+/// connect, or the one that is behind can never be reached to update it —
+/// exactly the session someone needs most. Raise this only when a version
+/// genuinely cannot be spoken any more, and say so in the release notes.
+pub const MIN_COMPATIBLE_PROTOCOL_VERSION: u16 = 2;
 pub const DEFAULT_PORT: u16 = 44_900;
 pub const FRAME_CHUNK_SIZE: usize = 48 * 1024;
 pub const FILE_CHUNK_SIZE: usize = 48 * 1024;
@@ -13,6 +20,66 @@ pub const MAX_DIRECTORY_ENTRIES: usize = 4096;
 pub const MAX_FRAME_DIMENSION: u32 = 16_384;
 pub const MAX_FRAME_PIXELS: u64 = 32 * 1024 * 1024;
 pub const MAX_CLOSE_REASON_BYTES: usize = 1024;
+
+/// Why two peers cannot talk, and which side is behind.
+///
+/// The distinction is the whole point: the message has to tell the operator
+/// which machine to update, and a viewer that is itself too old cannot be
+/// fixed from the far end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolMismatch {
+    /// The peer speaks a version this build no longer understands.
+    PeerTooOld { peer: u16, oldest_supported: u16 },
+    /// The peer is newer than anything this build understands, so the machine
+    /// to update is this one.
+    PeerTooNew { peer: u16, newest_supported: u16 },
+}
+
+impl fmt::Display for ProtocolMismatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PeerTooOld {
+                peer,
+                oldest_supported,
+            } => write!(
+                formatter,
+                "The other machine speaks Lattice Remote protocol {peer}, \
+                 older than the oldest this build supports ({oldest_supported}). \
+                 Update LatticeTerm on that machine."
+            ),
+            Self::PeerTooNew {
+                peer,
+                newest_supported,
+            } => write!(
+                formatter,
+                "The other machine speaks Lattice Remote protocol {peer}, \
+                 newer than this build understands ({newest_supported}). \
+                 Update LatticeTerm on this machine."
+            ),
+        }
+    }
+}
+
+/// The protocol version two peers will actually use.
+///
+/// A newer build talks down to an older peer rather than refusing it, so the
+/// machine that is behind stays reachable. Anything newer than this build is
+/// refused, because there is no way to guess what it added.
+pub fn negotiate_protocol_version(peer: u16) -> Result<u16, ProtocolMismatch> {
+    if peer < MIN_COMPATIBLE_PROTOCOL_VERSION {
+        return Err(ProtocolMismatch::PeerTooOld {
+            peer,
+            oldest_supported: MIN_COMPATIBLE_PROTOCOL_VERSION,
+        });
+    }
+    if peer > PROTOCOL_VERSION {
+        return Err(ProtocolMismatch::PeerTooNew {
+            peer,
+            newest_supported: PROTOCOL_VERSION,
+        });
+    }
+    Ok(peer)
+}
 
 const MESSAGE_HELLO: u8 = 1;
 const MESSAGE_FRAME_START: u8 = 2;
@@ -539,10 +606,19 @@ impl RemoteMessage {
                 let name_len = read_u16(body, 12)? as usize;
                 let root_len = read_u16(body, 14)? as usize;
                 let base_len = 16 + name_len + root_len;
-                let terminal = match body.len() {
-                    length if length == base_len => false,
-                    length if length == base_len + 1 => decode_bool(body[base_len])?,
-                    _ => return Err(ProtocolError::InvalidHello),
+                if body.len() < base_len {
+                    return Err(ProtocolError::InvalidHello);
+                }
+                // `terminal` arrived as an optional trailing byte so that
+                // screen-mode hellos stayed wire-identical for viewers that
+                // predated it. Anything beyond it belongs to a protocol
+                // version this build does not know, and is skipped rather
+                // than refused: an older machine has to stay reachable from a
+                // newer one, or it can never be updated. The frame cap still
+                // bounds how much can arrive.
+                let terminal = match body.get(base_len) {
+                    None => false,
+                    Some(byte) => decode_bool(*byte)?,
                 };
                 if name_len == 0 {
                     return Err(ProtocolError::InvalidHello);
@@ -1221,6 +1297,71 @@ mod tests {
                 message
             );
         }
+    }
+
+    #[test]
+    fn a_newer_build_talks_down_to_an_older_peer() {
+        for peer in MIN_COMPATIBLE_PROTOCOL_VERSION..=PROTOCOL_VERSION {
+            assert_eq!(negotiate_protocol_version(peer), Ok(peer));
+        }
+    }
+
+    #[test]
+    fn a_refusal_names_the_machine_to_update() {
+        assert_eq!(
+            negotiate_protocol_version(PROTOCOL_VERSION + 1),
+            Err(ProtocolMismatch::PeerTooNew {
+                peer: PROTOCOL_VERSION + 1,
+                newest_supported: PROTOCOL_VERSION,
+            })
+        );
+        assert!(negotiate_protocol_version(PROTOCOL_VERSION + 1)
+            .unwrap_err()
+            .to_string()
+            .contains("this machine"));
+
+        assert_eq!(
+            negotiate_protocol_version(MIN_COMPATIBLE_PROTOCOL_VERSION - 1),
+            Err(ProtocolMismatch::PeerTooOld {
+                peer: MIN_COMPATIBLE_PROTOCOL_VERSION - 1,
+                oldest_supported: MIN_COMPATIBLE_PROTOCOL_VERSION,
+            })
+        );
+        assert!(
+            negotiate_protocol_version(MIN_COMPATIBLE_PROTOCOL_VERSION - 1)
+                .unwrap_err()
+                .to_string()
+                .contains("that machine")
+        );
+    }
+
+    #[test]
+    fn a_hello_from_a_future_version_still_decodes() {
+        // A later protocol may append fields. An older viewer has to read the
+        // part it knows and ignore the rest, or the machine running it can
+        // never connect to a newer one to be updated.
+        let mut encoded = RemoteMessage::Hello(RemoteHello {
+            protocol_version: PROTOCOL_VERSION,
+            agent_name: "Workshop".to_string(),
+            // A terminal hello carries a character grid, not pixels.
+            width: 120,
+            height: 40,
+            view_only: true,
+            file_transfer: false,
+            file_root_label: String::new(),
+            terminal: true,
+        })
+        .encode()
+        .unwrap();
+        // Whatever a later version appends after the fields this build knows.
+        encoded.extend_from_slice(&[7, 42, 200]);
+
+        let RemoteMessage::Hello(decoded) = RemoteMessage::decode(&encoded).unwrap() else {
+            panic!("expected a hello");
+        };
+        assert_eq!(decoded.agent_name, "Workshop");
+        assert!(decoded.terminal);
+        assert!(decoded.view_only);
     }
 
     #[test]
