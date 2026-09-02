@@ -4,6 +4,20 @@
 
 ---
 
+## [0.34.0](https://github.com/NickYCLin/lattice-term/compare/v0.33.0...v0.34.0) (2026-09-02)
+
+
+### 🚀 新增功能
+
+* **remote:** 讓不同版本之間仍能以 ID 連線 ([#110](https://github.com/NickYCLin/lattice-term/issues/110)) ([1172507](https://github.com/NickYCLin/lattice-term/commit/1172507991c5276efbf1bacfd55904a4cdf573e4))
+* **發行:** 依累積政策自動合併 Release PR ([#111](https://github.com/NickYCLin/lattice-term/issues/111)) ([7cdaea9](https://github.com/NickYCLin/lattice-term/commit/7cdaea91aac7d9bd39c2ce235663b6ec9e6a57f5))
+
+
+### 🛠️ 問題修正
+
+* **relay:** 中繼限速涵蓋公網流量；記住並修復以 ID 連線的裝置 ([#107](https://github.com/NickYCLin/lattice-term/issues/107)) ([3369b9d](https://github.com/NickYCLin/lattice-term/commit/3369b9d7d3298d96b2c6d85dac722daba47baacf))
+* **remote:** 只在選擇中繼模式時建立裝置身分 ([#108](https://github.com/NickYCLin/lattice-term/issues/108)) ([f4b51a4](https://github.com/NickYCLin/lattice-term/commit/f4b51a412066a7db50406d3030477fa3be67f5cf))
+
 ## [0.33.0](https://github.com/NickYCLin/lattice-term/compare/v0.32.0...v0.33.0) (2026-09-02)
 
 
