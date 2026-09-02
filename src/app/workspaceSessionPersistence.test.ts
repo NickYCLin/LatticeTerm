@@ -36,6 +36,7 @@ function agent(overrides: Record<string, unknown> = {}) {
     stateSource: "heuristic" as const,
     processId: 42,
     tokenUsage: null,
+    queuedPrompts: 0,
     capturedSessionId: "native-chat-1",
     ...overrides,
   };

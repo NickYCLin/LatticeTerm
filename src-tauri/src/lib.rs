@@ -444,6 +444,35 @@ fn agent_send(
     )
 }
 
+/// Lines a prompt up behind whatever the agent is already doing.
+///
+/// Returns how many prompts are now waiting; zero means the agent was free
+/// and took it immediately.
+#[tauri::command]
+fn agent_enqueue(
+    app: AppHandle,
+    session_id: String,
+    data: String,
+    registry: State<'_, Arc<AgentRegistry>>,
+) -> Result<usize, String> {
+    crate::agent::enqueue(
+        &crate::agent::EventSink(app),
+        registry.inner(),
+        &session_id,
+        &data,
+    )
+}
+
+/// Drops every prompt still waiting for this agent, reporting how many went.
+#[tauri::command]
+fn agent_clear_queue(
+    app: AppHandle,
+    session_id: String,
+    registry: State<'_, Arc<AgentRegistry>>,
+) -> Result<usize, String> {
+    crate::agent::clear_queue(&crate::agent::EventSink(app), registry.inner(), &session_id)
+}
+
 #[tauri::command]
 fn agent_broadcast(
     app: AppHandle,
@@ -2073,6 +2102,8 @@ pub fn run() {
             agent_launch,
             agent_send,
             agent_broadcast,
+            agent_enqueue,
+            agent_clear_queue,
             agent_paste_clipboard_image,
             agent_export_transcript,
             agent_import_memory_handoff,

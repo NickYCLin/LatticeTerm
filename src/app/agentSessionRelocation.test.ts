@@ -56,6 +56,7 @@ function session(
     stateSource: "heuristic",
     processId: 123,
     tokenUsage: null,
+    queuedPrompts: 0,
     capturedSessionId: "native-session-1",
     ...overrides,
   };

@@ -943,6 +943,9 @@ export const en: Messages = {
   "agents.workspace.deleteBody":
     "Only the saved launch metadata is deleted. Any currently running agent keeps running.",
   "agents.workspace.deleteAction": "Delete launch item",
+  "agents.queue.toggle": "Queue while busy",
+  "agents.queue.hint": "An agent that is mid-turn receives the prompt once that turn actually ends, rather than in the middle of what it is doing; an idle one still takes it at once. Only an official integration event releases it — a guess does not.",
+  "agents.queue.waiting": "{count} queued",
   "agents.broadcast.eyebrow": "Safe orchestration",
   "agents.broadcast.title": "Prompt multiple agents together",
   "agents.broadcast.body":
