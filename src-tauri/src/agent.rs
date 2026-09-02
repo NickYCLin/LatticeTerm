@@ -4006,8 +4006,11 @@ fn plain_win32_path(path: PathBuf) -> PathBuf {
 }
 
 /// Windows cannot `CreateProcess` a `.cmd`/`.bat` shim directly, so those are
-/// routed through the command processor (`cmd.exe /c <script>`). All launch
-/// paths are first converted out of verbatim form for child compatibility.
+/// routed through the command processor (`cmd.exe /d /c <script>`). `/d`
+/// prevents unrelated interactive Command Processor AutoRun hooks from
+/// breaking a non-interactive CLI launch before the shim itself starts. All
+/// launch paths are first converted out of verbatim form for child
+/// compatibility.
 #[cfg(windows)]
 fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
     let executable = plain_windows_path(executable);
@@ -4021,7 +4024,10 @@ fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
         return (executable, Vec::new());
     }
     let comspec = std::env::var_os("ComSpec").unwrap_or_else(|| OsString::from("cmd.exe"));
-    (comspec, vec![OsString::from("/c"), executable])
+    (
+        comspec,
+        vec![OsString::from("/d"), OsString::from("/c"), executable],
+    )
 }
 
 #[cfg(not(windows))]
@@ -6110,6 +6116,10 @@ model = "gpt-5.3-codex"
         );
         assert_eq!(
             prefix.first().map(|arg| arg.to_string_lossy().to_string()),
+            Some("/d".to_string())
+        );
+        assert_eq!(
+            prefix.get(1).map(|arg| arg.to_string_lossy().to_string()),
             Some("/c".to_string())
         );
 
