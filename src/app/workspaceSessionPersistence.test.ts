@@ -29,6 +29,7 @@ function agent(overrides: Record<string, unknown> = {}) {
     model: null,
     executable: "C:\\tools\\codex.cmd",
     launchArguments: [],
+    restoreExistingSession: false,
     workingDirectory: "D:\\project\\LatticeTerm",
     state: "working" as const,
     stateSource: "heuristic" as const,
@@ -142,6 +143,35 @@ describe("workspace session persistence", () => {
 
     expect(snapshot.sessions).toEqual([]);
     expect(snapshot.active).toBeNull();
+  });
+
+  it("keeps a failed automatic restore until the user closes its tab", () => {
+    const snapshot = snapshotLiveWorkspaceSessions(
+      [
+        agent({
+          state: "done",
+          processId: null,
+          closedReason: "Process exited: ExitStatus { code: 1, signal: None }",
+          capturedSessionId: null,
+          restoreExistingSession: true,
+        }),
+      ],
+      [],
+      "agent-live-1",
+    );
+
+    expect(snapshot.sessions).toEqual([
+      expect.objectContaining({
+        kind: "agent",
+        definitionId: "codex",
+        resumeSessionId: null,
+      }),
+    ]);
+    expect(snapshot.active).toEqual({
+      kind: "agent",
+      groupKey: "project-group-1",
+      definitionId: "codex",
+    });
   });
 
   it("keeps sessions whose automatic restoration did not succeed", () => {

@@ -246,14 +246,14 @@ export function snapshotLiveWorkspaceSessions(
 ): WorkspaceSessionSnapshot {
   // A CLI may finish before the user closes its tab. When its adapter captured
   // the CLI's native conversation id, it is still safe to reopen with the
-  // provider's resume flow after an application restart. Dropping it here made
-  // completed conversations disappear even though they remained visible in the
-  // current window. A failed resume is deliberately omitted even when it has
-  // a captured id: replaying the same rejected identifier at every startup
-  // would trap the project in a permanently read-only tab.
+  // provider's resume flow after an application restart. An automatic restore
+  // that exits must also remain recoverable: otherwise one provider-specific
+  // startup failure silently deletes that tab and its sidebar placement. The
+  // user can still remove it explicitly by closing the tab.
   const restorableAgents = agents.filter(
     (session) =>
       !session.closedReason ||
+      session.restoreExistingSession === true ||
       (session.capturedSessionId !== null &&
         /\bcode:\s*0\b/.test(session.closedReason)),
   );

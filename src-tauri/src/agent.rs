@@ -311,6 +311,10 @@ pub struct AgentSessionSummary {
     pub executable: String,
     /// Original requested arguments, retained for a safe relaunch elsewhere.
     pub launch_arguments: Vec<String>,
+    /// Whether this process was recreated from the persisted workspace.
+    /// The frontend keeps failed automatic restores recoverable until the user
+    /// explicitly closes their tab.
+    pub restore_existing_session: bool,
     pub working_directory: String,
     pub state: AgentLifecycle,
     pub state_source: AgentStateSource,
@@ -4956,6 +4960,7 @@ pub fn launch_with_replay(
         model: launch_model,
         executable: executable.display().to_string(),
         launch_arguments,
+        restore_existing_session: request.restore_existing_session,
         working_directory: working_directory.display().to_string(),
         // Opening a CLI only creates an interactive prompt; it does not mean
         // the CLI has received work. Mark it idle until a submitted prompt or

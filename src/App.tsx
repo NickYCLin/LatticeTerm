@@ -361,11 +361,18 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           for (const saved of snapshot.sessions) {
             if (saved.kind !== "agent") continue;
             try {
+              const restoreArguments = agentRestoreArguments(saved);
+              const attemptedContinuation =
+                saved.resumeSessionId !== null ||
+                restoreArguments.length !== saved.launchArguments.length ||
+                restoreArguments.some(
+                  (argument, index) => argument !== saved.launchArguments[index],
+                );
               const launched = await agents.launch({
                 definitionId: saved.definitionId,
                 label: saved.label,
                 executable: saved.executable,
-                arguments: agentRestoreArguments(saved),
+                arguments: restoreArguments,
                 resumeSessionId: saved.resumeSessionId,
                 groupId: saved.groupKey,
                 seedInput: null,
@@ -375,11 +382,11 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 rows: 32,
               });
               restoredAgents.push(launched);
-              if (saved.resumeSessionId && launched.closedReason) {
+              if (attemptedContinuation && launched.closedReason) {
                 // A provider can reject an expired native conversation id.
-                // Keep that diagnostic tab for inspection, then immediately
-                // give the project a fresh interactive CLI instead of
-                // restoring it into a permanently read-only state.
+                // Its latest-conversation flag can fail in the same way when
+                // the project has no compatible history. Keep the diagnostic
+                // tab, then give the project a fresh interactive CLI.
                 try {
                   const fallback = await agents.launch({
                     definitionId: saved.definitionId,
@@ -395,7 +402,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                     rows: 32,
                   });
                   restoredAgents.push(fallback);
-                  if (!fallback.closedReason && !renamedGroups.has(saved.groupKey)) {
+                  if (fallback.closedReason) {
+                    unrestored.push({ ...saved, resumeSessionId: null });
+                  } else if (!renamedGroups.has(saved.groupKey)) {
                     renamedGroups.add(saved.groupKey);
                     try {
                       await agents.rename(fallback.sessionId, saved.groupLabel);
@@ -409,6 +418,10 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                   // restart. Keep a fresh launch intent for a later retry.
                   unrestored.push({ ...saved, resumeSessionId: null });
                 }
+                continue;
+              }
+              if (launched.closedReason) {
+                unrestored.push(saved);
                 continue;
               }
               if (!renamedGroups.has(saved.groupKey)) {

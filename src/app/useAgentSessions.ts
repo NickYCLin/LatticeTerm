@@ -101,6 +101,8 @@ export interface AgentSessionSummary {
   executable: string;
   /** Original CLI arguments, retained so a safe relaunch can preserve options. */
   launchArguments: string[];
+  /** True when this process was recreated from the persisted workspace. */
+  restoreExistingSession?: boolean;
   workingDirectory: string;
   state: AgentLifecycle;
   stateSource: AgentStateSource;
