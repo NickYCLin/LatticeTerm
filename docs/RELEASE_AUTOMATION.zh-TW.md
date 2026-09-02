@@ -1,6 +1,6 @@
 # Release 自動化與版本規則
 
-LatticeTerm 使用 Release Please、Conventional Commits 與 Tauri Action 管理版本。系統會自動計算下一個版本並維護 Release PR，但**合併 Release PR 才會正式發布**，因此版本判定可被檢視，發布時機也保留人工閘門。draft Release PR 顯示的版本只是候選版本，不代表已對外發布。
+LatticeTerm 使用 Release Please、Conventional Commits 與 Tauri Action 管理版本。系統會自動計算下一個版本並維護 Release PR，**合併 Release PR 才會正式發布**，因此版本判定可被檢視。合併這一步已自動化：`Release` workflow 每天檢查一次，只有在下方的累積政策成立時才把 PR 轉正並合併。draft Release PR 顯示的版本只是候選版本，不代表已對外發布。
 
 ## 版本如何判定
 
@@ -30,8 +30,15 @@ PR 的 CI 會驗證每一筆非合併提交的格式。若需明確指定下一�
 符合下列任一條件時，才將 Release PR 標示為 ready 並合併：
 
 - 已累積至少 3 個彼此獨立、使用者可感知的功能或修正項目。
+- 出現破壞性變更（`type!:` 或內文含 `BREAKING CHANGE:`）。
 - 維護者明確要求發布目前已累積的內容。
 - 發現需要立即處理的重大漏洞或重大故障。
+
+這個判斷寫在 `scripts/decide-release.mjs`，由 `Release` workflow 每天執行一次
+（UTC 18:00，台北時間隔日 02:00），成立才合併 Release PR。前兩條可由提交本身
+判定所以完全自動；後兩條無法從提交類型看出來，需要維護者以
+`workflow_dispatch` 勾選 `force` 觸發——那正是本政策保留給人的判斷。
+即使勾了 `force`，changelog 內容為空時仍不會發版。
 
 累積數量以「使用者結果」計算，不以 commit 數量計算。同一問題拆成程式、測試與文件等多筆提交仍只算 1 項；`docs:`、`test:`、`ci:`、`chore:`、`style:`、`refactor:`、`build:` 本身不計入累積門檻，也不得為了湊數刻意拆分提交。
 
@@ -42,14 +49,14 @@ PR 的 CI 會驗證每一筆非合併提交的格式。若需明確指定下一�
 - 資料遺失或無法復原的資料損毀。
 - 正式版在廣泛環境無法啟動，或核心連線功能全面不可用。
 
-一般介面瑕疵、單一平台邊界案例與低風險錯誤應留在 draft Release PR 內繼續累積。專案不因固定時間到期而自動強制發布。
+一般介面瑕疵、單一平台邊界案例與低風險錯誤應留在 draft Release PR 內繼續累積。每日檢查只是判斷條件是否成立，**不因時間到期強制發布**：累積未達門檻就繼續等，等多久都不會自動放行。
 
 ## 自動發布流程
 
 1. 一般 push 與功能 PR 只在 Linux amd64 執行前端檢查、Rust 格式、測試與 lint；PR 另外檢查 Conventional Commits。
 2. `Release` workflow 讀取自 `v0.2.0` 或上一個 Release 起的提交。
 3. 若有可發布變更，自動建立或更新一個 draft Release PR，內容包含新版本、`CHANGELOG.md` 與所有版本檔差異；workflow 會自動合併同一版本內由 merge commit 與原提交造成的重複 changelog 項目，並檢查版本檔是否同步。
-4. Release PR 不再重複派送原始碼 CI；達到累積門檻、維護者明確要求發布，或需緊急處理重大漏洞時，檢視版本與 changelog，再將 PR 標示為 ready 並合併。
+4. Release PR 不再重複派送原始碼 CI。同一個 workflow 接著執行 `scripts/decide-release.mjs`；條件成立時就地把 PR 標示為 ready 並合併，再於**同一個 run** 內第二次執行 Release Please 來建立 tag 與 GitHub Release。之所以不等 push 事件，是因為以 `GITHUB_TOKEN` 完成的合併不會觸發新的 workflow run，等下去永遠等不到。
 5. 下一次 `Release` workflow 建立 `vX.Y.Z` tag 與 GitHub Release；發布提交會跳過一般 push CI。
 6. Linux amd64、Linux arm64、Windows amd64、macOS arm64 原生 runner 建置安裝檔，上傳更新簽章與 `latest.json`；Android 只在簽章金鑰齊全時建置並附加 APK。
 7. 發布 job 將同一份繁中版本說明同步到 GitHub Release 與 `latest.json`，確認所有桌面平台完成後才公開 Release。
