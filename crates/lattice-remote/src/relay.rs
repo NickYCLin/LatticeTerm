@@ -335,11 +335,11 @@ impl DeviceIdentity {
             .map_err(|error| RelayError::Identity(error.to_string()))
     }
 
-    fn protect_file(path: &Path) -> Result<(), RelayError> {
+    fn protect_file(_path: &Path) -> Result<(), RelayError> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o600))
                 .map_err(|error| RelayError::Identity(error.to_string()))?;
         }
         Ok(())
