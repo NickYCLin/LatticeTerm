@@ -100,21 +100,7 @@ describe("terminal right-click", () => {
     );
   });
 
-  it("asks for a clipboard image when the webview exposes text only", async () => {
-    // WebKitGTK (Linux) has no navigator.clipboard.read, so an image-only
-    // clipboard reads back as empty text — the backend has to be asked.
-    const readText = vi.fn().mockResolvedValue("");
-    vi.stubGlobal("navigator", { clipboard: { readText } });
-    const onImagePaste = vi.fn();
-    const { terminal, mock, listeners } = fakeTerminal(null);
-    attachTerminalClipboard(terminal, { onImagePaste });
-
-    listeners.contextmenu(fakeContextMenuEvent());
-    await vi.waitFor(() => expect(onImagePaste).toHaveBeenCalled());
-    expect(mock.paste).not.toHaveBeenCalled();
-  });
-
-  it("handles the right click before xterm's native clipboard path", async () => {
+  it("never pastes the clipboard when no selection exists", async () => {
     const readText = vi.fn().mockResolvedValue("pasted text");
     vi.stubGlobal("navigator", { clipboard: { readText } });
     const onImagePaste = vi.fn();
@@ -123,27 +109,12 @@ describe("terminal right-click", () => {
 
     const event = fakeContextMenuEvent();
     listeners.contextmenu(event);
-    await vi.waitFor(() => expect(mock.paste).toHaveBeenCalledWith("pasted text"));
-    expect(mock.paste).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(readText).not.toHaveBeenCalled();
+    expect(mock.paste).not.toHaveBeenCalled();
     expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(event.stopImmediatePropagation).toHaveBeenCalledOnce();
     expect(listenerOptions.contextmenu).toBe(true);
-    expect(onImagePaste).not.toHaveBeenCalled();
-  });
-
-  it("uses native text when WebKitGTK reports an empty clipboard", async () => {
-    const readText = vi.fn().mockResolvedValue("");
-    const readTextFallback = vi.fn().mockResolvedValue("native pasted text");
-    vi.stubGlobal("navigator", { clipboard: { readText } });
-    const onImagePaste = vi.fn();
-    const { terminal, mock, listeners } = fakeTerminal(null);
-    attachTerminalClipboard(terminal, { readTextFallback, onImagePaste });
-
-    listeners.contextmenu(fakeContextMenuEvent());
-
-    await vi.waitFor(() =>
-      expect(mock.paste).toHaveBeenCalledWith("native pasted text"),
-    );
     expect(onImagePaste).not.toHaveBeenCalled();
   });
 });

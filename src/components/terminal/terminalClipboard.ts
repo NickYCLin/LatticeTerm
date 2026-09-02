@@ -4,8 +4,10 @@
  * xterm.js leaves Ctrl+C as an interrupt and has no Ctrl+V binding, which trips
  * up anyone used to a desktop terminal. This mirrors the Windows Terminal rules:
  * Ctrl+C copies when there is a selection and otherwise falls through to ^C,
- * Ctrl+V pastes, and right-click copies the selection or pastes when there is
- * none. Text is pasted straight in; an image on the clipboard is handed to the
+ * Ctrl+V pastes, and right-click copies the selection. A right-click without a
+ * selection deliberately does not paste: it is too easy to resend a command
+ * from the clipboard accidentally, and some xterm builds also handle it.
+ * Text is pasted straight in; an image on the clipboard is handed to the
  * optional image handler (agent terminals turn it into a file the CLI can
  * read — SSH panes have no local target, so they simply ignore it).
  *
@@ -70,9 +72,9 @@ export function attachTerminalClipboard(
   });
 
   // Callers attach after `terminal.open()`, so the element exists here.
-  // Register in capture phase: xterm registers its own bubble-phase handler
-  // while opening the terminal. Letting both see the right click prepares
-  // xterm's native clipboard path as well as ours, which can paste twice.
+  // Register in capture phase and stop the event before xterm's own handler.
+  // This retains right-click copy while preventing a browser/xterm clipboard
+  // paste from reaching the CLI (and, on some builds, reaching it twice).
   terminal.element?.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -83,12 +85,6 @@ export function attachTerminalClipboard(
       }
       // Dropping the highlight is the visible cue that the copy happened.
       terminal.clearSelection();
-    } else {
-      void pasteFromClipboard(
-        terminal,
-        options.readTextFallback,
-        options.onImagePaste,
-      );
     }
   }, true);
 }
