@@ -2356,13 +2356,21 @@ fn has_explicit_claude_settings(arguments: &[String]) -> bool {
     })
 }
 
+fn claude_customizations_disabled(arguments: &[String]) -> bool {
+    arguments
+        .iter()
+        .any(|argument| matches!(argument.trim(), "--safe-mode" | "--bare"))
+}
+
 fn claude_reporter_arguments(
     mut arguments: Vec<String>,
     reporter_executable: &Path,
 ) -> Vec<String> {
-    // A second --settings value has version-dependent precedence. Preserve an
-    // explicit caller override instead of risking replacement of its hooks.
-    if has_explicit_claude_settings(&arguments) {
+    // Safe/bare mode deliberately runs without user customizations, including
+    // hooks. Do not add LatticeTerm's observer hook back into that recovery
+    // path. A second --settings value also has version-dependent precedence,
+    // so preserve an explicit caller override instead of replacing its hooks.
+    if claude_customizations_disabled(&arguments) || has_explicit_claude_settings(&arguments) {
         return arguments;
     }
 
@@ -6547,6 +6555,18 @@ notify = ["notify.exe", "turn-ended"]"#,
             claude_reporter_arguments(explicit.clone(), Path::new("lattice-term")),
             explicit
         );
+
+        for safe_mode in ["--safe-mode", "--bare"] {
+            let arguments = vec![
+                safe_mode.to_string(),
+                "--model".to_string(),
+                "sonnet".to_string(),
+            ];
+            assert_eq!(
+                claude_reporter_arguments(arguments.clone(), Path::new("lattice-term")),
+                arguments
+            );
+        }
     }
 
     #[test]

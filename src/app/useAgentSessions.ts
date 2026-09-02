@@ -294,6 +294,53 @@ const FALLBACK_CATALOG: AgentDefinition[] = FALLBACK_CATALOG_SOURCE.map(
 const MAX_PENDING_OUTPUT = 256 * 1024;
 export const MAX_AGENT_BROADCAST_TARGETS = 32;
 export const MAX_SAVED_AGENT_PLANS = 32;
+export const CLAUDE_SAFE_MODE_STARTUP_WINDOW_MS = 15_000;
+
+function claudeCustomizationsAreAlreadyDisabled(
+  launchArguments: string[],
+): boolean {
+  return launchArguments.some(
+    (argument) => argument.trim() === "--safe-mode" || argument.trim() === "--bare",
+  );
+}
+
+/**
+ * A failing user Hook must not make LatticeTerm's Claude terminal unusable.
+ * The first launch keeps every user customization. Only a non-zero startup
+ * exit gets one recovery attempt in Claude's documented safe mode.
+ */
+export function claudeSafeModeFallbackRequest(
+  request: AgentLaunchRequest,
+  session: AgentSessionSummary,
+  closedReason: string,
+  launchedAt: number,
+  closedAt: number,
+): AgentLaunchRequest | null {
+  if (
+    request.definitionId !== "claude" ||
+    session.definitionId !== "claude" ||
+    closedAt - launchedAt > CLAUDE_SAFE_MODE_STARTUP_WINDOW_MS ||
+    !/\bcode:\s*[1-9]\d*/i.test(closedReason) ||
+    claudeCustomizationsAreAlreadyDisabled(request.arguments)
+  ) {
+    return null;
+  }
+
+  return {
+    ...request,
+    // Surface the degradation instead of silently hiding the fact that custom
+    // Hook, plugin, and MCP configuration is not active in this fallback.
+    label: `${session.label}（安全模式）`,
+    executable: session.executable,
+    groupId: session.groupId,
+    arguments: ["--safe-mode", ...request.arguments],
+  };
+}
+
+interface ClaudeStartupFallbackCandidate {
+  request: AgentLaunchRequest;
+  launchedAt: number;
+}
 
 interface AgentLaunchAttempt {
   /** Finishes once and returns every lifecycle event observed during the request. */
@@ -600,6 +647,12 @@ export function useAgentSessions(): AgentApi {
   const sessionsRef = useRef(sessions);
   const intentionalDisconnects = useRef(new Set<string>());
   const launchRaceGuard = useRef(new AgentLaunchRaceGuard());
+  const claudeStartupFallbacks = useRef(
+    new Map<string, ClaudeStartupFallbackCandidate>(),
+  );
+  const launchRef = useRef<
+    ((request: AgentLaunchRequest) => Promise<AgentSessionSummary>) | null
+  >(null);
   sessionsRef.current = sessions;
 
   const refreshCatalog = useCallback(async () => {
@@ -697,9 +750,11 @@ export function useAgentSessions(): AgentApi {
             event.payload.reason,
           );
           const intentional = intentionalDisconnects.current.delete(sessionId);
-          const knownSession = sessionsRef.current.some(
+          const knownSession = sessionsRef.current.find(
             (session) => session.sessionId === sessionId,
           );
+          const fallbackCandidate = claudeStartupFallbacks.current.get(sessionId);
+          claudeStartupFallbacks.current.delete(sessionId);
           const pendingLaunch = launchRaceGuard.current.hasPendingAttempt();
           if (!intentional && !knownSession && !pendingLaunch) {
             setLastClosed(
@@ -710,6 +765,27 @@ export function useAgentSessions(): AgentApi {
                 (session) => session.label,
               ),
             );
+          }
+          if (!intentional && knownSession && fallbackCandidate) {
+            const fallback = claudeSafeModeFallbackRequest(
+              fallbackCandidate.request,
+              knownSession,
+              event.payload.reason,
+              fallbackCandidate.launchedAt,
+              Date.now(),
+            );
+            if (fallback) {
+              const launchInSafeMode = launchRef.current;
+              if (launchInSafeMode) {
+                void launchInSafeMode(fallback).catch((reason) => {
+                  setError(
+                    `Claude Code 安全模式重啟失敗：${
+                      reason instanceof Error ? reason.message : String(reason)
+                    }`,
+                  );
+                });
+              }
+            }
           }
           setSessions((current) => {
             const next = intentional
@@ -933,6 +1009,7 @@ export function useAgentSessions(): AgentApi {
 
   const launch = useCallback(async (request: AgentLaunchRequest) => {
     const { invoke } = await core();
+    const launchedAt = Date.now();
     const attempt = launchRaceGuard.current.begin();
     try {
       const session = await invoke<AgentSessionSummary>("agent_launch", {
@@ -958,6 +1035,16 @@ export function useAgentSessions(): AgentApi {
         setLastClosed((current) =>
           current?.sessionId === session.sessionId ? null : current,
         );
+        const fallback = claudeSafeModeFallbackRequest(
+          request,
+          session,
+          closedReason,
+          launchedAt,
+          Date.now(),
+        );
+        if (fallback) {
+          return (await launchRef.current?.(fallback)) ?? closedSession;
+        }
         return closedSession;
       }
       setSessions((current) => {
@@ -968,11 +1055,24 @@ export function useAgentSessions(): AgentApi {
         sessionsRef.current = next;
         return next;
       });
+      if (
+        request.definitionId === "claude" &&
+        !claudeCustomizationsAreAlreadyDisabled(request.arguments)
+      ) {
+        claudeStartupFallbacks.current.set(session.sessionId, {
+          request,
+          launchedAt,
+        });
+        window.setTimeout(() => {
+          claudeStartupFallbacks.current.delete(session.sessionId);
+        }, CLAUDE_SAFE_MODE_STARTUP_WINDOW_MS);
+      }
       return settledSession;
     } finally {
       attempt.cancel();
     }
   }, []);
+  launchRef.current = launch;
 
   const rename = useCallback(async (sessionId: string, label: string) => {
     const { invoke } = await core();

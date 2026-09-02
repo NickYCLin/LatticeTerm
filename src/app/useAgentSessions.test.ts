@@ -7,6 +7,7 @@ import {
   applyAgentUsageEvent,
   agentCatalogForDisplay,
   buildAgentBroadcastPayload,
+  claudeSafeModeFallbackRequest,
   decodeAgentPayload,
   encodeAgentPayload,
   markAgentSessionClosed,
@@ -54,6 +55,69 @@ describe("agent session transport", () => {
 
     const later = guard.begin();
     expect(later.finish().closed.get("agent-unrelated")).toBeUndefined();
+  });
+
+  it("restarts a Claude startup failure once in safe mode", () => {
+    const request = {
+      definitionId: "claude",
+      label: "Claude Code",
+      executable: "claude",
+      arguments: ["--model", "sonnet"],
+      resumeSessionId: null,
+      workingDirectory: "D:/project/demo",
+      cols: 120,
+      rows: 30,
+    };
+    const session = {
+      sessionId: "agent-claude",
+      groupId: "project-claude",
+      groupLabel: "Project",
+      definitionId: "claude",
+      label: "Claude Code",
+      model: "sonnet",
+      executable: "C:/Users/nicklin/AppData/Roaming/npm/claude.cmd",
+      launchArguments: request.arguments,
+      workingDirectory: request.workingDirectory,
+      state: "idle" as const,
+      stateSource: "heuristic" as const,
+      processId: 42,
+      tokenUsage: null,
+      capturedSessionId: null,
+    };
+
+    expect(
+      claudeSafeModeFallbackRequest(
+        request,
+        session,
+        "Process exited: ExitStatus { code: 1, signal: None }",
+        1_000,
+        1_500,
+      ),
+    ).toMatchObject({
+      label: "Claude Code（安全模式）",
+      executable: session.executable,
+      groupId: "project-claude",
+      arguments: ["--safe-mode", "--model", "sonnet"],
+    });
+
+    expect(
+      claudeSafeModeFallbackRequest(
+        { ...request, arguments: ["--safe-mode"] },
+        session,
+        "Process exited: ExitStatus { code: 1, signal: None }",
+        1_000,
+        1_500,
+      ),
+    ).toBeNull();
+    expect(
+      claudeSafeModeFallbackRequest(
+        request,
+        session,
+        "Process exited: ExitStatus { code: 0, signal: None }",
+        1_000,
+        1_500,
+      ),
+    ).toBeNull();
   });
 
   it("keeps restore snapshot tombstones isolated from direct launches", () => {
