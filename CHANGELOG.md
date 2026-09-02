@@ -4,6 +4,29 @@
 
 ---
 
+## [0.33.0](https://github.com/NickYCLin/lattice-term/compare/v0.32.0...v0.33.0) (2026-09-02)
+
+
+### 🚀 新增功能
+
+* **remote:** 顯示這台裝置的固定 ID ([a286c63](https://github.com/NickYCLin/lattice-term/commit/a286c639fb057dd73d52fec8b26ce7dd3ddcb1a2))
+
+
+### 🛠️ 問題修正
+
+* **agent:** Hook 啟動失敗時以安全模式重啟 Claude ([f735e9a](https://github.com/NickYCLin/lattice-term/commit/f735e9a5e22a3ce6e3ff941695ba23ce65b4217d))
+* **agent:** 修正首次信任與執行狀態判斷 ([61d8028](https://github.com/NickYCLin/lattice-term/commit/61d80286a1974e2d1cbf3009f227d1ff7db7103f))
+* **agent:** 排除 Windows AutoRun 啟動干擾 ([dbcd035](https://github.com/NickYCLin/lattice-term/commit/dbcd0358329d6895372a0dff7fa24be609bbdcf7))
+* **agent:** 補齊 npm CLI 的 Node 路徑 ([c840e90](https://github.com/NickYCLin/lattice-term/commit/c840e9052a6c2ae8cefb9b56804194ebc3fa02bf))
+* **agent:** 限制 Windows CLI 的 PATH 長度 ([b3193e3](https://github.com/NickYCLin/lattice-term/commit/b3193e32a1f70fede54f7ef04701853fd03b9401))
+* **agent:** 隔離 Herdr 工作階段標記 ([630d303](https://github.com/NickYCLin/lattice-term/commit/630d303c131ab28708f9ad66c610251b2e8cc9bd))
+* **remote:** 清除 Windows 檔案權限編譯警告 ([9e99201](https://github.com/NickYCLin/lattice-term/commit/9e992013480241584f9313c6fa0c5707ff264f15))
+* **session:** 保留啟動失敗的工作階段 ([33e2acc](https://github.com/NickYCLin/lattice-term/commit/33e2acc69492b74cd1c6d00beb1e45a15bbeb8e9))
+* **session:** 續接失敗時開啟可用 CLI ([06adb7a](https://github.com/NickYCLin/lattice-term/commit/06adb7a90596e54f5a40ab5fdcb3963917e3ad79))
+* **session:** 重啟後保留工作階段與側欄配置 ([78ff181](https://github.com/NickYCLin/lattice-term/commit/78ff181b41d063564c358f0c0300afaf69f9ed7a))
+* **session:** 重啟後續接 Claude 對話 ([cebf933](https://github.com/NickYCLin/lattice-term/commit/cebf9337ab83657d37d9a1f642b9a61ba2429034))
+* **terminal:** 避免右鍵重送剪貼簿內容 ([b8e171b](https://github.com/NickYCLin/lattice-term/commit/b8e171b80b797e4808c4126c26a1351034c0417b))
+
 ## [0.32.0](https://github.com/NickYCLin/lattice-term/compare/v0.31.0...v0.32.0) (2026-09-01)
 
 
