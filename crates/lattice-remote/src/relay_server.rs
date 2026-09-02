@@ -109,6 +109,7 @@ pub struct RelayState {
     state_path: Option<PathBuf>,
     generations: Mutex<u64>,
     rates: Mutex<HashMap<IpAddr, Vec<Instant>>>,
+    forwarded_ip_header: Option<String>,
     connection_slots: Arc<Semaphore>,
     max_pending_dials: usize,
     max_device_registry_entries: usize,
@@ -144,6 +145,7 @@ impl RelayState {
             state_path,
             generations: Mutex::new(0),
             rates: Mutex::new(HashMap::new()),
+            forwarded_ip_header: None,
             connection_slots: Arc::new(Semaphore::new(max_connections)),
             max_pending_dials,
             max_device_registry_entries,
@@ -153,23 +155,47 @@ impl RelayState {
         state
     }
 
+    /// Charges loopback connections to the address this header carries.
+    ///
+    /// Only an operator who knows their ingress overwrites the header should
+    /// turn this on: with an appending proxy in front, or none at all, a
+    /// client could otherwise choose which bucket to spend.
+    pub fn trusting_forwarded_ip_header(mut self, header_name: Option<String>) -> Self {
+        self.forwarded_ip_header = header_name.filter(|name| !name.trim().is_empty());
+        self
+    }
+
     fn next_generation(&self) -> u64 {
         let mut current = self.generations.lock().expect("generation lock");
         *current += 1;
         *current
     }
 
-    /// Sliding-window limit on how often one IP may open connections.
+    /// Where a loopback peer is really connecting from, when the operator
+    /// named a trusted proxy header and the proxy supplied it.
     ///
-    /// Loopback is exempt: behind the recommended HTTPS/WSS ingress every
-    /// public client reaches the relay as 127.0.0.1, so one busy peer would
-    /// exhaust the shared bucket for everyone. Rate limiting public traffic
-    /// is the ingress's job there; the per-IP budget applies when the relay
-    /// port is exposed directly.
-    fn allow_connection(&self, ip: IpAddr) -> bool {
-        if ip.is_loopback() {
-            return true;
+    /// Behind the recommended HTTPS/WSS ingress every public client reaches
+    /// the relay as 127.0.0.1. Charging the peer address there would let one
+    /// busy client exhaust a bucket everyone shares, so loopback is exempt by
+    /// default — which also means the per-IP budget covers none of the
+    /// traffic it exists to bound. Naming the header the ingress sets charges
+    /// that traffic to the real client instead.
+    ///
+    /// A peer that is not loopback never gets to name its own address: it
+    /// reached the port directly, so any header it sent is its own writing,
+    /// and it is charged to its real address before the handshake anyway.
+    fn forwarded_client_ip(&self, peer: IpAddr, forwarded: Option<&str>) -> Option<IpAddr> {
+        if !peer.is_loopback() {
+            return None;
         }
+        // Only a configured header is ever captured, but refusing here too
+        // keeps a future caller from enabling the trust by accident.
+        self.forwarded_ip_header.as_ref()?;
+        forwarded.and_then(parse_forwarded_ip)
+    }
+
+    /// Sliding-window limit on how often one IP may open connections.
+    fn allow_connection(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
         let mut rates = self.rates.lock().expect("rate lock");
         if rates.len() >= MAX_RATE_BUCKETS && !rates.contains_key(&ip) {
@@ -398,6 +424,38 @@ impl RelayState {
     }
 }
 
+/// Reads the client address a trusted proxy wrote into its header.
+///
+/// Proxies differ on whether they append a port, so both shapes are accepted;
+/// anything else is discarded rather than guessed at, which leaves the
+/// connection exempt instead of charging it to a bucket it does not own.
+fn parse_forwarded_ip(value: &str) -> Option<IpAddr> {
+    let value = value.trim();
+    value
+        .parse::<IpAddr>()
+        .ok()
+        .or_else(|| value.parse::<SocketAddr>().ok().map(|address| address.ip()))
+}
+
+/// Who a connection belongs to, for the log.
+///
+/// Behind ingress the carrier address is always loopback, which tells an
+/// operator investigating abuse nothing; when a trusted proxy supplied the
+/// real address, both are shown.
+struct ClientAddress {
+    peer: SocketAddr,
+    forwarded: Option<IpAddr>,
+}
+
+impl std::fmt::Display for ClientAddress {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.forwarded {
+            Some(forwarded) => write!(formatter, "{forwarded} via {}", self.peer),
+            None => write!(formatter, "{}", self.peer),
+        }
+    }
+}
+
 async fn send_error(stream: &mut Transport, code: &str, detail: &str) {
     let _ = write_server_message(
         stream,
@@ -429,7 +487,7 @@ fn valid_channel_id(channel_id: &str) -> bool {
 async fn run_agent_control(
     state: Arc<RelayState>,
     stream: Transport,
-    peer: SocketAddr,
+    client: &ClientAddress,
     device_id: String,
     agent_name: String,
 ) {
@@ -448,7 +506,7 @@ async fn run_agent_control(
     if let Some(previous) = previous {
         let _ = previous.cancel.send(());
     }
-    println!("Registered device {device_id} from {peer}.");
+    println!("Registered device {device_id} from {client}.");
 
     let (mut read_half, write_half) = tokio::io::split(stream);
     let writer = Arc::new(tokio::sync::Mutex::new(write_half));
@@ -505,7 +563,7 @@ async fn run_agent_control(
 async fn run_dial(
     state: Arc<RelayState>,
     mut stream: Transport,
-    peer: SocketAddr,
+    client: &ClientAddress,
     device_id: String,
 ) {
     let device_id = match normalize_device_id(&device_id) {
@@ -613,7 +671,7 @@ async fn run_dial(
         return;
     }
 
-    println!("Linked a viewer at {peer} with device {device_id}.");
+    println!("Linked a viewer at {client} with device {device_id}.");
     match tokio::io::copy_bidirectional(&mut stream, &mut agent_stream.transport).await {
         Ok((to_agent, to_viewer)) => println!(
             "Channel for device {device_id} closed ({to_agent} bytes in, {to_viewer} bytes out)."
@@ -625,7 +683,7 @@ async fn run_dial(
 async fn run_connection(
     state: Arc<RelayState>,
     mut stream: Transport,
-    peer: SocketAddr,
+    client: &ClientAddress,
     connection_permit: OwnedSemaphorePermit,
 ) {
     let first = match timeout(FIRST_MESSAGE_LIMIT, read_client_message(&mut stream)).await {
@@ -690,10 +748,10 @@ async fn run_connection(
             {
                 return;
             }
-            run_agent_control(state, stream, peer, device_id, agent_name).await;
+            run_agent_control(state, stream, client, device_id, agent_name).await;
         }
         RelayClientMessage::Dial { device_id } => {
-            run_dial(state, stream, peer, device_id).await;
+            run_dial(state, stream, client, device_id).await;
         }
         RelayClientMessage::Join {
             channel_id,
@@ -750,17 +808,39 @@ pub async fn run(listener: TcpListener, state: Arc<RelayState>) {
                 };
                 let state = Arc::clone(&state);
                 tokio::spawn(async move {
-                    // The budget is spent before the WebSocket handshake so a
-                    // flood cannot buy HTTP parsing work with rejected
-                    // connections.
-                    if !state.allow_connection(peer.ip()) {
+                    // A direct peer's budget is spent before the WebSocket
+                    // handshake so a flood cannot buy HTTP parsing work with
+                    // rejected connections.
+                    if !peer.ip().is_loopback() && !state.allow_connection(peer.ip()) {
                         let _ = timeout(FIRST_MESSAGE_LIMIT, reject_rate_limited(stream)).await;
                         return;
                     }
-                    let negotiated = timeout(FIRST_MESSAGE_LIMIT, negotiate_carrier(stream)).await;
-                    if let Ok(Ok(transport)) = negotiated {
-                        run_connection(state, transport, peer, connection_permit).await;
+                    let negotiated = timeout(
+                        FIRST_MESSAGE_LIMIT,
+                        negotiate_carrier(stream, state.forwarded_ip_header.as_deref()),
+                    )
+                    .await;
+                    let Ok(Ok((mut transport, forwarded))) = negotiated else {
+                        return;
+                    };
+                    // A proxied peer only reveals its client inside the
+                    // handshake, so its budget is settled here instead. The
+                    // process-wide carrier cap bounds the handshake work a
+                    // flood can buy in the meantime.
+                    let forwarded = state.forwarded_client_ip(peer.ip(), forwarded.as_deref());
+                    if let Some(client_ip) = forwarded {
+                        if !state.allow_connection(client_ip) {
+                            send_error(
+                                &mut transport,
+                                "rateLimited",
+                                "Too many connections from this address; wait a minute.",
+                            )
+                            .await;
+                            return;
+                        }
                     }
+                    let client = ClientAddress { peer, forwarded };
+                    run_connection(state, transport, &client, connection_permit).await;
                 });
             }
             Err(error) => {
@@ -793,13 +873,20 @@ async fn reject_rate_limited(stream: TcpStream) {
 /// One listener supports native relay TCP and WebSocket upgrades. Relay JSON
 /// begins with a zero high byte in its bounded length prefix, while every
 /// WebSocket handshake begins with an HTTP `GET` request.
-async fn negotiate_carrier(stream: TcpStream) -> Result<Transport, std::io::Error> {
+async fn negotiate_carrier(
+    stream: TcpStream,
+    forwarded_ip_header: Option<&str>,
+) -> Result<(Transport, Option<String>), std::io::Error> {
     stream.set_nodelay(true)?;
     let mut first = [0_u8; 1];
     if stream.peek(&mut first).await? == 1 && first[0] == 0 {
-        return Ok(Transport::Tcp(stream));
+        // Native TCP has no handshake to carry a forwarded address.
+        return Ok((Transport::Tcp(stream), None));
     }
-    Transport::accept_websocket(stream).await
+    match forwarded_ip_header {
+        Some(header_name) => Transport::accept_websocket_with_header(stream, header_name).await,
+        None => Ok((Transport::accept_websocket(stream).await?, None)),
+    }
 }
 
 #[cfg(test)]
@@ -972,10 +1059,120 @@ mod tests {
         let state = RelayState::default();
         let v4: IpAddr = "127.0.0.1".parse().unwrap();
         let v6: IpAddr = "::1".parse().unwrap();
+        // Nothing to charge means nothing to exhaust, however many arrive.
         for _ in 0..(CONNECTIONS_PER_WINDOW * 2) {
-            assert!(state.allow_connection(v4));
-            assert!(state.allow_connection(v6));
+            assert_eq!(state.forwarded_client_ip(v4, None), None);
+            assert_eq!(state.forwarded_client_ip(v6, None), None);
         }
+    }
+
+    #[test]
+    fn a_trusted_header_charges_the_client_behind_the_ingress() {
+        let state = RelayState::default()
+            .trusting_forwarded_ip_header(Some("Cf-Connecting-Ip".to_string()));
+        let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+        let client: IpAddr = "203.0.113.9".parse().unwrap();
+
+        assert_eq!(
+            state.forwarded_client_ip(loopback, Some("203.0.113.9")),
+            Some(client)
+        );
+        for _ in 0..CONNECTIONS_PER_WINDOW {
+            assert!(state.allow_connection(client));
+        }
+        assert!(!state.allow_connection(client));
+        // One noisy client must not spend anyone else's budget.
+        assert!(state.allow_connection("203.0.113.10".parse().unwrap()));
+    }
+
+    #[test]
+    fn a_local_client_stays_exempt_when_the_ingress_adds_no_header() {
+        let state = RelayState::default()
+            .trusting_forwarded_ip_header(Some("Cf-Connecting-Ip".to_string()));
+        let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+
+        // The desktop app and a headless agent reach their own relay directly,
+        // with no proxy to write the header. Charging them to a bucket they
+        // never chose would rate limit the operator's own machine.
+        assert_eq!(state.forwarded_client_ip(loopback, None), None);
+        assert_eq!(
+            state.forwarded_client_ip(loopback, Some("not an address")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_direct_peer_cannot_choose_its_own_rate_bucket() {
+        let state = RelayState::default()
+            .trusting_forwarded_ip_header(Some("Cf-Connecting-Ip".to_string()));
+        let peer: IpAddr = "203.0.113.9".parse().unwrap();
+
+        // This peer reached the port itself, so the header is its own writing
+        // and is ignored; run() charges it to its real address instead.
+        assert_eq!(state.forwarded_client_ip(peer, Some("198.51.100.4")), None);
+    }
+
+    #[test]
+    fn a_forwarded_header_is_ignored_until_an_operator_names_it() {
+        let state = RelayState::default();
+        let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+
+        assert_eq!(
+            state.forwarded_client_ip(loopback, Some("203.0.113.9")),
+            None
+        );
+        assert_eq!(
+            RelayState::default()
+                .trusting_forwarded_ip_header(Some("   ".to_string()))
+                .forwarded_client_ip(loopback, Some("203.0.113.9")),
+            None
+        );
+    }
+
+    #[test]
+    fn forwarded_addresses_are_read_in_the_shapes_proxies_write() {
+        assert_eq!(
+            parse_forwarded_ip("203.0.113.9"),
+            Some("203.0.113.9".parse().unwrap())
+        );
+        assert_eq!(
+            parse_forwarded_ip(" 2001:db8::1 "),
+            Some("2001:db8::1".parse().unwrap())
+        );
+        // Some proxies append the source port.
+        assert_eq!(
+            parse_forwarded_ip("203.0.113.9:51234"),
+            Some("203.0.113.9".parse().unwrap())
+        );
+        assert_eq!(
+            parse_forwarded_ip("[2001:db8::1]:51234"),
+            Some("2001:db8::1".parse().unwrap())
+        );
+        // A value that cannot be read leaves the connection exempt rather
+        // than charging it to a guess.
+        assert_eq!(parse_forwarded_ip("unknown"), None);
+        assert_eq!(parse_forwarded_ip(""), None);
+    }
+
+    #[test]
+    fn logs_name_the_real_client_and_the_carrier_it_arrived_on() {
+        let peer: SocketAddr = "127.0.0.1:44408".parse().unwrap();
+        assert_eq!(
+            ClientAddress {
+                peer,
+                forwarded: None
+            }
+            .to_string(),
+            "127.0.0.1:44408"
+        );
+        assert_eq!(
+            ClientAddress {
+                peer,
+                forwarded: Some("203.0.113.9".parse().unwrap())
+            }
+            .to_string(),
+            "203.0.113.9 via 127.0.0.1:44408"
+        );
     }
 
     #[test]

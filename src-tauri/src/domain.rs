@@ -73,6 +73,16 @@ pub struct ConnectionProfile {
     pub group: String,
     pub tags: Vec<String>,
     pub favorite: bool,
+    /// A Lattice Remote device the relay addresses by its nine-digit identity
+    /// instead of a hostname and port. Absent on every other entry, and
+    /// skipped when serialising so existing stored files keep their shape.
+    ///
+    /// The pairing code is deliberately not here: it is a one-time secret and
+    /// never belongs in stored connection metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_address: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +102,10 @@ pub struct ConnectionDraft {
     pub tags: Vec<String>,
     #[serde(default)]
     pub favorite: bool,
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub relay_address: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +157,27 @@ where
     tags
 }
 
+/// Keeps digits only, so "123 456 789" and "123-456-789" both work.
+/// Mirrors `normalizeDeviceId` in the frontend.
+fn normalize_device_id(input: &str) -> Option<String> {
+    let digits: String = input
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '-')
+        .collect();
+    (digits.len() == 9 && digits.chars().all(|c| c.is_ascii_digit())).then_some(digits)
+}
+
+impl ConnectionDraft {
+    /// Whether this entry is addressed by device ID instead of host and port.
+    pub fn is_relay(&self) -> bool {
+        self.protocol == Protocol::Lattice
+            && self
+                .device_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty())
+    }
+}
+
 pub fn validate_connection_draft(draft: &ConnectionDraft) -> ValidationErrors {
     let mut errors = ValidationErrors::default();
     let name = draft.name.trim();
@@ -157,7 +192,23 @@ pub fn validate_connection_draft(draft: &ConnectionDraft) -> ValidationErrors {
         errors.name = Some(format!("Use {MAX_NAME_LENGTH} characters or fewer."));
     }
 
-    if hostname.is_empty() {
+    // A relay entry is addressed by device ID, so the address and port rules
+    // below would reject a perfectly valid one for leaving them empty.
+    let relay = draft.is_relay();
+
+    if relay {
+        if normalize_device_id(draft.device_id.as_deref().unwrap_or("")).is_none() {
+            errors.hostname = Some("A device ID has nine digits.".to_string());
+        } else if draft
+            .relay_address
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
+            errors.hostname = Some("Enter the relay server address.".to_string());
+        }
+    } else if hostname.is_empty() {
         errors.hostname = Some("Enter a hostname or IP address.".to_string());
     } else if hostname.contains(char::is_whitespace) {
         errors.hostname = Some("Hostnames cannot contain spaces.".to_string());
@@ -188,7 +239,8 @@ pub fn validate_connection_draft(draft: &ConnectionDraft) -> ValidationErrors {
         errors.username = Some(format!("Use {MAX_USERNAME_LENGTH} characters or fewer."));
     }
 
-    if !(MIN_PORT..=MAX_PORT).contains(&draft.port) {
+    // No port to check on a relay entry: the relay carries the session.
+    if !relay && !(MIN_PORT..=MAX_PORT).contains(&draft.port) {
         errors.port = Some(format!("Use a port between {MIN_PORT} and {MAX_PORT}."));
     }
 
@@ -216,21 +268,46 @@ impl ConnectionProfile {
             group
         };
 
+        let device_id = normalize_device_id(draft.device_id.as_deref().unwrap_or(""))
+            .filter(|_| draft.protocol == Protocol::Lattice);
+        let relay = device_id.is_some();
+
         ConnectionProfile {
             id,
             name: draft.name.trim().to_string(),
             protocol: draft.protocol,
-            hostname: draft.hostname.trim().to_string(),
+            // A relay entry has no address of its own; keeping a stale one
+            // would leave something misleading in exports and in the card.
+            hostname: if relay {
+                String::new()
+            } else {
+                draft.hostname.trim().to_string()
+            },
             username: draft.username.trim().to_string(),
-            port: draft.port,
+            port: if relay { 0 } else { draft.port },
             environment: draft.environment,
             group: group_name,
             tags: parse_tags(&draft.tags),
             favorite: draft.favorite,
+            relay_address: relay
+                .then(|| {
+                    draft
+                        .relay_address
+                        .as_deref()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string()
+                })
+                .filter(|address| !address.is_empty()),
+            device_id,
         }
     }
 
     pub fn target_string(&self) -> String {
+        // A relay entry is found by identity, so there is no address to show.
+        if let Some(device_id) = &self.device_id {
+            return device_id.clone();
+        }
         if self.username.is_empty() {
             format!("{}:{}", self.hostname, self.port)
         } else {

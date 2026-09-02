@@ -32,6 +32,8 @@ import {
   type PreferencesValue,
 } from "./app/preferences";
 import type { EncryptedBackupRestore } from "./app/encryptedBackup";
+import { rememberRelayDevice } from "./app/rememberRelayDevice";
+import { saveRelayAddress } from "./app/remoteRelay";
 import { findTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
 import { APP_VERSION } from "./app/version";
@@ -48,7 +50,11 @@ import { useVaultAutoLock } from "./app/useVaultAutoLock";
 import { useWindowTheme } from "./app/useWindowTheme";
 import { useWorkspace } from "./app/useWorkspace";
 import { useCredentialDeleteGuard } from "./app/useSavedCredential";
-import type { ConnectionDraft, ConnectionProfile } from "./domain/connection";
+import {
+  draftFromProfile,
+  type ConnectionDraft,
+  type ConnectionProfile,
+} from "./domain/connection";
 import { I18nProvider } from "./i18n";
 import { useI18n } from "./i18n/context";
 import { localeCatalog } from "./i18n/catalog";
@@ -1107,9 +1113,14 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
       {quickConnectOpen && runtime.host === "tauri" && (
         <RemoteQuickConnect
           remote={remote}
-          onConnected={(sessionId) => {
+          onConnected={(result) => {
             setQuickConnectOpen(false);
-            setActiveSessionId(sessionId);
+            // Keep the device in My connections so the next session needs
+            // only the pairing code, not the nine digits and the relay too.
+            const memory = rememberRelayDevice(workspace.profiles, result);
+            if (memory?.action === "add") workspace.addProfile(memory.draft);
+            else if (memory) workspace.updateProfile(memory.id, memory.draft);
+            setActiveSessionId(result.sessionId);
             setView("terminal");
           }}
           onCancel={() => setQuickConnectOpen(false)}
@@ -1133,6 +1144,17 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         <RemoteConnectFlow
           profile={connectTarget}
           remote={remote}
+          onRelayAddressChanged={(relayAddress) => {
+            // The device moved to a new relay. Keep the saved entry pointing
+            // at the address that just worked, and let the remembered
+            // install-wide address follow it, since a quick tunnel rename
+            // invalidates that one too.
+            workspace.updateProfile(connectTarget.id, {
+              ...draftFromProfile(connectTarget),
+              relayAddress,
+            });
+            saveRelayAddress(window.localStorage, relayAddress);
+          }}
           onConnected={(sessionId) => {
             setConnectTarget(null);
             setActiveSessionId(sessionId);

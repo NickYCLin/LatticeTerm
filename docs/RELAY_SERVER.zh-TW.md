@@ -21,12 +21,22 @@
   （trust-on-first-use）；之後金鑰不符會直接拒連，即使中繼站被
   掉包或有人搶到同號也冒充不了。裝置重灌後需在檢視端的
   `remote-device-pins.json` 移除該筆再連。
-- 每個來源 IP 每分鐘最多 30 條新連線，且在 WebSocket 握手前就先檢查，
-  阻擋透過中繼站暴力嘗試配對碼或掃描裝置 ID。來自 loopback 的連線
-  不受此限——經 HTTPS/WSS ingress 轉送時所有公網流量的來源都是
-  127.0.0.1，共用同一個額度反而會互相卡死；公網的來源限速必須在
-  ingress 另外設定（例如 Cloudflare WAF／Rate Limiting、nginx `limit_req`
-  或等效閘道能力），不能把 loopback 豁免誤認成已有公網保護。
+- 每個來源 IP 每分鐘最多 30 條新連線，阻擋透過中繼站暴力嘗試配對碼或
+  掃描裝置 ID。直連的來源在 WebSocket 握手前就先檢查，被擋下的連線買不到
+  HTTP 解析工作。
+- 預設情況下 loopback 的連線不受此限——經 HTTPS/WSS ingress 轉送時所有
+  公網流量的來源都是 127.0.0.1，共用同一個額度反而會互相卡死。代價是
+  **這個限速對公網流量完全沒有作用**。加上 `--client-ip-header` 指定
+  ingress 寫入真實來源的標頭（Cloudflare 是 `Cf-Connecting-Ip`，nginx
+  常用 `X-Real-Ip`），loopback 連線就改記在該位址名下，限速重新涵蓋公網。
+  沒開這個選項時，公網的來源限速必須在 ingress 另外設定（例如 Cloudflare
+  WAF／Rate Limiting、nginx `limit_req` 或等效閘道能力），不能把 loopback
+  豁免誤認成已有公網保護。
+- `--client-ip-header` 只信任 loopback 對端送來的該標頭：直接連到這個
+  port 的人送什麼都會被忽略，不能自己挑要花哪個額度。前提是前面的代理
+  **覆寫**該標頭而不是把客戶端送的值接在前面；relay 取最後一個值，所以
+  會附加的代理也安全，但完全不設該標頭的代理就等於沒開。標頭讀不出位址
+  時該連線維持豁免，不會被記到猜出來的額度上。
 - 中繼位址**不是機密**：兩端必須知道它，DNS、TLS 連線與本機設定也能看見。
   LatticeTerm 在成功保存後只顯示「使用已儲存的中繼伺服器」，是降低日常
   操作雜訊，不是以隱藏網址取代加密、認證或入口防護。
@@ -60,8 +70,13 @@ nginx 或 Caddy 把 HTTPS/WebSocket 入口轉送到這個位址。
 ```bash
 cargo build --release --features relay-server --bin lattice-relay \
   --manifest-path crates/lattice-remote/Cargo.toml
-lattice-relay --bind 127.0.0.1:44910 --state /var/lib/lattice-relay/devices.json
+lattice-relay --bind 127.0.0.1:44910 --state /var/lib/lattice-relay/devices.json \
+  --client-ip-header Cf-Connecting-Ip
 ```
+
+`--client-ip-header` 依前面的 ingress 而定：Cloudflare 用
+`Cf-Connecting-Ip`，nginx 用你在 `proxy_set_header` 設的名稱（常見是
+`X-Real-Ip`）。不確定前面會不會覆寫該標頭就先不要加，改在 ingress 做限速。
 
 ### 免費 Cloudflare Quick Tunnel
 
@@ -74,9 +89,19 @@ cloudflared tunnel --url http://127.0.0.1:44910 --no-autoupdate
 `cloudflared` 印出的 `https://隨機名稱.trycloudflare.com` 要在 LatticeTerm
 填成 `wss://隨機名稱.trycloudflare.com`。Quick Tunnel 免費且不需要網域，
 但程序每次重啟網址都會改，而且是 Cloudflare 定位為測試用途、沒有 SLA 的
-臨時入口；relay 看到的又是豁免內建來源限速的 loopback。它可用來自己測試，
-不應作為對外多人服務。要固定網址與可控的入口政策，需使用掛在自己網域下的
-named tunnel 或自行管理 nginx／Caddy。Cloudflare 的限制以
+臨時入口。`trycloudflare.com` 不是自己的網域，掛不上 WAF／Rate Limiting，
+所以入口端補不了限速；relay 這邊請務必啟動時加上
+
+```bash
+lattice-relay --bind 127.0.0.1:44910 \
+  --state /var/lib/lattice-relay/devices.json \
+  --client-ip-header Cf-Connecting-Ip
+```
+
+否則所有公網流量都是 loopback，內建的每 IP 限速一條都用不到。即使如此，
+Quick Tunnel 仍只適合自己測試，不應作為對外多人服務。要固定網址與可控的
+入口政策，需使用掛在自己網域下的 named tunnel 或自行管理 nginx／Caddy。
+Cloudflare 的限制以
 [Quick Tunnel 官方文件](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)
 為準。
 
@@ -89,6 +114,16 @@ named tunnel 或自行管理 nginx／Caddy。Cloudflare 的限制以
 - **檢視端**：右上角「以 ID 連線」，輸入對方的裝置 ID、配對碼與同一台
   中繼伺服器位址即可。第一次成功使用後，位址會保存在這個安裝的前端本機
   儲存區，之後分享與連線畫面只顯示已儲存狀態；按「修改」仍可查看或更換。
+- 連線成功的裝置會留在「我的連線」，之後從清單連線只需要輸入配對碼，
+  不必再重打九位數與中繼位址。**配對碼是一次性密碼，不會被保存**。
+  這筆記錄存的是裝置 ID 與中繼位址：兩者都不是機密，和其他連線設定檔
+  一樣可以命名、分組、標籤與匯出。同一個裝置換到別的中繼位址時，
+  下次連上會就地更新，不會多出一筆；你自己改過的名稱不會被覆蓋。
+- **中繼位址換掉時**（Quick Tunnel 每次重啟都會換），連線對話框會在
+  中繼沒有回應時就地打開位址欄位，填入新網址重連即可，不必先去編輯
+  設定檔。只有真的連上的位址才會被寫回去，猜錯不會覆蓋原本可用的值。
+  中繼有回應但拒絕（例如裝置離線）時不會出現這個欄位——那種情況位址
+  是對的，要修的是另一端。
 - **無畫面的純文字主機**（沒有桌面環境的伺服器）：在該機器上執行
   `lattice-agent --relay wss://你的伺服器 --terminal --allow-input`，
   分享的是加密的 shell 終端機而不是畫面；檢視端一樣用裝置 ID＋配對碼

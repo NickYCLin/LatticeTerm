@@ -65,6 +65,10 @@ export function serializeProfiles(
       group: profile.group === UNGROUPED ? "" : profile.group,
       tags: profile.tags,
       favorite: profile.favorite,
+      // Only relay entries carry these, and both are addressing metadata
+      // rather than secrets, so they travel with the rest of the entry.
+      ...(profile.deviceId ? { deviceId: profile.deviceId } : {}),
+      ...(profile.relayAddress ? { relayAddress: profile.relayAddress } : {}),
     })),
   };
 
@@ -180,6 +184,12 @@ export function parseAndValidateImport(jsonContent: string): ImportResult {
             : [],
       ),
       favorite: Boolean(record.favorite),
+      ...(typeof record.deviceId === "string"
+        ? { deviceId: record.deviceId }
+        : {}),
+      ...(typeof record.relayAddress === "string"
+        ? { relayAddress: record.relayAddress }
+        : {}),
     };
 
     const validation = validateConnectionDraft(draft);

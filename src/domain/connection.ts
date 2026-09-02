@@ -10,6 +10,7 @@
  * parameters, and the interface decides what language to render them in.
  */
 
+import { formatDeviceId, normalizeDeviceId } from "../app/remoteRelay";
 import type { MessageKey } from "../i18n/messages/zh-TW";
 
 export const protocolCatalog = [
@@ -88,6 +89,9 @@ export interface ConnectionDraft {
   group?: string;
   tags?: string[];
   favorite?: boolean;
+  /** Set on relay entries; see `ConnectionProfile`. */
+  deviceId?: string;
+  relayAddress?: string;
 }
 
 export interface ConnectionProfile {
@@ -101,6 +105,24 @@ export interface ConnectionProfile {
   group: string;
   tags: string[];
   favorite: boolean;
+  /**
+   * A Lattice Remote device reached through a relay rather than an address.
+   * The relay finds the machine by this nine-digit identity, so `hostname`
+   * and `port` are unused and stay empty on these entries.
+   *
+   * The pairing code is deliberately absent: it is a one-time secret that
+   * belongs in the connect dialog, never in a stored profile.
+   */
+  deviceId?: string;
+  /** The relay that resolves `deviceId`, as `wss://host` or `host:port`. */
+  relayAddress?: string;
+}
+
+/** Whether an entry is addressed by device ID instead of hostname and port. */
+export function isRelayProfile(
+  entry: Pick<ConnectionProfile, "protocol" | "deviceId">,
+): boolean {
+  return entry.protocol === "lattice" && !!entry.deviceId;
 }
 
 /** A validation failure, expressed as something the interface can translate. */
@@ -173,6 +195,11 @@ export function draftFromProfile(profile: ConnectionProfile): ConnectionDraft {
     group: profile.group === UNGROUPED ? "" : profile.group,
     tags: [...profile.tags],
     favorite: profile.favorite,
+    // Carried through editing untouched: the form offers no way to retype a
+    // device identity, and dropping it would turn a relay entry into a
+    // direct one pointing at an empty address.
+    ...(profile.deviceId ? { deviceId: profile.deviceId } : {}),
+    ...(profile.relayAddress ? { relayAddress: profile.relayAddress } : {}),
   };
 }
 
@@ -205,6 +232,9 @@ export function validateConnectionDraft(
   const username = draft.username.trim();
   const group = (draft.group ?? "").trim();
   const tags = parseTags(draft.tags ?? []);
+  // A relay entry is addressed by device ID, so the address and port rules
+  // below would reject a perfectly valid one for leaving them empty.
+  const relay = isRelayProfile(draft);
 
   if (!name) {
     errors.name = { key: "validation.nameRequired" };
@@ -215,7 +245,13 @@ export function validateConnectionDraft(
     };
   }
 
-  if (!hostname) {
+  if (relay) {
+    if (!normalizeDeviceId(draft.deviceId ?? "")) {
+      errors.hostname = { key: "validation.deviceIdInvalid" };
+    } else if (!(draft.relayAddress ?? "").trim()) {
+      errors.hostname = { key: "validation.relayRequired" };
+    }
+  } else if (!hostname) {
     errors.hostname = { key: "validation.hostRequired" };
   } else if (/\s/.test(hostname)) {
     errors.hostname = { key: "validation.hostSpaces" };
@@ -245,7 +281,9 @@ export function validateConnectionDraft(
     };
   }
 
-  if (!Number.isInteger(draft.port)) {
+  if (relay) {
+    // No port to check: the relay carries the session.
+  } else if (!Number.isInteger(draft.port)) {
     errors.port = { key: "validation.portInteger" };
   } else if (draft.port < limits.minPort || draft.port > limits.maxPort) {
     errors.port = {
@@ -281,25 +319,40 @@ export function createConnectionProfile(
   id: string = crypto.randomUUID(),
 ): ConnectionProfile {
   const group = (draft.group ?? "").trim();
+  const deviceId = normalizeDeviceId(draft.deviceId ?? "");
+  const relay = draft.protocol === "lattice" && !!deviceId;
 
   return {
     id,
     name: draft.name.trim(),
     protocol: draft.protocol,
-    hostname: draft.hostname.trim(),
+    // A relay entry has no address of its own; storing a stale one would
+    // leave something misleading in exports and in the card subtitle.
+    hostname: relay ? "" : draft.hostname.trim(),
     // Lattice Remote authenticates with a pairing code and VNC authenticates
     // the shared display. Neither has a username that belongs in the profile.
     username: protocolUsesUsername(draft.protocol) ? draft.username.trim() : "",
-    port: draft.port,
+    port: relay ? 0 : draft.port,
     environment: draft.environment ?? "unassigned",
     group: group || UNGROUPED,
     tags: parseTags(draft.tags ?? []),
     favorite: draft.favorite ?? false,
+    ...(relay
+      ? {
+          deviceId: deviceId!,
+          relayAddress: (draft.relayAddress ?? "").trim(),
+        }
+      : {}),
   };
 }
 
-/** `user@host:port`, the form an operator recognises at a glance. */
+/**
+ * What an operator recognises at a glance: `user@host:port` for a direct
+ * entry, and the spoken nine-digit identity for a relay one, which has no
+ * address to show.
+ */
 export function connectionTarget(profile: ConnectionProfile): string {
+  if (isRelayProfile(profile)) return formatDeviceId(profile.deviceId!);
   const account = profile.username ? `${profile.username}@` : "";
   return `${account}${profile.hostname}:${profile.port}`;
 }
@@ -313,9 +366,18 @@ export function findDuplicateTarget(
   profiles: ConnectionProfile[],
   candidate: ConnectionProfile,
 ): ConnectionProfile | undefined {
+  // Relay entries all share an empty hostname and port zero, so comparing
+  // those would report every one of them as a duplicate of every other.
+  if (isRelayProfile(candidate)) {
+    return profiles.find(
+      (profile) =>
+        profile.id !== candidate.id && profile.deviceId === candidate.deviceId,
+    );
+  }
   return profiles.find(
     (profile) =>
       profile.id !== candidate.id &&
+      !isRelayProfile(profile) &&
       profile.protocol === candidate.protocol &&
       profile.hostname.toLowerCase() === candidate.hostname.toLowerCase() &&
       profile.port === candidate.port,

@@ -153,6 +153,16 @@
   color: var(--text-faint);
 }
 
+/* A value shown in an input's shape but with nothing to edit, such as the
+   device identity of a remembered relay entry. A paragraph rather than a
+   disabled field: there is no control here to re-enable. */
+.input--readonly {
+  display: flex;
+  align-items: center;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
 .input:hover {
   border-color: var(--text-faint);
 }
