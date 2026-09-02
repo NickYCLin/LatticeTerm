@@ -292,16 +292,37 @@ export function snapshotLiveWorkspaceSessions(
   return boundedSnapshot(sessions, active);
 }
 
+export function agentFreshLaunchArguments(session: SavedAgentSession): string[] {
+  const arguments_ = session.launchArguments;
+  if (
+    session.definitionId === "codex" &&
+    arguments_[0] === "resume" &&
+    arguments_[1] === "--last"
+  ) {
+    return arguments_.slice(2);
+  }
+  if (
+    (session.definitionId === "claude" ||
+      session.definitionId === "antigravity" ||
+      session.definitionId === "cursor") &&
+    arguments_[0] === "--continue"
+  ) {
+    return arguments_.slice(1);
+  }
+  return [...arguments_];
+}
+
 export function agentRestoreArguments(session: SavedAgentSession): string[] {
   if (session.resumeSessionId) return [];
+  const launchArguments = agentFreshLaunchArguments(session);
   // Claude's --continue resumes the most recent conversation in this working
   // directory and still accepts ordinary startup flags such as --model.
   // Putting it first avoids silently turning a restored Claude tab into a
   // fresh conversation just because the user picked a model.
   if (session.definitionId === "claude") {
-    return ["--continue", ...session.launchArguments];
+    return ["--continue", ...launchArguments];
   }
-  if (session.launchArguments.length > 0) return session.launchArguments;
+  if (launchArguments.length > 0) return launchArguments;
   if (session.definitionId === "codex") return ["resume", "--last"];
   if (
     session.definitionId === "antigravity" ||

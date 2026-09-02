@@ -4074,6 +4074,65 @@ fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
     )
 }
 
+#[cfg(windows)]
+fn configure_node_runtime_for_script_in(
+    command: &mut CommandBuilder,
+    executable: &Path,
+    candidate_directories: &[PathBuf],
+    inherited_path: Option<&OsStr>,
+) -> bool {
+    let is_script = executable
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        });
+    if !is_script {
+        return false;
+    }
+    let Some(runtime_directory) = candidate_directories
+        .iter()
+        .find(|directory| is_executable(&directory.join("node.exe")))
+    else {
+        return false;
+    };
+    let mut path_entries = vec![runtime_directory.clone()];
+    if let Some(inherited_path) = inherited_path {
+        path_entries.extend(std::env::split_paths(inherited_path));
+    }
+    let Ok(path) = std::env::join_paths(path_entries) else {
+        return false;
+    };
+    command.env("PATH", path);
+    true
+}
+
+/// Explorer does not refresh a running desktop process after Node.js updates
+/// the user PATH. npm shims can therefore be discovered under `%APPDATA%\npm`
+/// but still exit immediately because their internal `node` command cannot be
+/// resolved. Prepend an installed Node.js runtime for script shims only.
+#[cfg(windows)]
+fn configure_node_runtime_for_script(command: &mut CommandBuilder, executable: &Path) {
+    let mut candidates = Vec::new();
+    if let Some(directory) = executable.parent() {
+        candidates.push(directory.to_path_buf());
+    }
+    for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(variable) {
+            candidates.push(PathBuf::from(root).join("nodejs"));
+        }
+    }
+    if let Some(root) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(root).join("Programs").join("nodejs"));
+    }
+    let _ = configure_node_runtime_for_script_in(
+        command,
+        executable,
+        &candidates,
+        std::env::var_os("PATH").as_deref(),
+    );
+}
+
 #[cfg(not(windows))]
 fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
     (executable.as_os_str().to_os_string(), Vec::new())
@@ -4877,6 +4936,8 @@ pub fn launch_with_replay(
     let (program, prefix_args) = launch_parts(&executable);
     let mut command = CommandBuilder::new(&program);
     clear_host_terminal_markers(&mut command);
+    #[cfg(windows)]
+    configure_node_runtime_for_script(&mut command, &executable);
     for prefix in &prefix_args {
         command.arg(prefix);
     }
@@ -6220,6 +6281,22 @@ model = "gpt-5.3-codex"
             Some(PathBuf::from(r"C:\Users\dev\AppData\Local\agy\bin\agy.exe"))
         );
         assert!(well_known_agent_path("custom", Path::new(r"C:\Temp")).is_none());
+
+        let node_directory = dir.path().join("nodejs");
+        std::fs::create_dir_all(&node_directory).unwrap();
+        std::fs::write(node_directory.join("node.exe"), "MZ").unwrap();
+        let mut command = CommandBuilder::new("cmd.exe");
+        assert!(configure_node_runtime_for_script_in(
+            &mut command,
+            &shim,
+            std::slice::from_ref(&node_directory),
+            Some(OsStr::new(r"C:\stale-path")),
+        ));
+        let refreshed_path = command.get_env("PATH").expect("refreshed PATH");
+        assert_eq!(
+            std::env::split_paths(refreshed_path).next(),
+            Some(node_directory)
+        );
     }
 
     #[test]

@@ -64,6 +64,7 @@ import { DesktopBackendRequiredDialog } from "./components/overlays/DesktopBacke
 import { UpdatePrompt } from "./components/overlays/UpdatePrompt";
 import { useAppUpdater } from "./app/useAppUpdater";
 import {
+  agentFreshLaunchArguments,
   agentRestoreArguments,
   loadWorkspaceSessionSnapshot,
   preserveUnrestoredWorkspaceSessions,
@@ -361,12 +362,13 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           for (const saved of snapshot.sessions) {
             if (saved.kind !== "agent") continue;
             try {
+              const freshArguments = agentFreshLaunchArguments(saved);
               const restoreArguments = agentRestoreArguments(saved);
               const attemptedContinuation =
                 saved.resumeSessionId !== null ||
-                restoreArguments.length !== saved.launchArguments.length ||
+                restoreArguments.length !== freshArguments.length ||
                 restoreArguments.some(
-                  (argument, index) => argument !== saved.launchArguments[index],
+                  (argument, index) => argument !== freshArguments[index],
                 );
               const launched = await agents.launch({
                 definitionId: saved.definitionId,
@@ -392,7 +394,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                     definitionId: saved.definitionId,
                     label: saved.label,
                     executable: saved.executable,
-                    arguments: saved.launchArguments,
+                    arguments: freshArguments,
                     resumeSessionId: null,
                     groupId: saved.groupKey,
                     seedInput: null,

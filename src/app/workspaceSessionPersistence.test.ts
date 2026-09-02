@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentFreshLaunchArguments,
   agentRestoreArguments,
   loadWorkspaceSessionSnapshot,
   preserveUnrestoredWorkspaceSessions,
@@ -261,6 +262,31 @@ describe("workspace session persistence", () => {
     expect(cursor.kind === "agent" && agentRestoreArguments(cursor)).toEqual([
       "--continue",
     ]);
+  });
+
+  it("does not accumulate continuation flags in restored launch metadata", () => {
+    const codex = sanitizeWorkspaceSessionSnapshot({
+      version: 1,
+      sessions: [
+        {
+          kind: "agent",
+          groupKey: "group-codex",
+          groupLabel: "OpenAI Codex",
+          definitionId: "codex",
+          label: "OpenAI Codex",
+          executable: "C:\\tools\\codex.cmd",
+          launchArguments: ["resume", "--last"],
+          workingDirectory: "D:\\project",
+          resumeSessionId: null,
+        },
+      ],
+      active: null,
+    })?.sessions[0];
+
+    expect(codex?.kind).toBe("agent");
+    if (!codex || codex.kind !== "agent") return;
+    expect(agentFreshLaunchArguments(codex)).toEqual([]);
+    expect(agentRestoreArguments(codex)).toEqual(["resume", "--last"]);
   });
 
   it("never writes more entries than a later start will accept", () => {
