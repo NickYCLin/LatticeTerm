@@ -4081,6 +4081,9 @@ fn configure_node_runtime_for_script_in(
     candidate_directories: &[PathBuf],
     inherited_path: Option<&OsStr>,
 ) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MAX_CMD_PATH_CODE_UNITS: usize = 7_800;
     let is_script = executable
         .extension()
         .and_then(OsStr::to_str)
@@ -4097,8 +4100,24 @@ fn configure_node_runtime_for_script_in(
         return false;
     };
     let mut path_entries = vec![runtime_directory.clone()];
+    let mut seen = HashSet::from([runtime_directory
+        .as_os_str()
+        .to_string_lossy()
+        .to_ascii_lowercase()]);
     if let Some(inherited_path) = inherited_path {
-        path_entries.extend(std::env::split_paths(inherited_path));
+        for entry in std::env::split_paths(inherited_path) {
+            let identity = entry.as_os_str().to_string_lossy().to_ascii_lowercase();
+            if !seen.insert(identity) {
+                continue;
+            }
+            path_entries.push(entry);
+            let exceeds_cmd_limit = std::env::join_paths(&path_entries)
+                .ok()
+                .is_none_or(|path| path.encode_wide().count() > MAX_CMD_PATH_CODE_UNITS);
+            if exceeds_cmd_limit {
+                path_entries.pop();
+            }
+        }
     }
     let Ok(path) = std::env::join_paths(path_entries) else {
         return false;
@@ -4110,7 +4129,8 @@ fn configure_node_runtime_for_script_in(
 /// Explorer does not refresh a running desktop process after Node.js updates
 /// the user PATH. npm shims can therefore be discovered under `%APPDATA%\npm`
 /// but still exit immediately because their internal `node` command cannot be
-/// resolved. Prepend an installed Node.js runtime for script shims only.
+/// resolved. Prepend an installed Node.js runtime for script shims only, and
+/// bound a bloated inherited PATH to what `cmd.exe` can search reliably.
 #[cfg(windows)]
 fn configure_node_runtime_for_script(command: &mut CommandBuilder, executable: &Path) {
     let mut candidates = Vec::new();
@@ -6295,7 +6315,28 @@ model = "gpt-5.3-codex"
         let refreshed_path = command.get_env("PATH").expect("refreshed PATH");
         assert_eq!(
             std::env::split_paths(refreshed_path).next(),
-            Some(node_directory)
+            Some(node_directory.clone())
+        );
+
+        let bloated_path = std::env::join_paths(
+            (0..1_000).map(|index| PathBuf::from(format!(r"C:\temporary\path-{index}"))),
+        )
+        .unwrap();
+        let mut bounded = CommandBuilder::new("cmd.exe");
+        assert!(configure_node_runtime_for_script_in(
+            &mut bounded,
+            &shim,
+            std::slice::from_ref(&node_directory),
+            Some(&bloated_path),
+        ));
+        use std::os::windows::ffi::OsStrExt;
+        assert!(
+            bounded
+                .get_env("PATH")
+                .expect("bounded PATH")
+                .encode_wide()
+                .count()
+                <= 7_800
         );
     }
 
