@@ -4035,6 +4035,15 @@ fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
     (executable.as_os_str().to_os_string(), Vec::new())
 }
 
+/// A LatticeTerm PTY is not a Herdr pane. When the desktop app was itself
+/// opened from Herdr, inheriting these markers makes global Claude hooks send
+/// pane updates to a host that cannot accept them, then emit a misleading
+/// startup-hook failure inside the new CLI.
+fn clear_host_terminal_markers(command: &mut CommandBuilder) {
+    command.env_remove("HERDR_ENV");
+    command.env_remove("HERDR_PANE_ID");
+}
+
 fn validated_size(cols: u32, rows: u32) -> Result<PtySize, String> {
     if !(1..=1000).contains(&cols) || !(1..=1000).contains(&rows) {
         return Err("Terminal dimensions must be between 1 and 1000.".to_string());
@@ -4808,6 +4817,7 @@ pub fn launch_with_replay(
         .map_err(|error| format!("Cannot create a local terminal: {error}"))?;
     let (program, prefix_args) = launch_parts(&executable);
     let mut command = CommandBuilder::new(&program);
+    clear_host_terminal_markers(&mut command);
     for prefix in &prefix_args {
         command.arg(prefix);
     }
@@ -6145,6 +6155,18 @@ model = "gpt-5.3-codex"
             Some(PathBuf::from(r"C:\Users\dev\AppData\Local\agy\bin\agy.exe"))
         );
         assert!(well_known_agent_path("custom", Path::new(r"C:\Temp")).is_none());
+    }
+
+    #[test]
+    fn agent_launches_do_not_inherit_herdr_pane_markers() {
+        let mut command = CommandBuilder::new("agent");
+        command.env("HERDR_ENV", "1");
+        command.env("HERDR_PANE_ID", "pane-123");
+
+        clear_host_terminal_markers(&mut command);
+
+        assert!(command.get_env("HERDR_ENV").is_none());
+        assert!(command.get_env("HERDR_PANE_ID").is_none());
     }
 
     #[cfg(windows)]
