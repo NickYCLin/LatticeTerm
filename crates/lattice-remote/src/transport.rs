@@ -79,6 +79,10 @@ impl Transport {
     /// the real address exists only in a header the proxy adds during the
     /// handshake. Nothing above this layer can recover it afterwards, so the
     /// value is captured while the request is still in hand.
+    // The handshake callback's error type is tungstenite's own bulky
+    // `ErrorResponse`, and this callback never builds one: it only reads a
+    // header and returns the response it was handed.
+    #[allow(clippy::result_large_err)]
     pub async fn accept_websocket_with_header(
         stream: TcpStream,
         header_name: &str,
