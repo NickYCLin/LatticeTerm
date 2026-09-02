@@ -7,6 +7,7 @@ import {
   emptyDraft,
   findDuplicateTarget,
   isProtocolAvailable,
+  isRelayProfile,
   parseTags,
   protocolUsesUsername,
   validateConnectionDraft,
@@ -313,5 +314,95 @@ describe("duplicate targets", () => {
     expect(
       findDuplicateTarget([base], { ...base, id: "profile-d", port: 2222 }),
     ).toBeUndefined();
+  });
+});
+
+describe("relay entries", () => {
+  const draft = {
+    name: "Workshop",
+    protocol: "lattice" as const,
+    hostname: "",
+    username: "",
+    port: 0,
+    deviceId: "018536454",
+    relayAddress: "wss://relay.example.com",
+  };
+
+  it("stores a device identity instead of an address", () => {
+    const profile = createConnectionProfile(draft, "relay-a");
+
+    expect(isRelayProfile(profile)).toBe(true);
+    expect(profile.deviceId).toBe("018536454");
+    expect(profile.relayAddress).toBe("wss://relay.example.com");
+    expect(profile.hostname).toBe("");
+    expect(profile.port).toBe(0);
+  });
+
+  it("carries no pairing code, which is a one-time secret", () => {
+    const profile = createConnectionProfile(
+      { ...draft, pairingCode: "12345678" } as never,
+      "relay-a",
+    );
+
+    expect(JSON.stringify(profile)).not.toContain("12345678");
+  });
+
+  it("accepts an empty address and port that a direct entry may not", () => {
+    expect(validateConnectionDraft(draft)).toEqual({});
+  });
+
+  it("still insists on a readable identity and a relay to reach it", () => {
+    expect(validateConnectionDraft({ ...draft, deviceId: "12345" }).hostname)
+      .toEqual({ key: "validation.deviceIdInvalid" });
+    expect(validateConnectionDraft({ ...draft, relayAddress: "  " }).hostname)
+      .toEqual({ key: "validation.relayRequired" });
+  });
+
+  it("reads the identity in the grouping people speak it in", () => {
+    expect(connectionTarget(createConnectionProfile(draft, "relay-a"))).toBe(
+      "018 536 454",
+    );
+  });
+
+  it("survives editing without losing the identity", () => {
+    const profile = createConnectionProfile(draft, "relay-a");
+    const renamed = createConnectionProfile(
+      { ...draftFromProfile(profile), name: "Studio" },
+      profile.id,
+    );
+
+    expect(renamed.name).toBe("Studio");
+    expect(renamed.deviceId).toBe("018536454");
+    expect(renamed.relayAddress).toBe("wss://relay.example.com");
+  });
+
+  it("matches duplicates by identity, not by the empty address they share", () => {
+    const saved = createConnectionProfile(draft, "relay-a");
+    const sameDevice = createConnectionProfile(draft, "relay-b");
+    const otherDevice = createConnectionProfile(
+      { ...draft, deviceId: "309759966" },
+      "relay-c",
+    );
+
+    expect(findDuplicateTarget([saved], sameDevice)?.id).toBe("relay-a");
+    expect(findDuplicateTarget([saved], otherDevice)).toBeUndefined();
+  });
+
+  it("is never confused with a direct entry of the same protocol", () => {
+    const direct = createConnectionProfile(
+      {
+        name: "Lab box",
+        protocol: "lattice",
+        hostname: "10.0.0.5",
+        username: "",
+        port: 44900,
+      },
+      "direct-a",
+    );
+    const relay = createConnectionProfile(draft, "relay-a");
+
+    expect(isRelayProfile(direct)).toBe(false);
+    expect(findDuplicateTarget([direct], relay)).toBeUndefined();
+    expect(findDuplicateTarget([relay], direct)).toBeUndefined();
   });
 });

@@ -20,6 +20,7 @@ import {
   environmentLabelKey,
   findDuplicateTarget,
   findProtocol,
+  isRelayProfile,
   limits,
   parseTags,
   protocolCatalog,
@@ -33,6 +34,7 @@ import {
   type Protocol,
   type ValidationErrors,
 } from "../../domain/connection";
+import { formatDeviceId } from "../../app/remoteRelay";
 import { useI18n, type MessageKey } from "../../i18n/context";
 import { ProtocolTile } from "../common/Badge";
 import { Callout } from "../common/Callout";
@@ -51,7 +53,9 @@ function sameDraft(a: ConnectionDraft, b: ConnectionDraft): boolean {
     (a.environment ?? "unassigned") === (b.environment ?? "unassigned") &&
     (a.group ?? "") === (b.group ?? "") &&
     (a.favorite ?? false) === (b.favorite ?? false) &&
-    (a.tags ?? []).join(",") === (b.tags ?? []).join(",")
+    (a.tags ?? []).join(",") === (b.tags ?? []).join(",") &&
+    (a.deviceId ?? "") === (b.deviceId ?? "") &&
+    (a.relayAddress ?? "") === (b.relayAddress ?? "")
   );
 }
 
@@ -128,6 +132,9 @@ export function ConnectionDrawer({
     draft.protocol,
     supportedProtocols,
   );
+  // A device remembered from "connect by ID" is addressed by identity, so the
+  // address and port fields below have nothing to edit.
+  const relayEntry = isRelayProfile(draft);
 
   function requestClose() {
     if (dirty) {
@@ -340,36 +347,80 @@ export function ConnectionDrawer({
                 )}
               </div>
 
-              <div className="field">
-                <label className="field__label" htmlFor={`${formId}-host`}>
-                  {t(
-                    draft.protocol === "lattice"
-                      ? "form.remoteAddress"
-                      : "form.hostname",
+              {relayEntry ? (
+                /* A remembered device is found by identity, so there is no
+                   address to edit. The relay that resolves it can still move,
+                   which is the one part worth keeping editable here. */
+                <div className="field">
+                  <span className="field__label">{t("form.relayDevice")}</span>
+                  <p className="input mono input--readonly">
+                    {formatDeviceId(draft.deviceId ?? "")}
+                  </p>
+                </div>
+              ) : (
+                <div className="field">
+                  <label className="field__label" htmlFor={`${formId}-host`}>
+                    {t(
+                      draft.protocol === "lattice"
+                        ? "form.remoteAddress"
+                        : "form.hostname",
+                    )}
+                  </label>
+                  <input
+                    id={`${formId}-host`}
+                    data-field="hostname"
+                    className={`input mono${errors.hostname ? " is-invalid" : ""}`}
+                    value={draft.hostname}
+                    onChange={(event) =>
+                      patch({ hostname: event.currentTarget.value }, "hostname")
+                    }
+                    placeholder={t(hostnamePlaceholderKeys[draft.protocol])}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-invalid={Boolean(errors.hostname)}
+                  />
+                  {error("hostname") && (
+                    <p className="field__error">
+                      <AlertIcon size={12} />
+                      {error("hostname")}
+                    </p>
                   )}
+                </div>
+              )}
+            </div>
+
+            {relayEntry && (
+              <div className="field">
+                <label className="field__label" htmlFor={`${formId}-relay`}>
+                  {t("remote.host.relayAddress")}
                 </label>
                 <input
-                  id={`${formId}-host`}
-                  data-field="hostname"
+                  id={`${formId}-relay`}
+                  data-field="relayAddress"
                   className={`input mono${errors.hostname ? " is-invalid" : ""}`}
-                  value={draft.hostname}
+                  value={draft.relayAddress ?? ""}
                   onChange={(event) =>
-                    patch({ hostname: event.currentTarget.value }, "hostname")
+                    patch(
+                      { relayAddress: event.currentTarget.value },
+                      "hostname",
+                    )
                   }
-                  placeholder={t(hostnamePlaceholderKeys[draft.protocol])}
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
                   aria-invalid={Boolean(errors.hostname)}
                 />
-                {error("hostname") && (
+                {error("hostname") ? (
                   <p className="field__error">
                     <AlertIcon size={12} />
                     {error("hostname")}
                   </p>
+                ) : (
+                  <p className="field__hint">{t("remote.host.relayHint")}</p>
                 )}
               </div>
-            </div>
+            )}
 
             <div
               className={`field-grid${
@@ -406,6 +457,9 @@ export function ConnectionDrawer({
                 </div>
               )}
 
+              {/* A relay entry has no port of its own; the relay carries
+                  the session. */}
+              {!relayEntry && (
               <div className="field field--port">
                 <label className="field__label" htmlFor={`${formId}-port`}>
                   {t("form.port")}
@@ -431,9 +485,10 @@ export function ConnectionDrawer({
                   </p>
                 )}
               </div>
+              )}
             </div>
 
-            {draft.protocol === "lattice" && (
+            {draft.protocol === "lattice" && !relayEntry && (
               <Callout tone="info" title={t("form.remoteDirect.title")}>
                 {t("form.remoteDirect.body")}
               </Callout>

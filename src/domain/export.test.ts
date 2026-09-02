@@ -142,3 +142,46 @@ describe("export & import", () => {
     });
   });
 });
+
+describe("relay entries in a transfer file", () => {
+  it("survives an export and import round trip", () => {
+    const device = createConnectionProfile(
+      {
+        name: "Workshop",
+        protocol: "lattice",
+        hostname: "",
+        username: "",
+        port: 0,
+        deviceId: "018536454",
+        relayAddress: "wss://relay.example.com",
+      },
+      "relay-a",
+    );
+
+    const result = parseAndValidateImport(serializeProfiles([device]));
+
+    expect(result.issues).toEqual([]);
+    expect(result.validProfiles).toHaveLength(1);
+    const restored = result.validProfiles[0];
+    expect(restored.deviceId).toBe("018536454");
+    expect(restored.relayAddress).toBe("wss://relay.example.com");
+    expect(restored.hostname).toBe("");
+  });
+
+  it("leaves direct entries without the relay fields", () => {
+    const direct = createConnectionProfile({
+      name: "Gateway",
+      protocol: "ssh",
+      hostname: "gw.example.com",
+      username: "root",
+      port: 22,
+    });
+
+    const written = JSON.parse(serializeProfiles([direct])) as {
+      profiles: Record<string, unknown>[];
+    };
+
+    expect(written.profiles[0]).not.toHaveProperty("deviceId");
+    expect(written.profiles[0]).not.toHaveProperty("relayAddress");
+  });
+});

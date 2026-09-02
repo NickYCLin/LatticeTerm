@@ -32,6 +32,7 @@ import {
   type PreferencesValue,
 } from "./app/preferences";
 import type { EncryptedBackupRestore } from "./app/encryptedBackup";
+import { rememberRelayDevice } from "./app/rememberRelayDevice";
 import { findTheme, themeCatalog } from "./app/themes";
 import { useRuntimeSummary } from "./app/useRuntimeSummary";
 import { APP_VERSION } from "./app/version";
@@ -1107,9 +1108,14 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
       {quickConnectOpen && runtime.host === "tauri" && (
         <RemoteQuickConnect
           remote={remote}
-          onConnected={(sessionId) => {
+          onConnected={(result) => {
             setQuickConnectOpen(false);
-            setActiveSessionId(sessionId);
+            // Keep the device in My connections so the next session needs
+            // only the pairing code, not the nine digits and the relay too.
+            const memory = rememberRelayDevice(workspace.profiles, result);
+            if (memory?.action === "add") workspace.addProfile(memory.draft);
+            else if (memory) workspace.updateProfile(memory.id, memory.draft);
+            setActiveSessionId(result.sessionId);
             setView("terminal");
           }}
           onCancel={() => setQuickConnectOpen(false)}

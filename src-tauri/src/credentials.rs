@@ -460,6 +460,8 @@ mod tests {
             group: "Servers".to_string(),
             tags: Vec::new(),
             favorite: false,
+            device_id: None,
+            relay_address: None,
         }
     }
 

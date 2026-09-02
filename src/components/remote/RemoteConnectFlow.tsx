@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { RemoteApi } from "../../app/useRemoteSessions";
-import { connectionTarget, type ConnectionProfile } from "../../domain/connection";
+import {
+  connectionTarget,
+  isRelayProfile,
+  type ConnectionProfile,
+} from "../../domain/connection";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { CloseIcon, ScreenShareIcon, ShieldIcon } from "../icons";
@@ -54,6 +58,14 @@ export function RemoteConnectFlow({
       hostname: profile.hostname,
       port: profile.port,
       pairingCode,
+      // A remembered device has no address of its own; the relay finds it by
+      // identity, exactly as the connect-by-ID dialog does.
+      ...(isRelayProfile(profile)
+        ? {
+            deviceId: profile.deviceId,
+            relayAddress: profile.relayAddress,
+          }
+        : {}),
     });
     // Drop the one-time secret immediately after the IPC call resolves.
     setPairingCode("");

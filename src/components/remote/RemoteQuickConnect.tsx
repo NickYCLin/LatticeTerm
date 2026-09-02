@@ -17,13 +17,22 @@ import { RelayAddressField } from "./RelayAddressField";
  * AnyDesk-style entry: type the other machine's nine-digit device ID and its
  * pairing code, and the relay finds it — no IP address or port required.
  */
+/** What a successful dial learned about the machine on the other end. */
+export interface RemoteQuickConnectResult {
+  sessionId: string;
+  deviceId: string;
+  relayAddress: string;
+  /** The name the Agent reports, used when remembering the device. */
+  agentName: string;
+}
+
 export function RemoteQuickConnect({
   remote,
   onConnected,
   onCancel,
 }: {
   remote: RemoteApi;
-  onConnected: (sessionId: string) => void;
+  onConnected: (result: RemoteQuickConnectResult) => void;
   onCancel: () => void;
 }) {
   const { t } = useI18n();
@@ -82,7 +91,12 @@ export function RemoteQuickConnect({
     setBusy(false);
     if (outcome.outcome === "connected") {
       saveRelayAddress(window.localStorage, relayAddress);
-      onConnected(outcome.sessionId);
+      onConnected({
+        sessionId: outcome.sessionId,
+        deviceId: normalizedId,
+        relayAddress: relayAddress.trim(),
+        agentName: outcome.agentName,
+      });
     } else {
       setProblem(
         t("remote.connect.failedBody", {

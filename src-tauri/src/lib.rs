@@ -2236,6 +2236,8 @@ mod tests {
             group: "Servers".to_string(),
             tags: Vec::new(),
             favorite: false,
+            device_id: None,
+            relay_address: None,
         }
     }
 
@@ -2297,6 +2299,8 @@ mod tests {
             group: "Servers".to_string(),
             tags: Vec::new(),
             favorite: false,
+            device_id: None,
+            relay_address: None,
         };
 
         bind_ssh_request_to_profile(&mut request, &profile).unwrap();
@@ -2332,6 +2336,8 @@ mod tests {
             group: "Servers".to_string(),
             tags: Vec::new(),
             favorite: false,
+            device_id: None,
+            relay_address: None,
         };
 
         assert!(bind_ssh_request_to_profile(&mut request, &profile).is_err());
@@ -2415,6 +2421,8 @@ mod tests {
             group: Some("Core platform".to_string()),
             tags: vec!["edge".to_string(), "eu-west".to_string()],
             favorite: true,
+            device_id: None,
+            relay_address: None,
         };
 
         let errors = validate_connection_draft(&draft);
@@ -2430,6 +2438,88 @@ mod tests {
     }
 
     #[test]
+    fn accepts_a_relay_draft_addressed_by_device_id() {
+        let draft = ConnectionDraft {
+            name: "Workshop".to_string(),
+            protocol: Protocol::Lattice,
+            // A relay entry has neither of these; the relay finds the machine
+            // by its identity.
+            hostname: String::new(),
+            username: String::new(),
+            port: 0,
+            environment: Environment::Unassigned,
+            group: None,
+            tags: vec![],
+            favorite: false,
+            device_id: Some("018 536 454".to_string()),
+            relay_address: Some("wss://relay.example.com".to_string()),
+        };
+
+        let errors = validate_connection_draft(&draft);
+        assert!(errors.is_empty(), "Expected valid draft, got {:?}", errors);
+
+        let profile = ConnectionProfile::from_draft(draft, "relay-1".to_string());
+        assert_eq!(profile.device_id.as_deref(), Some("018536454"));
+        assert_eq!(
+            profile.relay_address.as_deref(),
+            Some("wss://relay.example.com")
+        );
+        assert_eq!(profile.target_string(), "018536454");
+    }
+
+    #[test]
+    fn rejects_a_relay_draft_without_a_readable_identity() {
+        let draft = ConnectionDraft {
+            name: "Workshop".to_string(),
+            protocol: Protocol::Lattice,
+            hostname: String::new(),
+            username: String::new(),
+            port: 0,
+            environment: Environment::Unassigned,
+            group: None,
+            tags: vec![],
+            favorite: false,
+            device_id: Some("12345".to_string()),
+            relay_address: Some("wss://relay.example.com".to_string()),
+        };
+
+        assert!(validate_connection_draft(&draft).hostname.is_some());
+    }
+
+    #[test]
+    fn a_relay_entry_survives_a_storage_round_trip() {
+        let draft = ConnectionDraft {
+            name: "Workshop".to_string(),
+            protocol: Protocol::Lattice,
+            hostname: String::new(),
+            username: String::new(),
+            port: 0,
+            environment: Environment::Unassigned,
+            group: None,
+            tags: vec![],
+            favorite: false,
+            device_id: Some("018536454".to_string()),
+            relay_address: Some("wss://relay.example.com".to_string()),
+        };
+        let profile = ConnectionProfile::from_draft(draft, "relay-1".to_string());
+
+        let written = serde_json::to_string(&profile).unwrap();
+        // The pairing code is a one-time secret and never reaches storage.
+        assert!(written.contains("018536454"));
+        let restored: ConnectionProfile = serde_json::from_str(&written).unwrap();
+        assert_eq!(restored, profile);
+
+        // Entries written before relay support still load.
+        let legacy = r#"{"id":"a","name":"Gateway","protocol":"ssh",
+            "hostname":"gw.example.com","username":"root","port":22,
+            "environment":"production","group":"Servers","tags":[],
+            "favorite":false}"#;
+        let old: ConnectionProfile = serde_json::from_str(legacy).unwrap();
+        assert_eq!(old.device_id, None);
+        assert_eq!(old.relay_address, None);
+    }
+
+    #[test]
     fn rejects_invalid_draft_fields() {
         let invalid_draft = ConnectionDraft {
             name: "".to_string(),
@@ -2441,6 +2531,8 @@ mod tests {
             group: None,
             tags: vec![],
             favorite: false,
+            device_id: None,
+            relay_address: None,
         };
 
         let errors = validate_connection_draft(&invalid_draft);
@@ -2471,6 +2563,8 @@ mod tests {
             group: "Servers".to_string(),
             tags: vec!["db".to_string()],
             favorite: true,
+            device_id: None,
+            relay_address: None,
         };
 
         assert!(storage.insert_profile(profile.clone()).is_ok());

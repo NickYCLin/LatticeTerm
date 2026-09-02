@@ -23,7 +23,7 @@ LatticeTerm is currently pre-1.0. The latest GitHub Release and the latest commi
 
 ## Current security boundaries
 
-- Connection profiles persist in the operating system's per-user application-data directory and contain no passwords, private keys, passphrases, or tokens.
+- Connection profiles persist in the operating system's per-user application-data directory and contain no passwords, private keys, passphrases, or tokens. A device dialed by ID is remembered as an ordinary profile holding its nine-digit identity and relay address, both non-secret addressing metadata; the pairing code is never stored and is asked for on every connection.
 - SSH terminal sessions use the Rust russh engine. Passwords default to one connection attempt; when the user explicitly chooses to remember one, it is written only after authentication succeeds and only to the operating system credential store.
 - SFTP uses the same russh transport and strict host-key trust store, with a separate OS credential entry per profile. Remote paths reject control characters, mutating actions are user initiated, and overwrites and deletes require confirmation in the UI. Large transfers use bounded streaming; uploads remain in a private same-directory staging file until the declared byte count is complete, then protect and replace an existing target. Cancellation, failure, and session disconnect remove incomplete staging files. The legacy whole-payload read/write IPC remains capped at 32 MiB.
 - SSH host keys are checked strictly against `known_hosts.json`. Unknown keys require an explicit comparison, changed keys are blocked, and the Key Vault view manages the same real trust store.

@@ -333,6 +333,8 @@ mod file_storage_tests {
             group: "Core platform".to_string(),
             tags: vec!["edge".to_string()],
             favorite: true,
+            device_id: None,
+            relay_address: None,
         }
     }
 
