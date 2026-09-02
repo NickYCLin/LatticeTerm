@@ -81,13 +81,41 @@ describe("workspace session persistence", () => {
     expect(target.values.has(WORKSPACE_SESSIONS_KEY)).toBe(true);
   });
 
-  it("does not restore a CLI that already exited but is kept for inspection", () => {
+  it("keeps an exited CLI when its native conversation can be resumed", () => {
     const snapshot = snapshotLiveWorkspaceSessions(
       [
         agent({
           state: "done",
           processId: null,
           closedReason: "Process exited: ExitStatus { code: 0, signal: None }",
+          capturedSessionId: "native-chat-finished",
+        }),
+      ],
+      [],
+      "agent-live-1",
+    );
+
+    expect(snapshot.sessions).toEqual([
+      expect.objectContaining({
+        kind: "agent",
+        resumeSessionId: "native-chat-finished",
+      }),
+    ]);
+    expect(snapshot.active).toEqual({
+      kind: "agent",
+      groupKey: "project-group-1",
+      definitionId: "codex",
+    });
+  });
+
+  it("does not reopen an exited CLI with no native conversation id", () => {
+    const snapshot = snapshotLiveWorkspaceSessions(
+      [
+        agent({
+          state: "done",
+          processId: null,
+          closedReason: "Process exited: ExitStatus { code: 0, signal: None }",
+          capturedSessionId: null,
         }),
       ],
       [],

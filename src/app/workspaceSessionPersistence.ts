@@ -244,12 +244,20 @@ export function snapshotLiveWorkspaceSessions(
   ssh: readonly SshSessionSummary[],
   activeSessionId: string | null,
 ): WorkspaceSessionSnapshot {
-  const liveAgents = agents.filter((session) => !session.closedReason);
-  const activeAgent = liveAgents.find(
+  // A CLI may finish before the user closes its tab. When its adapter captured
+  // the CLI's native conversation id, it is still safe to reopen with the
+  // provider's resume flow after an application restart. Dropping it here made
+  // completed conversations disappear even though they remained visible in the
+  // current window. An exited session without that id is deliberately omitted:
+  // reopening it would create an unrelated new conversation.
+  const restorableAgents = agents.filter(
+    (session) => !session.closedReason || session.capturedSessionId !== null,
+  );
+  const activeAgent = restorableAgents.find(
     (session) => session.sessionId === activeSessionId,
   );
   const activeSsh = ssh.find((session) => session.sessionId === activeSessionId);
-  const sessions: SavedWorkspaceSession[] = liveAgents.map((session) => ({
+  const sessions: SavedWorkspaceSession[] = restorableAgents.map((session) => ({
     kind: "agent",
     groupKey: session.groupId || session.sessionId,
     groupLabel: session.groupLabel,

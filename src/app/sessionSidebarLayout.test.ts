@@ -46,6 +46,34 @@ describe("session sidebar layout", () => {
     expect(sessionSidebarChildren(layout, project.id)).toEqual([]);
   });
 
+  it("keeps restored session placement while its CLI is starting", () => {
+    let layout = reconcileSessionSidebarLayout(emptySessionSidebarLayout, [
+      project,
+      session,
+    ]);
+    layout = createSessionSidebarFolder(
+      layout,
+      { id: "folder:water", name: "水情" },
+      null,
+    );
+    layout = moveSessionSidebarNode(layout, project.id, "folder:water");
+
+    const duringRestore = reconcileSessionSidebarLayout(layout, [], [
+      project,
+      session,
+    ]);
+
+    expect(sessionSidebarChildren(duringRestore, null)).toEqual([
+      "folder:water",
+    ]);
+    expect(sessionSidebarChildren(duringRestore, "folder:water")).toEqual([
+      project.id,
+    ]);
+    expect(sessionSidebarChildren(duringRestore, project.id)).toEqual([
+      session.id,
+    ]);
+  });
+
   it("uses saved profile identity across remote-session reconnects", () => {
     expect(
       sessionSidebarSessionNodeId("ssh", "runtime-before", "profile:server"),

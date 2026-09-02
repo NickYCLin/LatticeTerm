@@ -21,6 +21,7 @@ import { displayPath } from "../app/displayPath";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
+import type { SavedWorkspaceSession } from "../app/workspaceSessionPersistence";
 import { agentGroupSidebarStatus } from "../app/sessionStatus";
 import {
   agentSessionSidebarMemberNodeId,
@@ -219,6 +220,7 @@ export function SessionsView({
   onSelect,
   theme,
   sessionRestoreComplete,
+  restoredWorkspaceSessions,
 }: {
   agents: AgentApi;
   ssh: SshApi;
@@ -230,6 +232,7 @@ export function SessionsView({
   onSelect: (sessionId: string | null) => void;
   theme: ThemeId;
   sessionRestoreComplete: boolean;
+  restoredWorkspaceSessions: readonly SavedWorkspaceSession[];
 }) {
   const { t, tag } = useI18n();
   const sessionTabsId = useId();
@@ -1197,6 +1200,63 @@ export function SessionsView({
       }));
     }),
   }));
+  const restoredSidebarNodes = useMemo(() => {
+    const nodes = new Map<string, LiveSessionSidebarNode>();
+    const restoredAgentGroups = new Map<
+      string,
+      Extract<SavedWorkspaceSession, { kind: "agent" }>[]
+    >();
+    for (const session of restoredWorkspaceSessions) {
+      if (session.kind === "agent") {
+        const projectNodeId = sidebarProjectNodeId(
+          localProjectId(session.workingDirectory),
+        );
+        nodes.set(projectNodeId, {
+          id: projectNodeId,
+          defaultParentId: null,
+        });
+        const group = restoredAgentGroups.get(session.groupKey) ?? [];
+        group.push(session);
+        restoredAgentGroups.set(session.groupKey, group);
+        continue;
+      }
+
+      const projectNodeId = sidebarProjectNodeId("remote-connections");
+      nodes.set(projectNodeId, { id: projectNodeId, defaultParentId: null });
+      const sessionNodeId = sessionSidebarSessionNodeId(
+        "ssh",
+        session.profileId,
+        session.profileId,
+      );
+      nodes.set(sessionNodeId, {
+        id: sessionNodeId,
+        defaultParentId: projectNodeId,
+      });
+    }
+    for (const [groupKey, members] of restoredAgentGroups) {
+      const sidebarMembers = members.map((member) => ({
+        ...member,
+        // The stable portion of the node id is derived from the launch
+        // identity below. This temporary value only fulfils the runtime-id
+        // parameter until the restored CLI receives its new process id.
+        sessionId: member.groupKey,
+      }));
+      members.forEach((member, memberIndex) => {
+        const nodeId = agentSessionSidebarMemberNodeId(
+          groupKey,
+          sidebarMembers,
+          memberIndex,
+        );
+        nodes.set(nodeId, {
+          id: nodeId,
+          defaultParentId: sidebarProjectNodeId(
+            localProjectId(member.workingDirectory),
+          ),
+        });
+      });
+    }
+    return [...nodes.values()];
+  }, [restoredWorkspaceSessions]);
   const liveSidebarNodes: LiveSessionSidebarNode[] = sidebarProjects.flatMap(
     (project) => [
       { id: project.nodeId, defaultParentId: null },
@@ -1209,8 +1269,9 @@ export function SessionsView({
   const reconciledSidebarLayout = reconcileSessionSidebarLayout(
     sidebarLayout,
     liveSidebarNodes,
+    restoredSidebarNodes,
   );
-  const liveSidebarKey = liveSidebarNodes
+  const liveSidebarKey = [...liveSidebarNodes, ...restoredSidebarNodes]
     .map((node) => `${node.id}>${node.defaultParentId ?? "root"}`)
     .join("|");
   const liveSidebarNodesRef = useRef(liveSidebarNodes);
@@ -1225,6 +1286,7 @@ export function SessionsView({
       const reconciled = reconcileSessionSidebarLayout(
         current,
         liveSidebarNodesRef.current,
+        restoredSidebarNodes,
       );
       const next = update(reconciled);
       // A reveal that had nothing collapsed must not churn state or rewrite
@@ -1238,10 +1300,14 @@ export function SessionsView({
   useEffect(() => {
     if (!sessionRestoreComplete) return;
     setSidebarLayout((current) => {
-      const next = reconcileSessionSidebarLayout(current, liveSidebarNodes);
+      const next = reconcileSessionSidebarLayout(
+        current,
+        liveSidebarNodes,
+        restoredSidebarNodes,
+      );
       return JSON.stringify(next) === JSON.stringify(current) ? current : next;
     });
-  }, [liveSidebarKey, sessionRestoreComplete]);
+  }, [liveSidebarKey, restoredSidebarNodes, sessionRestoreComplete]);
   useEffect(() => {
     if (!pendingRevealSessionId) return;
     const revealed = sidebarProjects

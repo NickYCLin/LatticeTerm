@@ -331,6 +331,10 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const storedSessionSnapshotRef = useRef(
     loadWorkspaceSessionSnapshot(window.localStorage),
   );
+  const restoredWorkspaceSessions = useMemo(
+    () => storedSessionSnapshotRef.current?.sessions ?? [],
+    [],
+  );
   const unrestoredSessionsRef = useRef<readonly SavedWorkspaceSession[]>([]);
   const restoreStartedRef = useRef(false);
   const [sessionRestoreComplete, setSessionRestoreComplete] = useState(false);
@@ -871,6 +875,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                     onSelect={setActiveSessionId}
                     theme={activeTheme}
                     sessionRestoreComplete={sessionRestoreComplete}
+                    restoredWorkspaceSessions={restoredWorkspaceSessions}
                   />
                 </div>
               </Suspense>

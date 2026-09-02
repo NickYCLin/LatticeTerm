@@ -187,21 +187,32 @@ function reindexPlacements(
 }
 
 /**
- * Reconciles saved organization with live projects/sessions. Missing live nodes
- * are dropped, while empty custom folders remain available for future work.
+ * Reconciles saved organization with live projects/sessions. Restored nodes
+ * retain their saved placement while their CLI process is being recreated, so
+ * asynchronous startup cannot flatten the sidebar before they appear.
  */
 export function reconcileSessionSidebarLayout(
   layout: SessionSidebarLayout,
   liveNodes: readonly LiveSessionSidebarNode[],
+  restoredNodes: readonly LiveSessionSidebarNode[] = [],
 ): SessionSidebarLayout {
   const folderIds = new Set(layout.folders.map((folder) => folder.id));
-  const liveIds = new Set(liveNodes.map((node) => node.id));
-  const knownIds = new Set([...folderIds, ...liveIds]);
+  // A restored session can take time to start, especially when several CLIs
+  // resume in sequence. Keep its stable sidebar identity until the live
+  // session replaces it; live data wins if the two disagree.
+  const nodesById = new Map<string, LiveSessionSidebarNode>();
+  for (const node of restoredNodes) nodesById.set(node.id, node);
+  for (const node of liveNodes) nodesById.set(node.id, node);
+  const knownNodes = [...nodesById.values()];
+  const knownIds = new Set([
+    ...folderIds,
+    ...knownNodes.map((node) => node.id),
+  ]);
   const placements: Record<string, SessionSidebarPlacement> = {};
 
   for (const id of knownIds) {
     const saved = layout.placements[id];
-    const fallback = liveNodes.find((node) => node.id === id)?.defaultParentId ?? null;
+    const fallback = nodesById.get(id)?.defaultParentId ?? null;
     // `null` is a deliberate top-level placement. Nullish coalescing would
     // mistake it for a missing value and put the node back under its default
     // project every time the layout is reconciled.
@@ -229,7 +240,7 @@ export function reconcileSessionSidebarLayout(
       );
     }
   }
-  for (const node of liveNodes) {
+  for (const node of knownNodes) {
     if (layout.placements[node.id]) continue;
     const placement = placements[node.id];
     placement.order = nextOrder.get(placement.parentId) ?? 0;
@@ -243,7 +254,7 @@ export function reconcileSessionSidebarLayout(
   }
 
   const projectIds = new Set(
-    liveNodes
+    knownNodes
       .map((node) => node.id)
       .filter((id) => id.startsWith("project:")),
   );
