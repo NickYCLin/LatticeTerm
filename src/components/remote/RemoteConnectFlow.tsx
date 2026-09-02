@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { relayConnectFollowUp } from "../../app/relayAddressRecovery";
 import type { RemoteApi } from "../../app/useRemoteSessions";
 import {
   connectionTarget,
@@ -15,18 +16,28 @@ export function RemoteConnectFlow({
   profile,
   remote,
   onConnected,
+  onRelayAddressChanged,
   onCancel,
 }: {
   profile: ConnectionProfile;
   remote: RemoteApi;
   onConnected: (sessionId: string) => void;
+  /** Persists a corrected relay address back onto the saved entry. */
+  onRelayAddressChanged?: (relayAddress: string) => void;
   onCancel: () => void;
 }) {
   const { t } = useI18n();
+  const relay = isRelayProfile(profile);
   const [pairingCode, setPairingCode] = useState("");
+  const [relayAddress, setRelayAddress] = useState(profile.relayAddress ?? "");
+  // A quick tunnel hands out a new hostname every restart, so a saved address
+  // goes stale on its own. Offering the field only after the relay actually
+  // failed keeps the usual connection down to one input.
+  const [relayUnreachable, setRelayUnreachable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const codeRef = useRef<HTMLInputElement>(null);
+  const relayRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useModalFocus({
@@ -39,6 +50,12 @@ export function RemoteConnectFlow({
   useEffect(() => {
     if (busy) dialogRef.current?.focus();
   }, [busy]);
+
+  // Once the address is the thing to fix, put the caret there rather than
+  // leaving it in the pairing code the user already filled in correctly.
+  useEffect(() => {
+    if (relayUnreachable) relayRef.current?.focus();
+  }, [relayUnreachable]);
 
   const formatted =
     pairingCode.length > 4
@@ -53,6 +70,7 @@ export function RemoteConnectFlow({
     }
     setBusy(true);
     setProblem(null);
+    const attempted = relayAddress.trim();
     const outcome = await remote.connect({
       profileId: profile.id,
       hostname: profile.hostname,
@@ -60,26 +78,31 @@ export function RemoteConnectFlow({
       pairingCode,
       // A remembered device has no address of its own; the relay finds it by
       // identity, exactly as the connect-by-ID dialog does.
-      ...(isRelayProfile(profile)
-        ? {
-            deviceId: profile.deviceId,
-            relayAddress: profile.relayAddress,
-          }
-        : {}),
+      ...(relay ? { deviceId: profile.deviceId, relayAddress: attempted } : {}),
     });
     // Drop the one-time secret immediately after the IPC call resolves.
     setPairingCode("");
     setBusy(false);
+
+    const followUp = relayConnectFollowUp({
+      relayEntry: relay,
+      savedAddress: profile.relayAddress ?? "",
+      attemptedAddress: attempted,
+      outcome,
+    });
+    if (followUp.addressToSave) onRelayAddressChanged?.(followUp.addressToSave);
+
     if (outcome.outcome === "connected") {
       onConnected(outcome.sessionId);
-    } else {
-      setProblem(
-        t("remote.connect.failedBody", {
-          stage: outcome.stage,
-          detail: outcome.detail,
-        }),
-      );
+      return;
     }
+    if (followUp.offerAddressRepair) setRelayUnreachable(true);
+    setProblem(
+      t("remote.connect.failedBody", {
+        stage: outcome.stage,
+        detail: outcome.detail,
+      }),
+    );
   }
 
   return (
@@ -125,6 +148,29 @@ export function RemoteConnectFlow({
             <Callout tone="warn" title={t("remote.connect.failedTitle")}>
               {problem}
             </Callout>
+          )}
+
+          {relayUnreachable && (
+            <div className="field">
+              <Callout tone="info" title={t("remote.connect.relayMovedTitle")}>
+                {t("remote.connect.relayMovedBody")}
+              </Callout>
+              <label className="field__label" htmlFor="remote-relay-address">
+                {t("remote.host.relayAddress")}
+              </label>
+              <input
+                id="remote-relay-address"
+                ref={relayRef}
+                className="input mono"
+                value={relayAddress}
+                disabled={busy}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                onChange={(event) => setRelayAddress(event.currentTarget.value)}
+              />
+              <p className="field__optional">{t("remote.host.relayHint")}</p>
+            </div>
           )}
 
           <div className="field">

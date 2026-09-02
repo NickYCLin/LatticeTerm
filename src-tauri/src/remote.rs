@@ -505,6 +505,20 @@ fn session_id() -> String {
     format!("remote-{timestamp}-{sequence}")
 }
 
+/// Which failure stage a relay dial error belongs to.
+///
+/// `relay` means the relay itself could not be reached or understood, which
+/// points at the address the user saved; the viewer offers to correct it on
+/// this stage alone. A relay that answered and rejected the dial reports
+/// `connect`: there the address was right and the device was not there, so
+/// inviting an address edit would send the user to fix the wrong thing.
+fn relay_dial_stage(error: &RelayError) -> &'static str {
+    match error {
+        RelayError::Rejected { .. } => "connect",
+        _ => "relay",
+    }
+}
+
 fn failed(stage: &'static str, detail: impl Into<String>) -> RemoteConnectOutcome {
     RemoteConnectOutcome::Failed {
         stage,
@@ -697,16 +711,27 @@ pub async fn connect(
     };
 
     let mut connection = if let Some(device_id) = &device_id {
+        // "relay" means the relay itself could not be reached or understood,
+        // which points at the address; a relay that answers and rejects the
+        // dial keeps "connect", because there the address was right and the
+        // far machine was simply not there. The caller offers to correct a
+        // saved address only on the former.
         let relay_endpoint = match normalize_relay_endpoint(&request.relay_address) {
             Ok(endpoint) => endpoint,
-            Err(error) => return failed("connect", error.to_string()),
+            Err(error) => return failed("relay", error.to_string()),
         };
         let stream = match timeout(Duration::from_secs(15), dial(&relay_endpoint, device_id)).await
         {
             Ok(Ok((stream, _agent_name))) => stream,
-            Ok(Err(RelayError::Rejected { detail, .. })) => return failed("connect", detail),
-            Ok(Err(error)) => return failed("connect", error.to_string()),
-            Err(_) => return failed("connect", "The relay did not answer within 15 seconds."),
+            Ok(Err(error)) => {
+                let stage = relay_dial_stage(&error);
+                let detail = match error {
+                    RelayError::Rejected { detail, .. } => detail,
+                    other => other.to_string(),
+                };
+                return failed(stage, detail);
+            }
+            Err(_) => return failed("relay", "The relay did not answer within 15 seconds."),
         };
         match timeout(
             Duration::from_secs(12),
@@ -1150,6 +1175,31 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::Barrier;
+
+    #[test]
+    fn only_an_unreachable_relay_blames_the_address() {
+        // The viewer offers to correct a saved relay address on this stage
+        // alone, so the split has to survive edits to the dial path.
+        assert_eq!(
+            relay_dial_stage(&RelayError::Io(std::io::Error::from(
+                std::io::ErrorKind::ConnectionRefused
+            ))),
+            "relay"
+        );
+        assert_eq!(relay_dial_stage(&RelayError::Closed), "relay");
+        assert_eq!(relay_dial_stage(&RelayError::Protocol), "relay");
+        assert_eq!(relay_dial_stage(&RelayError::InvalidRelayAddress), "relay");
+
+        // The relay answered, so the address was right and the device simply
+        // was not registered there.
+        assert_eq!(
+            relay_dial_stage(&RelayError::Rejected {
+                code: "offline".to_string(),
+                detail: "That device is not connected.".to_string(),
+            }),
+            "connect"
+        );
+    }
 
     fn hello(protocol_version: u16) -> RemoteHello {
         RemoteHello {

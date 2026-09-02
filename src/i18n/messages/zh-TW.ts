@@ -990,6 +990,8 @@ export const zhTW = {
   "remote.connect.securityBody": "配對碼只用於這次 Noise 加密交握，不會儲存。能否操控鍵鼠或瀏覽檔案由主機端在每次分享時分別授權。",
   "remote.connect.code": "Agent 配對碼",
   "remote.connect.codeHint": "請輸入被控端 lattice-agent 顯示的八位數配對碼。",
+  "remote.connect.relayMovedTitle": "中繼伺服器連不上",
+  "remote.connect.relayMovedBody": "中繼沒有回應，位址可能已經變了——免費的 Cloudflare Quick Tunnel 每次重啟都會換網址。填入目前的位址再連一次；連上之後這筆連線就會記住新的位址。",
   "remote.connect.codeInvalid": "配對碼必須是八位數字。",
   "remote.connect.submit": "開始安全連線",
   "remote.connect.connecting": "正在加密配對…",

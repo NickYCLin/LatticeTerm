@@ -1067,6 +1067,8 @@ export const en: Messages = {
   "remote.connect.code": "Agent pairing code",
   "remote.connect.codeHint":
     "Enter the eight-digit code shown by lattice-agent on the remote device.",
+  "remote.connect.relayMovedTitle": "The relay did not answer",
+  "remote.connect.relayMovedBody": "Its address may have changed — a free Cloudflare Quick Tunnel hands out a new one every restart. Enter the current address and connect again; this entry keeps the new one once it works.",
   "remote.connect.codeInvalid": "The pairing code must contain eight digits.",
   "remote.connect.submit": "Start secure session",
   "remote.connect.connecting": "Pairing securely…",
