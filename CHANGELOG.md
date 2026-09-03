@@ -4,6 +4,13 @@
 
 ---
 
+## [0.37.1](https://github.com/NickYCLin/lattice-term/compare/v0.37.0...v0.37.1) (2026-09-03)
+
+
+### 🛠️ 問題修正
+
+* **session:** 啟動失敗時仍保留工作目錄 ([e88fd2f](https://github.com/NickYCLin/lattice-term/commit/e88fd2fb7e6fcd25b5ee704263494ba96144aced))
+
 ## [0.37.0](https://github.com/NickYCLin/lattice-term/compare/v0.36.0...v0.37.0) (2026-09-03)
 
 
