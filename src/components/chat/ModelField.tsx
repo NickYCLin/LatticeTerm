@@ -40,6 +40,7 @@ export function ModelField({
   title,
   models,
   loadModels,
+  isSelectionDisabled,
   onChange,
 }: {
   definitionId: ChatDefinitionId;
@@ -50,6 +51,8 @@ export function ModelField({
   title?: string;
   models: Record<ChatDefinitionId, ChatModelList>;
   loadModels: (definitionId: ChatDefinitionId) => void;
+  /** A CLI may keep its model fixed after creating a native session. */
+  isSelectionDisabled?: (selection: ChatModelSelection) => boolean;
   onChange: (selection: ChatModelSelection) => void;
 }) {
   const { t } = useI18n();
@@ -107,6 +110,7 @@ export function ModelField({
                 <option
                   key={`${id}:${model.value || "default"}`}
                   value={encodeModelSelection({ definitionId: id, model: model.value })}
+                  disabled={isSelectionDisabled?.({ definitionId: id, model: model.value })}
                 >
                   {model.label}
                 </option>

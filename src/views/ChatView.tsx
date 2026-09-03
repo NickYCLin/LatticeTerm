@@ -22,6 +22,7 @@ import {
   permissionsFor,
   threadIsFresh,
   type ChatDefinitionId,
+  type ChatAttachment,
   type ChatItem,
   type ChatPermission,
   type ChatThread,
@@ -40,8 +41,11 @@ import { ModelField } from "../components/chat/ModelField";
 import { ChatThreadTree } from "../components/chat/ChatThreadTree";
 import {
   ChatIcon,
+  CloseIcon,
+  FileIcon,
   ClockIcon,
   FolderIcon,
+  ImageFileIcon,
   PlusIcon,
   SendIcon,
   SettingsIcon,
@@ -67,6 +71,24 @@ function directoryName(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
   const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return index === -1 ? trimmed : trimmed.slice(index + 1);
+}
+
+function attachmentName(path: string): string {
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] || path;
+}
+
+function isImageAttachment(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp)$/i.test(path);
+}
+
+function attachmentsFromPaths(paths: readonly string[]): ChatAttachment[] {
+  const seen = new Set<string>();
+  return paths.flatMap((path) => {
+    if (!path || seen.has(path)) return [];
+    seen.add(path);
+    return [{ path, name: attachmentName(path), isImage: isImageAttachment(path) }];
+  });
 }
 
 export function ChatView({
@@ -410,6 +432,8 @@ function ThreadPane({
   const { t } = useI18n();
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [draggingFiles, setDraggingFiles] = useState(false);
   const fresh = threadIsFresh(thread);
   // A new thread needs its directory chosen, so its settings start open;
   // an ongoing conversation keeps them tucked behind the summary chips.
@@ -419,7 +443,10 @@ function ThreadPane({
   const running = thread.runningTurnId !== null;
   const cliInstalled = installed.includes(thread.definitionId);
   const canSend =
-    !running && cliInstalled && thread.workingDirectory !== "" && draft.trim() !== "";
+    !running &&
+    cliInstalled &&
+    thread.workingDirectory !== "" &&
+    (draft.trim() !== "" || attachments.length > 0);
   const assistant = cliLabel(thread.definitionId);
 
   // Follow the reply as it streams, unless the reader scrolled up to look
@@ -431,7 +458,70 @@ function ThreadPane({
 
   useEffect(() => {
     setNotice(null);
+    setAttachments([]);
   }, [thread.id]);
+
+  function addAttachments(paths: readonly string[]) {
+    const added = attachmentsFromPaths(paths);
+    if (added.length === 0) return;
+    setAttachments((current) => {
+      const existing = new Set(current.map((attachment) => attachment.path));
+      return [...current, ...added.filter((attachment) => !existing.has(attachment.path))];
+    });
+  }
+
+  async function chooseAttachments(kind: "image" | "file") {
+    setNotice(null);
+    try {
+      const selected = await open({
+        multiple: true,
+        title: t(kind === "image" ? "chat.attachment.images" : "chat.attachment.files"),
+        ...(kind === "image"
+          ? { filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] }] }
+          : {}),
+      });
+      if (typeof selected === "string") addAttachments([selected]);
+      else if (Array.isArray(selected)) addAttachments(selected);
+    } catch (reason) {
+      setNotice(
+        t("chat.attachment.failed", {
+          detail: reason instanceof Error ? reason.message : String(reason),
+        }),
+      );
+    }
+  }
+
+  // Tauri owns OS file drag-and-drop, so normal React drop events do not see
+  // desktop paths. Bind only while this conversation pane is mounted.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+        const stop = await getCurrentWebviewWindow().onDragDropEvent((event) => {
+          if (running) return;
+          if (event.payload.type === "enter" || event.payload.type === "over") {
+            setDraggingFiles(true);
+          } else if (event.payload.type === "leave") {
+            setDraggingFiles(false);
+          } else if (event.payload.type === "drop") {
+            setDraggingFiles(false);
+            addAttachments(event.payload.paths);
+          }
+        });
+        if (cancelled) stop();
+        else unlisten = stop;
+      } catch {
+        // Browser previews have no native paths and cannot send a chat turn.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      setDraggingFiles(false);
+    };
+  }, [thread.id, running]);
 
   function onScroll() {
     const node = scrollRef.current;
@@ -464,9 +554,10 @@ function ThreadPane({
     if (!canSend) return;
     const prompt = draft;
     setDraft("");
+    setAttachments([]);
     pinnedToBottom.current = true;
     setSettingsOpen(false);
-    void chat.send(thread.id, prompt);
+    void chat.send(thread.id, prompt, attachments);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -567,29 +658,25 @@ function ThreadPane({
           <div className="chat-settings" id={`chat-settings-${thread.id}`}>
             <ModelField
               definitionId={thread.definitionId}
-              definitionIds={
-                fresh
-                  ? installed.length > 0
-                    ? installed
-                    : chat.supported
-                  : [thread.definitionId]
-              }
+              definitionIds={installed.length > 0 ? installed : chat.supported}
               cliLabel={cliLabel}
               value={thread.model}
-              disabled={running || (thread.definitionId === "codex" && !fresh)}
-              title={thread.definitionId === "codex" && !fresh ? t("chat.model.locked") : undefined}
+              disabled={running}
+              title={!fresh ? t("chat.model.handoff") : undefined}
               models={chat.models}
               loadModels={chat.loadModels}
+              isSelectionDisabled={({ definitionId, model }) =>
+                thread.definitionId === "codex" &&
+                !fresh &&
+                definitionId === "codex" &&
+                model !== thread.model
+              }
               onChange={({ definitionId, model }) => {
-                chat.updateThread(thread.id, {
-                  definitionId,
-                  model,
-                  // A permission the new assistant cannot honour falls back
-                  // to its own default rather than being sent and refused.
-                  ...(permissionsFor(definitionId).includes(thread.permission)
-                    ? {}
-                    : { permission: defaultPermission(definitionId) }),
-                });
+                if (definitionId !== thread.definitionId) {
+                  chat.handoffThread(thread.id, definitionId, model);
+                } else if (thread.definitionId !== "codex") {
+                  chat.updateThread(thread.id, { model });
+                }
               }}
             />
             <div className="field field--grow">
@@ -636,6 +723,11 @@ function ThreadPane({
         {thread.permission === "full" && (
           <Callout tone="warn">{t("chat.permission.full.hint")}</Callout>
         )}
+        {thread.handoff && (
+          <Callout tone="info">
+            {t("chat.handoff.pending", { assistant })}
+          </Callout>
+        )}
         {!cliInstalled && (
           <Callout tone="warn">
             {t("chat.notInstalled", { cli: cliLabel(thread.definitionId) })}
@@ -663,7 +755,9 @@ function ThreadPane({
             <ChatItemView
               key={item.id}
               item={item}
-              assistant={assistant}
+              assistant={cliLabel(item.type !== "user" && item.type !== "notice" && item.type !== "turnEnd"
+                ? item.assistantDefinitionId ?? thread.definitionId
+                : thread.definitionId)}
               streaming={running && index === thread.items.length - 1}
               tag={tag}
               onAnswer={answer}
@@ -683,7 +777,29 @@ function ThreadPane({
       </div>
 
       <form className="chat-composer" onSubmit={submit}>
-        <div className={`chat-composer__box${running ? " is-busy" : ""}`}>
+        <div className={`chat-composer__box${running ? " is-busy" : ""}${draggingFiles ? " is-file-dragging" : ""}`}>
+          {attachments.length > 0 && (
+            <div className="chat-attachments" aria-label={t("chat.attachment.selected")}>
+              {attachments.map((attachment) => (
+                <span className="chat-attachment" key={attachment.path} title={attachment.path}>
+                  {attachment.isImage ? <ImageFileIcon size={14} /> : <FileIcon size={14} />}
+                  <span>{attachment.name}</span>
+                  <button
+                    type="button"
+                    className="chat-attachment__remove"
+                    onClick={() =>
+                      setAttachments((current) =>
+                        current.filter((candidate) => candidate.path !== attachment.path),
+                      )
+                    }
+                    aria-label={t("chat.attachment.remove", { name: attachment.name })}
+                  >
+                    <CloseIcon size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <textarea
             className="chat-composer__input"
             value={draft}
@@ -704,6 +820,26 @@ function ThreadPane({
                 : t("chat.storage.note")}
             </span>
             <div className="chat-composer__actions">
+              <button
+                type="button"
+                className="button button--ghost button--sm"
+                onClick={() => void chooseAttachments("image")}
+                disabled={running}
+                title={t("chat.attachment.images")}
+              >
+                <ImageFileIcon />
+                {t("chat.attachment.images")}
+              </button>
+              <button
+                type="button"
+                className="button button--ghost button--sm"
+                onClick={() => void chooseAttachments("file")}
+                disabled={running}
+                title={t("chat.attachment.files")}
+              >
+                <FileIcon />
+                {t("chat.attachment.files")}
+              </button>
               {running && (
                 <button
                   type="button"
@@ -749,7 +885,19 @@ function ChatItemView({
     case "user":
       return (
         <div className="chat-msg chat-msg--user">
-          <div className="chat-bubble">{item.text}</div>
+          <div className="chat-bubble">
+            {item.text && <div>{item.text}</div>}
+            {item.attachments && item.attachments.length > 0 && (
+              <div className="chat-attachments chat-attachments--sent">
+                {item.attachments.map((attachment) => (
+                  <span className="chat-attachment" key={attachment.path} title={attachment.path}>
+                    {attachment.isImage ? <ImageFileIcon size={14} /> : <FileIcon size={14} />}
+                    <span>{attachment.name}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       );
     case "text":

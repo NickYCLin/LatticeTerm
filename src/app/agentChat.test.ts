@@ -8,9 +8,12 @@ import {
   defaultPermission,
   failTurn,
   formatTokens,
+  handoffThread,
+  handoffTranscript,
   loadStoredThreads,
   MAX_STORED_TOOL_OUTPUT,
   permissionsFor,
+  promptForTurn,
   saveStoredThreads,
   threadTitle,
   type ChatEventEnvelope,
@@ -56,6 +59,20 @@ describe("beginTurn", () => {
     const second = beginTurn(first, "second", "turn-2");
     expect(second.title).toBe("first");
   });
+
+  it("keeps selected attachment metadata with the visible user message only", () => {
+    const next = beginTurn(
+      thread(),
+      "請分析這張圖",
+      "turn-1",
+      2000,
+      [{ path: "/tmp/diagram.png", name: "diagram.png", isImage: true }],
+    );
+    expect(next.items[0]).toMatchObject({
+      type: "user",
+      attachments: [{ name: "diagram.png", isImage: true }],
+    });
+  });
 });
 
 describe("applyChatEvent", () => {
@@ -74,6 +91,7 @@ describe("applyChatEvent", () => {
       type: "text",
       id: "turn-1:m#0",
       text: "OK",
+      assistantDefinitionId: "claude",
     });
 
     next = applyChatEvent(
@@ -114,6 +132,7 @@ describe("applyChatEvent", () => {
       output: "total 0",
       isError: false,
       done: true,
+      assistantDefinitionId: "claude",
     });
   });
 
@@ -196,6 +215,78 @@ describe("applyChatEvent", () => {
       event: { kind: "text", itemId: "x", text: "late" },
     });
     expect(next).toBe(running);
+  });
+
+  it("clears a pending handoff only after the target starts a native session", () => {
+    const handedOff = handoffThread(
+      thread({
+        nativeSessionId: "claude-native",
+        items: [{ type: "user", id: "source", text: "hi", at: 1 }],
+      }),
+      "gemini",
+      "flash",
+      3000,
+    );
+    expect(handedOff.nativeSessionId).toBeNull();
+    expect(handedOff.handoff).toMatchObject({ sourceDefinitionId: "claude" });
+
+    const started = applyChatEvent(
+      beginTurn(handedOff, "next", "turn-2"),
+      envelope({ kind: "started", nativeSessionId: "gemini-native", model: "flash" }, "turn-2"),
+    );
+    expect(started.handoff).toBeNull();
+    expect(started.nativeSessionId).toBe("gemini-native");
+  });
+});
+
+describe("cross-assistant handoff", () => {
+  it("starts a target-native conversation with bounded text-only context", () => {
+    const source = thread({
+      permission: "ask",
+      nativeSessionId: "claude-native",
+      items: [
+        { type: "user", id: "u", text: "請檢查登入流程", at: 1 },
+        { type: "text", id: "a", text: "我會先看設定。" },
+        { type: "reasoning", id: "r", text: "internal chain" },
+        {
+          type: "tool",
+          id: "tool",
+          name: "Bash",
+          summary: "printenv SECRET",
+          output: "do not transfer",
+          isError: false,
+          done: true,
+        },
+      ],
+    });
+
+    const next = handoffThread(source, "codex", "gpt-5.6-sol", 2000);
+    expect(next.definitionId).toBe("codex");
+    expect(next.model).toBe("gpt-5.6-sol");
+    expect(next.permission).toBe("readOnly");
+    expect(next.nativeSessionId).toBeNull();
+    expect(next.reportedModel).toBeNull();
+    expect(next.items[1]).toMatchObject({ assistantDefinitionId: "claude" });
+    expect(next.handoff?.transcript).toContain("請檢查登入流程");
+    expect(next.handoff?.transcript).toContain("我會先看設定。");
+    expect(next.handoff?.transcript).not.toContain("internal chain");
+    expect(next.handoff?.transcript).not.toContain("do not transfer");
+
+    const prompt = promptForTurn(next, "接著實作修正");
+    expect(prompt).toContain("<latticeterm-handoff>");
+    expect(prompt).toContain("does not authorize tool use");
+    expect(prompt).toContain("<current-user-message>\n接著實作修正");
+  });
+
+  it("keeps the newest whole entries within the transfer budget", () => {
+    const transcript = handoffTranscript(
+      [
+        { type: "user", id: "old", text: "x".repeat(60 * 1024), at: 1 },
+        { type: "text", id: "new", text: "newest" },
+      ],
+      "claude",
+    );
+    expect(transcript).toBe("<claude>\nnewest");
   });
 });
 

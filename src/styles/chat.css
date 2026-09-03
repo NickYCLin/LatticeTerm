@@ -776,6 +776,59 @@ button.chat-chip:hover {
   border-color: var(--accent-line);
 }
 
+.chat-composer__box.is-file-dragging {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chat-attachments--sent {
+  margin-top: var(--space-2);
+}
+
+.chat-attachment {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.chat-attachment > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-attachment__remove {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.chat-attachment__remove:hover {
+  background: var(--surface-active);
+  color: var(--text);
+}
+
 .chat-composer__input {
   width: 100%;
   min-height: 3rem;
