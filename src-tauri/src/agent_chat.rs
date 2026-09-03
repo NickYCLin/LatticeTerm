@@ -2,7 +2,8 @@
 //!
 //! Some people would rather talk to a model in a message thread than in a
 //! terminal. Each turn here runs the CLI once in its documented headless mode
-//! (`claude -p --output-format stream-json`, `codex exec --json`), reads the
+//! (`claude -p --output-format stream-json`, `codex exec --json`, or Gemini's
+//! stream JSON mode), reads the
 //! JSON it prints, and forwards a small normalised event stream to the
 //! interface. The CLI's own session id comes back with the first turn so the
 //! next one can resume the same conversation; the CLI keeps the transcript,
@@ -39,6 +40,7 @@ const MAX_STDERR_BYTES: usize = 4 * 1024;
 const MAX_MODEL_LEN: usize = 64;
 const MAX_SESSION_ID_LEN: usize = 128;
 const MAX_ID_LEN: usize = 64;
+const CLAUDE_OAUTH_RETRY_DELAYS_MS: [u64; 2] = [750, 2_000];
 
 /// What the CLI may do during a turn, named by effect so the same choice
 /// means the same thing whichever CLI is behind it.
@@ -195,6 +197,12 @@ struct RunningTurn {
 #[derive(Default)]
 pub struct AgentChatRegistry {
     running: Mutex<HashMap<String, RunningTurn>>,
+    /// Claude's OAuth refresh lock is cross-process. Starting a model probe
+    /// and a turn at the same instant can make one process report that the
+    /// other is refreshing the token even though the saved login is valid.
+    /// Serialize only the authentication/startup window; turns remain free
+    /// to run concurrently after Claude emits its initialization event.
+    claude_startup: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AgentChatRegistry {
@@ -206,6 +214,14 @@ impl AgentChatRegistry {
         self.running
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    async fn startup_guard(&self, dialect: Dialect) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        if dialect == Dialect::Claude {
+            Some(Arc::clone(&self.claude_startup).lock_owned().await)
+        } else {
+            None
+        }
     }
 
     /// Asks the running turn on `thread_id` to stop. Returns whether there
@@ -531,7 +547,10 @@ fn gemini_model_choices() -> Vec<ChatModelChoice> {
 /// `model/list` on its app-server protocol. Either process is killed as soon
 /// as the answer is in. Gemini exposes documented routing aliases instead of
 /// a non-interactive list API, so those stable aliases are returned directly.
-pub async fn list_models(definition_id: &str) -> Result<Vec<ChatModelChoice>, String> {
+pub async fn list_models(
+    registry: Arc<AgentChatRegistry>,
+    definition_id: &str,
+) -> Result<Vec<ChatModelChoice>, String> {
     let dialect = Dialect::from_definition(definition_id)
         .ok_or_else(|| "This CLI has no chat mode.".to_string())?;
     let executable = crate::agent::catalog_executable(definition_id)
@@ -541,6 +560,9 @@ pub async fn list_models(definition_id: &str) -> Result<Vec<ChatModelChoice>, St
         // concrete targets can change with account access and CLI updates.
         return Ok(gemini_model_choices());
     }
+    // Keep the guard until the probe has answered and its process has exited.
+    // A turn requested meanwhile waits instead of racing Claude's token refresh.
+    let _startup_guard = registry.startup_guard(dialect).await;
     let mut command = headless_command(&executable);
     let (requests, done_id): (Vec<String>, &str) = match dialect {
         Dialect::Claude => {
@@ -728,208 +750,281 @@ pub async fn send<S: ChatSink>(
     registry: Arc<AgentChatRegistry>,
     request: ChatTurnRequest,
 ) -> Result<(), String> {
-    validate_id(&request.thread_id, "thread id")?;
-    validate_id(&request.turn_id, "turn id")?;
-    let dialect = Dialect::from_definition(&request.definition_id)
-        .ok_or_else(|| "This CLI has no chat mode.".to_string())?;
-    let interactive = request.permission == ChatPermission::Ask;
-    if interactive && dialect != Dialect::Claude {
-        return Err("This CLI cannot ask for approval in chat mode.".to_string());
-    }
-    if request.prompt.trim().is_empty() {
-        return Err("Type a message first.".to_string());
-    }
-    if request.prompt.len() > MAX_PROMPT_BYTES {
-        return Err("The message is too long for one turn.".to_string());
-    }
-    let model = request
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(model) = model {
-        validate_model(model)?;
-    }
-    if let Some(id) = request.native_session_id.as_deref() {
-        validate_native_session_id(id)?;
-    }
-    let working_directory = validate_working_directory(&request.working_directory)?;
-    let executable = crate::agent::catalog_executable(&request.definition_id)
-        .ok_or_else(|| "This CLI is not installed.".to_string())?;
+    send_with_retry(sink, registry, request, 0).await
+}
 
-    {
-        let running = registry.lock();
-        if running.contains_key(&request.thread_id) {
-            return Err("This conversation is still answering.".to_string());
+fn send_with_retry<S: ChatSink>(
+    sink: Arc<S>,
+    registry: Arc<AgentChatRegistry>,
+    request: ChatTurnRequest,
+    retry_index: usize,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'static>> {
+    Box::pin(async move {
+        validate_id(&request.thread_id, "thread id")?;
+        validate_id(&request.turn_id, "turn id")?;
+        let dialect = Dialect::from_definition(&request.definition_id)
+            .ok_or_else(|| "This CLI has no chat mode.".to_string())?;
+        let interactive = request.permission == ChatPermission::Ask;
+        if interactive && dialect != Dialect::Claude {
+            return Err("This CLI cannot ask for approval in chat mode.".to_string());
         }
-    }
+        if request.prompt.trim().is_empty() {
+            return Err("Type a message first.".to_string());
+        }
+        if request.prompt.len() > MAX_PROMPT_BYTES {
+            return Err("The message is too long for one turn.".to_string());
+        }
+        let model = request
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(model) = model {
+            validate_model(model)?;
+        }
+        if let Some(id) = request.native_session_id.as_deref() {
+            validate_native_session_id(id)?;
+        }
+        let working_directory = validate_working_directory(&request.working_directory)?;
+        let executable = crate::agent::catalog_executable(&request.definition_id)
+            .ok_or_else(|| "This CLI is not installed.".to_string())?;
 
-    let mut command = headless_command(&executable);
-    command.args(turn_arguments(
-        dialect,
-        &working_directory,
-        request.permission,
-        model,
-        request.native_session_id.as_deref(),
-    ));
-    command.current_dir(&working_directory);
+        // Claude model discovery and other chat threads may start at nearly the
+        // same time. Wait for their authentication startup before spawning this
+        // process, then keep the guard until this process reports initialization.
+        let mut startup_guard = registry.startup_guard(dialect).await;
 
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Cannot start {}: {error}", request.definition_id))?;
-    let stdin = child.stdin.take();
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "The agent's output could not be captured.".to_string())?;
-    let stderr = child.stderr.take();
-    let (one_shot_stdin, mut shared_stdin) = if interactive {
-        (
-            None,
-            stdin.map(|stdin| Arc::new(tokio::sync::Mutex::new(stdin))),
-        )
-    } else {
-        (stdin, None)
-    };
+        {
+            let running = registry.lock();
+            if running.contains_key(&request.thread_id) {
+                return Err("This conversation is still answering.".to_string());
+            }
+        }
 
-    {
-        let mut running = registry.lock();
-        running.insert(
-            request.thread_id.clone(),
-            RunningTurn {
-                turn_id: request.turn_id.clone(),
-                child,
-                stdin: shared_stdin.clone(),
-                pending_inputs: HashMap::new(),
-            },
-        );
-    }
+        let mut command = headless_command(&executable);
+        command.args(turn_arguments(
+            dialect,
+            &working_directory,
+            request.permission,
+            model,
+            request.native_session_id.as_deref(),
+        ));
+        command.current_dir(&working_directory);
 
-    let thread_id = request.thread_id;
-    let turn_id = request.turn_id;
-    let prompt = request.prompt;
-    tauri::async_runtime::spawn(async move {
-        // A CLI that has already exited closes the pipe; the exit status
-        // explains that better than a write error would.
-        if let Some(mut stdin) = one_shot_stdin {
-            let _ = stdin.write_all(prompt.as_bytes()).await;
-            let _ = stdin.write_all(b"\n").await;
-            let _ = stdin.shutdown().await;
-        } else if let Some(stdin) = &shared_stdin {
-            let mut stdin = stdin.lock().await;
-            for line in interactive_opening_lines(&prompt) {
-                let _ = stdin.write_all(line.as_bytes()).await;
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("Cannot start {}: {error}", request.definition_id))?;
+        let stdin = child.stdin.take();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "The agent's output could not be captured.".to_string())?;
+        let stderr = child.stderr.take();
+        let (one_shot_stdin, mut shared_stdin) = if interactive {
+            (
+                None,
+                stdin.map(|stdin| Arc::new(tokio::sync::Mutex::new(stdin))),
+            )
+        } else {
+            (stdin, None)
+        };
+
+        {
+            let mut running = registry.lock();
+            running.insert(
+                request.thread_id.clone(),
+                RunningTurn {
+                    turn_id: request.turn_id.clone(),
+                    child,
+                    stdin: shared_stdin.clone(),
+                    pending_inputs: HashMap::new(),
+                },
+            );
+        }
+
+        let retry_request = request.clone();
+        let thread_id = request.thread_id;
+        let turn_id = request.turn_id;
+        let prompt = request.prompt;
+        tauri::async_runtime::spawn(async move {
+            // A CLI that has already exited closes the pipe; the exit status
+            // explains that better than a write error would.
+            if let Some(mut stdin) = one_shot_stdin {
+                let _ = stdin.write_all(prompt.as_bytes()).await;
                 let _ = stdin.write_all(b"\n").await;
-            }
-            let _ = stdin.flush().await;
-        }
-
-        let stderr_task = tauri::async_runtime::spawn(async move {
-            let mut tail = String::new();
-            if let Some(mut stderr) = stderr {
-                let mut buffer = Vec::new();
-                let _ = stderr.read_to_end(&mut buffer).await;
-                tail = String::from_utf8_lossy(&buffer).into_owned();
-            }
-            if tail.len() > MAX_STDERR_BYTES {
-                let cut = floor_char_boundary(&tail, tail.len() - MAX_STDERR_BYTES);
-                tail = tail[cut..].to_string();
-            }
-            tail
-        });
-
-        let mut state = TurnState::default();
-        let mut reader = BufReader::new(stdout);
-        let mut line = Vec::new();
-        loop {
-            line.clear();
-            match read_bounded_line(&mut reader, &mut line).await {
-                Ok(0) => break,
-                Ok(_) => {}
-                Err(LineError::TooLong) => {
-                    sink.event(
-                        &thread_id,
-                        &turn_id,
-                        ChatEvent::Notice {
-                            message: "One message from the agent was too large to show."
-                                .to_string(),
-                        },
-                    );
-                    continue;
+                let _ = stdin.shutdown().await;
+            } else if let Some(stdin) = &shared_stdin {
+                let mut stdin = stdin.lock().await;
+                for line in interactive_opening_lines(&prompt) {
+                    let _ = stdin.write_all(line.as_bytes()).await;
+                    let _ = stdin.write_all(b"\n").await;
                 }
-                Err(LineError::Io) => break,
+                let _ = stdin.flush().await;
             }
-            let text = String::from_utf8_lossy(&line);
-            for event in parse_line(dialect, &mut state, text.trim_end()) {
-                sink.event(&thread_id, &turn_id, event);
-            }
-            if !state.pending_inputs.is_empty() {
-                let mut running = registry.lock();
-                if let Some(turn) = running.get_mut(&thread_id) {
-                    if turn.turn_id == turn_id {
-                        turn.pending_inputs.extend(state.pending_inputs.drain(..));
+
+            let stderr_task = tauri::async_runtime::spawn(async move {
+                let mut tail = String::new();
+                if let Some(mut stderr) = stderr {
+                    let mut buffer = Vec::new();
+                    let _ = stderr.read_to_end(&mut buffer).await;
+                    tail = String::from_utf8_lossy(&buffer).into_owned();
+                }
+                if tail.len() > MAX_STDERR_BYTES {
+                    let cut = floor_char_boundary(&tail, tail.len() - MAX_STDERR_BYTES);
+                    tail = tail[cut..].to_string();
+                }
+                tail
+            });
+
+            let mut state = TurnState::default();
+            let mut had_progress = false;
+            let mut reader = BufReader::new(stdout);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                match read_bounded_line(&mut reader, &mut line).await {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(LineError::TooLong) => {
+                        sink.event(
+                            &thread_id,
+                            &turn_id,
+                            ChatEvent::Notice {
+                                message: "One message from the agent was too large to show."
+                                    .to_string(),
+                            },
+                        );
+                        continue;
                     }
+                    Err(LineError::Io) => break,
                 }
-                state.pending_inputs.clear();
-            }
-            if state.turn_complete {
-                if let Some(stdin) = shared_stdin.take() {
-                    // The reply is in. Closing stdin is what ends a
-                    // bidirectional CLI; it keeps waiting for input otherwise.
-                    {
-                        let mut running = registry.lock();
-                        if let Some(turn) = running.get_mut(&thread_id) {
-                            turn.stdin = None;
-                            turn.pending_inputs.clear();
+                let text = String::from_utf8_lossy(&line);
+                for event in parse_line(dialect, &mut state, text.trim_end()) {
+                    if matches!(&event, ChatEvent::Started { .. }) {
+                        startup_guard.take();
+                    }
+                    if matches!(
+                        &event,
+                        ChatEvent::TextDelta { .. }
+                            | ChatEvent::Text { .. }
+                            | ChatEvent::Reasoning { .. }
+                            | ChatEvent::ToolStarted { .. }
+                            | ChatEvent::ToolFinished { .. }
+                            | ChatEvent::ApprovalRequested { .. }
+                    ) {
+                        had_progress = true;
+                    }
+                    sink.event(&thread_id, &turn_id, event);
+                }
+                if !state.pending_inputs.is_empty() {
+                    let mut running = registry.lock();
+                    if let Some(turn) = running.get_mut(&thread_id) {
+                        if turn.turn_id == turn_id {
+                            turn.pending_inputs.extend(state.pending_inputs.drain(..));
                         }
                     }
-                    let mut stdin = stdin.lock().await;
-                    let _ = stdin.shutdown().await;
+                    state.pending_inputs.clear();
+                }
+                if state.turn_complete {
+                    if let Some(stdin) = shared_stdin.take() {
+                        // The reply is in. Closing stdin is what ends a
+                        // bidirectional CLI; it keeps waiting for input otherwise.
+                        {
+                            let mut running = registry.lock();
+                            if let Some(turn) = running.get_mut(&thread_id) {
+                                turn.stdin = None;
+                                turn.pending_inputs.clear();
+                            }
+                        }
+                        let mut stdin = stdin.lock().await;
+                        let _ = stdin.shutdown().await;
+                    }
                 }
             }
-        }
 
-        let child = {
-            let mut running = registry.lock();
-            match running.get(&thread_id) {
-                Some(turn) if turn.turn_id == turn_id => running.remove(&thread_id),
-                _ => None,
-            }
-        };
-        let status = match child {
-            Some(mut turn) => turn.child.wait().await.ok(),
-            None => None,
-        };
-        let stderr_tail = stderr_task.await.unwrap_or_default();
-
-        let mut error = state.error.take();
-        if error.is_none() {
-            match status {
-                Some(status) if status.success() => {}
-                Some(status) => {
-                    let detail = stderr_tail.trim();
-                    error = Some(if detail.is_empty() {
-                        format!("The agent exited with {status}.")
-                    } else {
-                        detail.to_string()
-                    });
+            let child = {
+                let mut running = registry.lock();
+                match running.get(&thread_id) {
+                    Some(turn) if turn.turn_id == turn_id => running.remove(&thread_id),
+                    _ => None,
                 }
-                None => error = Some("The agent was stopped.".to_string()),
+            };
+            let status = match child {
+                Some(mut turn) => turn.child.wait().await.ok(),
+                None => None,
+            };
+            let stderr_tail = stderr_task.await.unwrap_or_default();
+
+            let mut error = state.error.take();
+            if error.is_none() {
+                match status {
+                    Some(status) if status.success() => {}
+                    Some(status) => {
+                        let detail = stderr_tail.trim();
+                        error = Some(if detail.is_empty() {
+                            format!("The agent exited with {status}.")
+                        } else {
+                            detail.to_string()
+                        });
+                    }
+                    None => error = Some("The agent was stopped.".to_string()),
+                }
             }
-        }
-        sink.event(
-            &thread_id,
-            &turn_id,
-            ChatEvent::Finished {
-                native_session_id: state.native_session_id.take(),
-                usage: state.usage.take(),
-                cost_usd: state.cost_usd,
-                duration_ms: state.duration_ms,
-                error,
-            },
-        );
-    });
-    Ok(())
+
+            if should_retry_claude_oauth(dialect, had_progress, retry_index, error.as_deref()) {
+                // Claude says this exact failure is transient. No answer or tool
+                // call was emitted, so resending cannot duplicate a side effect.
+                // A new conversation stays new; an existing one keeps the id
+                // supplied by the original request.
+                startup_guard.take();
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    CLAUDE_OAUTH_RETRY_DELAYS_MS[retry_index],
+                ))
+                .await;
+                match send_with_retry(
+                    Arc::clone(&sink),
+                    Arc::clone(&registry),
+                    retry_request,
+                    retry_index + 1,
+                )
+                .await
+                {
+                    Ok(()) => return,
+                    Err(retry_error) => error = Some(retry_error),
+                }
+            }
+            sink.event(
+                &thread_id,
+                &turn_id,
+                ChatEvent::Finished {
+                    native_session_id: state.native_session_id.take(),
+                    usage: state.usage.take(),
+                    cost_usd: state.cost_usd,
+                    duration_ms: state.duration_ms,
+                    error,
+                },
+            );
+        });
+        Ok(())
+    })
+}
+
+fn is_claude_oauth_refresh_busy(error: &str) -> bool {
+    error
+        .to_ascii_lowercase()
+        .contains("another claude code process is refreshing it or exited mid-refresh")
+}
+
+fn should_retry_claude_oauth(
+    dialect: Dialect,
+    had_progress: bool,
+    retry_index: usize,
+    error: Option<&str>,
+) -> bool {
+    dialect == Dialect::Claude
+        && !had_progress
+        && retry_index < CLAUDE_OAUTH_RETRY_DELAYS_MS.len()
+        && error.is_some_and(is_claude_oauth_refresh_busy)
 }
 
 enum LineError {
@@ -1923,6 +2018,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn claude_startups_share_one_oauth_gate() {
+        let registry = Arc::new(AgentChatRegistry::new());
+        tauri::async_runtime::block_on(async {
+            assert!(registry.startup_guard(Dialect::Codex).await.is_none());
+            let first = registry
+                .startup_guard(Dialect::Claude)
+                .await
+                .expect("Claude uses the startup gate");
+            assert!(Arc::clone(&registry.claude_startup)
+                .try_lock_owned()
+                .is_err());
+            drop(first);
+            assert!(Arc::clone(&registry.claude_startup)
+                .try_lock_owned()
+                .is_ok());
+        });
+    }
+
+    #[test]
+    fn only_the_transient_claude_oauth_lock_error_is_retried() {
+        let transient = "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh.";
+        assert!(is_claude_oauth_refresh_busy(transient));
+        assert!(is_claude_oauth_refresh_busy(
+            "FAILED TO REFRESH OAUTH TOKEN: ANOTHER CLAUDE CODE PROCESS IS REFRESHING IT OR EXITED MID-REFRESH"
+        ));
+        assert!(!is_claude_oauth_refresh_busy(
+            "OAuth token has expired - Please run /login"
+        ));
+        assert!(should_retry_claude_oauth(
+            Dialect::Claude,
+            false,
+            0,
+            Some(transient)
+        ));
+        assert!(!should_retry_claude_oauth(
+            Dialect::Claude,
+            true,
+            0,
+            Some(transient)
+        ));
+        assert!(!should_retry_claude_oauth(
+            Dialect::Codex,
+            false,
+            0,
+            Some(transient)
+        ));
+        assert!(!should_retry_claude_oauth(
+            Dialect::Claude,
+            false,
+            CLAUDE_OAUTH_RETRY_DELAYS_MS.len(),
+            Some(transient)
+        ));
+    }
+
     /// Asks a real CLI for its models. Ignored: needs the CLI installed and
     /// logged in. `LATTICETERM_CHAT_E2E=claude|codex|gemini cargo test list_models -- --ignored`.
     #[test]
@@ -1930,7 +2080,11 @@ mod tests {
     fn a_real_cli_lists_its_models() {
         let definition_id =
             std::env::var("LATTICETERM_CHAT_E2E").unwrap_or_else(|_| "claude".to_string());
-        let models = tauri::async_runtime::block_on(list_models(&definition_id)).expect("models");
+        let models = tauri::async_runtime::block_on(list_models(
+            Arc::new(AgentChatRegistry::new()),
+            &definition_id,
+        ))
+        .expect("models");
         assert!(!models.is_empty());
         assert!(models.iter().any(|model| model.is_default), "{models:?}");
     }

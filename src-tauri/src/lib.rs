@@ -526,8 +526,9 @@ async fn agent_chat_respond(
 #[tauri::command]
 async fn agent_chat_models(
     definition_id: String,
+    registry: State<'_, Arc<crate::agent_chat::AgentChatRegistry>>,
 ) -> Result<Vec<crate::agent_chat::ChatModelChoice>, String> {
-    crate::agent_chat::list_models(&definition_id).await
+    crate::agent_chat::list_models(Arc::clone(registry.inner()), &definition_id).await
 }
 
 #[tauri::command]
