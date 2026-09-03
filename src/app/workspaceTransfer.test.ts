@@ -24,6 +24,7 @@ function session(): AgentSessionSummary {
     stateSource: "heuristic",
     processId: 42,
     tokenUsage: null,
+    queuedPrompts: 0,
     capturedSessionId: "local-conversation-id",
   };
 }

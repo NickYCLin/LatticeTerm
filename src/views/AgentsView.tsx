@@ -140,6 +140,10 @@ export function AgentsView({
     () => new Set(),
   );
   const [broadcastPrompt, setBroadcastPrompt] = useState("");
+  // Sending to an agent that is mid-turn drops the prompt into whatever it is
+  // doing. Queueing instead holds it until that turn actually ends; an agent
+  // that is already free still takes it straight away.
+  const [queueWhenBusy, setQueueWhenBusy] = useState(false);
   const [pendingBroadcast, setPendingBroadcast] = useState<string[] | null>(null);
   const [broadcasting, setBroadcasting] = useState(false);
   const [broadcastNotice, setBroadcastNotice] = useState<{
@@ -427,7 +431,22 @@ export function AgentsView({
     setBroadcasting(true);
     setBroadcastNotice(null);
     try {
-      const outcomes = await agents.broadcast(targets, broadcastPrompt);
+      const outcomes = queueWhenBusy
+        ? await Promise.all(
+            targets.map(async (sessionId) => {
+              try {
+                await agents.enqueue(sessionId, broadcastPrompt);
+                return { sessionId, delivered: true, error: null };
+              } catch (reason) {
+                return {
+                  sessionId,
+                  delivered: false,
+                  error: reason instanceof Error ? reason.message : String(reason),
+                };
+              }
+            }),
+          )
+        : await agents.broadcast(targets, broadcastPrompt);
       const failures = outcomes.filter((outcome) => !outcome.delivered);
       const delivered = outcomes.length - failures.length;
       setBroadcastNotice({
@@ -977,6 +996,19 @@ export function AgentsView({
           {t("agents.broadcast.securityBody")}
         </Callout>
 
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={queueWhenBusy}
+            disabled={broadcasting}
+            onChange={(event) => setQueueWhenBusy(event.currentTarget.checked)}
+          />
+          <span>
+            <strong>{t("agents.queue.toggle")}</strong>
+            <small className="field__optional">{t("agents.queue.hint")}</small>
+          </span>
+        </label>
+
         {broadcastNotice && (
           <Callout
             tone={broadcastNotice.failed > 0 ? "danger" : "info"}
@@ -1027,6 +1059,13 @@ export function AgentsView({
                 <span className="agents-broadcast__target-label">
                   <strong>{session.label}</strong>
                   <span className="mono">{displayPath(session.workingDirectory)}</span>
+                  {session.queuedPrompts > 0 && (
+                    <small className="field__optional">
+                      {t("agents.queue.waiting", {
+                        count: session.queuedPrompts,
+                      })}
+                    </small>
+                  )}
                 </span>
               </label>
             ))}

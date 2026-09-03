@@ -30,6 +30,7 @@ function member(
     stateSource: "heuristic",
     processId: 100,
     tokenUsage: null,
+    queuedPrompts: 0,
     capturedSessionId: null,
     ...overrides,
   };

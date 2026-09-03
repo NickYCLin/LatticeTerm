@@ -109,6 +109,8 @@ export interface AgentSessionSummary {
   processId: number | null;
   /** Trusted cumulative token buckets supplied by a semantic adapter. */
   tokenUsage: AgentTokenUsage | null;
+  /** Prompts waiting for this session to finish its current turn. */
+  queuedPrompts: number;
   /** The CLI's own session id, once its output announced one. */
   capturedSessionId: string | null;
   /** Frontend-only close state retained so terminal output does not disappear. */
@@ -179,6 +181,11 @@ export interface AgentUsageEvent {
   tokenUsage: AgentTokenUsage;
 }
 
+export interface AgentQueueEvent {
+  sessionId: string;
+  queuedPrompts: number;
+}
+
 export interface AgentOutputEvent {
   sessionId: string;
   offset: number;
@@ -228,6 +235,17 @@ export function applyAgentUsageEvent(
   return sessions.map((session) =>
     session.sessionId === event.sessionId
       ? { ...session, tokenUsage: event.tokenUsage }
+      : session,
+  );
+}
+
+export function applyAgentQueueEvent(
+  sessions: AgentSessionSummary[],
+  event: AgentQueueEvent,
+): AgentSessionSummary[] {
+  return sessions.map((session) =>
+    session.sessionId === event.sessionId
+      ? { ...session, queuedPrompts: event.queuedPrompts }
       : session,
   );
 }
@@ -611,6 +629,13 @@ export interface AgentApi {
     sessionIds: string[],
     prompt: string,
   ) => Promise<AgentBroadcastOutcome[]>;
+  /**
+   * Lines a prompt up behind whatever the agent is already doing. Resolves
+   * with how many prompts are waiting; zero means it was free and took it.
+   */
+  enqueue: (sessionId: string, prompt: string) => Promise<number>;
+  /** Drops everything still waiting, resolving with how many went. */
+  clearQueue: (sessionId: string) => Promise<number>;
   resize: (sessionId: string, cols: number, rows: number) => Promise<void>;
   disconnect: (sessionId: string) => Promise<void>;
   clearLastClosed: () => void;
@@ -907,6 +932,19 @@ export function useAgentSessions(): AgentApi {
         );
         if (!keep(stopUsage)) return;
 
+        // The depth also arrives on the session summary, so a queue event
+        // missed during hydration corrects itself on the next snapshot.
+        const stopQueue = await listen<AgentQueueEvent>(
+          "agent://queue",
+          (event) => {
+            if (hydrating) return;
+            setSessions((current) =>
+              applyAgentQueueEvent(current, event.payload),
+            );
+          },
+        );
+        if (!keep(stopQueue)) return;
+
         const [
           definitions,
           directory,
@@ -1196,6 +1234,29 @@ export function useAgentSessions(): AgentApi {
     [],
   );
 
+  /**
+   * Lines a prompt up behind whatever the agent is already doing.
+   *
+   * Resolves with how many prompts are waiting; zero means the agent was free
+   * and took it at once.
+   */
+  const enqueue = useCallback(async (sessionId: string, prompt: string) => {
+    // A queued prompt is submitted exactly as a broadcast one is, so the two
+    // paths cannot disagree about line endings or trailing returns.
+    const payload = buildAgentBroadcastPayload(prompt);
+    if (!payload) throw new Error("A queued prompt is required.");
+    const { invoke } = await core();
+    return invoke<number>("agent_enqueue", {
+      sessionId,
+      data: encodeAgentPayload(new TextEncoder().encode(payload)),
+    });
+  }, []);
+
+  const clearQueue = useCallback(async (sessionId: string) => {
+    const { invoke } = await core();
+    return invoke<number>("agent_clear_queue", { sessionId });
+  }, []);
+
   const broadcast = useCallback(async (sessionIds: string[], prompt: string) => {
     const payload = buildAgentBroadcastPayload(prompt);
     if (!payload) throw new Error("A broadcast prompt is required.");
@@ -1312,6 +1373,8 @@ export function useAgentSessions(): AgentApi {
     exportTranscript,
     importMemoryHandoff,
     broadcast,
+    enqueue,
+    clearQueue,
     resize,
     disconnect,
     clearLastClosed,

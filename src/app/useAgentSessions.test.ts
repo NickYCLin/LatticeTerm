@@ -4,6 +4,7 @@ import {
   applyAgentLaunchEvents,
   applyAgentRestoreLaunchEvents,
   applyAgentStateEvent,
+  applyAgentQueueEvent,
   applyAgentUsageEvent,
   agentCatalogForDisplay,
   buildAgentBroadcastPayload,
@@ -82,6 +83,7 @@ describe("agent session transport", () => {
       stateSource: "heuristic" as const,
       processId: 42,
       tokenUsage: null,
+      queuedPrompts: 0,
       capturedSessionId: null,
     };
 
@@ -148,6 +150,7 @@ describe("agent session transport", () => {
       stateSource: "heuristic" as const,
       processId: 42,
       tokenUsage: null,
+      queuedPrompts: 0,
       capturedSessionId: null,
     };
     const closedIds = new Set(restoreEvents.closed.keys());
@@ -215,6 +218,7 @@ describe("agent session transport", () => {
       stateSource: "heuristic" as const,
       processId: 42,
       tokenUsage: null,
+      queuedPrompts: 0,
       capturedSessionId: null,
     };
     const settled = applyAgentLaunchEvents(initial, events);
@@ -393,6 +397,7 @@ describe("agent session transport", () => {
         stateSource: "heuristic" as const,
         processId: 42,
         tokenUsage: null,
+        queuedPrompts: 0,
         capturedSessionId: null,
       },
     ];
@@ -420,6 +425,25 @@ describe("agent session transport", () => {
         tokenUsage,
       })[0].tokenUsage,
     ).toEqual(tokenUsage);
+
+    const queued = applyAgentQueueEvent(sessions, {
+      sessionId: "agent-session-1",
+      queuedPrompts: 3,
+    });
+    expect(queued[0].queuedPrompts).toBe(3);
+    // Only the named session moves, and the source array is left alone.
+    expect(queued.slice(1).every((session) => session.queuedPrompts === 0)).toBe(
+      true,
+    );
+    expect(sessions[0].queuedPrompts).toBe(0);
+
+    // An event for a session that is gone changes nothing.
+    expect(
+      applyAgentQueueEvent(sessions, {
+        sessionId: "agent-missing",
+        queuedPrompts: 9,
+      }),
+    ).toEqual(sessions);
   });
 
   it("moves saved launch plans by one position without mutating the source", () => {
@@ -455,6 +479,7 @@ describe("agent session transport", () => {
       stateSource: "heuristic" as const,
       processId: 42,
       tokenUsage: null,
+      queuedPrompts: 0,
       capturedSessionId: null,
     };
 

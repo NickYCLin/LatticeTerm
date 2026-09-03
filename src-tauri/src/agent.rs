@@ -23,6 +23,7 @@ pub const EVENT_STATE: &str = "agent://state";
 pub const EVENT_CAPTURE: &str = "agent://capture";
 pub const EVENT_MODEL: &str = "agent://model";
 pub const EVENT_USAGE: &str = "agent://usage";
+pub const EVENT_QUEUE: &str = "agent://queue";
 
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENTS: usize = 64;
@@ -31,6 +32,10 @@ const MAX_RESUME_SESSION_ID_BYTES: usize = 512;
 const MAX_ANTIGRAVITY_CAPTURE_LOG_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PLAN_NOTE_BYTES: usize = 200;
 const MAX_BROADCAST_TARGETS: usize = 32;
+/// Prompts one session may hold waiting for it to finish. Deep enough for a
+/// planned sequence of steps, shallow enough that a queue built by accident
+/// cannot keep feeding a CLI long after the user stopped watching.
+const MAX_QUEUED_PROMPTS: usize = 16;
 pub const MAX_AGENT_SESSIONS: usize = 32;
 pub const MAX_SAVED_AGENT_PLANS: usize = 32;
 const MAX_OUTPUT_SNAPSHOT_BYTES: usize = 256 * 1024;
@@ -322,6 +327,9 @@ pub struct AgentSessionSummary {
     /// Token buckets reported by an authenticated semantic adapter. `None`
     /// means this CLI has not supplied trustworthy usage data.
     pub token_usage: Option<AgentTokenUsage>,
+    /// Prompts waiting for this session to finish its current turn.
+    #[serde(default)]
+    pub queued_prompts: usize,
     /// The CLI's own session id, when its output announced one — the value
     /// native resume takes. Never guessed: absent until actually seen.
     pub captured_session_id: Option<String>,
@@ -453,6 +461,13 @@ struct AgentUsageChanged {
     token_usage: AgentTokenUsage,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentQueueChanged {
+    session_id: String,
+    queued_prompts: usize,
+}
+
 pub trait AgentSink: Send + Sync + 'static {
     fn data(&self, session_id: &str, offset: u64, bytes: &[u8]);
     fn state(&self, session_id: &str, state: AgentLifecycle, source: AgentStateSource);
@@ -460,6 +475,8 @@ pub trait AgentSink: Send + Sync + 'static {
     fn captured(&self, session_id: &str, native_session_id: &str);
     fn model(&self, session_id: &str, model: &str);
     fn usage(&self, session_id: &str, token_usage: &AgentTokenUsage);
+    /// How many prompts are now waiting for this session.
+    fn queue(&self, session_id: &str, queued_prompts: usize);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -537,6 +554,16 @@ impl AgentSink for EventSink {
             },
         );
     }
+
+    fn queue(&self, session_id: &str, queued_prompts: usize) {
+        let _ = self.0.emit(
+            EVENT_QUEUE,
+            AgentQueueChanged {
+                session_id: session_id.to_string(),
+                queued_prompts,
+            },
+        );
+    }
 }
 
 struct AgentSessionEntry {
@@ -567,6 +594,13 @@ struct AgentSessionEntry {
     /// Reporter retries must be idempotent: if the local acknowledgement is
     /// lost, the same successful API request can be delivered more than once.
     reported_usage_requests: Mutex<ReportedUsageRequests>,
+    /// Prompts lined up while this session was busy, delivered one at a time.
+    ///
+    /// Only an official integration event releases the next one. A heuristic
+    /// guess that the CLI went idle is not proof that it stopped reading, and
+    /// typing into a session that is still working would land the prompt in
+    /// the middle of whatever it was doing.
+    queued_prompts: Mutex<VecDeque<Vec<u8>>>,
     /// Keeps per-session integration files alive only as long as their PTY.
     _integration_settings: Option<AgentIntegrationSettings>,
     /// Clipboard images may contain sensitive material. Keep their temporary
@@ -2078,6 +2112,12 @@ fn handle_report_connection(mut stream: TcpStream, registry: &AgentRegistry, sin
         })) => {
             if changed {
                 sink.state(&message.session_id, state, AgentStateSource::Integration);
+                // The only path that releases a queued prompt. Every
+                // integration event funnels through here, and nothing
+                // heuristic does.
+                if releases_queued_prompt(state, AgentStateSource::Integration) {
+                    deliver_next_queued(sink, registry, &message.session_id);
+                }
             }
             if let Some(native_session_id) = captured {
                 sink.captured(&message.session_id, &native_session_id);
@@ -5087,6 +5127,7 @@ pub fn launch_with_replay(
         state_source: AgentStateSource::Heuristic,
         process_id,
         token_usage: None,
+        queued_prompts: 0,
         // A session launched as a native resume already knows its id; a
         // fresh announcement in the output still overwrites it.
         captured_session_id: request.resume_session_id.clone(),
@@ -5133,6 +5174,7 @@ pub fn launch_with_replay(
         copilot_activity,
         hermes_activity,
         reported_usage_requests: Mutex::new(ReportedUsageRequests::default()),
+        queued_prompts: Mutex::new(VecDeque::new()),
         _integration_settings: integration_settings,
         staged_images: Mutex::new(StagedAgentImages::default()),
     });
@@ -5313,6 +5355,127 @@ fn send_bytes(
     Ok(())
 }
 
+/// Whether a state change means the session is free to receive a queued
+/// prompt.
+///
+/// Only an integration event counts. A heuristic `Idle` is a guess — the
+/// silent-working watchdog produces one after ten minutes of quiet, and a CLI
+/// that is merely slow would then be typed into mid-turn.
+fn releases_queued_prompt(state: AgentLifecycle, source: AgentStateSource) -> bool {
+    source == AgentStateSource::Integration
+        && matches!(state, AgentLifecycle::Done | AgentLifecycle::Idle)
+}
+
+/// Records how many prompts are still waiting, so the interface can show it.
+fn store_queue_depth(registry: &AgentRegistry, session_id: &str, depth: usize) {
+    let Ok(entry) = registry.get(session_id) else {
+        return;
+    };
+    let Ok(mut summary) = entry.summary.lock() else {
+        return;
+    };
+    summary.queued_prompts = depth;
+}
+
+/// Lines a prompt up behind whatever this session is already doing.
+///
+/// A session that is already free takes the prompt straight away: queueing it
+/// would leave it sitting there until some future integration event that may
+/// never come, because nothing is running to produce one.
+pub fn enqueue(
+    sink: &dyn AgentSink,
+    registry: &AgentRegistry,
+    session_id: &str,
+    encoded: &str,
+) -> Result<usize, String> {
+    let bytes = decode(encoded)?;
+    if bytes.is_empty() {
+        return Err("A queued prompt is required.".to_string());
+    }
+    let entry = registry.get(session_id)?;
+
+    let (state, source) = {
+        let summary = entry.summary.lock().map_err(|error| error.to_string())?;
+        (summary.state, summary.state_source)
+    };
+    let queue_is_empty = entry
+        .queued_prompts
+        .lock()
+        .map(|queue| queue.is_empty())
+        .unwrap_or(false);
+    if queue_is_empty && releases_queued_prompt(state, source) {
+        send_bytes(sink, registry, session_id, &bytes)?;
+        return Ok(0);
+    }
+
+    let depth = {
+        let mut queue = entry
+            .queued_prompts
+            .lock()
+            .map_err(|error| error.to_string())?;
+        if queue.len() >= MAX_QUEUED_PROMPTS {
+            return Err(format!(
+                "This agent already has {MAX_QUEUED_PROMPTS} prompts waiting."
+            ));
+        }
+        queue.push_back(bytes);
+        queue.len()
+    };
+    store_queue_depth(registry, session_id, depth);
+    sink.queue(session_id, depth);
+    Ok(depth)
+}
+
+/// Drops everything still waiting for this session and reports how many went.
+pub fn clear_queue(
+    sink: &dyn AgentSink,
+    registry: &AgentRegistry,
+    session_id: &str,
+) -> Result<usize, String> {
+    let entry = registry.get(session_id)?;
+    let dropped = {
+        let mut queue = entry
+            .queued_prompts
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let dropped = queue.len();
+        queue.clear();
+        dropped
+    };
+    store_queue_depth(registry, session_id, 0);
+    sink.queue(session_id, 0);
+    Ok(dropped)
+}
+
+/// Hands the next waiting prompt to a session whose turn just ended.
+///
+/// Called only from the one place an integration state change is published,
+/// so a heuristic guess can never trigger a delivery.
+fn deliver_next_queued(sink: &dyn AgentSink, registry: &AgentRegistry, session_id: &str) {
+    let Ok(entry) = registry.get(session_id) else {
+        return;
+    };
+    let next = {
+        let Ok(mut queue) = entry.queued_prompts.lock() else {
+            return;
+        };
+        queue.pop_front()
+    };
+    let Some(bytes) = next else {
+        return;
+    };
+    let depth = entry
+        .queued_prompts
+        .lock()
+        .map(|queue| queue.len())
+        .unwrap_or(0);
+    store_queue_depth(registry, session_id, depth);
+    sink.queue(session_id, depth);
+    // A write that fails means the PTY is gone; the remaining prompts are
+    // dropped with the session rather than retried into a dead terminal.
+    let _ = send_bytes(sink, registry, session_id, &bytes);
+}
+
 pub fn broadcast(
     sink: &dyn AgentSink,
     registry: &AgentRegistry,
@@ -5415,6 +5578,7 @@ mod tests {
         captured: Mutex<Vec<(String, String)>>,
         models: Mutex<Vec<(String, String)>>,
         usages: Mutex<Vec<(String, AgentTokenUsage)>>,
+        queues: Mutex<Vec<(String, usize)>>,
     }
 
     impl AgentSink for TestSink {
@@ -5462,6 +5626,13 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((session_id.to_string(), token_usage.clone()));
+        }
+
+        fn queue(&self, session_id: &str, queued_prompts: usize) {
+            self.queues
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), queued_prompts));
         }
     }
 
@@ -8183,6 +8354,231 @@ notify = ["notify.exe", "turn-ended"]"#,
     }
 
     #[cfg(unix)]
+    fn launch_cat(
+        sink: &Arc<dyn AgentSink>,
+        registry: &Arc<AgentRegistry>,
+        label: &str,
+    ) -> AgentSessionSummary {
+        launch(
+            sink.clone(),
+            registry.clone(),
+            AgentLaunchRequest {
+                definition_id: "custom".to_string(),
+                label: label.to_string(),
+                executable: "/bin/cat".to_string(),
+                arguments: Vec::new(),
+                resume_session_id: None,
+                group_id: None,
+                seed_input: None,
+                restore_existing_session: false,
+                working_directory: std::env::current_dir().unwrap().display().to_string(),
+                cols: 80,
+                rows: 24,
+            },
+        )
+        .unwrap()
+    }
+
+    /// Whether the PTY echoed `needle` back within `within`.
+    ///
+    /// `/bin/cat` echoes whatever it is given, so this reports whether the
+    /// bytes were actually written to the terminal.
+    fn received_within(
+        collector: &TestSink,
+        session_id: &str,
+        needle: &str,
+        within: Duration,
+    ) -> bool {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            let received = collector.session_data.lock().unwrap();
+            if received
+                .get(session_id)
+                .is_some_and(|bytes| String::from_utf8_lossy(bytes).contains(needle))
+            {
+                return true;
+            }
+            drop(received);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[test]
+    fn a_heuristic_idle_never_releases_a_queued_prompt() {
+        // The silent-working watchdog produces a heuristic Idle after ten
+        // minutes of quiet. Typing into a CLI that is merely slow would land
+        // the prompt in the middle of whatever it was still doing.
+        for state in [AgentLifecycle::Done, AgentLifecycle::Idle] {
+            assert!(releases_queued_prompt(state, AgentStateSource::Integration));
+            assert!(!releases_queued_prompt(state, AgentStateSource::Heuristic));
+        }
+        // A turn that is running, or one waiting on the user, is not free
+        // whoever reported it.
+        for state in [AgentLifecycle::Working, AgentLifecycle::NeedsAttention] {
+            for source in [AgentStateSource::Integration, AgentStateSource::Heuristic] {
+                assert!(!releases_queued_prompt(state, source));
+            }
+        }
+    }
+
+    #[test]
+    fn a_free_agent_takes_a_queued_prompt_immediately() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        let session = launch_cat(&sink, &registry, "Queue idle");
+        registry.update_state(
+            &session.session_id,
+            AgentLifecycle::Done,
+            AgentStateSource::Integration,
+        );
+
+        // Queueing it would leave it waiting for an integration event that
+        // nothing is running to produce.
+        let depth = enqueue(
+            sink.as_ref(),
+            &registry,
+            &session.session_id,
+            &encode(b"queued-immediate\n"),
+        )
+        .unwrap();
+
+        assert_eq!(depth, 0);
+        assert!(received_within(
+            &collector,
+            &session.session_id,
+            "queued-immediate",
+            Duration::from_secs(3)
+        ));
+        registry.stop_all();
+    }
+
+    #[test]
+    fn a_busy_agent_holds_prompts_until_its_turn_ends() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        let session = launch_cat(&sink, &registry, "Queue busy");
+        registry.update_state(
+            &session.session_id,
+            AgentLifecycle::Working,
+            AgentStateSource::Integration,
+        );
+
+        assert_eq!(
+            enqueue(
+                sink.as_ref(),
+                &registry,
+                &session.session_id,
+                &encode(b"queued-first\n")
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            enqueue(
+                sink.as_ref(),
+                &registry,
+                &session.session_id,
+                &encode(b"queued-second\n")
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            registry
+                .session_summary(&session.session_id)
+                .unwrap()
+                .queued_prompts,
+            2
+        );
+        assert!(!received_within(
+            &collector,
+            &session.session_id,
+            "queued-first",
+            Duration::from_millis(300)
+        ));
+
+        // One turn end releases exactly one prompt, so a queue cannot empty
+        // itself into a CLI that has only reported finishing once.
+        deliver_next_queued(sink.as_ref(), &registry, &session.session_id);
+        assert!(received_within(
+            &collector,
+            &session.session_id,
+            "queued-first",
+            Duration::from_secs(3)
+        ));
+        assert_eq!(
+            registry
+                .session_summary(&session.session_id)
+                .unwrap()
+                .queued_prompts,
+            1
+        );
+        assert!(!received_within(
+            &collector,
+            &session.session_id,
+            "queued-second",
+            Duration::from_millis(300)
+        ));
+        registry.stop_all();
+    }
+
+    #[test]
+    fn a_queue_is_bounded_and_can_be_dropped() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        let session = launch_cat(&sink, &registry, "Queue bounds");
+        registry.update_state(
+            &session.session_id,
+            AgentLifecycle::Working,
+            AgentStateSource::Integration,
+        );
+
+        for index in 0..MAX_QUEUED_PROMPTS {
+            enqueue(
+                sink.as_ref(),
+                &registry,
+                &session.session_id,
+                &encode(format!("queued-{index}\n").as_bytes()),
+            )
+            .unwrap();
+        }
+        let refused = enqueue(
+            sink.as_ref(),
+            &registry,
+            &session.session_id,
+            &encode(b"one-too-many\n"),
+        );
+        assert!(refused.is_err(), "expected the queue to be bounded");
+
+        assert_eq!(
+            clear_queue(sink.as_ref(), &registry, &session.session_id).unwrap(),
+            MAX_QUEUED_PROMPTS
+        );
+        assert_eq!(
+            registry
+                .session_summary(&session.session_id)
+                .unwrap()
+                .queued_prompts,
+            0
+        );
+        registry.stop_all();
+    }
+
+    #[test]
+    fn an_empty_queued_prompt_is_refused() {
+        let collector = Arc::new(TestSink::default());
+        let sink: Arc<dyn AgentSink> = collector.clone();
+        let registry = Arc::new(AgentRegistry::new());
+        let session = launch_cat(&sink, &registry, "Queue empty");
+
+        assert!(enqueue(sink.as_ref(), &registry, &session.session_id, &encode(b"")).is_err());
+        registry.stop_all();
+    }
+
     #[test]
     fn broadcast_fans_out_to_each_selected_pty() {
         let collector = Arc::new(TestSink::default());
