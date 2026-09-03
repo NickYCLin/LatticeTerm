@@ -591,7 +591,7 @@ fn show_certificate_dialog(
     sender: oneshot::Sender<bool>,
     prompt_permit: OwnedSemaphorePermit,
 ) -> Result<(), String> {
-    let mut dialog = app
+    let dialog = app
         .dialog()
         .message(message)
         .title("Confirm RDP server identity")
@@ -601,9 +601,13 @@ fn show_certificate_dialog(
             "Cancel".to_string(),
         ));
     #[cfg(desktop)]
-    if let Some(window) = app.get_webview_window("main") {
-        dialog = dialog.parent(&window);
-    }
+    let dialog = {
+        let mut dialog = dialog;
+        if let Some(window) = app.get_webview_window("main") {
+            dialog = dialog.parent(&window);
+        }
+        dialog
+    };
     dialog.show(move |approved| {
         drop(prompt_permit);
         let _ = sender.send(approved);
