@@ -522,6 +522,14 @@ async fn agent_chat_respond(
     crate::agent_chat::respond(registry, &thread_id, &request_id, allow, message.as_deref()).await
 }
 
+/// The models a chat CLI offers right now; empty when it cannot say.
+#[tauri::command]
+async fn agent_chat_models(
+    definition_id: String,
+) -> Result<Vec<crate::agent_chat::ChatModelChoice>, String> {
+    crate::agent_chat::list_models(&definition_id).await
+}
+
 #[tauri::command]
 fn agent_broadcast(
     app: AppHandle,
@@ -2308,6 +2316,7 @@ pub fn run() {
             agent_chat_send,
             agent_chat_stop,
             agent_chat_respond,
+            agent_chat_models,
             agent_paste_clipboard_image,
             agent_export_transcript,
             agent_import_memory_handoff,

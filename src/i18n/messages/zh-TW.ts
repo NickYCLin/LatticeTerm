@@ -1008,7 +1008,9 @@ export const zhTW = {
   "chat.permission.full.hint":
     "CLI 會用你的帳號權限做任何事，不會再問你。只在完全信任這個工作目錄與提示內容時使用。",
   "chat.model": "模型",
-  "chat.model.placeholder": "留空使用 CLI 預設",
+  "chat.model.placeholder": "留空使用預設模型",
+  "chat.model.default": "預設",
+  "chat.model.loading": "正在讀取可用模型…",
   "chat.model.locked": "Codex 的模型在第一則訊息後就固定了",
   "chat.composer.placeholder": "輸入訊息；Enter 送出，Shift+Enter 換行",
   "chat.send": "送出",

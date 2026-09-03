@@ -22,8 +22,10 @@ import {
 import {
   chatPermissions,
   type ChatDefinitionId,
+  type ChatModelList,
   type ChatPermission,
 } from "../../app/agentChat";
+import { ModelField } from "./ModelField";
 import type { AgentAutomationsApi } from "../../app/useAgentAutomations";
 import { displayPath } from "../../app/displayPath";
 import { useI18n } from "../../i18n/context";
@@ -93,8 +95,12 @@ export function AutomationPane({
   onSelect,
   onDoneEditing,
   onOpenThread,
+  models,
+  loadModels,
 }: {
   automations: AgentAutomationsApi;
+  models: Record<ChatDefinitionId, ChatModelList>;
+  loadModels: (definitionId: ChatDefinitionId) => void;
   selectedId: string | null;
   /** True for a brand-new automation being composed. */
   editing: boolean;
@@ -118,6 +124,8 @@ export function AutomationPane({
         initial={initial}
         installed={installed}
         cliLabel={cliLabel}
+        models={models}
+        loadModels={loadModels}
         onCancel={() => {
           setEditingExisting(false);
           onDoneEditing();
@@ -256,12 +264,16 @@ function AutomationForm({
   initial,
   installed,
   cliLabel,
+  models,
+  loadModels,
   onSave,
   onCancel,
 }: {
   initial: AutomationDraft;
   installed: readonly ChatDefinitionId[];
   cliLabel: (id: ChatDefinitionId) => string;
+  models: Record<ChatDefinitionId, ChatModelList>;
+  loadModels: (definitionId: ChatDefinitionId) => void;
   onSave: (draft: AutomationDraft) => void;
   onCancel: () => void;
 }) {
@@ -397,15 +409,13 @@ function AutomationForm({
                   ))}
               </select>
             </label>
-            <label className="field">
-              <span className="field__label">{t("chat.model")}</span>
-              <input
-                className="input"
-                value={draft.model}
-                placeholder={t("chat.model.placeholder")}
-                onChange={(event) => patch({ model: event.target.value })}
-              />
-            </label>
+            <ModelField
+              definitionId={draft.definitionId}
+              value={draft.model}
+              models={models}
+              loadModels={loadModels}
+              onChange={(model) => patch({ model })}
+            />
           </div>
           <p className="chat-composer__hint">{t("automation.permission.hint")}</p>
 

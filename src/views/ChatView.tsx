@@ -36,6 +36,7 @@ import type { MessageKey } from "../i18n/messages/zh-TW";
 import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import { ChatMarkdown } from "../components/chat/ChatMarkdown";
+import { ModelField } from "../components/chat/ModelField";
 import {
   ChatIcon,
   ClockIcon,
@@ -243,6 +244,8 @@ export function ChatView({
               onSelect={setSelectedAutomationId}
               onDoneEditing={() => setComposingAutomation(false)}
               onOpenThread={openThread}
+              models={chat.models}
+              loadModels={chat.loadModels}
             />
           ) : (
             <EmptyState
@@ -507,19 +510,15 @@ function ThreadPane({
               ))}
             </select>
           </label>
-          <label className="field">
-            <span className="field__label">{t("chat.model")}</span>
-            <input
-              className="input"
-              value={thread.model}
-              placeholder={t("chat.model.placeholder")}
-              disabled={running || (thread.definitionId === "codex" && !fresh)}
-              title={
-                thread.definitionId === "codex" && !fresh ? t("chat.model.locked") : undefined
-              }
-              onChange={(event) => chat.updateThread(thread.id, { model: event.target.value })}
-            />
-          </label>
+          <ModelField
+            definitionId={thread.definitionId}
+            value={thread.model}
+            disabled={running || (thread.definitionId === "codex" && !fresh)}
+            title={thread.definitionId === "codex" && !fresh ? t("chat.model.locked") : undefined}
+            models={chat.models}
+            loadModels={chat.loadModels}
+            onChange={(model) => chat.updateThread(thread.id, { model })}
+          />
         </div>
         <p className="chat-composer__hint">{t(permissionHintKey[thread.permission])}</p>
         {thread.permission === "full" && (

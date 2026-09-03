@@ -1083,7 +1083,9 @@ export const en: Messages = {
   "chat.permission.full.hint":
     "The CLI acts with your full account rights and never asks. Use only when you fully trust this directory and the prompt.",
   "chat.model": "Model",
-  "chat.model.placeholder": "Leave empty for the CLI default",
+  "chat.model.placeholder": "Leave empty for the default model",
+  "chat.model.default": "Default",
+  "chat.model.loading": "Reading available models…",
   "chat.model.locked": "A Codex thread keeps the model chosen for its first message",
   "chat.composer.placeholder": "Type a message; Enter sends, Shift+Enter adds a line",
   "chat.send": "Send",
