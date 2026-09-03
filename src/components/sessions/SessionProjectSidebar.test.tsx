@@ -101,6 +101,7 @@ describe("session project sidebar", () => {
     expect(markup).toContain('class="session-tree__session is-active status-idle"');
     expect(markup).toContain('aria-label="工作階段狀態說明"');
     expect(markup).toContain('aria-controls="session-project-status-guide"');
+    expect(markup).not.toContain('status-working"><span aria-hidden="true"></span>執行中');
     expect(markup).toContain("移除「Codex」工作階段");
     expect(markup).toContain('placeholder="搜尋專案或工作階段"');
     expect(markup).toContain('role="combobox"');

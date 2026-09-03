@@ -129,6 +129,8 @@ export interface AgentLaunchRequest {
   seedInput?: string | null;
   /** Relaunches saved work and must not inject the new-session instructions. */
   restoreExistingSession?: boolean;
+  /** Ephemeral local config root for a Codex/Claude account profile. */
+  profileConfigPath?: string | null;
   workingDirectory: string;
   cols: number;
   rows: number;

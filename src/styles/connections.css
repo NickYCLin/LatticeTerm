@@ -1291,7 +1291,11 @@
 }
 
 .session-projects__title > span {
+  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-projects__add {
@@ -1656,6 +1660,9 @@
 }
 
 .session-tree__status > span {
+  position: relative;
+  display: grid;
+  place-items: center;
   width: 0.42rem;
   height: 0.42rem;
   border-radius: 999px;
@@ -1709,6 +1716,9 @@
 }
 
 .session-projects__status-guide i {
+  position: relative;
+  display: grid;
+  place-items: center;
   width: 0.42rem;
   height: 0.42rem;
   flex: 0 0 auto;
@@ -1731,6 +1741,34 @@
 
 .session-projects__status-guide .status-done {
   color: var(--ok);
+}
+
+/* A state is never encoded by colour alone: idle is hollow, attention is a
+   diamond, and completion has a check. The same shapes appear in the tree,
+   its fixed legend, and the in-terminal CLI switcher. */
+.session-tree__status.status-idle > span,
+.session-projects__status-guide .status-idle,
+.cli-switch__status.status-idle {
+  background: transparent;
+  border: 1.5px solid currentColor;
+  box-shadow: none;
+}
+
+.session-tree__status.status-attention > span,
+.session-projects__status-guide .status-attention,
+.cli-switch__status.status-attention {
+  border-radius: 0.08rem;
+  transform: rotate(45deg);
+}
+
+.session-tree__status.status-done > span::after,
+.session-projects__status-guide .status-done::after,
+.cli-switch__status.status-done::after {
+  content: "✓";
+  color: var(--surface-solid);
+  font-size: 0.45rem;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .session-tree__session.status-working .session-tree__session-select > svg {
@@ -1757,12 +1795,16 @@
   }
 }
 
-.session-tree__status.status-working > span {
+.session-tree__status.status-working > span,
+.session-projects__status-guide .status-working,
+.cli-switch__status.status-working {
   animation: session-status-pulse 1.8s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-tree__status.status-working > span {
+  .session-tree__status.status-working > span,
+  .session-projects__status-guide .status-working,
+  .cli-switch__status.status-working {
     animation: none;
   }
 }
@@ -1793,7 +1835,9 @@
    project row's plus button. */
 .session-launch-menu {
   position: fixed;
-  z-index: 120;
+  /* This portal must stay over terminal canvases and the mobile drawer. */
+  z-index: 200;
+  isolation: isolate;
   display: grid;
   gap: var(--space-2);
   max-height: calc(100vh - 1.5rem);
@@ -2359,6 +2403,9 @@
 
 /* Live state of each CLI in the pill row, matching the sidebar tree tones. */
 .cli-switch__status {
+  position: relative;
+  display: grid;
+  place-items: center;
   flex: none;
   width: 0.42rem;
   height: 0.42rem;

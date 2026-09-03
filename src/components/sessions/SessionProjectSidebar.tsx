@@ -530,7 +530,6 @@ export function SessionProjectSidebar({
         aria-label={label}
       >
         <span aria-hidden="true" />
-        {(status === "done" || status === "attention") && label}
       </span>
     );
   }
@@ -851,7 +850,7 @@ export function SessionProjectSidebar({
     >
       <div className="session-projects__title">
         <FolderIcon size={14} />
-        <span>{t("terminal.projects")}</span>
+        <span title={t("terminal.projects")}>{t("terminal.projects")}</span>
         <button
           type="button"
           className="icon-button icon-button--sm session-projects__status-help"

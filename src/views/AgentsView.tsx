@@ -8,6 +8,11 @@ import type {
 import { agentCatalogForDisplay } from "../app/useAgentSessions";
 import { copyTextToClipboard } from "../app/clipboardText";
 import { displayPath } from "../app/displayPath";
+import {
+  loadChatAccountProfiles,
+  profilesFor,
+  type ChatAccountProfile,
+} from "../app/chatAccountProfiles";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import {
   MAX_AGENT_BROADCAST_TARGETS,
@@ -98,6 +103,10 @@ export function AgentsView({
   const [workingDirectory, setWorkingDirectory] = useState("");
   const [launchNote, setLaunchNote] = useState("");
   const [launching, setLaunching] = useState<string | null>(null);
+  const [accountProfiles] = useState<ChatAccountProfile[]>(() =>
+    typeof localStorage === "undefined" ? [] : loadChatAccountProfiles(localStorage),
+  );
+  const [selectedAccountProfile, setSelectedAccountProfile] = useState<Record<string, string>>({});
   const [installing, setInstalling] = useState<string | null>(null);
   const [pendingInstall, setPendingInstall] = useState<AgentDefinition | null>(null);
   const [copiedInstallSource, setCopiedInstallSource] = useState<string | null>(null);
@@ -193,6 +202,9 @@ export function AgentsView({
     [agents.sessions],
   );
   function launchDraft(definition: AgentDefinition) {
+    const profile = profilesFor(accountProfiles, definition.id).find(
+      (candidate) => candidate.id === selectedAccountProfile[definition.id],
+    );
     return {
       definitionId: definition.id,
       label: "",
@@ -200,6 +212,7 @@ export function AgentsView({
       arguments: [],
       resumeSessionId: null,
       note: launchNote.trim(),
+      profileConfigPath: profile?.configDirectory ?? null,
       workingDirectory,
     };
   }
@@ -660,6 +673,24 @@ export function AgentsView({
                       <small>{definition.account.method}</small>
                     )}
                   </div>
+                )}
+                {definition.installed && profilesFor(accountProfiles, definition.id).length > 0 && (
+                  <label className="field">
+                    <span className="field__label">{t("agents.account.profile")}</span>
+                    <select
+                      className="select"
+                      value={selectedAccountProfile[definition.id] ?? ""}
+                      onChange={(event) => setSelectedAccountProfile((current) => ({
+                        ...current,
+                        [definition.id]: event.currentTarget.value,
+                      }))}
+                    >
+                      <option value="">{t("agents.account.default")}</option>
+                      {profilesFor(accountProfiles, definition.id).map((profile) => (
+                        <option key={profile.id} value={profile.id}>{profile.name}</option>
+                      ))}
+                    </select>
+                  </label>
                 )}
                 {!definition.installed && definition.install.displayCommand && (
                   <code className="agent-card__install-command">
