@@ -246,6 +246,53 @@
   border-color: var(--line-strong);
 }
 
+/* Most forms put the class on the native control itself. Give those selects
+   the same height, focus ring and surface language as text fields instead of
+   falling back to the browser/OS default. */
+select.select {
+  display: block;
+  width: 100%;
+  min-width: 10rem;
+  height: 2.5rem;
+  padding: 0 2.25rem 0 var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  appearance: none;
+  background-color: var(--surface-hover);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 1rem) 50%,
+    calc(100% - 0.7rem) 50%;
+  background-repeat: no-repeat;
+  background-size: 0.35rem 0.35rem;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    box-shadow var(--duration-fast) var(--ease),
+    background-color var(--duration-fast) var(--ease);
+}
+
+select.select:hover:not(:disabled) {
+  border-color: var(--text-faint);
+  background-color: var(--surface-active);
+}
+
+select.select:focus-visible {
+  border-color: var(--accent);
+  background-color: var(--surface-active);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+
+select.select:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .segmented {
   display: inline-flex;
   padding: 3px;

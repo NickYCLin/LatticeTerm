@@ -421,8 +421,12 @@ button.chat-chip:hover {
 }
 
 .chat-settings .field {
-  min-width: 9rem;
+  min-width: 11rem;
   margin: 0;
+}
+
+.chat-settings .field:first-child {
+  flex: 1 1 15rem;
 }
 
 .chat-settings .field--grow {

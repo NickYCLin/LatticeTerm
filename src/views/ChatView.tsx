@@ -565,31 +565,33 @@ function ThreadPane({
         </div>
         {settingsOpen && (
           <div className="chat-settings" id={`chat-settings-${thread.id}`}>
-            <label className="field">
-              <span className="field__label">{t("chat.cli")}</span>
-              <select
-                className="select"
-                value={thread.definitionId}
-                disabled={!fresh}
-                onChange={(event) => {
-                  const definitionId = event.target.value as ChatDefinitionId;
-                  chat.updateThread(thread.id, {
-                    definitionId,
-                    // A permission the new assistant cannot honour falls back
-                    // to its own default rather than being sent and refused.
-                    ...(permissionsFor(definitionId).includes(thread.permission)
-                      ? {}
-                      : { permission: defaultPermission(definitionId) }),
-                  });
-                }}
-              >
-                {chat.supported.map((id) => (
-                  <option key={id} value={id}>
-                    {cliLabel(id)}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <ModelField
+              definitionId={thread.definitionId}
+              definitionIds={
+                fresh
+                  ? installed.length > 0
+                    ? installed
+                    : chat.supported
+                  : [thread.definitionId]
+              }
+              cliLabel={cliLabel}
+              value={thread.model}
+              disabled={running || (thread.definitionId === "codex" && !fresh)}
+              title={thread.definitionId === "codex" && !fresh ? t("chat.model.locked") : undefined}
+              models={chat.models}
+              loadModels={chat.loadModels}
+              onChange={({ definitionId, model }) => {
+                chat.updateThread(thread.id, {
+                  definitionId,
+                  model,
+                  // A permission the new assistant cannot honour falls back
+                  // to its own default rather than being sent and refused.
+                  ...(permissionsFor(definitionId).includes(thread.permission)
+                    ? {}
+                    : { permission: defaultPermission(definitionId) }),
+                });
+              }}
+            />
             <div className="field field--grow">
               <span className="field__label">{t("chat.directory")}</span>
               <div className="chat-directory">
@@ -628,15 +630,6 @@ function ThreadPane({
                 ))}
               </select>
             </label>
-            <ModelField
-              definitionId={thread.definitionId}
-              value={thread.model}
-              disabled={running || (thread.definitionId === "codex" && !fresh)}
-              title={thread.definitionId === "codex" && !fresh ? t("chat.model.locked") : undefined}
-              models={chat.models}
-              loadModels={chat.loadModels}
-              onChange={(model) => chat.updateThread(thread.id, { model })}
-            />
             <p className="chat-settings__hint">{t(permissionHintKey[thread.permission])}</p>
           </div>
         )}

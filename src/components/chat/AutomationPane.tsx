@@ -356,22 +356,15 @@ function AutomationForm({
             )}
           </label>
           <div className="chat-settings">
-            <label className="field">
-              <span className="field__label">{t("chat.cli")}</span>
-              <select
-                className="select"
-                value={draft.definitionId}
-                onChange={(event) =>
-                  patch({ definitionId: event.target.value as ChatDefinitionId })
-                }
-              >
-                {cliChoices.map((id) => (
-                  <option key={id} value={id}>
-                    {cliLabel(id)}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <ModelField
+              definitionId={draft.definitionId}
+              definitionIds={cliChoices}
+              cliLabel={cliLabel}
+              value={draft.model}
+              models={models}
+              loadModels={loadModels}
+              onChange={({ definitionId, model }) => patch({ definitionId, model })}
+            />
             <div className="field field--grow">
               <span className="field__label">{t("chat.directory")}</span>
               <div className="chat-directory">
@@ -409,13 +402,6 @@ function AutomationForm({
                   ))}
               </select>
             </label>
-            <ModelField
-              definitionId={draft.definitionId}
-              value={draft.model}
-              models={models}
-              loadModels={loadModels}
-              onChange={(model) => patch({ model })}
-            />
           </div>
           <p className="chat-composer__hint">{t("automation.permission.hint")}</p>
 

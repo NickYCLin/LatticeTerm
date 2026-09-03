@@ -241,6 +241,7 @@ impl AgentChatRegistry {
 enum Dialect {
     Claude,
     Codex,
+    Gemini,
 }
 
 impl Dialect {
@@ -248,6 +249,7 @@ impl Dialect {
         match definition_id {
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
+            "gemini" => Some(Self::Gemini),
             _ => None,
         }
     }
@@ -256,7 +258,7 @@ impl Dialect {
 /// Which CLIs chat mode can drive. Only those with a documented headless
 /// JSON mode qualify; anything else stays a terminal in the Agent Fleet.
 pub fn supported_definitions() -> &'static [&'static str] {
-    &["claude", "codex"]
+    &["claude", "codex", "gemini"]
 }
 
 fn validate_id(value: &str, label: &str) -> Result<(), String> {
@@ -416,6 +418,30 @@ fn turn_arguments(
             // Read the prompt from stdin.
             args.push("-".into());
         }
+        Dialect::Gemini => {
+            args.extend(["--output-format", "stream-json"].map(OsString::from));
+            args.push("--approval-mode".into());
+            args.push(
+                match permission {
+                    ChatPermission::ReadOnly => "plan",
+                    ChatPermission::WorkspaceWrite => "auto_edit",
+                    ChatPermission::Full => "yolo",
+                    // Refused before argument construction.
+                    ChatPermission::Ask => "plan",
+                }
+                .into(),
+            );
+            if let Some(model) = model {
+                args.push("--model".into());
+                args.push(model.into());
+            }
+            if let Some(id) = native_session_id {
+                args.push("--resume".into());
+                args.push(id.into());
+            }
+            // A piped stdin makes Gemini enter headless mode without putting
+            // the user's prompt in the process list.
+        }
     }
     args
 }
@@ -426,6 +452,10 @@ fn headless_command(executable: &Path) -> Command {
     let (program, prefix) = crate::agent::launch_parts(executable);
     let mut command = Command::new(&program);
     command.args(prefix);
+    #[cfg(windows)]
+    if let Some(path) = crate::agent::node_runtime_path_for_script(executable) {
+        command.env("PATH", path);
+    }
     // A chat turn is its own conversation, not a hook target of whatever
     // launched LatticeTerm. Inherited markers would make the CLI refuse to
     // nest, or report its progress to a fleet session it does not belong to.
@@ -466,17 +496,51 @@ pub struct ChatModelChoice {
 
 const MODEL_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
+fn gemini_model_choices() -> Vec<ChatModelChoice> {
+    vec![
+        ChatModelChoice {
+            value: String::new(),
+            label: "Auto (default)".to_string(),
+            description: None,
+            is_default: true,
+        },
+        ChatModelChoice {
+            value: "pro".to_string(),
+            label: "Pro".to_string(),
+            description: None,
+            is_default: false,
+        },
+        ChatModelChoice {
+            value: "flash".to_string(),
+            label: "Flash".to_string(),
+            description: None,
+            is_default: false,
+        },
+        ChatModelChoice {
+            value: "flash-lite".to_string(),
+            label: "Flash Lite".to_string(),
+            description: None,
+            is_default: false,
+        },
+    ]
+}
+
 /// Asks the CLI which models it offers, without starting a conversation.
 ///
 /// Claude lists them in its `initialize` handshake reply; Codex answers
-/// `model/list` on its app-server protocol. Either process is killed as
-/// soon as the answer is in. The list is whatever the CLI says today, not
-/// something LatticeTerm knows on its own.
+/// `model/list` on its app-server protocol. Either process is killed as soon
+/// as the answer is in. Gemini exposes documented routing aliases instead of
+/// a non-interactive list API, so those stable aliases are returned directly.
 pub async fn list_models(definition_id: &str) -> Result<Vec<ChatModelChoice>, String> {
     let dialect = Dialect::from_definition(definition_id)
         .ok_or_else(|| "This CLI has no chat mode.".to_string())?;
     let executable = crate::agent::catalog_executable(definition_id)
         .ok_or_else(|| "This CLI is not installed.".to_string())?;
+    if dialect == Dialect::Gemini {
+        // Gemini's documented aliases are deliberately stable while their
+        // concrete targets can change with account access and CLI updates.
+        return Ok(gemini_model_choices());
+    }
     let mut command = headless_command(&executable);
     let (requests, done_id): (Vec<String>, &str) = match dialect {
         Dialect::Claude => {
@@ -528,6 +592,7 @@ pub async fn list_models(definition_id: &str) -> Result<Vec<ChatModelChoice>, St
                 "2",
             )
         }
+        Dialect::Gemini => unreachable!("Gemini model aliases return without a subprocess"),
     };
     let mut child = command
         .spawn()
@@ -649,6 +714,7 @@ fn models_from_reply(
                     .collect(),
             )
         }
+        Dialect::Gemini => None,
     }
 }
 
@@ -1031,6 +1097,7 @@ fn parse_line(dialect: Dialect, state: &mut TurnState, line: &str) -> Vec<ChatEv
     match dialect {
         Dialect::Claude => parse_claude(state, &value),
         Dialect::Codex => parse_codex(state, &value),
+        Dialect::Gemini => parse_gemini(state, &value),
     }
 }
 
@@ -1452,6 +1519,128 @@ fn parse_codex(state: &mut TurnState, value: &Value) -> Vec<ChatEvent> {
     events
 }
 
+fn parse_gemini(state: &mut TurnState, value: &Value) -> Vec<ChatEvent> {
+    let mut events = Vec::new();
+    match str_field(value, "type") {
+        Some("init") => {
+            state.native_session_id = str_field(value, "session_id").map(str::to_string);
+            events.push(ChatEvent::Started {
+                native_session_id: state.native_session_id.clone(),
+                model: str_field(value, "model").map(str::to_string),
+            });
+        }
+        Some("message") if str_field(value, "role") == Some("assistant") => {
+            let Some(content) = str_field(value, "content") else {
+                return events;
+            };
+            if value.get("delta").and_then(Value::as_bool).unwrap_or(false) {
+                events.push(ChatEvent::TextDelta {
+                    item_id: "gemini-message".to_string(),
+                    delta: content.to_string(),
+                });
+            } else {
+                events.push(ChatEvent::Text {
+                    item_id: "gemini-message".to_string(),
+                    text: content.to_string(),
+                });
+            }
+        }
+        Some("tool_use") => {
+            let name = str_field(value, "tool_name").unwrap_or("tool").to_string();
+            let parameters = value.get("parameters").cloned().unwrap_or(Value::Null);
+            events.push(ChatEvent::ToolStarted {
+                item_id: str_field(value, "tool_id")
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "gemini-tool".to_string()),
+                summary: gemini_tool_summary(&name, &parameters),
+                name,
+            });
+        }
+        Some("tool_result") => {
+            let output = value
+                .get("output")
+                .map(json_value_text)
+                .filter(|text| !text.is_empty())
+                .or_else(|| {
+                    value
+                        .get("error")
+                        .and_then(|error| str_field(error, "message"))
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            events.push(ChatEvent::ToolFinished {
+                item_id: str_field(value, "tool_id")
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "gemini-tool".to_string()),
+                name: None,
+                summary: None,
+                output: bounded_output(&output),
+                is_error: str_field(value, "status") == Some("error")
+                    || value.get("error").is_some_and(|error| !error.is_null()),
+            });
+        }
+        Some("error") => {
+            let message = truncate(
+                str_field(value, "message").unwrap_or("Gemini CLI reported an error."),
+                2048,
+            );
+            if str_field(value, "severity") == Some("error") {
+                state.error = Some(message.clone());
+            }
+            events.push(ChatEvent::Notice { message });
+        }
+        Some("result") => {
+            state.turn_complete = true;
+            state.duration_ms = value
+                .get("stats")
+                .and_then(|stats| stats.get("duration_ms"))
+                .and_then(Value::as_u64);
+            if let Some(stats) = value.get("stats") {
+                state.usage = Some(ChatUsage {
+                    input_tokens: u64_field(stats, "input_tokens"),
+                    output_tokens: u64_field(stats, "output_tokens"),
+                    cache_read_tokens: u64_field(stats, "cached"),
+                    cache_write_tokens: 0,
+                    reasoning_tokens: 0,
+                });
+            }
+            if str_field(value, "status") == Some("success") {
+                state.error = None;
+            } else if state.error.is_none() {
+                state.error = Some("Gemini CLI reported an error.".to_string());
+            }
+        }
+        _ => {}
+    }
+    events
+}
+
+fn gemini_tool_summary(name: &str, parameters: &Value) -> String {
+    let keys: &[&str] = match name {
+        "run_shell_command" => &["command"],
+        "read_file" | "write_file" | "replace" => &["file_path", "path"],
+        "glob" | "glob_search" => &["pattern"],
+        "grep_search" => &["query", "pattern"],
+        "web_fetch" => &["url"],
+        "google_web_search" => &["query"],
+        _ => &[],
+    };
+    let summary = keys
+        .iter()
+        .find_map(|key| str_field(parameters, key))
+        .map(str::to_string)
+        .unwrap_or_else(|| json_value_text(parameters));
+    truncate(summary.lines().next().unwrap_or_default(), 200)
+}
+
+fn json_value_text(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
 fn bounded_output(output: &str) -> String {
     if output.len() <= MAX_TOOL_OUTPUT_BYTES {
         return output.to_string();
@@ -1719,8 +1908,23 @@ mod tests {
         .is_none());
     }
 
+    #[test]
+    fn gemini_uses_its_documented_routing_aliases() {
+        assert_eq!(supported_definitions(), ["claude", "codex", "gemini"]);
+        let models = gemini_model_choices();
+        assert_eq!(models[0].value, "");
+        assert!(models[0].is_default);
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.value.as_str())
+                .collect::<Vec<_>>(),
+            ["", "pro", "flash", "flash-lite"]
+        );
+    }
+
     /// Asks a real CLI for its models. Ignored: needs the CLI installed and
-    /// logged in. `LATTICETERM_CHAT_E2E=claude|codex cargo test list_models -- --ignored`.
+    /// logged in. `LATTICETERM_CHAT_E2E=claude|codex|gemini cargo test list_models -- --ignored`.
     #[test]
     #[ignore]
     fn a_real_cli_lists_its_models() {
@@ -1799,6 +2003,57 @@ mod tests {
         let raw = r#"{"type":"turn.failed","error":{"message":"Model overloaded"}}"#;
         let (state, _) = lines(Dialect::Codex, raw);
         assert_eq!(state.error.as_deref(), Some("Model overloaded"));
+    }
+
+    #[test]
+    fn gemini_stream_reports_text_tools_usage_and_session() {
+        // Captured shape from Gemini CLI's documented stream-json protocol.
+        let raw = r#"{"type":"init","timestamp":"2026-09-03T00:00:00Z","session_id":"87cc4aa7-b190-4a9d-a709-b7f9f9c90001","model":"gemini-2.5-flash"}
+{"type":"message","timestamp":"2026-09-03T00:00:01Z","role":"assistant","content":"I will inspect it.","delta":true}
+{"type":"tool_use","timestamp":"2026-09-03T00:00:02Z","tool_name":"read_file","tool_id":"tool-1","parameters":{"file_path":"/work/README.md"}}
+{"type":"tool_result","timestamp":"2026-09-03T00:00:03Z","tool_id":"tool-1","status":"success","output":"hello"}
+{"type":"message","timestamp":"2026-09-03T00:00:04Z","role":"assistant","content":" Done.","delta":true}
+{"type":"result","timestamp":"2026-09-03T00:00:05Z","status":"success","stats":{"input_tokens":21,"output_tokens":7,"cached":3,"duration_ms":1200}}"#;
+        let (state, events) = lines(Dialect::Gemini, raw);
+
+        assert_eq!(
+            events[0],
+            ChatEvent::Started {
+                native_session_id: Some("87cc4aa7-b190-4a9d-a709-b7f9f9c90001".to_string()),
+                model: Some("gemini-2.5-flash".to_string()),
+            }
+        );
+        assert_eq!(
+            events[2],
+            ChatEvent::ToolStarted {
+                item_id: "tool-1".to_string(),
+                name: "read_file".to_string(),
+                summary: "/work/README.md".to_string(),
+            }
+        );
+        assert_eq!(
+            events[3],
+            ChatEvent::ToolFinished {
+                item_id: "tool-1".to_string(),
+                name: None,
+                summary: None,
+                output: "hello".to_string(),
+                is_error: false,
+            }
+        );
+        assert_eq!(
+            state.usage,
+            Some(ChatUsage {
+                input_tokens: 21,
+                output_tokens: 7,
+                cache_read_tokens: 3,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+            })
+        );
+        assert_eq!(state.duration_ms, Some(1200));
+        assert!(state.turn_complete);
+        assert!(state.error.is_none());
     }
 
     #[test]
@@ -1887,6 +2142,35 @@ mod tests {
             "--dangerously-bypass-approvals-and-sandbox"
         )));
         assert_eq!(args.last(), Some(&OsString::from("-")));
+    }
+
+    #[test]
+    fn gemini_arguments_keep_the_prompt_on_stdin_and_map_permissions() {
+        let args = turn_arguments(
+            Dialect::Gemini,
+            Path::new("/work"),
+            ChatPermission::WorkspaceWrite,
+            Some("flash"),
+            Some("87cc4aa7-b190-4a9d-a709-b7f9f9c90001"),
+        );
+        let args: Vec<String> = args
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--output-format",
+                "stream-json",
+                "--approval-mode",
+                "auto_edit",
+                "--model",
+                "flash",
+                "--resume",
+                "87cc4aa7-b190-4a9d-a709-b7f9f9c90001",
+            ]
+        );
+        assert!(!args.iter().any(|argument| argument.contains("prompt")));
     }
 
     #[test]

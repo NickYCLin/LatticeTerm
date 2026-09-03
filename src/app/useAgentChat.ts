@@ -54,7 +54,7 @@ async function events() {
 
 const EVENT_CHAT = "agent-chat://event";
 const SAVE_DELAY_MS = 400;
-const FALLBACK_SUPPORTED: ChatDefinitionId[] = ["claude", "codex"];
+const FALLBACK_SUPPORTED: ChatDefinitionId[] = ["claude", "codex", "gemini"];
 
 export interface ChatThreadSettings {
   definitionId: ChatDefinitionId;
@@ -108,6 +108,7 @@ export function useAgentChat(): AgentChatApi {
   const [models, setModels] = useState<Record<ChatDefinitionId, ChatModelList>>({
     claude: { state: "idle" },
     codex: { state: "idle" },
+    gemini: { state: "idle" },
   });
   const modelsRef = useRef(models);
   modelsRef.current = models;
@@ -150,7 +151,8 @@ export function useAgentChat(): AgentChatApi {
         .then((ids) => {
           if (disposed) return;
           const known = ids.filter(
-            (id): id is ChatDefinitionId => id === "claude" || id === "codex",
+            (id): id is ChatDefinitionId =>
+              id === "claude" || id === "codex" || id === "gemini",
           );
           if (known.length > 0) setSupported(known);
         })

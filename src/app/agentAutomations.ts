@@ -313,7 +313,9 @@ function isAutomation(value: unknown): value is Automation {
     typeof automation.id === "string" &&
     typeof automation.name === "string" &&
     typeof automation.instructions === "string" &&
-    (automation.definitionId === "claude" || automation.definitionId === "codex") &&
+    (automation.definitionId === "claude" ||
+      automation.definitionId === "codex" ||
+      automation.definitionId === "gemini") &&
     typeof automation.workingDirectory === "string" &&
     typeof automation.permission === "string" &&
     isSchedule(automation.schedule) &&

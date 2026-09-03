@@ -4204,6 +4204,16 @@ fn configure_node_runtime_for_script(command: &mut CommandBuilder, executable: &
     );
 }
 
+/// The bounded PATH a non-PTY child should use for an npm `.cmd` shim.
+/// Agent chat uses Tokio rather than `portable_pty::CommandBuilder`, but it
+/// needs the same stale-Explorer-PATH protection as an interactive terminal.
+#[cfg(windows)]
+pub(crate) fn node_runtime_path_for_script(executable: &Path) -> Option<OsString> {
+    let mut command = CommandBuilder::new("cmd.exe");
+    configure_node_runtime_for_script(&mut command, executable);
+    command.get_env("PATH").map(OsStr::to_os_string)
+}
+
 #[cfg(not(windows))]
 pub(crate) fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
     (executable.as_os_str().to_os_string(), Vec::new())
@@ -8394,6 +8404,7 @@ notify = ["notify.exe", "turn-ended"]"#,
     ///
     /// `/bin/cat` echoes whatever it is given, so this reports whether the
     /// bytes were actually written to the terminal.
+    #[cfg(unix)]
     fn received_within(
         collector: &TestSink,
         session_id: &str,
@@ -8433,6 +8444,7 @@ notify = ["notify.exe", "turn-ended"]"#,
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_free_agent_takes_a_queued_prompt_immediately() {
         let collector = Arc::new(TestSink::default());
@@ -8465,6 +8477,7 @@ notify = ["notify.exe", "turn-ended"]"#,
         registry.stop_all();
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_busy_agent_holds_prompts_until_its_turn_ends() {
         let collector = Arc::new(TestSink::default());
@@ -8536,6 +8549,7 @@ notify = ["notify.exe", "turn-ended"]"#,
         registry.stop_all();
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_queue_is_bounded_and_can_be_dropped() {
         let collector = Arc::new(TestSink::default());
@@ -8579,6 +8593,7 @@ notify = ["notify.exe", "turn-ended"]"#,
         registry.stop_all();
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_empty_queued_prompt_is_refused() {
         let collector = Arc::new(TestSink::default());

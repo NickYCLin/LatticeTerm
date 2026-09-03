@@ -7,7 +7,7 @@
  * on its own. The hook in `useAgentChat` wires it to Tauri.
  */
 
-export type ChatDefinitionId = "claude" | "codex";
+export type ChatDefinitionId = "claude" | "codex" | "gemini";
 
 /** What the CLI may do during a turn; see `ChatPermission` in Rust. */
 export type ChatPermission = "ask" | "readOnly" | "workspaceWrite" | "full";
@@ -465,7 +465,9 @@ function isThread(value: unknown): value is ChatThread {
   const thread = value as Partial<ChatThread>;
   return (
     typeof thread.id === "string" &&
-    (thread.definitionId === "claude" || thread.definitionId === "codex") &&
+    (thread.definitionId === "claude" ||
+      thread.definitionId === "codex" ||
+      thread.definitionId === "gemini") &&
     typeof thread.workingDirectory === "string" &&
     chatPermissions.includes(thread.permission as ChatPermission) &&
     Array.isArray(thread.items)

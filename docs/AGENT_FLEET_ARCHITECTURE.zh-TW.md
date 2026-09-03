@@ -55,17 +55,17 @@ Adapter 會把舊工作區的識別值當成單一 argument，不經 shell；長
 
 Agent Fleet 的每個工作階段都是真正的 PTY，但不是每個人都想面對終端機。對話模式（`src-tauri/src/agent_chat.rs`、`src/views/ChatView.tsx`）提供 Codex Desktop 風格的聊天視窗，底層仍是同一批 CLI：
 
-- **一輪一個程序**。每則訊息以該 CLI 的官方 headless JSON 模式啟動一次程序：Claude Code 是 `claude -p --output-format stream-json --verbose --include-partial-messages`，Codex 是 `codex exec --json`。提示從 stdin 送入並關閉，不放在命令列參數，因此不受參數長度限制也不會出現在程序清單。程序以使用者權限執行，工作目錄由使用者選擇並經 canonicalize 與 is_dir 驗證。
-- **續接靠 CLI 自己的對話 ID**。第一輪的 `system/init`（Claude）或 `thread.started`（Codex）回報的 ID 隨 `Started`／`Finished` 事件交給前端，下一輪以 `claude --resume <id>`、`codex exec … resume <id> -` 續接。LatticeTerm 不讀寫任何 CLI 的原生對話檔；Codex 的模型在第一輪後固定（`resume` 不提供換模型），Claude 每輪都可指定 `--model`。
-- **事件正規化**。Rust 逐行解析 JSON，映射成 `started`、`textDelta`、`text`、`reasoning`、`toolStarted`、`toolFinished`、`notice`、`finished` 八種事件，經 `agent-chat://event` 送到 WebView；前端只依 item id 就地更新，不理解各家格式。Claude 的 `stream_event` 提供逐字 delta，`assistant` 訊息提供最終全文；Codex 是 item 級事件。工具卡片摘要取最能辨識的欄位（Bash 的 command、Read／Edit 的 file_path、Codex 的 command 或變更檔案清單），工具輸出每張最多 8 KiB，單行最多 16 MiB，超過就跳過並提示。
-- **權限以效果命名**。`readOnly`／`workspaceWrite`／`full` 分別映射到 Claude `--permission-mode plan`／`acceptEdits`／`bypassPermissions` 與 Codex `-s read-only`／`-s workspace-write`／`--dangerously-bypass-approvals-and-sandbox`。前三種是一次性回合：Claude 在 `acceptEdits` 下需要審核的指令會被拒絕並在回覆中說明；`full` 在介面上有明確警告。第四種 `ask` 只有 Claude 有：以 `--permission-mode manual --input-format stream-json --permission-prompt-tool stdio` 啟動，stdin 整輪保持開啟，先送 SDK 的 `initialize` 握手再把提示包成 `user` 訊息；CLI 規則放行不了的工具呼叫會以 `control_request`（`can_use_tool`）送出，Rust 轉成 `approvalRequested` 事件並把原始 input 留在 registry，使用者按允許／拒絕後以 `control_response` 回寫（allow 會原樣回傳 `updatedInput`，deny 附理由）；看到 `result` 就關閉 stdin，程序才會結束。停止或程序結束時未回答的卡片標成失效。Codex 的 `exec` 沒有對應機制，介面不提供該選項，後端也會拒絕。
+- **一輪一個程序**。每則訊息以該 CLI 的官方 headless JSON 模式啟動一次程序：Claude Code 是 `claude -p --output-format stream-json --verbose --include-partial-messages`，Codex 是 `codex exec --json`，Gemini 是 `gemini --output-format stream-json`。提示從 stdin 送入並關閉，不放在命令列參數，因此不受參數長度限制也不會出現在程序清單。程序以使用者權限執行，工作目錄由使用者選擇並經 canonicalize 與 is_dir 驗證。
+- **續接靠 CLI 自己的對話 ID**。第一輪的 `system/init`（Claude）、`thread.started`（Codex）或 `init`（Gemini）回報的 ID 隨 `Started`／`Finished` 事件交給前端，下一輪以 `claude --resume <id>`、`codex exec … resume <id> -`、`gemini --resume <id>` 續接。LatticeTerm 不讀寫任何 CLI 的原生對話檔；Codex 的模型在第一輪後固定（`resume` 不提供換模型），Claude 與 Gemini 每輪都可指定 `--model`。
+- **事件正規化**。Rust 逐行解析 JSON，映射成 `started`、`textDelta`、`text`、`reasoning`、`toolStarted`、`toolFinished`、`notice`、`finished` 八種事件，經 `agent-chat://event` 送到 WebView；前端只依 item id 就地更新，不理解各家格式。Claude 的 `stream_event` 與 Gemini 的 `message` 提供逐字 delta，Codex 則是 item 級事件。工具卡片摘要取最能辨識的欄位（Bash／Gemini shell 的 command、Read／Edit 的 file_path、Codex 的 command 或變更檔案清單），工具輸出每張最多 8 KiB，單行最多 16 MiB，超過就跳過並提示。
+- **權限以效果命名**。`readOnly`／`workspaceWrite`／`full` 分別映射到 Claude `--permission-mode plan`／`acceptEdits`／`bypassPermissions`、Codex `-s read-only`／`-s workspace-write`／`--dangerously-bypass-approvals-and-sandbox`，以及 Gemini `--approval-mode plan`／`auto_edit`／`yolo`。前三種是一次性回合：Claude 與 Gemini 在編輯模式下遇到仍需要審核的指令會拒絕並在回覆中說明；`full` 在介面上有明確警告。第四種 `ask` 只有 Claude 有：以 `--permission-mode manual --input-format stream-json --permission-prompt-tool stdio` 啟動，stdin 整輪保持開啟，先送 SDK 的 `initialize` 握手再把提示包成 `user` 訊息；CLI 規則放行不了的工具呼叫會以 `control_request`（`can_use_tool`）送出，Rust 轉成 `approvalRequested` 事件並把原始 input 留在 registry，使用者按允許／拒絕後以 `control_response` 回寫（allow 會原樣回傳 `updatedInput`，deny 附理由）；看到 `result` 就關閉 stdin，程序才會結束。停止或程序結束時未回答的卡片標成失效。Codex 與 Gemini 的非互動模式沒有對應機制，介面不提供該選項，後端也會拒絕。
 - **環境隔離**。子程序移除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`HERDR_*` 與 `LATTICETERM_AGENT_*`：對話回合不是任何 Fleet 工作階段的 hook 目標，也不該因 LatticeTerm 本身由某個 CLI 啟動而拒絕巢狀執行。
 - **停止與退出**。每個對話同時只允許一輪；「停止」對該子程序 `start_kill`，`Finished` 仍會在程序結束後送出並標記錯誤。應用程式離開時終止所有回合。
 - **保存邊界**。對話串（CLI、工作目錄、權限、模型、CLI 對話 ID、訊息）存在 WebView 的 `localStorage`，每串最多 300 則、工具輸出截到 2 KiB、總量 4 MiB、最多 50 串，超過先丟最舊的；正在進行的回合不會被保存。完整逐字稿仍由各 CLI 自己保存。回覆以自家的小型 Markdown 讀取器渲染（段落、標題、清單、程式碼區塊、行內程式碼與粗體），沒有 HTML 直通，模型輸出不可能注入標記。
-- **模型清單**。`agent_chat_models` 不打任何模型就取得清單：Claude 送一個 `initialize` 握手，回應的 `models[]` 含別名（`default`、`opus[1m]`、`sonnet`、`haiku`…）與說明；Codex 啟動 `codex app-server`，`initialize` → `initialized` → `model/list`，略過 `hidden`。拿到即 kill，25 秒逾時；`default` 對應空值＝不傳 `--model`。前端每個助理每次啟動只問一次，問不到退回文字輸入。
+- **單一模型清單**。設定區不再分開切助理與模型；`ModelField` 以助理分組，在一個下拉選單裡同時決定 CLI 與模型。Claude 送 `initialize` 握手取得 `models[]`，Codex 以 `app-server` 的 `model/list` 取得並略過 `hidden`；Gemini 沒有非互動模型列舉 API，因此提供官方穩定的 Auto／Pro／Flash／Flash Lite 路由別名。空值代表該 CLI 預設模型，既有但清單未知的模型仍會保留為可選值。
 - **Windows**。以管線啟動主控台程式會彈出黑視窗，所有 headless 程序統一經 `headless_command` 建立並加 `CREATE_NO_WINDOW`。
 - **側欄資料夾**。對話清單沿用工作項目側欄的 `sessionSidebarLayout` 模型（另一個儲存鍵），節點 id 為 `thread:<id>`；資料夾巢狀、收合、雙擊改名、指標拖曳搬移與排序，刪除資料夾時內容移到上一層。
-- **驗證邊界**。單元測試以實際擷取的 Claude／Codex 事件驗證解析與參數組裝；另有 `#[ignore]` 的端對端測試會真的跑一輪（`LATTICETERM_CHAT_E2E=claude|codex cargo test -- --ignored`），本次已對兩個 CLI 各執行一次通過；`ask` 模式另有一個端對端測試，會真的讓 Claude 對 WebFetch 提出核准、由測試放行並確認回合自行結束。
+- **驗證邊界**。單元測試以實際協定形狀的 Claude／Codex／Gemini 事件驗證解析與參數組裝；另有 `#[ignore]` 的端對端測試可真的跑一輪（`LATTICETERM_CHAT_E2E=claude|codex|gemini cargo test -- --ignored`）；`ask` 模式另有一個端對端測試，會真的讓 Claude 對 WebFetch 提出核准、由測試放行並確認回合自行結束。
 
 ### 排程任務
 
@@ -142,7 +142,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態或用量訊息。Registr
 | 跨程序背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段；目前只支援同一桌面程序內的 WebView 重新 attach |
 | 跨重啟還原 | 部分完成 | 已保存的 Codex 項目會續接同工作目錄最近的對話，Cursor 項目會使用 `agent --continue` 續接最近對話；正常關閉時，每個 Agent 最近 256 KiB 終端輸出會以 OS 安全儲存區中的裝置金鑰加密保存，重啟同一項目後先重播。若安全儲存區不可用就不落地輸出；原 PTY 程序與可互動 pane 仍無法跨程序存活 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
-| 對話模式 | 已完成 | Claude Code 與 Codex 以官方 headless JSON 模式逐輪執行；串流文字、工具卡片、用量統計與以 CLI 對話 ID 續接；Claude 另支援逐項核准（stream-json 控制協定）；Codex 無對應機制 |
+| 對話模式 | 已完成 | Claude Code、Codex 與 Gemini CLI 以官方 headless JSON 模式逐輪執行；串流文字、工具卡片、用量統計與以 CLI 對話 ID 續接；Claude 另支援逐項核准（stream-json 控制協定）；Codex 與 Gemini 的非互動模式無對應機制 |
 | 任務編排 | 部分完成 | broadcast prompt 與每個工作階段的提示佇列已完成；佇列上限 16 則，只有官方整合回報 `Done`／`Idle` 才放行一則，heuristic 猜測不放行；對話模式的排程任務已完成（見下），依賴圖仍待實作 |
 | 權限隔離 | 未完成 | 尚無每 Agent 容器、沙箱或檔案範圍策略 |
 
