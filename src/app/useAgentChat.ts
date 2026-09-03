@@ -43,13 +43,22 @@ export interface ChatThreadSettings {
   model: string;
 }
 
+export interface ChatThreadCreation extends ChatThreadSettings {
+  title?: string;
+  automationId?: string;
+  /** False keeps the current thread in front, for runs started by a schedule. */
+  activate?: boolean;
+}
+
 export interface AgentChatApi {
   threads: ChatThread[];
   activeThreadId: string | null;
   setActiveThreadId: (id: string | null) => void;
   /** CLIs the backend can drive in chat mode. */
   supported: readonly ChatDefinitionId[];
-  createThread: (settings: ChatThreadSettings) => ChatThread;
+  createThread: (settings: ChatThreadCreation) => ChatThread;
+  /** Flags a thread as having news the user has not seen. */
+  markUnread: (id: string, unread: boolean) => void;
   updateThread: (id: string, patch: Partial<ChatThreadSettings>) => void;
   removeThread: (id: string) => void;
   send: (id: string, prompt: string) => Promise<void>;
@@ -117,12 +126,29 @@ export function useAgentChat(): AgentChatApi {
     };
   }, []);
 
-  const create = useCallback((settings: ChatThreadSettings) => {
+  const create = useCallback((settings: ChatThreadCreation) => {
     const thread = createThread(settings);
     setThreads((current) => [thread, ...current]);
-    setActiveThreadId(thread.id);
+    if (settings.activate !== false) setActiveThreadId(thread.id);
     return thread;
   }, []);
+
+  const markUnread = useCallback((id: string, unread: boolean) => {
+    setThreads((current) =>
+      current.map((thread) =>
+        thread.id === id && thread.unread !== unread ? { ...thread, unread } : thread,
+      ),
+    );
+  }, []);
+
+  // Opening a thread is reading it.
+  const activate = useCallback(
+    (id: string | null) => {
+      setActiveThreadId(id);
+      if (id) markUnread(id, false);
+    },
+    [markUnread],
+  );
 
   const update = useCallback((id: string, patch: Partial<ChatThreadSettings>) => {
     setThreads((current) =>
@@ -195,15 +221,28 @@ export function useAgentChat(): AgentChatApi {
     () => ({
       threads,
       activeThreadId,
-      setActiveThreadId,
+      setActiveThreadId: activate,
       supported,
       createThread: create,
+      markUnread,
       updateThread: update,
       removeThread: remove,
       send,
       stop: stopTurn,
       respond,
     }),
-    [threads, activeThreadId, supported, create, update, remove, send, stopTurn, respond],
+    [
+      threads,
+      activeThreadId,
+      activate,
+      supported,
+      create,
+      markUnread,
+      update,
+      remove,
+      send,
+      stopTurn,
+      respond,
+    ],
   );
 }

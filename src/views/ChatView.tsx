@@ -27,6 +27,8 @@ import {
   type ChatThread,
 } from "../app/agentChat";
 import type { AgentChatApi } from "../app/useAgentChat";
+import type { AgentAutomationsApi } from "../app/useAgentAutomations";
+import { AutomationPane, describeSchedule } from "../components/chat/AutomationPane";
 import type { AgentApi } from "../app/useAgentSessions";
 import { displayPath } from "../app/displayPath";
 import { useI18n } from "../i18n/context";
@@ -34,7 +36,14 @@ import type { MessageKey } from "../i18n/messages/zh-TW";
 import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import { ChatMarkdown } from "../components/chat/ChatMarkdown";
-import { ChatIcon, FolderIcon, PlusIcon, StopIcon, TrashIcon } from "../components/icons";
+import {
+  ChatIcon,
+  ClockIcon,
+  FolderIcon,
+  PlusIcon,
+  StopIcon,
+  TrashIcon,
+} from "../components/icons";
 
 const permissionLabelKey: Record<ChatPermission, MessageKey> = {
   ask: "chat.permission.ask",
@@ -56,9 +65,20 @@ function directoryName(path: string): string {
   return index === -1 ? trimmed : trimmed.slice(index + 1);
 }
 
-export function ChatView({ agents, chat }: { agents: AgentApi; chat: AgentChatApi }) {
+export function ChatView({
+  agents,
+  chat,
+  automations,
+}: {
+  agents: AgentApi;
+  chat: AgentChatApi;
+  automations: AgentAutomationsApi;
+}) {
   const { t, tag } = useI18n();
   const [pendingDelete, setPendingDelete] = useState<ChatThread | null>(null);
+  const [mode, setMode] = useState<"threads" | "automations">("threads");
+  const [selectedAutomationId, setSelectedAutomationId] = useState<string | null>(null);
+  const [composingAutomation, setComposingAutomation] = useState(false);
 
   const cliLabel = (id: ChatDefinitionId) =>
     agents.catalog.find((definition) => definition.id === id)?.label ?? id;
@@ -86,52 +106,163 @@ export function ChatView({ agents, chat }: { agents: AgentApi; chat: AgentChatAp
     });
   }
 
+  function startAutomation() {
+    setSelectedAutomationId(null);
+    setComposingAutomation(true);
+    setMode("automations");
+  }
+
+  function openThread(threadId: string) {
+    setMode("threads");
+    chat.setActiveThreadId(threadId);
+  }
+
+  const previous = chat.threads[0];
+  const automationDefaults = {
+    definitionId:
+      previous && installed.includes(previous.definitionId)
+        ? previous.definitionId
+        : (installed[0] ?? "claude"),
+    workingDirectory: previous?.workingDirectory ?? "",
+  };
+
   return (
     <section className="chat-view" aria-label={t("chat.title")}>
       <aside className="chat-threads">
         <div className="chat-threads__header">
-          <h2>{t("chat.title")}</h2>
+          <div className="chat-mode" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "threads"}
+              className={`chat-mode__tab${mode === "threads" ? " is-active" : ""}`}
+              onClick={() => setMode("threads")}
+            >
+              <ChatIcon />
+              {t("chat.title")}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "automations"}
+              className={`chat-mode__tab${mode === "automations" ? " is-active" : ""}`}
+              onClick={() => setMode("automations")}
+            >
+              <ClockIcon />
+              {t("automation.title")}
+              {automations.unreadCount > 0 && (
+                <span className="chat-mode__badge" aria-label={t("automation.unread", { count: automations.unreadCount })}>
+                  {automations.unreadCount}
+                </span>
+              )}
+            </button>
+          </div>
           <button
             type="button"
             className="button button--primary button--sm"
-            onClick={startThread}
+            onClick={mode === "threads" ? startThread : startAutomation}
             disabled={agents.mode !== "ready"}
+            aria-label={mode === "threads" ? t("chat.new") : t("automation.new")}
+            title={mode === "threads" ? t("chat.new") : t("automation.new")}
           >
             <PlusIcon />
-            {t("chat.new")}
           </button>
         </div>
-        <ul className="chat-threads__list">
-          {chat.threads.map((thread) => (
-            <li key={thread.id}>
-              <button
-                type="button"
-                className={`chat-thread${thread.id === chat.activeThreadId ? " is-active" : ""}`}
-                onClick={() => chat.setActiveThreadId(thread.id)}
-              >
-                <span>
-                  <span className="chat-thread__title">
-                    {thread.title || t("chat.untitled")}
+        {mode === "threads" ? (
+          <ul className="chat-threads__list">
+            {chat.threads.map((thread) => (
+              <li key={thread.id}>
+                <button
+                  type="button"
+                  className={`chat-thread${thread.id === chat.activeThreadId ? " is-active" : ""}${thread.unread ? " is-unread" : ""}`}
+                  onClick={() => chat.setActiveThreadId(thread.id)}
+                >
+                  <span>
+                    <span className="chat-thread__title">
+                      {thread.title || t("chat.untitled")}
+                    </span>
+                    <br />
+                    <span className="chat-thread__meta">
+                      {thread.automationId ? `${t("automation.badge")} · ` : ""}
+                      {cliLabel(thread.definitionId)}
+                      {thread.workingDirectory
+                        ? ` · ${directoryName(thread.workingDirectory)}`
+                        : ""}
+                    </span>
                   </span>
-                  <br />
-                  <span className="chat-thread__meta">
-                    {cliLabel(thread.definitionId)}
-                    {thread.workingDirectory
-                      ? ` · ${directoryName(thread.workingDirectory)}`
-                      : ""}
+                  {thread.runningTurnId ? (
+                    <span className="chat-thread__dot" aria-label={t("chat.running")} />
+                  ) : thread.unread ? (
+                    <span className="chat-thread__dot chat-thread__dot--unread" aria-label={t("automation.unread.one")} />
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <ul className="chat-threads__list">
+            {automations.automations.map((automation) => (
+              <li key={automation.id}>
+                <button
+                  type="button"
+                  className={`chat-thread${automation.id === selectedAutomationId && !composingAutomation ? " is-active" : ""}`}
+                  onClick={() => {
+                    setComposingAutomation(false);
+                    setSelectedAutomationId(automation.id);
+                  }}
+                >
+                  <span>
+                    <span className="chat-thread__title">{automation.name}</span>
+                    <br />
+                    <span className="chat-thread__meta">
+                      {automation.enabled
+                        ? describeSchedule(automation.schedule, t)
+                        : t("automation.paused")}
+                    </span>
                   </span>
-                </span>
-                {thread.runningTurnId && (
-                  <span className="chat-thread__dot" aria-label={t("chat.running")} />
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
+                  {automation.runs[0]?.outcome === "running" && (
+                    <span className="chat-thread__dot" aria-label={t("automation.running")} />
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </aside>
 
       <div className="chat-main">
-        {agents.mode === "unavailable" ? (
+        {mode === "automations" && agents.mode !== "unavailable" ? (
+          composingAutomation || selectedAutomationId ? (
+            <AutomationPane
+              automations={automations}
+              selectedId={selectedAutomationId}
+              editing={composingAutomation}
+              defaults={automationDefaults}
+              installed={installed}
+              cliLabel={cliLabel}
+              onSelect={setSelectedAutomationId}
+              onDoneEditing={() => setComposingAutomation(false)}
+              onOpenThread={openThread}
+            />
+          ) : (
+            <EmptyState
+              icon={<ClockIcon />}
+              title={t("automation.empty.title")}
+              description={t("automation.empty.body")}
+              actions={
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={startAutomation}
+                  disabled={agents.mode !== "ready" || installed.length === 0}
+                >
+                  <PlusIcon />
+                  {t("automation.new")}
+                </button>
+              }
+            />
+          )
+        ) : agents.mode === "unavailable" ? (
           <div className="chat-header">
             <Callout tone="warn" title={t("desktopBackend.required.title")}>
               {t("desktopBackend.required.body")}

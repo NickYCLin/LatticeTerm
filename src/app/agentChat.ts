@@ -134,6 +134,10 @@ export interface ChatThread {
   /** The turn in flight. Stored threads never carry one: a process does
    *  not outlive the window that started it. */
   runningTurnId: string | null;
+  /** Set when a scheduled automation opened this thread for one of its runs. */
+  automationId: string | null;
+  /** A finished run nobody has looked at yet; the thread list is the inbox. */
+  unread: boolean;
 }
 
 export const MAX_TITLE_LENGTH = 60;
@@ -155,14 +159,17 @@ export function createThread(
   settings: Pick<
     ChatThread,
     "definitionId" | "workingDirectory" | "permission" | "model"
-  >,
+  > &
+    Partial<Pick<ChatThread, "title" | "automationId">>,
   id: string = crypto.randomUUID(),
   now: number = Date.now(),
 ): ChatThread {
   return {
     id,
     definitionId: settings.definitionId,
-    title: "",
+    title: settings.title ?? "",
+    automationId: settings.automationId ?? null,
+    unread: false,
     workingDirectory: settings.workingDirectory,
     permission: settings.permission,
     model: settings.model.trim(),
@@ -466,6 +473,9 @@ export function loadStoredThreads(storage: Pick<Storage, "getItem">): ChatThread
         typeof thread.reportedModel === "string" ? thread.reportedModel : null,
       createdAt: typeof thread.createdAt === "number" ? thread.createdAt : 0,
       updatedAt: typeof thread.updatedAt === "number" ? thread.updatedAt : 0,
+      automationId:
+        typeof thread.automationId === "string" ? thread.automationId : null,
+      unread: thread.unread === true,
       // A turn cannot survive a reload: its process belonged to the window
       // that is gone.
       runningTurnId: null,
