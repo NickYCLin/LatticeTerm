@@ -4,6 +4,15 @@
 
 ---
 
+## [0.35.0](https://github.com/NickYCLin/lattice-term/compare/v0.34.0...v0.35.0) (2026-09-03)
+
+
+### 🚀 新增功能
+
+* **activity:** 加入 CLI 工作活動中心 ([ee8119e](https://github.com/NickYCLin/lattice-term/commit/ee8119e2cca850aa80b6b16e5b97c11e929c79f1))
+* **remote:** 加入安全檔案部署 CLI ([0bd55ec](https://github.com/NickYCLin/lattice-term/commit/0bd55ec8aed1055714f8d6dbec35c0d582173b49))
+* **remote:** 安全記住 Agent 配對碼 ([2e547e7](https://github.com/NickYCLin/lattice-term/commit/2e547e7987357cad7691f8eee75acca27e4fe863))
+
 ## [0.34.0](https://github.com/NickYCLin/lattice-term/compare/v0.33.0...v0.34.0) (2026-09-02)
 
 
