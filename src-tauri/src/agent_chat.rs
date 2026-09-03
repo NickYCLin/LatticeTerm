@@ -2075,7 +2075,7 @@ mod tests {
         );
         assert!(args
             .windows(2)
-            .any(|pair| { pair[0] == OsString::from("--image") && pair[1] == image.as_os_str() }));
+            .any(|pair| { pair[0] == "--image" && pair[1] == image.as_os_str() }));
         assert!(validate_attachments(&[ChatAttachmentRequest {
             path: directory.path().display().to_string(),
         }])
