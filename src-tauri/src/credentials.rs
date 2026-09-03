@@ -65,8 +65,9 @@ fn backend_path() -> Option<PathBuf> {
     DIRECTORY.get().map(|dir| dir.join(BACKEND_FILE))
 }
 
-/// Mobile platforms have no OS keyring this app can reach, so the vault is
-/// the sensible default there; desktop keeps the OS store.
+/// Mobile platforms default to the vault so an OS credential store is never
+/// selected implicitly; desktop keeps the OS store as its default. iOS still
+/// supports its protected Keychain store when the user explicitly selects it.
 fn default_backend() -> CredentialBackend {
     if cfg!(any(target_os = "android", target_os = "ios")) {
         CredentialBackend::Vault
@@ -257,11 +258,15 @@ fn provider() -> &'static str {
     {
         "macOS Keychain"
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "ios")]
+    {
+        "iOS Keychain"
+    }
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
     {
         "Secret Service"
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "ios", unix)))]
     {
         "Unsupported platform"
     }

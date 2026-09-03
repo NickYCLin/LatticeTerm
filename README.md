@@ -7,7 +7,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 [下載安裝](#-下載與安裝-downloads) · [功能現況](#完成度總覽) · [程式碼與文件導覽](docs/README.md) · [安全性](SECURITY.md) · [參與貢獻](CONTRIBUTING.md) · [English project map](llms.txt)
 
 > [!NOTE]
-> LatticeTerm 目前處於 **公開測試與功能成熟化階段**。桌面端的連線管理、SSH／SFTP／Tunnel、Web RDP、VNC、本機 AI Agent Fleet、安全保管庫、備份、跨平台安裝檔與自動更新已可實際使用，Lattice Remote 亦支援自架中繼、數字裝置 ID、遠端控制／檔案傳輸與純終端分享；背景 Agent daemon、遠端 Fleet、NAT 直連穿透與 iOS 等進階能力仍依後續藍圖開發。
+> LatticeTerm 目前處於 **公開測試與功能成熟化階段**。桌面端的連線管理、SSH／SFTP／Tunnel、Web RDP、VNC、本機 AI Agent Fleet、安全保管庫、備份、跨平台安裝檔與自動更新已可實際使用，Lattice Remote 亦支援自架中繼、數字裝置 ID、遠端控制／檔案傳輸與純終端分享；背景 Agent daemon、遠端 Fleet、NAT 直連穿透與 iOS 實機發布等進階能力仍依後續藍圖開發。
 
 ## 完成度總覽
 
@@ -19,12 +19,13 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | Lattice Remote | **基礎功能可用** | 已完成使用者主動啟動、Noise 端對端加密、主螢幕／純終端分享，以及由分享端分別授權的鍵盤／滑鼠或終端輸入與單一根目錄檔案瀏覽、上下載；另支援自架 lattice-relay 中繼、永久九位數裝置 ID、跨網路連線、裝置金鑰釘選與固定配對碼（無人值守）；以 ID 連線過的裝置會留在「我的連線」，中繼位址失效時可在連線對話框就地更正。目前仍是自架、小規模服務，NAT 直連穿透與多人租戶管理尚未加入。 |
 | 發行與更新 | **可用** | Windows x64、Linux x64／arm64、macOS Apple Silicon 安裝檔、更新簽章、Release PR 與應用程式內更新已自動化。 |
 | Android | **預覽** | 共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面可建置；需要桌面 sidecar 的 RDP、VNC 與 Agent Fleet 不提供。 |
-| 進階 Agent 與行動能力 | **規劃中** | 跨程序 daemon、遠端 Fleet、任務編排、每 Agent 沙箱與 iOS 尚未完成。 |
+| iOS | **預覽** | 已在 iPhone 17 Simulator 編譯、安裝及啟動共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面；實機簽章、TestFlight 與上架仍未驗證。 |
+| 進階 Agent 與行動能力 | **規劃中** | 跨程序 daemon、遠端 Fleet、任務編排與每 Agent 沙箱仍待完成。 |
 
 ## 主要特色
 
 - **現代化桌面工作空間**：整合全域導覽列、資源側欄、工作區與即時狀態列。
-- **安全的連線管理**：連線設定檔不含密碼、配對碼與私鑰；SSH/SFTP/RDP/VNC 驗證成功後可由使用者選擇保存密碼，已儲存且具永久裝置 ID 的 Lattice Relay 連線也可選擇保存配對碼。認證資料交給 Windows Credential Manager、macOS Keychain、Linux Secret Service，或以主密碼保護的本機加密保管庫隔離保存。保管庫預設閒置 15 分鐘或視窗進入背景時自動鎖定，也可由使用者調整策略。
+- **安全的連線管理**：連線設定檔不含密碼、配對碼與私鑰；SSH/SFTP/RDP/VNC 驗證成功後可由使用者選擇保存密碼，已儲存且具永久裝置 ID 的 Lattice Relay 連線也可選擇保存配對碼。認證資料交給 Windows Credential Manager、macOS Keychain、iOS Keychain、Linux Secret Service，或以主密碼保護的本機加密保管庫隔離保存。保管庫預設閒置 15 分鐘或視窗進入背景時自動鎖定，也可由使用者調整策略。
 - **敏感剪貼簿保護**：Lattice Remote 一次性配對碼預設在複製 30 秒後清除，可調整為 15／60／120 秒或關閉；清除前會比對內容，使用者後來複製的文字不會被覆蓋，亦可從設定立即清除。
 - **終端機剪貼簿**：SSH 與本機 Agent CLI 支援 `Ctrl+C`／`Ctrl+V`、Linux 常用的 `Ctrl+Shift+C`／`Ctrl+Shift+V`，以及右鍵複製／貼上；有選取內容時 `Ctrl+C` 才會複製，否則仍送出中斷。Linux WebKitGTK 拒絕瀏覽器剪貼簿 API 時會走限制為 1 MiB 文字的 Rust 原生橋接，不必開放整個 clipboard plugin 給 WebView。Agent 貼入圖片時只接受有界 RGBA 圖片，會以擁有者限定權限暫存並綁定到目標工作階段；工作階段停止、自然結束或應用程式離開時即刪除。
 - **真實主機信任管理**：Key Vault 直接讀寫桌面核心的 `known_hosts.json`，可搜尋、複製、新增及移除已驗證的 SHA-256 指紋。
@@ -44,7 +45,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 - **Lattice Remote（協定 v2）**：桌面版內建「分享這台裝置」，可在區網直連，或經自架 `lattice-relay` 以永久九位數裝置 ID 跨網路連線；中繼只轉送密文，兩端仍以八位數配對碼完成 Noise XXpsk3 端對端加密，回訪裝置另以 TOFU 釘選永久身分金鑰。沒有桌面環境的主機可分享加密 shell 終端而非畫面。兩端跑不同 LatticeTerm 版本仍可連線：檢視端會降到對方支援的協定版本，Hello 也會略過不認得的尾端欄位，落後的機器因此連得進去、可以被遠端協助更新；真的無法溝通時，錯誤訊息會明講該更新哪一台。以 ID 連線成功的裝置會存成一般的連線設定檔留在「我的連線」。回訪時可繼續手動輸入配對碼，或明確選擇在成功配對後交給安全認證後端保存；配對碼不會寫入連線設定檔，且儲存項目會同時綁定該設定檔與永久裝置 ID。中繼位址換掉時（免費 Quick Tunnel 每次重啟都會換）連線對話框會在中繼沒有回應時就地開啟位址欄位，只有真的連上的位址才會寫回設定檔。鍵鼠／終端輸入與檔案分享分開授權；檔案模式只暴露指定的單一根目錄，路徑跳脫和越界符號連結會被拒絕，上傳完整收完並安全關檔後才替換目標。協定也會限制畫面、終端與檔案訊息資源，斷線或停止分享會釋放輸入並清除未完成的檔案暫存。
 - **Web RDP Canvas**：IronRDP 原生 engine 以 TLS/NLA 連到 Windows，畫面繪入內嵌 Canvas，並支援滑鼠、滾輪與鍵盤。密碼只經本機 stdin 傳給隔離 engine，也可在成功驗證後安全保存。
 - **使用者控制的截圖與錄影**：Lattice Remote、Web RDP 與 VNC 都可手動擷取 PNG，或開始、停止並下載遠端 Canvas 錄影；不會自動錄製或上傳。
-- **跨平台支援**：桌面版支援 Windows、Linux 與 macOS；Android 版已可建置執行共用的純 Rust 核心功能，需本機程序的 RDP／VNC／CLI Fleet 維持桌面限定。
+- **跨平台支援**：桌面版支援 Windows、Linux 與 macOS；Android 與 iOS Simulator 版已可建置執行共用的純 Rust 核心功能，需本機程序的 RDP／VNC／CLI Fleet 維持桌面限定。
 
 ## 📥 下載與安裝 (Downloads)
 
@@ -78,7 +79,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 1. **Lattice Remote 連線範圍**：鍵盤／滑鼠遠端控制已可用（由分享端明確授權）；免帳戶數字裝置 ID、自架 Relay（`docs/RELAY_SERVER.zh-TW.md`）、裝置金鑰釘選（TOFU）與固定配對碼無人值守已可用；接著加入 NAT 直連穿透。連線清單先保存在本機，帳戶只作為日後跨裝置同步與團隊權限的選配層。
 2. **Agent 常駐與遠端能力**：把 PTY owner 抽成使用者自行啟動的背景 daemon，支援跨程序重新 attach，並先以 SSH transport 實作遠端 Agent Fleet。
 3. **Agent 編排與隔離**：補齊其他工具的 hook 與 token／cost 可觀測事件、依賴圖、佇列、排程、資源限制與每 Agent 沙箱／檔案範圍策略。
-4. **平台完整度**：設計安全的 Windows npm shim adapter、持續強化 Android 發行流程，並在 macOS／Xcode 環境啟動 iOS 建置與驗證。
+4. **平台完整度**：設計安全的 Windows npm shim adapter、持續強化 Android 發行流程，並完成 iOS 實機簽章、TestFlight 與上架驗證。
 5. **正式發行信任**：自動更新包已有 Tauri 簽章；Windows Authenticode 與 Apple Developer ID／notarization 仍需發行者憑證。
 
 ## 鍵盤快捷鍵

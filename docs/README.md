@@ -28,6 +28,6 @@
 - LatticeTerm 會啟動本機 AI CLI，但不接管它們的 API key、登入 token 或雲端帳號。
 - SSH、SFTP、RDP、VNC 與 Lattice Remote 都是真實工作階段，不以假資料模擬已完成能力。
 - Lattice Remote 支援兩種模式：區網一次性加密直連，或透過自架 `lattice-relay` 以九位數裝置 ID 跨網路連線；可分享主螢幕或純終端，輸入與單一檔案根目錄分開授權。中繼位址只在首次／修改時展開，並非安全機密；多人租戶服務與 NAT 直連穿透仍是後續階段（見 [中繼部署與安全](RELAY_SERVER.zh-TW.md)）。
-- 桌面版是主要完成範圍；需要 sidecar 或本機 PTY 的功能不會假裝可在瀏覽器或 Android 使用。
+- 桌面版是主要完成範圍；需要 sidecar 或本機 PTY 的功能不會假裝可在瀏覽器、Android 或 iOS 使用。
 
 安全問題請依 [SECURITY.md](../SECURITY.md) 私下回報；一般修改流程與提交規則請見 [CONTRIBUTING.md](../CONTRIBUTING.md)。

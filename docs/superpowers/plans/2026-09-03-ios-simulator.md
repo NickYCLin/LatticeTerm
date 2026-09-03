@@ -27,7 +27,12 @@
 - Create: `src-tauri/gen/apple/**`（由 `npx tauri ios init` 產生）
 - Create: `src-tauri/tauri.ios.conf.json`
 - Create: `scripts/ios-config.test.mjs`
+- Modify: `src-tauri/Cargo.toml`
+- Modify: `src-tauri/src/credentials.rs`
+- Modify: `src/i18n/messages/en.ts`
+- Modify: `src/i18n/messages/zh-TW.ts`
 - Modify: `README.md`
+- Modify: `docs/README.md`
 - Modify: `docs/UI_IMPLEMENTATION.zh-TW.md`
 
 **Interfaces:**
@@ -35,17 +40,17 @@
 - Consumes: `src-tauri/tauri.conf.json` 的產品名稱、版本與 identifier；`src-tauri/tauri.android.conf.json` 的行動 sidecar 邊界。
 - Produces: 可被 `npx tauri ios build` 與 Xcode 載入的 Apple project，並使 iOS 的 `bundle.externalBin` 為空陣列。
 
-- [ ] **Step 1: 寫入失敗的設定測試**
+- [x] **Step 1: 寫入失敗的設定測試**
 
 新增 Node 測試，讀取 `src-tauri/tauri.ios.conf.json` 並斷言 `bundle.externalBin` 為空陣列。檔案不存在時測試必須失敗。
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
-Run: `node --test scripts/ios-config.test.mjs`
+Run: `npx vitest run scripts/ios-config.test.mjs`
 
 Expected: FAIL，因為 `tauri.ios.conf.json` 尚不存在。
 
-- [ ] **Step 3: 產生原生專案與最小設定**
+- [x] **Step 3: 產生原生專案與最小設定**
 
 Run: `npx tauri ios init`
 
@@ -66,13 +71,13 @@ Create `src-tauri/tauri.ios.conf.json`:
 
 同步 README 與 UI 實作文件的 iOS 狀態、建置指令與桌面功能限制。
 
-- [ ] **Step 4: 執行設定測試確認通過**
+- [x] **Step 4: 執行設定測試確認通過**
 
-Run: `node --test scripts/ios-config.test.mjs`
+Run: `npx vitest run scripts/ios-config.test.mjs`
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```sh
 git add src-tauri/gen/apple src-tauri/tauri.ios.conf.json scripts/ios-config.test.mjs README.md docs/UI_IMPLEMENTATION.zh-TW.md
@@ -88,39 +93,39 @@ git commit -m "feat(行動版): 初始化 iOS Simulator 建置"
 **Interfaces:**
 
 - Consumes: Task 1 的 Apple project 與 iOS 設定。
-- Produces: `aarch64-apple-ios-sim` debug build，並由 Xcode 成功編譯其 simulator scheme。
+- Produces: `aarch64-sim` debug build，並由 Xcode 成功編譯其 simulator scheme。
 
-- [ ] **Step 1: 建立並觀察 build 基線**
+- [x] **Step 1: 建立並觀察 build 基線**
 
-Run: `npx tauri ios build --debug --target aarch64-apple-ios-sim`
+Run: `npx tauri ios build --debug --target aarch64-sim`
 
 Expected: 初次執行可能因 iOS target 或 desktop-only crate 失敗；完整保存錯誤訊息以決定最小修正。
 
-- [ ] **Step 2: 以失敗訊息為基礎做最小平台隔離**
+- [x] **Step 2: 以失敗訊息為基礎做最小平台相依修正**
 
-若 Rust 編譯指向桌面 sidecar 或 PTY，將該 module 或 command registration 以 `#[cfg(desktop)]` 隔離，並讓前端既有的 `runtime_summary` 行動協定清單維持 `ssh`、`sftp`、`lattice`。
+若 Rust 編譯指向桌面 sidecar 或 PTY，將該 module 或 command registration 以 `#[cfg(desktop)]` 隔離，並讓前端既有的 `runtime_summary` 行動協定清單維持 `ssh`、`sftp`、`lattice`。若相依 crate 的 iOS provider 要求受保護的儲存功能，僅在 iOS target 直接啟用所需 feature。
 
-- [ ] **Step 3: 執行相關 Rust/前端測試**
+- [x] **Step 3: 執行相關 Rust/前端測試**
 
 Run: `npm run typecheck && npm test -- --run src/app/platformCapabilities.test.ts`
 
 Expected: PASS。
 
-- [ ] **Step 4: 再建置 Simulator**
+- [x] **Step 4: 再建置 Simulator**
 
-Run: `npx tauri ios build --debug --target aarch64-apple-ios-sim`
+Run: `npx tauri ios build --debug --target aarch64-sim`
 
 Expected: PASS，產生 Simulator app。
 
-- [ ] **Step 5: 以 Xcode 編譯生成 scheme**
+- [x] **Step 5: 以 Xcode 編譯生成 scheme**
 
-Run: `npx tauri ios dev --open`，再以產生 Apple project 的 simulator scheme 執行 `xcodebuild`。
+Run: `npx tauri ios build --debug --target aarch64-sim`，由 Tauri 對產生 Apple project 的 simulator scheme 執行 `xcodebuild`；再以 `xcrun simctl install` 與 `xcrun simctl launch` 安裝並啟動 app。
 
-Expected: Xcode project 成功開啟且 simulator build PASS。
+Expected: `xcodebuild` 成功完成 Simulator build，app 可在 iPhone Simulator 啟動。
 
-- [ ] **Step 6: 提交修正**
+- [x] **Step 6: 提交修正**
 
 ```sh
 git add src-tauri src scripts README.md docs
-git commit -m "fix(行動版): 讓 iOS Simulator 可編譯"
+git commit -m "fix(行動版): 消除 iOS RDP 編譯警告"
 ```

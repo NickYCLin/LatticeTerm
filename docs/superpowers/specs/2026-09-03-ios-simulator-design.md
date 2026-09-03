@@ -21,8 +21,8 @@
 ## 驗證
 
 - `npm ci` 後執行既有 TypeScript 型別檢查與相關行動版測試。
-- `npx tauri ios build --debug --target aarch64-apple-ios-sim` 必須成功。
-- Xcode project 的 simulator scheme 必須以 `xcodebuild` 成功編譯；若圖形化 Xcode 能開啟，則也以 `npx tauri ios dev --open` 交給 Xcode 載入。
+- `npx tauri ios build --debug --target aarch64-sim` 必須成功。
+- Xcode project 的 simulator scheme 必須以 Tauri 叫用的 `xcodebuild` 成功編譯；完成後將 app 安裝並啟動於 iPhone Simulator。
 - 檢查 iOS 設定不含 `externalBin`，並確認 Git diff 僅包含 iOS 原生檔、設定、文件和必要測試。
 
 ## 風險處理

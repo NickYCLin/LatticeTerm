@@ -1444,7 +1444,7 @@ export const en: Messages = {
   "vault.credentials.activity.removed": "Secure credential removed for {name}",
   "vault.credentials.systemStore": "Operating-system credential store",
   "vault.credentials.systemStoreDetail":
-    "Save user-approved passwords and pairing codes with Windows Credential Manager, macOS Keychain, or Linux Secret Service.",
+    "Save user-approved passwords and pairing codes with Windows Credential Manager, macOS Keychain, iOS Keychain, or Linux Secret Service.",
   "vault.credentials.stronghold": "Master-password encrypted vault",
   "vault.credentials.strongholdDetail":
     "Protect passwords and pairing codes with Argon2id and XChaCha20-Poly1305 without importing SSH keys or passphrases.",

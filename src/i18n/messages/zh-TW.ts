@@ -1348,7 +1348,7 @@ export const zhTW = {
   "vault.credentials.activity.removed": "已刪除「{name}」的安全認證資料",
   "vault.credentials.systemStore": "作業系統認證儲存區",
   "vault.credentials.systemStoreDetail":
-    "由 Windows Credential Manager、macOS Keychain 或 Linux Secret Service 保存使用者明確選擇的密碼與配對碼。",
+    "由 Windows Credential Manager、macOS Keychain、iOS Keychain 或 Linux Secret Service 保存使用者明確選擇的密碼與配對碼。",
   "vault.credentials.stronghold": "主密碼加密保管庫",
   "vault.credentials.strongholdDetail":
     "以 Argon2id 與 XChaCha20-Poly1305 保護密碼與配對碼；不匯入 SSH 私鑰或 Passphrase。",

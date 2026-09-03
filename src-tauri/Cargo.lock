@@ -2935,6 +2935,7 @@ dependencies = [
 name = "lattice-term"
 version = "0.36.0"
 dependencies = [
+ "apple-native-keyring-store",
  "arboard",
  "argon2 0.5.3",
  "base64 0.23.1",
