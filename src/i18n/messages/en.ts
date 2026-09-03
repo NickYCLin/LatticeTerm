@@ -830,6 +830,8 @@ export const en: Messages = {
   "terminal.empty.title": "No session is open",
   "terminal.empty.body":
     "Choose a local project folder and launch a CLI, or pick a host to open its session here.",
+  "terminal.empty.savedBody":
+    "Your previous working directories and folder layout are still here. Use the plus button beside a project to reopen a CLI.",
   "terminal.sessionClosed.title": "Session disconnected",
   "terminal.sessionEnded.title": "Session ended",
   "terminal.sessionClosed.body": "{name} stopped unexpectedly: {reason}",

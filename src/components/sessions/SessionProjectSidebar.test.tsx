@@ -70,6 +70,7 @@ describe("session project sidebar", () => {
           mobileOpen
           onMobileClose={vi.fn()}
           onChooseProject={vi.fn()}
+          onLaunchProject={vi.fn()}
           onSelect={vi.fn()}
           onRemove={vi.fn()}
           onQuickLaunch={vi.fn()}
@@ -111,5 +112,53 @@ describe("session project sidebar", () => {
     expect(markup).toContain('role="dialog"');
     expect(markup).toContain('aria-modal="true"');
     expect(markup).toContain('tabindex="-1"');
+  });
+
+  it("keeps an empty saved project visible and offers to reopen a CLI", () => {
+    vi.stubGlobal("window", { innerWidth: 1200, innerHeight: 800 });
+    const projectNodeId = "project:local:latticeterm";
+    const layout = reconcileSessionSidebarLayout(emptySessionSidebarLayout, [
+      { id: projectNodeId, defaultParentId: null },
+    ]);
+
+    const markup = renderToStaticMarkup(
+      <I18nProvider locale="zh-TW">
+        <SessionProjectSidebar
+          projects={[
+            {
+              nodeId: projectNodeId,
+              projectId: "local:latticeterm",
+              label: "LatticeTerm",
+              workingDirectory: "D:\\project\\LatticeTerm",
+              sessions: [],
+            },
+          ]}
+          layout={layout}
+          activeSessionId={null}
+          choosingProject={false}
+          chooseError={false}
+          installedAgents={[]}
+          mobileOpen={false}
+          onMobileClose={vi.fn()}
+          onChooseProject={vi.fn()}
+          onLaunchProject={vi.fn()}
+          onSelect={vi.fn()}
+          onRemove={vi.fn()}
+          onQuickLaunch={vi.fn()}
+          onExportWorkspace={vi.fn()}
+          onImportWorkspace={vi.fn()}
+          onClearWorkspace={vi.fn()}
+          onCreateFolder={vi.fn()}
+          onRenameFolder={vi.fn()}
+          onDeleteFolder={vi.fn()}
+          onToggleFolder={vi.fn()}
+          onRevealNode={vi.fn()}
+          onMove={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain("LatticeTerm");
+    expect(markup).toContain('aria-label="在這個專案新增工作階段"');
   });
 });

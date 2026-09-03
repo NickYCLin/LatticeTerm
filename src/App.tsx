@@ -360,6 +360,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
     () => storedSessionSnapshotRef.current?.sessions ?? [],
     [],
   );
+  const [unrestoredWorkspaceSessions, setUnrestoredWorkspaceSessions] = useState(
+    restoredWorkspaceSessions,
+  );
   const unrestoredSessionsRef = useRef<readonly SavedWorkspaceSession[]>([]);
   const restoreStartedRef = useRef(false);
   const [sessionRestoreComplete, setSessionRestoreComplete] = useState(false);
@@ -545,7 +548,12 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           if (match) setActiveSessionId(match.sessionId);
         }
 
-        if (restoredAgents.length > 0 || restoredSsh.length > 0) {
+        setUnrestoredWorkspaceSessions(unrestored);
+        if (
+          restoredAgents.length > 0 ||
+          restoredSsh.length > 0 ||
+          unrestored.some((session) => session.kind === "agent")
+        ) {
           setView("terminal");
           setTerminalMounted(true);
         }
@@ -997,6 +1005,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                     theme={activeTheme}
                     sessionRestoreComplete={sessionRestoreComplete}
                     restoredWorkspaceSessions={restoredWorkspaceSessions}
+                    unrestoredWorkspaceSessions={unrestoredWorkspaceSessions}
                   />
                 </div>
               </Suspense>

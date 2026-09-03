@@ -796,6 +796,7 @@ export const zhTW = {
   "terminal.reconnect": "重新連線",
   "terminal.empty.title": "目前沒有進行中的工作階段",
   "terminal.empty.body": "選擇本機專案資料夾並啟動 CLI，或在連線清單挑一台主機，工作階段就會在這裡開啟。",
+  "terminal.empty.savedBody": "先前的工作目錄與資料夾位置仍在；按專案旁的加號即可重新開啟 CLI。",
   "terminal.sessionClosed.title": "工作階段已中斷",
   "terminal.sessionEnded.title": "工作階段已結束",
   "terminal.sessionClosed.body": "「{name}」已停止連線：{reason}",

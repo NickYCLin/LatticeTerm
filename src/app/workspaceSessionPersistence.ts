@@ -168,6 +168,30 @@ export function loadWorkspaceSessionSnapshot(
   }
 }
 
+/**
+ * Returns each saved local Agent directory once, keeping the first spelling
+ * that was written. Windows paths compare case-insensitively and either slash
+ * may appear after a CLI or WebView upgrade, so neither difference should
+ * create a second project row.
+ */
+export function savedAgentWorkingDirectories(
+  sessions: readonly SavedWorkspaceSession[],
+): string[] {
+  const seen = new Set<string>();
+  const directories: string[] = [];
+  for (const session of sessions) {
+    if (session.kind !== "agent") continue;
+    const identity = session.workingDirectory
+      .replace(/[\\/]+/g, "/")
+      .replace(/\/+$/, "")
+      .toLocaleLowerCase();
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    directories.push(session.workingDirectory);
+  }
+  return directories;
+}
+
 export function saveWorkspaceSessionSnapshot(
   storage: StorageReaderWriter,
   snapshot: WorkspaceSessionSnapshot,

@@ -21,7 +21,10 @@ import { displayPath } from "../app/displayPath";
 import type { SshApi } from "../app/useSshSessions";
 import type { SftpApi } from "../app/useSftpSessions";
 import type { ThemeId } from "../app/themes";
-import type { SavedWorkspaceSession } from "../app/workspaceSessionPersistence";
+import {
+  savedAgentWorkingDirectories,
+  type SavedWorkspaceSession,
+} from "../app/workspaceSessionPersistence";
 import { agentGroupSidebarStatus } from "../app/sessionStatus";
 import {
   agentSessionSidebarMemberNodeId,
@@ -221,6 +224,7 @@ export function SessionsView({
   theme,
   sessionRestoreComplete,
   restoredWorkspaceSessions,
+  unrestoredWorkspaceSessions,
 }: {
   agents: AgentApi;
   ssh: SshApi;
@@ -233,6 +237,7 @@ export function SessionsView({
   theme: ThemeId;
   sessionRestoreComplete: boolean;
   restoredWorkspaceSessions: readonly SavedWorkspaceSession[];
+  unrestoredWorkspaceSessions: readonly SavedWorkspaceSession[];
 }) {
   const { t, tag } = useI18n();
   const sessionTabsId = useId();
@@ -1130,6 +1135,22 @@ export function SessionsView({
       : null;
   const sshHostMetrics = useSessionHostMetrics(activeSshSessionId);
   const projectMap = new Map<string, SessionProject>();
+  for (const workingDirectory of savedAgentWorkingDirectories(
+    unrestoredWorkspaceSessions,
+  )) {
+    const id = localProjectId(workingDirectory);
+    const isGeneralChat =
+      !!homeDirectory &&
+      normalizeDirectory(workingDirectory) === normalizeDirectory(homeDirectory);
+    projectMap.set(id, {
+      id,
+      label: isGeneralChat
+        ? t("terminal.projects.generalChat")
+        : localProjectLabel(workingDirectory),
+      workingDirectory,
+      sessions: [],
+    });
+  }
   for (const session of sessions) {
     const id = projectIdForSession(session);
     const existing = projectMap.get(id);
@@ -1523,6 +1544,94 @@ export function SessionsView({
     />
   ) : null;
 
+  function openSavedProject(workingDirectory: string) {
+    setNewProjectError(null);
+    setNewProjectDirectory(workingDirectory);
+    setSelectedProjectCliId(installedAgents[0]?.id ?? null);
+  }
+
+  const projectSidebar = (
+    <SessionProjectSidebar
+      projects={sidebarProjects}
+      layout={reconciledSidebarLayout}
+      activeSessionId={active?.sessionId ?? null}
+      choosingProject={choosingProject}
+      chooseError={Boolean(newProjectError && !newProjectDialog)}
+      installedAgents={installedAgents}
+      mobileOpen={mobileTreeOpen}
+      onMobileClose={() => setMobileTreeOpen(false)}
+      onChooseProject={() => void chooseProjectDirectory()}
+      onLaunchProject={openSavedProject}
+      onSelect={(sessionId) => {
+        setMobileTreeOpen(false);
+        const group = agentGroups.find((candidate) =>
+          candidate.members.some((member) => member.sessionId === sessionId),
+        );
+        if (group) selectMember(group.groupId, sessionId);
+        else onSelect(sessionId);
+      }}
+      onRemove={(sidebarSession) => {
+        const session = sessions.find((candidate) =>
+          candidate.kind === "agent"
+            ? candidate.members.some(
+                (member) => member.sessionId === sidebarSession.sessionId,
+              )
+            : sidebarSessionNodeId(candidate) === sidebarSession.nodeId,
+        );
+        if (!session) return;
+        setRemoveSessionError(null);
+        setPendingRemoveSession(
+          session.kind === "agent"
+            ? {
+                ...session,
+                sessionId: sidebarSession.sessionId,
+                label: sidebarSession.label,
+              }
+            : session,
+        );
+      }}
+      onQuickLaunch={(definition) => {
+        setMobileTreeOpen(false);
+        void launchQuickChat(definition);
+      }}
+      onExportWorkspace={() => {
+        setMobileTreeOpen(false);
+        void exportWorkspaceItems();
+      }}
+      onImportWorkspace={() => {
+        setMobileTreeOpen(false);
+        workspaceImportInputRef.current?.click();
+      }}
+      onClearWorkspace={() => {
+        setMobileTreeOpen(false);
+        setPendingClearWorkspace(true);
+      }}
+      onCreateFolder={(parentId) => openFolderEditor(parentId)}
+      onRenameFolder={(folder) =>
+        openFolderEditor(
+          reconciledSidebarLayout.placements[folder.id]?.parentId ?? null,
+          folder,
+        )
+      }
+      onDeleteFolder={setPendingDeleteFolder}
+      onToggleFolder={(folderId) =>
+        updateSidebarLayout((layout) =>
+          toggleSessionSidebarFolder(layout, folderId),
+        )
+      }
+      onRevealNode={(nodeId) =>
+        updateSidebarLayout((layout) =>
+          expandSessionSidebarAncestors(layout, nodeId),
+        )
+      }
+      onMove={(nodeId, parentId, beforeNodeId) =>
+        updateSidebarLayout((layout) =>
+          moveSessionSidebarNode(layout, nodeId, parentId, beforeNodeId),
+        )
+      }
+    />
+  );
+
   if (!active || !activeProject) {
     return (
       <div className="terminal-workspace">
@@ -1537,34 +1646,58 @@ export function SessionsView({
             </Callout>
           </div>
         )}
-        <EmptyState
-          icon={<TerminalIcon size={26} />}
-          title={t("terminal.empty.title")}
-          description={t("terminal.empty.body")}
-          actions={
-            <>
-              <button
-                type="button"
-                className="button button--primary"
-                disabled={choosingProject}
-                onClick={() => void chooseProjectDirectory()}
-              >
-                <FolderIcon size={14} />
-                {t(
-                  choosingProject
-                    ? "terminal.projects.choosing"
-                    : "terminal.projects.add",
-                )}
-              </button>
-              <button
-                type="button"
-                className="button button--ghost"
-                onClick={() => workspaceImportInputRef.current?.click()}
-              >
-                <ImportIcon size={14} />
-                {t("terminal.projects.import")}
-              </button>
-              {homeDirectory && installedAgents.length > 0 && (
+        <div className="terminal-workspace__body">
+          {mobileTreeOpen && (
+            <div
+              className="session-projects-scrim"
+              role="presentation"
+              onClick={() => setMobileTreeOpen(false)}
+            />
+          )}
+          {sidebarProjects.length > 0 && projectSidebar}
+          <section className="terminal-project-workspace">
+            <EmptyState
+              icon={<TerminalIcon size={26} />}
+              title={t("terminal.empty.title")}
+              description={t(
+                sidebarProjects.length > 0
+                  ? "terminal.empty.savedBody"
+                  : "terminal.empty.body",
+              )}
+              actions={
+                <>
+                  {sidebarProjects.length > 0 && (
+                    <button
+                      type="button"
+                      className="button button--ghost"
+                      onClick={() => setMobileTreeOpen(true)}
+                    >
+                      <FolderIcon size={14} />
+                      {t("terminal.projects")}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    disabled={choosingProject}
+                    onClick={() => void chooseProjectDirectory()}
+                  >
+                    <FolderIcon size={14} />
+                    {t(
+                      choosingProject
+                        ? "terminal.projects.choosing"
+                        : "terminal.projects.add",
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--ghost"
+                    onClick={() => workspaceImportInputRef.current?.click()}
+                  >
+                    <ImportIcon size={14} />
+                    {t("terminal.projects.import")}
+                  </button>
+                  {homeDirectory && installedAgents.length > 0 && (
                   <div className="terminal-empty-quick">
                     <small>{t("terminal.empty.quickChat")}</small>
                     <div className="terminal-empty-quick__list">
@@ -1581,10 +1714,12 @@ export function SessionsView({
                         ))}
                     </div>
                   </div>
-                )}
-            </>
-          }
-        />
+                  )}
+                </>
+              }
+            />
+          </section>
+        </div>
         {newProjectDialog}
         {folderDialog}
         {workspaceImportDialog}
@@ -1697,85 +1832,7 @@ export function SessionsView({
             onClick={() => setMobileTreeOpen(false)}
           />
         )}
-        <SessionProjectSidebar
-          projects={sidebarProjects}
-          layout={reconciledSidebarLayout}
-          activeSessionId={active.sessionId}
-          choosingProject={choosingProject}
-          chooseError={Boolean(newProjectError && !newProjectDialog)}
-          installedAgents={installedAgents}
-          mobileOpen={mobileTreeOpen}
-          onMobileClose={() => setMobileTreeOpen(false)}
-          onChooseProject={() => void chooseProjectDirectory()}
-          onSelect={(sessionId) => {
-            setMobileTreeOpen(false);
-            const group = agentGroups.find((candidate) =>
-              candidate.members.some((member) => member.sessionId === sessionId),
-            );
-            if (group) selectMember(group.groupId, sessionId);
-            else onSelect(sessionId);
-          }}
-          onRemove={(sidebarSession) => {
-            const session = sessions.find(
-              (candidate) =>
-                candidate.kind === "agent"
-                  ? candidate.members.some(
-                      (member) => member.sessionId === sidebarSession.sessionId,
-                    )
-                  : sidebarSessionNodeId(candidate) === sidebarSession.nodeId,
-            );
-            if (!session) return;
-            setRemoveSessionError(null);
-            setPendingRemoveSession(
-              session.kind === "agent"
-                ? {
-                    ...session,
-                    sessionId: sidebarSession.sessionId,
-                    label: sidebarSession.label,
-                  }
-                : session,
-            );
-          }}
-          onQuickLaunch={(definition) => {
-            setMobileTreeOpen(false);
-            void launchQuickChat(definition);
-          }}
-          onExportWorkspace={() => {
-            setMobileTreeOpen(false);
-            void exportWorkspaceItems();
-          }}
-          onImportWorkspace={() => {
-            setMobileTreeOpen(false);
-            workspaceImportInputRef.current?.click();
-          }}
-          onClearWorkspace={() => {
-            setMobileTreeOpen(false);
-            setPendingClearWorkspace(true);
-          }}
-          onCreateFolder={(parentId) => openFolderEditor(parentId)}
-          onRenameFolder={(folder) =>
-            openFolderEditor(
-              reconciledSidebarLayout.placements[folder.id]?.parentId ?? null,
-              folder,
-            )
-          }
-          onDeleteFolder={setPendingDeleteFolder}
-          onToggleFolder={(folderId) =>
-            updateSidebarLayout((layout) =>
-              toggleSessionSidebarFolder(layout, folderId),
-            )
-          }
-          onRevealNode={(nodeId) =>
-            updateSidebarLayout((layout) =>
-              expandSessionSidebarAncestors(layout, nodeId),
-            )
-          }
-          onMove={(nodeId, parentId, beforeNodeId) =>
-            updateSidebarLayout((layout) =>
-              moveSessionSidebarNode(layout, nodeId, parentId, beforeNodeId),
-            )
-          }
-        />
+        {projectSidebar}
 
         <section className="terminal-project-workspace">
           {(() => {

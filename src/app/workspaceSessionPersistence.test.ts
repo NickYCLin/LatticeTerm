@@ -4,6 +4,7 @@ import {
   agentRestoreArguments,
   loadWorkspaceSessionSnapshot,
   preserveUnrestoredWorkspaceSessions,
+  savedAgentWorkingDirectories,
   saveWorkspaceSessionSnapshot,
   sanitizeWorkspaceSessionSnapshot,
   snapshotLiveWorkspaceSessions,
@@ -82,6 +83,29 @@ describe("workspace session persistence", () => {
 
     expect(loadWorkspaceSessionSnapshot(target)).toEqual(snapshot);
     expect(target.values.has(WORKSPACE_SESSIONS_KEY)).toBe(true);
+  });
+
+  it("keeps saved Agent directories available when no CLI process restored", () => {
+    const first = snapshotLiveWorkspaceSessions(
+      [
+        agent({ workingDirectory: "D:\\project\\LatticeTerm" }),
+        agent({
+          sessionId: "agent-live-2",
+          groupId: "project-group-2",
+          definitionId: "claude",
+          workingDirectory: "d:/PROJECT/LatticeTerm/",
+        }),
+      ],
+      [],
+      null,
+    );
+
+    expect(
+      savedAgentWorkingDirectories([
+        ...first.sessions,
+        { kind: "ssh", profileId: "server" },
+      ]),
+    ).toEqual(["D:\\project\\LatticeTerm"]);
   });
 
   it("keeps an exited CLI when its native conversation can be resumed", () => {

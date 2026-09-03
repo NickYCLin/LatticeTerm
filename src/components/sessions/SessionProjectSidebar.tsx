@@ -120,6 +120,7 @@ export function SessionProjectSidebar({
   mobileOpen = false,
   onMobileClose,
   onChooseProject,
+  onLaunchProject,
   onSelect,
   onRemove,
   onQuickLaunch,
@@ -135,13 +136,14 @@ export function SessionProjectSidebar({
 }: {
   projects: SessionSidebarProjectItem[];
   layout: SessionSidebarLayout;
-  activeSessionId: string;
+  activeSessionId: string | null;
   choosingProject: boolean;
   chooseError: boolean;
   installedAgents: AgentDefinition[];
   mobileOpen?: boolean;
   onMobileClose: () => void;
   onChooseProject: () => void;
+  onLaunchProject: (workingDirectory: string) => void;
   onSelect: (sessionId: string) => void;
   onRemove: (session: SessionSidebarSessionItem) => void;
   onQuickLaunch: (definition: AgentDefinition) => void;
@@ -682,6 +684,22 @@ export function SessionProjectSidebar({
             <FolderGlyph size={13} data-folder-state={expanded ? "open" : "closed"} />
             <span className="truncate">{project.label}</span>
           </button>
+          {project.workingDirectory && (
+            <button
+              type="button"
+              className="icon-button icon-button--sm"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                onLaunchProject(project.workingDirectory!);
+              }}
+              aria-label={t("terminal.projects.newSession")}
+              title={t("terminal.projects.newSession")}
+              data-tree-action="true"
+            >
+              <PlusIcon size={11} />
+            </button>
+          )}
           {children.length > 0 && (
             <button
               type="button"
