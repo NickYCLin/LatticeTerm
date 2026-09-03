@@ -64,6 +64,17 @@ Agent Fleet 的每個工作階段都是真正的 PTY，但不是每個人都想�
 - **保存邊界**。對話串（CLI、工作目錄、權限、模型、CLI 對話 ID、訊息）存在 WebView 的 `localStorage`，每串最多 300 則、工具輸出截到 2 KiB、總量 4 MiB、最多 50 串，超過先丟最舊的；正在進行的回合不會被保存。完整逐字稿仍由各 CLI 自己保存。回覆以自家的小型 Markdown 讀取器渲染（段落、標題、清單、程式碼區塊、行內程式碼與粗體），沒有 HTML 直通，模型輸出不可能注入標記。
 - **驗證邊界**。單元測試以實際擷取的 Claude／Codex 事件驗證解析與參數組裝；另有 `#[ignore]` 的端對端測試會真的跑一輪（`LATTICETERM_CHAT_E2E=claude|codex cargo test -- --ignored`），本次已對兩個 CLI 各執行一次通過；`ask` 模式另有一個端對端測試，會真的讓 Claude 對 WebFetch 提出核准、由測試放行並確認回合自行結束。
 
+### 排程任務
+
+參考 Codex app 的 Automations（名稱＋指示、預設或自訂週期、每次執行開新對話、側欄收件匣含未讀與 Active／Paused、Run now），以對話模式為執行器：
+
+- **定義與時鐘都在前端**（`src/app/agentAutomations.ts`、`useAgentAutomations.ts`）。沒有 chrono 相依，下一次執行時間直接用 JS `Date` 在本機時區計算並存成 unix ms；`useAgentAutomations` 掛在 App 根層，每 30 秒問純函式 `dueAutomations` 有哪些到期，逐一以 `chat.createThread`＋`chat.send` 執行。執行前先把 `nextRunAt` 推到下一次，所以同一個時刻不會重複觸發；上一輪還在跑的排程直接跳過這一輪。
+- **每次執行就是一個對話串**，帶 `automationId` 與「名稱 · 時間」標題，不搶目前畫面。對話的回合結束時（最後一則是 `turnEnd`）記錄結果為完成／失敗，並把該串標成未讀；點開即已讀。對話串被刪掉時記為中斷。
+- **無人值守限制**：`ask` 權限在驗證、儲存讀取與啟動三處都被擋下並退回唯讀；預設唯讀。
+- **沒有 daemon**：關著時錯過的排程在下次開啟時（第一次 tick）補跑一次，之後照原時間；上一個程序中還在「執行中」的紀錄載入時標為中斷。
+- **保存**：`localStorage` 的 `latticeterm.agentAutomations.v1`，最多 50 個排程、每個保留最近 20 次執行；隨加密備份匯出。指示是使用者明確寫下的任務內容，屬於刻意保存的設定，不是單次提示。
+- **排程表達式**：`daily`（`HH:MM` 加星期集合，空集合為每天）與 `interval`（15 分鐘到 7 天）。沒有做 RRULE；Codex 也是以預設為主、進階才露出 RRULE。
+
 ## 語意 Reporter 協定
 
 每個由 Agent Fleet 啟動的 CLI 都會收到下列環境變數：
@@ -129,7 +140,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態或用量訊息。Registr
 | 跨重啟還原 | 部分完成 | 已保存的 Codex 項目會續接同工作目錄最近的對話，Cursor 項目會使用 `agent --continue` 續接最近對話；正常關閉時，每個 Agent 最近 256 KiB 終端輸出會以 OS 安全儲存區中的裝置金鑰加密保存，重啟同一項目後先重播。若安全儲存區不可用就不落地輸出；原 PTY 程序與可互動 pane 仍無法跨程序存活 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 對話模式 | 已完成 | Claude Code 與 Codex 以官方 headless JSON 模式逐輪執行；串流文字、工具卡片、用量統計與以 CLI 對話 ID 續接；Claude 另支援逐項核准（stream-json 控制協定）；Codex 無對應機制 |
-| 任務編排 | 部分完成 | broadcast prompt 與每個工作階段的提示佇列已完成；佇列上限 16 則，只有官方整合回報 `Done`／`Idle` 才放行一則，heuristic 猜測不放行；依賴圖與排程仍待實作 |
+| 任務編排 | 部分完成 | broadcast prompt 與每個工作階段的提示佇列已完成；佇列上限 16 則，只有官方整合回報 `Done`／`Idle` 才放行一則，heuristic 猜測不放行；對話模式的排程任務已完成（見下），依賴圖仍待實作 |
 | 權限隔離 | 未完成 | 尚無每 Agent 容器、沙箱或檔案範圍策略 |
 
 ## 下一階段設計

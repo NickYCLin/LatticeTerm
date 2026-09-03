@@ -41,6 +41,7 @@ import { useStorageStatus } from "./app/useStorageStatus";
 import { useAgentSessions } from "./app/useAgentSessions";
 import { useAgentActivity } from "./app/useAgentActivity";
 import { useAgentChat } from "./app/useAgentChat";
+import { useAgentAutomations } from "./app/useAgentAutomations";
 import { useSshSessions } from "./app/useSshSessions";
 import { useSftpSessions } from "./app/useSftpSessions";
 import { useRemoteSessions } from "./app/useRemoteSessions";
@@ -301,6 +302,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   // Lives here rather than in the view so a reply keeps streaming into its
   // thread while another view is open.
   const chat = useAgentChat();
+  // The schedule clock also lives at the root: a run must fire on time no
+  // matter which view is open.
+  const automations = useAgentAutomations(chat, preferences.locale);
   const [mobileResourceSidebarOpen, setMobileResourceSidebarOpen] =
     useState(false);
   // A desktop-only view reached on mobile (stale state) snaps back home.
@@ -1006,7 +1010,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 }}
               />
             )}
-            {view === "chat" && <ChatView agents={agents} chat={chat} />}
+            {view === "chat" && (
+              <ChatView agents={agents} chat={chat} automations={automations} />
+            )}
             {view === "tunnels" && (
               // Tunnels authenticate with a saved SSH password, so only SSH
               // profiles can serve as the gateway; offering an RDP or Lattice
