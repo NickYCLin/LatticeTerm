@@ -62,6 +62,9 @@ Agent Fleet 的每個工作階段都是真正的 PTY，但不是每個人都想�
 - **環境隔離**。子程序移除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`HERDR_*` 與 `LATTICETERM_AGENT_*`：對話回合不是任何 Fleet 工作階段的 hook 目標，也不該因 LatticeTerm 本身由某個 CLI 啟動而拒絕巢狀執行。
 - **停止與退出**。每個對話同時只允許一輪；「停止」對該子程序 `start_kill`，`Finished` 仍會在程序結束後送出並標記錯誤。應用程式離開時終止所有回合。
 - **保存邊界**。對話串（CLI、工作目錄、權限、模型、CLI 對話 ID、訊息）存在 WebView 的 `localStorage`，每串最多 300 則、工具輸出截到 2 KiB、總量 4 MiB、最多 50 串，超過先丟最舊的；正在進行的回合不會被保存。完整逐字稿仍由各 CLI 自己保存。回覆以自家的小型 Markdown 讀取器渲染（段落、標題、清單、程式碼區塊、行內程式碼與粗體），沒有 HTML 直通，模型輸出不可能注入標記。
+- **模型清單**。`agent_chat_models` 不打任何模型就取得清單：Claude 送一個 `initialize` 握手，回應的 `models[]` 含別名（`default`、`opus[1m]`、`sonnet`、`haiku`…）與說明；Codex 啟動 `codex app-server`，`initialize` → `initialized` → `model/list`，略過 `hidden`。拿到即 kill，25 秒逾時；`default` 對應空值＝不傳 `--model`。前端每個助理每次啟動只問一次，問不到退回文字輸入。
+- **Windows**。以管線啟動主控台程式會彈出黑視窗，所有 headless 程序統一經 `headless_command` 建立並加 `CREATE_NO_WINDOW`。
+- **側欄資料夾**。對話清單沿用工作項目側欄的 `sessionSidebarLayout` 模型（另一個儲存鍵），節點 id 為 `thread:<id>`；資料夾巢狀、收合、雙擊改名、指標拖曳搬移與排序，刪除資料夾時內容移到上一層。
 - **驗證邊界**。單元測試以實際擷取的 Claude／Codex 事件驗證解析與參數組裝；另有 `#[ignore]` 的端對端測試會真的跑一輪（`LATTICETERM_CHAT_E2E=claude|codex cargo test -- --ignored`），本次已對兩個 CLI 各執行一次通過；`ask` 模式另有一個端對端測試，會真的讓 Claude 對 WebFetch 提出核准、由測試放行並確認回合自行結束。
 
 ### 排程任務
