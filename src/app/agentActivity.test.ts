@@ -30,6 +30,7 @@ function session(
     stateSource: "integration",
     processId: 123,
     tokenUsage: null,
+    queuedPrompts: 0,
     capturedSessionId: null,
     ...overrides,
   };
