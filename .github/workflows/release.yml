@@ -105,6 +105,10 @@ jobs:
         id: due
         env:
           RELEASE_FORCE: ${{ inputs.force }}
+          # On a push only a breaking change ships at once; the accumulation
+          # rule is applied by the daily schedule (or a manual dispatch), so
+          # ordinary work is batched instead of released on the third push.
+          RELEASE_TRIGGER: ${{ github.event_name }}
         run: node scripts/decide-release.mjs
 
       - name: Find the pending Release PR

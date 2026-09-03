@@ -131,6 +131,29 @@ describe("decideRelease", () => {
     expect(decision.release).toBe(false);
   });
 
+  it("does not batch-release on a push, only on the daily pass", () => {
+    // Three releasable commits landing on three pushes must not become
+    // three releases; the threshold is meant to batch them.
+    const commits = [
+      commit("fix(ui): 對齊按鈕"),
+      commit("feat(ui): 新增分頁"),
+      commit("perf(remote): 減少重繪"),
+    ];
+
+    const onPush = decideRelease({ commits, minItems: 3, immediateOnly: true });
+    expect(onPush.release).toBe(false);
+    expect(onPush.reason).toContain("daily pass");
+    expect(decideRelease({ commits, minItems: 3 }).release).toBe(true);
+  });
+
+  it("still ships a breaking change straight from a push", () => {
+    const decision = decideRelease({
+      commits: [commit("feat(remote)!: 換掉協定")],
+      immediateOnly: true,
+    });
+    expect(decision.release).toBe(true);
+  });
+
   it("holds when there is nothing at all", () => {
     expect(decideRelease({ commits: [] }).release).toBe(false);
   });
