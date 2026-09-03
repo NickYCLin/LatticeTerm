@@ -69,4 +69,26 @@ describe("ModelField", () => {
     });
     expect(decodeModelSelection("not-json")).toBeNull();
   });
+
+  it("can lock only incompatible choices while preserving other assistants", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider locale="zh-TW">
+        <ModelField
+          definitionId="codex"
+          definitionIds={["codex", "claude"]}
+          cliLabel={(id) => id}
+          value="gpt-5.6-sol"
+          models={models}
+          loadModels={vi.fn()}
+          isSelectionDisabled={({ definitionId, model }) =>
+            definitionId === "codex" && model !== "gpt-5.6-sol"
+          }
+          onChange={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain('value="[&quot;codex&quot;,&quot;&quot;]" disabled=""');
+    expect(markup).toContain('value="[&quot;claude&quot;,&quot;sonnet&quot;]"');
+  });
 });

@@ -15,9 +15,12 @@ import {
   createThread,
   decideApproval,
   failTurn,
+  handoffThread,
+  promptForTurn,
   loadStoredThreads,
   saveStoredThreads,
   type ChatDefinitionId,
+  type ChatAttachment,
   type ChatEventEnvelope,
   type ChatModelChoice,
   type ChatModelList,
@@ -80,8 +83,10 @@ export interface AgentChatApi {
   /** Flags a thread as having news the user has not seen. */
   markUnread: (id: string, unread: boolean) => void;
   updateThread: (id: string, patch: Partial<ChatThreadSettings>) => void;
+  /** Starts a new native conversation with another CLI and carries safe context. */
+  handoffThread: (id: string, definitionId: ChatDefinitionId, model: string) => void;
   removeThread: (id: string) => void;
-  send: (id: string, prompt: string) => Promise<void>;
+  send: (id: string, prompt: string, attachments?: readonly ChatAttachment[]) => Promise<void>;
   stop: (id: string) => Promise<void>;
   /** Answers an approval card; rejects with the reason when it cannot. */
   respond: (id: string, requestId: string, allow: boolean) => Promise<void>;
@@ -258,6 +263,14 @@ export function useAgentChat(): AgentChatApi {
     );
   }, []);
 
+  const handoff = useCallback((id: string, definitionId: ChatDefinitionId, model: string) => {
+    setThreads((current) =>
+      current.map((thread) =>
+        thread.id === id ? handoffThread(thread, definitionId, model) : thread,
+      ),
+    );
+  }, []);
+
   const remove = useCallback((id: string) => {
     const target = threadsRef.current.find((thread) => thread.id === id);
     if (target?.runningTurnId && hasDesktopBackend()) {
@@ -273,12 +286,19 @@ export function useAgentChat(): AgentChatApi {
     });
   }, []);
 
-  const send = useCallback(async (id: string, prompt: string) => {
+  const send = useCallback(async (
+    id: string,
+    prompt: string,
+    attachments: readonly ChatAttachment[] = [],
+  ) => {
     const thread = threadsRef.current.find((entry) => entry.id === id);
     if (!thread || thread.runningTurnId) return;
     const turnId = crypto.randomUUID();
+    const visiblePrompt = prompt.trim() ? prompt : "Please inspect the attached files.";
     setThreads((current) =>
-      current.map((entry) => (entry.id === id ? beginTurn(entry, prompt, turnId) : entry)),
+      current.map((entry) =>
+        entry.id === id ? beginTurn(entry, prompt, turnId, Date.now(), attachments) : entry,
+      ),
     );
     try {
       const { invoke } = await core();
@@ -288,10 +308,11 @@ export function useAgentChat(): AgentChatApi {
           turnId,
           definitionId: thread.definitionId,
           workingDirectory: thread.workingDirectory,
-          prompt,
+          prompt: promptForTurn(thread, visiblePrompt),
           permission: thread.permission,
           model: thread.model.trim() || null,
           nativeSessionId: thread.nativeSessionId,
+          attachments: attachments.map(({ path }) => ({ path })),
         },
       });
     } catch (reason) {
@@ -360,6 +381,7 @@ export function useAgentChat(): AgentChatApi {
       createThread: create,
       markUnread,
       updateThread: update,
+      handoffThread: handoff,
       removeThread: remove,
       send,
       stop: stopTurn,
@@ -381,6 +403,7 @@ export function useAgentChat(): AgentChatApi {
       create,
       markUnread,
       update,
+      handoff,
       remove,
       send,
       stopTurn,
