@@ -376,9 +376,38 @@ pub struct AgentLaunchRequest {
     /// prepend instructions intended only for a newly started CLI task.
     #[serde(default)]
     pub restore_existing_session: bool,
+    /// An ephemeral, user-selected CLI config root for Codex or Claude. It is
+    /// intentionally excluded from saved workspace plans: credentials and
+    /// machine-local account paths must not be restored or shared by a plan.
+    #[serde(default)]
+    pub profile_config_path: Option<String>,
     pub working_directory: String,
     pub cols: u32,
     pub rows: u32,
+}
+
+fn profile_config_directory(
+    definition_id: &str,
+    raw: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(raw) = raw.map(str::trim).filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    if definition_id != "codex" && definition_id != "claude" {
+        return Err("Only Codex and Claude Code support account profiles.".to_string());
+    }
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return Err("The account profile directory must be an absolute path.".to_string());
+    }
+    let path = plain_win32_path(
+        path.canonicalize()
+            .map_err(|error| format!("Cannot open the account profile directory: {error}"))?,
+    );
+    if !path.is_dir() {
+        return Err("The account profile path is not a directory.".to_string());
+    }
+    Ok(Some(path))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -4494,6 +4523,9 @@ pub fn launch_request_from_plan(
         group_id: None,
         seed_input: None,
         restore_existing_session,
+        // Account profiles are intentionally an ephemeral launch choice. A
+        // workspace plan must never retain a machine-local credential root.
+        profile_config_path: None,
         working_directory: validated.working_directory,
         cols,
         rows,
@@ -4964,6 +4996,8 @@ pub fn launch_with_replay(
     let launch_arguments = request.arguments.clone();
     let (definition_id, label, executable, mut arguments, working_directory) =
         resolve_launch(&request)?;
+    let profile_config_path =
+        profile_config_directory(&definition_id, request.profile_config_path.as_deref())?;
     let launch_model =
         model_from_arguments(&arguments).or_else(|| configured_agent_model(&definition_id));
     let session_id = registry.next_id();
@@ -5061,6 +5095,13 @@ pub fn launch_with_replay(
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     command.env("LATTICETERM_AGENT_SESSION", &session_id);
+    if let Some(profile_config_path) = profile_config_path.as_deref() {
+        if definition_id == "codex" {
+            command.env("CODEX_HOME", profile_config_path);
+        } else if definition_id == "claude" {
+            command.env("CLAUDE_CONFIG_DIR", profile_config_path);
+        }
+    }
     if let Some(remote_cli) = remote_cli_executable() {
         command.env("LATTICETERM_REMOTE_CLI", remote_cli);
     }
@@ -5832,6 +5873,7 @@ session id: 0199aa11-"
             group_id: Some("google-project".to_string()),
             seed_input: None,
             restore_existing_session: true,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 120,
             rows: 32,
@@ -5864,6 +5906,7 @@ session id: 0199aa11-"
             group_id: None,
             seed_input: None,
             restore_existing_session: false,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 120,
             rows: 32,
@@ -5885,6 +5928,7 @@ session id: 0199aa11-"
             group_id: None,
             seed_input: Some("Continue the previous review.".to_string()),
             restore_existing_session: false,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 120,
             rows: 32,
@@ -6428,6 +6472,7 @@ model = "gpt-5.3-codex"
             group_id: None,
             seed_input: None,
             restore_existing_session: false,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 100,
             rows: 30,
@@ -6579,6 +6624,29 @@ model = "gpt-5.3-codex"
 
         assert!(command.get_env("HERDR_ENV").is_none());
         assert!(command.get_env("HERDR_PANE_ID").is_none());
+    }
+
+    #[test]
+    fn account_profiles_accept_only_local_codex_or_claude_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let raw = directory.path().display().to_string();
+        let expected = plain_win32_path(directory.path().canonicalize().unwrap());
+
+        assert_eq!(
+            profile_config_directory("codex", Some(&raw)).unwrap(),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            profile_config_directory("claude", Some(&raw)).unwrap(),
+            Some(expected)
+        );
+        assert!(profile_config_directory("codex", None).unwrap().is_none());
+        assert!(profile_config_directory("custom", Some(&raw))
+            .unwrap_err()
+            .contains("Only Codex and Claude"));
+        assert!(profile_config_directory("claude", Some("relative-profile"))
+            .unwrap_err()
+            .contains("absolute path"));
     }
 
     #[cfg(windows)]
@@ -6747,6 +6815,7 @@ model = "gpt-5.3-codex"
         assert_eq!(request.resume_session_id.as_deref(), Some("session-42"));
         assert!(request.arguments.is_empty());
         assert!(request.restore_existing_session);
+        assert!(request.profile_config_path.is_none());
     }
 
     #[test]
@@ -7726,6 +7795,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             group_id: None,
             seed_input: None,
             restore_existing_session: false,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -7806,6 +7876,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             group_id: None,
             seed_input: None,
             restore_existing_session: false,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8035,6 +8106,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             group_id: None,
             seed_input: None,
             restore_existing_session: false,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8086,6 +8158,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             group_id: None,
             seed_input: None,
             restore_existing_session: false,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8145,6 +8218,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 group_id: None,
                 seed_input: None,
                 restore_existing_session: false,
+                profile_config_path: None,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -8182,6 +8256,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             group_id: None,
             seed_input: None,
             restore_existing_session: false,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8225,6 +8300,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             group_id: None,
             seed_input: None,
             restore_existing_session: false,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8310,6 +8386,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 group_id: None,
                 seed_input: None,
                 restore_existing_session: false,
+                profile_config_path: None,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -8347,6 +8424,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 group_id: None,
                 seed_input: None,
                 restore_existing_session: false,
+                profile_config_path: None,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -8392,6 +8470,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 group_id: None,
                 seed_input: None,
                 restore_existing_session: false,
+                profile_config_path: None,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -8625,6 +8704,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                         group_id: None,
                         seed_input: None,
                         restore_existing_session: false,
+                        profile_config_path: None,
                         working_directory: std::env::current_dir().unwrap().display().to_string(),
                         cols: 80,
                         rows: 24,
@@ -8687,6 +8767,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             group_id: None,
             seed_input: None,
             restore_existing_session: false,
+            profile_config_path: None,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,

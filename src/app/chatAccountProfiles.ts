@@ -18,7 +18,7 @@ export const CHAT_ACCOUNT_PROFILES_KEY = "latticeterm.chatAccountProfiles.v1";
 const MAX_PROFILES = 24;
 const MAX_NAME_LENGTH = 64;
 
-export function profileCapable(definitionId: ChatDefinitionId): definitionId is ProfiledChatDefinitionId {
+export function profileCapable(definitionId: string): definitionId is ProfiledChatDefinitionId {
   return definitionId === "codex" || definitionId === "claude";
 }
 
@@ -66,7 +66,7 @@ export function saveChatAccountProfiles(
 
 export function profilesFor(
   profiles: readonly ChatAccountProfile[],
-  definitionId: ChatDefinitionId,
+  definitionId: string,
 ): readonly ChatAccountProfile[] {
   return profileCapable(definitionId)
     ? profiles.filter((profile) => profile.definitionId === definitionId)
