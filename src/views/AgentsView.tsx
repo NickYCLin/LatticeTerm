@@ -10,7 +10,9 @@ import { copyTextToClipboard } from "../app/clipboardText";
 import { displayPath } from "../app/displayPath";
 import {
   loadChatAccountProfiles,
+  profileCapable,
   profilesFor,
+  saveChatAccountProfiles,
   type ChatAccountProfile,
 } from "../app/chatAccountProfiles";
 import type { RemoteApi } from "../app/useRemoteSessions";
@@ -20,6 +22,8 @@ import {
   moveAgentLaunchPlan,
 } from "../app/useAgentSessions";
 import { AgentRemoteDelivery } from "../components/agents/AgentRemoteDelivery";
+import { AgentAccountProfileDialog } from "../components/agents/AgentAccountProfileDialog";
+import { AgentSkillsPanel } from "../components/agents/AgentSkillsPanel";
 import { SharedAgentRulesPanel } from "../components/agents/SharedAgentRulesPanel";
 import { Callout } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
@@ -28,7 +32,6 @@ import {
   ChevronDownIcon,
   EditIcon,
   FolderIcon,
-  MemoryIcon,
   PlayIcon,
   RefreshIcon,
   StopIcon,
@@ -103,10 +106,11 @@ export function AgentsView({
   const [workingDirectory, setWorkingDirectory] = useState("");
   const [launchNote, setLaunchNote] = useState("");
   const [launching, setLaunching] = useState<string | null>(null);
-  const [accountProfiles] = useState<ChatAccountProfile[]>(() =>
+  const [accountProfiles, setAccountProfiles] = useState<ChatAccountProfile[]>(() =>
     typeof localStorage === "undefined" ? [] : loadChatAccountProfiles(localStorage),
   );
   const [selectedAccountProfile, setSelectedAccountProfile] = useState<Record<string, string>>({});
+  const [accountProfileDefinition, setAccountProfileDefinition] = useState<AgentDefinition | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [pendingInstall, setPendingInstall] = useState<AgentDefinition | null>(null);
   const [copiedInstallSource, setCopiedInstallSource] = useState<string | null>(null);
@@ -114,7 +118,6 @@ export function AgentsView({
   const copyRequestRef = useRef(0);
   const [copyProblem, setCopyProblem] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [editingWorkspaceName, setEditingWorkspaceName] = useState(false);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
@@ -178,6 +181,12 @@ export function AgentsView({
   }, [agents.startupInstructions]);
 
   useEffect(() => {
+    if (typeof localStorage !== "undefined") {
+      saveChatAccountProfiles(localStorage, accountProfiles);
+    }
+  }, [accountProfiles]);
+
+  useEffect(() => {
     const activeIds = new Set(agents.sessions.map((session) => session.sessionId));
     setSelectedBroadcastIds((current) => {
       const next = new Set(
@@ -217,17 +226,43 @@ export function AgentsView({
     };
   }
 
+  function addAccountProfile(
+    definition: AgentDefinition,
+    name: string,
+    configDirectory: string,
+  ) {
+    if (!profileCapable(definition.id)) return;
+    const profile: ChatAccountProfile = {
+      id: crypto.randomUUID(),
+      definitionId: definition.id,
+      name: name.slice(0, 64),
+      configDirectory,
+    };
+    setAccountProfiles((current) => [...current, profile]);
+    setSelectedAccountProfile((current) => ({
+      ...current,
+      [definition.id]: profile.id,
+    }));
+    setAccountProfileDefinition(null);
+  }
+
   async function launch(definition: AgentDefinition) {
     const id = definition.id;
     setLaunching(id);
     setError(null);
     try {
+      const draft = launchDraft(definition);
       const session = await agents.launch({
-        ...launchDraft(definition),
+        ...draft,
         cols: 120,
         rows: 32,
       });
       onOpen(session.sessionId);
+      // Launch stays responsive if storage is unavailable. The native store
+      // upserts an identical CLI/cwd instead of creating duplicate entries.
+      void agents.savePlan(draft).catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -291,22 +326,6 @@ export function AgentsView({
           error: reason instanceof Error ? reason.message : String(reason),
         }),
       );
-    }
-  }
-
-  async function savePlan(definition: AgentDefinition) {
-    const id = definition.id;
-    setSaving(id);
-    setError(null);
-    setWorkspaceNotice(null);
-    try {
-      const plan = await agents.savePlan(launchDraft(definition));
-      setWorkspaceNotice({ saved: plan.label });
-      setLaunchNote("");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setSaving(null);
     }
   }
 
@@ -400,12 +419,6 @@ export function AgentsView({
     agents.mode !== "ready" || !workingDirectory.trim() || launching !== null;
   const installDisabled =
     agents.mode !== "ready" || !workingDirectory.trim() || installing !== null;
-  const planLimitReached = agents.plans.length >= MAX_SAVED_AGENT_PLANS;
-  const saveDisabled =
-    agents.mode !== "ready" ||
-    !workingDirectory.trim() ||
-    saving !== null ||
-    planLimitReached;
   const broadcastCandidates = agents.sessions.slice(
     0,
     MAX_AGENT_BROADCAST_TARGETS,
@@ -635,6 +648,12 @@ export function AgentsView({
           disabled={agents.mode !== "ready"}
         />
 
+        <AgentSkillsPanel
+          catalog={displayCatalog}
+          accountProfiles={accountProfiles}
+          projectDirectory={workingDirectory}
+        />
+
         <div className="agent-grid">
           {displayCatalog.map((definition) => (
             <article
@@ -674,23 +693,35 @@ export function AgentsView({
                     )}
                   </div>
                 )}
-                {definition.installed && profilesFor(accountProfiles, definition.id).length > 0 && (
-                  <label className="field">
-                    <span className="field__label">{t("agents.account.profile")}</span>
-                    <select
-                      className="select"
-                      value={selectedAccountProfile[definition.id] ?? ""}
-                      onChange={(event) => setSelectedAccountProfile((current) => ({
-                        ...current,
-                        [definition.id]: event.currentTarget.value,
-                      }))}
+                {definition.installed && profileCapable(definition.id) && (
+                  <div className="agent-card__profile">
+                    <label className="field">
+                      <span className="field__label">{t("agents.account.profile")}</span>
+                      <select
+                        className="select"
+                        value={selectedAccountProfile[definition.id] ?? ""}
+                        onChange={(event) => setSelectedAccountProfile((current) => ({
+                          ...current,
+                          [definition.id]: event.currentTarget.value,
+                        }))}
+                      >
+                        <option value="">{t("agents.account.default")}</option>
+                        {profilesFor(accountProfiles, definition.id).map((profile) => (
+                          <option key={profile.id} value={profile.id}>{profile.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="button button--secondary button--sm"
+                      onClick={() => setAccountProfileDefinition(definition)}
                     >
-                      <option value="">{t("agents.account.default")}</option>
-                      {profilesFor(accountProfiles, definition.id).map((profile) => (
-                        <option key={profile.id} value={profile.id}>{profile.name}</option>
-                      ))}
-                    </select>
-                  </label>
+                      {t("agents.account.addProfile")}
+                    </button>
+                    <p className="agent-card__profile-hint">
+                      {t("agents.account.profileHint")}
+                    </p>
+                  </div>
                 )}
                 {!definition.installed && definition.install.displayCommand && (
                   <code className="agent-card__install-command">
@@ -699,17 +730,6 @@ export function AgentsView({
                 )}
               </div>
               <div className="agent-card__actions">
-                <button
-                  type="button"
-                  className="button button--ghost button--sm"
-                  disabled={saveDisabled}
-                  onClick={() => void savePlan(definition)}
-                >
-                  <MemoryIcon size={12} />
-                  {saving === definition.id
-                    ? t("agents.workspace.saving")
-                    : t("agents.workspace.save")}
-                </button>
                 {!definition.installed &&
                   (definition.install.executable && definition.install.available ? (
                     <button
@@ -1310,6 +1330,15 @@ export function AgentsView({
           tone="danger"
           onConfirm={() => void confirmDeletePlan()}
           onCancel={() => setPendingDeletePlan(null)}
+        />
+      )}
+
+      {accountProfileDefinition && profileCapable(accountProfileDefinition.id) && (
+        <AgentAccountProfileDialog
+          agentLabel={accountProfileDefinition.label}
+          onSave={(name, configDirectory) =>
+            addAccountProfile(accountProfileDefinition, name, configDirectory)}
+          onCancel={() => setAccountProfileDefinition(null)}
         />
       )}
     </div>

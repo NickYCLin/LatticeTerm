@@ -235,12 +235,36 @@ impl FileAgentPlanStore {
     }
 
     pub fn save(&mut self, draft: AgentLaunchPlanDraft) -> Result<AgentLaunchPlan, String> {
+        let candidate = normalize_launch_plan(Self::next_id()?, draft)?;
+        let matching_plan = self.plans.iter().position(|existing| {
+            existing.definition_id == candidate.definition_id
+                && existing.label == candidate.label
+                && existing.executable == candidate.executable
+                && existing.arguments == candidate.arguments
+                && existing.resume_session_id == candidate.resume_session_id
+                && existing.working_directory == candidate.working_directory
+        });
+
+        if let Some(index) = matching_plan {
+            let mut updated = candidate;
+            updated.id = self.plans[index].id.clone();
+            if updated == self.plans[index] {
+                return Ok(updated);
+            }
+            let previous = std::mem::replace(&mut self.plans[index], updated.clone());
+            if let Err(error) = self.persist() {
+                self.plans[index] = previous;
+                return Err(error);
+            }
+            return Ok(updated);
+        }
+
         if self.plans.len() >= MAX_SAVED_AGENT_PLANS {
             return Err(format!(
                 "At most {MAX_SAVED_AGENT_PLANS} launch plans may be saved."
             ));
         }
-        let plan = normalize_launch_plan(Self::next_id()?, draft)?;
+        let plan = candidate;
         self.plans.push(plan.clone());
         if let Err(error) = self.persist() {
             self.plans.pop();
@@ -348,6 +372,20 @@ mod tests {
         for secret in ["reportToken", "processId", "prompt", "terminalOutput"] {
             assert!(!raw.contains(secret), "unexpected {secret} in plan store");
         }
+    }
+
+    #[test]
+    fn saving_the_same_launch_updates_its_memo_without_creating_a_duplicate() {
+        let directory = temp_dir("upsert");
+        let mut store = FileAgentPlanStore::open(&directory).unwrap();
+        let initial = store.save(draft(&directory, "Review agent")).unwrap();
+        let mut refreshed = draft(&directory, "Review agent");
+        refreshed.note = "Updated memo".to_string();
+
+        let saved = store.save(refreshed).unwrap();
+        assert_eq!(saved.id, initial.id);
+        assert_eq!(saved.note, "Updated memo");
+        assert_eq!(store.snapshot().plans, vec![saved]);
     }
 
     #[test]
