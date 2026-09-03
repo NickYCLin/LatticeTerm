@@ -4,6 +4,14 @@
 
 ---
 
+## [0.39.0](https://github.com/NickYCLin/lattice-term/compare/v0.38.0...v0.39.0) (2026-09-03)
+
+
+### 🚀 新增功能
+
+* **對話:** 支援帳號設定檔與 Skills ([#137](https://github.com/NickYCLin/lattice-term/issues/137)) ([1dbc36a](https://github.com/NickYCLin/lattice-term/commit/1dbc36ae065e0791e0183fb1c8da23eb5d8ee950))
+* **對話:** 支援跨模型轉交與附件 ([#135](https://github.com/NickYCLin/lattice-term/issues/135)) ([81d1d5d](https://github.com/NickYCLin/lattice-term/commit/81d1d5d42c95773d51c7f2cc0de50e2ce476b814))
+
 ## [0.38.0](https://github.com/NickYCLin/lattice-term/compare/v0.37.2...v0.38.0) (2026-09-03)
 
 
