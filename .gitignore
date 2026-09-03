@@ -46,6 +46,9 @@ src-tauri/icons/ios/
 # Rust build output
 **/target/
 
+# Local isolated development worktrees.
+.worktrees/
+
 # Built and bundled by scripts/build-*-engine.mjs / build-remote-agent.mjs.
 src-tauri/binaries/lattice-rdp-engine-*
 src-tauri/binaries/lattice-vnc-engine-*
