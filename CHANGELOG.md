@@ -4,6 +4,13 @@
 
 ---
 
+## [0.37.2](https://github.com/NickYCLin/lattice-term/compare/v0.37.1...v0.37.2) (2026-09-03)
+
+
+### 🛠️ 問題修正
+
+* **session:** 恢復桌面工作階段資料位置 ([dfb12fd](https://github.com/NickYCLin/lattice-term/commit/dfb12fd9aa91acc27279a1466935d5ef6f24725d))
+
 ## [0.37.1](https://github.com/NickYCLin/lattice-term/compare/v0.37.0...v0.37.1) (2026-09-03)
 
 
