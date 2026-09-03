@@ -12,6 +12,27 @@ export default defineConfig(async () => ({
     __APP_VERSION__: JSON.stringify(packageJson.version),
   },
 
+  // The application shell imports React DOM and Tauri bridge helpers for its
+  // live-session hooks. Keep these stable runtime dependencies separate from
+  // the first-screen application code, so later page chunks reuse cacheable
+  // runtime chunks rather than growing the entry bundle.
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (
+            id.includes("/node_modules/react/") ||
+            id.includes("/node_modules/react-dom/") ||
+            id.includes("/node_modules/scheduler/")
+          ) {
+            return "react";
+          }
+          if (id.includes("/node_modules/@tauri-apps/")) return "tauri";
+        },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
