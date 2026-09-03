@@ -4,6 +4,14 @@
 
 ---
 
+## [0.40.0](https://github.com/NickYCLin/lattice-term/compare/v0.39.0...v0.40.0) (2026-09-03)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** 支援帳號設定檔啟動 ([#138](https://github.com/NickYCLin/lattice-term/issues/138)) ([185b241](https://github.com/NickYCLin/lattice-term/commit/185b2417eefa8102e8a9b3827700fd00981774d9))
+* **Agent Fleet:** 自動保存並集中管理帳號與 Skills ([#140](https://github.com/NickYCLin/lattice-term/issues/140)) ([422b1ab](https://github.com/NickYCLin/lattice-term/commit/422b1abe34cd0175b51365c43497a5472e6684fd))
+
 ## [0.39.0](https://github.com/NickYCLin/lattice-term/compare/v0.38.0...v0.39.0) (2026-09-03)
 
 
