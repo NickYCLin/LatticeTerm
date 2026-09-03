@@ -4,6 +4,23 @@
 
 ---
 
+## [0.38.0](https://github.com/NickYCLin/lattice-term/compare/v0.37.2...v0.38.0) (2026-09-03)
+
+
+### 🚀 新增功能
+
+* **chat:** 整合 Gemini 與單一模型選單 ([c2b948a](https://github.com/NickYCLin/lattice-term/commit/c2b948a33630a9d372021399be065c2f11777a4b))
+
+
+### 🛠️ 問題修正
+
+* **chat:** 避免 Claude 認證更新互相衝突 ([54523c7](https://github.com/NickYCLin/lattice-term/commit/54523c73de88fdb4955bac5c69c67238003701b9))
+
+
+### ⚡ 效能與體驗優化
+
+* **前端:** 拆分穩定執行期分包 ([#134](https://github.com/NickYCLin/lattice-term/issues/134)) ([3542eb4](https://github.com/NickYCLin/lattice-term/commit/3542eb4b727ef84fafd883587597f479bde7e550))
+
 ## [0.37.2](https://github.com/NickYCLin/lattice-term/compare/v0.37.1...v0.37.2) (2026-09-03)
 
 
