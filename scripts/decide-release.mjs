@@ -55,17 +55,17 @@ export function classifyCommit({ subject, body = "" }) {
 }
 
 /**
- * @param commits unreleased commits, newest first, each `{subject, body, at}`
- *   where `at` is an ISO date string.
- */
-/**
  * @param commits unreleased commits, each `{subject, body}`.
  * @param forced the maintainer asked for a release regardless of the count.
+ * @param immediateOnly this is a push, not the daily pass: only a breaking
+ *   change ships now, everything else waits to be batched. Without this the
+ *   accumulation threshold degenerates into "release on the third push".
  */
 export function decideRelease({
   commits,
   minItems = DEFAULT_MIN_ITEMS,
   forced = false,
+  immediateOnly = false,
 }) {
   const classified = commits.map((commit) => ({
     ...commit,
@@ -75,6 +75,12 @@ export function decideRelease({
 
   if (classified.some((commit) => commit.breaking)) {
     return { release: true, reason: "a breaking change is waiting" };
+  }
+  if (immediateOnly) {
+    return {
+      release: false,
+      reason: "no breaking change; the daily pass decides on accumulation",
+    };
   }
   if (releasable.length === 0) {
     // Forcing a version with an empty changelog would ship nothing while
@@ -128,6 +134,9 @@ function main() {
     commits,
     minItems: Number(process.env.RELEASE_MIN_ITEMS ?? DEFAULT_MIN_ITEMS),
     forced: process.env.RELEASE_FORCE === "true",
+    // A push to main runs this workflow too, but only the scheduled pass
+    // and a maintainer's dispatch apply the accumulation rule.
+    immediateOnly: process.env.RELEASE_TRIGGER === "push",
   });
   const summary = `release=${decision.release} (${decision.reason})`;
   console.log(summary);
