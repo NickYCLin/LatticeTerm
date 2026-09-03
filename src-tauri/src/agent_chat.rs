@@ -1,0 +1,1402 @@
+//! Chat-style conversations with an agent CLI.
+//!
+//! Some people would rather talk to a model in a message thread than in a
+//! terminal. Each turn here runs the CLI once in its documented headless mode
+//! (`claude -p --output-format stream-json`, `codex exec --json`), reads the
+//! JSON it prints, and forwards a small normalised event stream to the
+//! interface. The CLI's own session id comes back with the first turn so the
+//! next one can resume the same conversation; the CLI keeps the transcript,
+//! and LatticeTerm keeps nothing of its own on disk.
+//!
+//! Login, model access and tool permissions stay with the CLI exactly as in
+//! the Agent Fleet: nothing here reads a key or a token, and the CLI runs
+//! with the user's own rights, not in a sandbox of LatticeTerm's making.
+
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::{Arc, Mutex};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
+
+pub const EVENT_CHAT: &str = "agent-chat://event";
+
+/// Largest prompt a single turn accepts. Well above anything typed by hand;
+/// it exists so a pasted file cannot balloon the child's stdin unbounded.
+pub const MAX_PROMPT_BYTES: usize = 256 * 1024;
+/// Largest tool output forwarded to the interface per tool call. The full
+/// output already reached the model; the card only needs enough to read.
+const MAX_TOOL_OUTPUT_BYTES: usize = 8 * 1024;
+/// Longest single JSON line the reader will parse. A line past this is
+/// reported and skipped rather than buffered in full.
+const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+/// Tail of stderr kept to explain a failed turn.
+const MAX_STDERR_BYTES: usize = 4 * 1024;
+const MAX_MODEL_LEN: usize = 64;
+const MAX_SESSION_ID_LEN: usize = 128;
+const MAX_ID_LEN: usize = 64;
+
+/// What the CLI may do during a turn, named by effect so the same choice
+/// means the same thing whichever CLI is behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatPermission {
+    /// Look but never change: `claude --permission-mode plan`,
+    /// `codex -s read-only`.
+    ReadOnly,
+    /// Edit files under the working directory. Claude still refuses shell
+    /// commands that would need an interactive approval, and says so in the
+    /// reply; Codex runs them inside its workspace-write sandbox.
+    WorkspaceWrite,
+    /// Everything, with no prompts. Kept behind an explicit choice in the
+    /// interface because it hands the CLI the user's full rights.
+    Full,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurnRequest {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub definition_id: String,
+    pub working_directory: String,
+    pub prompt: String,
+    pub permission: ChatPermission,
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The CLI's own id for this conversation, from an earlier `Started` or
+    /// `Finished` event. Absent on the first turn.
+    #[serde(default)]
+    pub native_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub reasoning_tokens: u64,
+}
+
+/// One step of a turn, in the shape the interface renders. Item ids are
+/// stable within a turn so a later event can update the card it started.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ChatEvent {
+    Started {
+        native_session_id: Option<String>,
+        model: Option<String>,
+    },
+    TextDelta {
+        item_id: String,
+        delta: String,
+    },
+    /// The complete text of an assistant message; replaces any deltas.
+    Text {
+        item_id: String,
+        text: String,
+    },
+    Reasoning {
+        item_id: String,
+        text: String,
+    },
+    ToolStarted {
+        item_id: String,
+        name: String,
+        summary: String,
+    },
+    ToolFinished {
+        item_id: String,
+        name: Option<String>,
+        summary: Option<String>,
+        output: String,
+        is_error: bool,
+    },
+    /// Something worth showing that does not end the turn.
+    Notice {
+        message: String,
+    },
+    Finished {
+        native_session_id: Option<String>,
+        usage: Option<ChatUsage>,
+        cost_usd: Option<f64>,
+        duration_ms: Option<u64>,
+        error: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatEventEnvelope {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub event: ChatEvent,
+}
+
+pub trait ChatSink: Send + Sync + 'static {
+    fn event(&self, thread_id: &str, turn_id: &str, event: ChatEvent);
+}
+
+pub struct EventSink(pub tauri::AppHandle);
+
+impl ChatSink for EventSink {
+    fn event(&self, thread_id: &str, turn_id: &str, event: ChatEvent) {
+        use tauri::Emitter;
+        let _ = self.0.emit(
+            EVENT_CHAT,
+            ChatEventEnvelope {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                event,
+            },
+        );
+    }
+}
+
+struct RunningTurn {
+    turn_id: String,
+    child: Child,
+}
+
+/// The turns currently running, one per thread at most.
+#[derive(Default)]
+pub struct AgentChatRegistry {
+    running: Mutex<HashMap<String, RunningTurn>>,
+}
+
+impl AgentChatRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, RunningTurn>> {
+        self.running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Asks the running turn on `thread_id` to stop. Returns whether there
+    /// was one; the `Finished` event still arrives once the process exits.
+    pub fn stop(&self, thread_id: &str) -> Result<bool, String> {
+        validate_id(thread_id, "thread id")?;
+        let mut running = self.lock();
+        match running.get_mut(thread_id) {
+            Some(turn) => {
+                turn.child
+                    .start_kill()
+                    .map_err(|error| format!("Cannot stop the agent: {error}"))?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Ends every running turn. Called when the application exits so no CLI
+    /// keeps working for a window that is gone.
+    pub fn shutdown(&self) {
+        let mut running = self.lock();
+        for turn in running.values_mut() {
+            let _ = turn.child.start_kill();
+        }
+        running.clear();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dialect {
+    Claude,
+    Codex,
+}
+
+impl Dialect {
+    fn from_definition(definition_id: &str) -> Option<Self> {
+        match definition_id {
+            "claude" => Some(Self::Claude),
+            "codex" => Some(Self::Codex),
+            _ => None,
+        }
+    }
+}
+
+/// Which CLIs chat mode can drive. Only those with a documented headless
+/// JSON mode qualify; anything else stays a terminal in the Agent Fleet.
+pub fn supported_definitions() -> &'static [&'static str] {
+    &["claude", "codex"]
+}
+
+fn validate_id(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > MAX_ID_LEN {
+        return Err(format!("Invalid {label}."));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!("Invalid {label}."));
+    }
+    Ok(())
+}
+
+fn validate_model(model: &str) -> Result<(), String> {
+    if model.is_empty() || model.len() > MAX_MODEL_LEN {
+        return Err("The model name is too long.".to_string());
+    }
+    if model.starts_with('-')
+        || !model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/'))
+    {
+        return Err("The model name contains characters a CLI would not accept.".to_string());
+    }
+    Ok(())
+}
+
+fn validate_native_session_id(id: &str) -> Result<(), String> {
+    if id.is_empty() || id.len() > MAX_SESSION_ID_LEN {
+        return Err("The saved conversation id is invalid.".to_string());
+    }
+    if id.starts_with('-')
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    {
+        return Err("The saved conversation id is invalid.".to_string());
+    }
+    Ok(())
+}
+
+fn validate_working_directory(raw: &str) -> Result<PathBuf, String> {
+    let path = Path::new(raw.trim());
+    if raw.trim().is_empty() || !path.is_absolute() {
+        return Err("Choose a working directory first.".to_string());
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("The working directory cannot be opened: {error}"))?;
+    if !canonical.is_dir() {
+        return Err("The working directory is not a directory.".to_string());
+    }
+    Ok(canonical)
+}
+
+/// The argument vector for one turn. The prompt is never an argument: it
+/// goes to stdin, so it neither hits an argument length limit nor shows in
+/// the process list.
+fn turn_arguments(
+    dialect: Dialect,
+    working_directory: &Path,
+    permission: ChatPermission,
+    model: Option<&str>,
+    native_session_id: Option<&str>,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = Vec::new();
+    match dialect {
+        Dialect::Claude => {
+            args.extend(
+                [
+                    "-p",
+                    "--output-format",
+                    "stream-json",
+                    // stream-json refuses to run without it.
+                    "--verbose",
+                    "--include-partial-messages",
+                    "--permission-mode",
+                    match permission {
+                        ChatPermission::ReadOnly => "plan",
+                        ChatPermission::WorkspaceWrite => "acceptEdits",
+                        ChatPermission::Full => "bypassPermissions",
+                    },
+                ]
+                .map(OsString::from),
+            );
+            if let Some(model) = model {
+                args.push("--model".into());
+                args.push(model.into());
+            }
+            if let Some(id) = native_session_id {
+                args.push("--resume".into());
+                args.push(id.into());
+            }
+        }
+        Dialect::Codex => {
+            args.push("exec".into());
+            args.push("--json".into());
+            // The user chose the directory; whether it is a git checkout is
+            // not a reason to refuse a conversation.
+            args.push("--skip-git-repo-check".into());
+            args.push("-C".into());
+            args.push(working_directory.as_os_str().to_os_string());
+            match permission {
+                ChatPermission::ReadOnly => {
+                    args.push("-s".into());
+                    args.push("read-only".into());
+                }
+                ChatPermission::WorkspaceWrite => {
+                    args.push("-s".into());
+                    args.push("workspace-write".into());
+                }
+                ChatPermission::Full => {
+                    args.push("--dangerously-bypass-approvals-and-sandbox".into());
+                }
+            }
+            match native_session_id {
+                Some(id) => {
+                    // A Codex thread keeps its model; changing it mid-thread
+                    // is not something `resume` offers.
+                    args.push("resume".into());
+                    args.push(id.into());
+                }
+                None => {
+                    if let Some(model) = model {
+                        args.push("-m".into());
+                        args.push(model.into());
+                    }
+                }
+            }
+            // Read the prompt from stdin.
+            args.push("-".into());
+        }
+    }
+    args
+}
+
+/// Starts one turn. Returns as soon as the process is running; everything
+/// it says arrives through the sink.
+///
+/// Async because tokio's process spawning needs a runtime context, which a
+/// synchronous Tauri command does not have.
+pub async fn send<S: ChatSink>(
+    sink: Arc<S>,
+    registry: Arc<AgentChatRegistry>,
+    request: ChatTurnRequest,
+) -> Result<(), String> {
+    validate_id(&request.thread_id, "thread id")?;
+    validate_id(&request.turn_id, "turn id")?;
+    let dialect = Dialect::from_definition(&request.definition_id)
+        .ok_or_else(|| "This CLI has no chat mode.".to_string())?;
+    if request.prompt.trim().is_empty() {
+        return Err("Type a message first.".to_string());
+    }
+    if request.prompt.len() > MAX_PROMPT_BYTES {
+        return Err("The message is too long for one turn.".to_string());
+    }
+    let model = request
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(model) = model {
+        validate_model(model)?;
+    }
+    if let Some(id) = request.native_session_id.as_deref() {
+        validate_native_session_id(id)?;
+    }
+    let working_directory = validate_working_directory(&request.working_directory)?;
+    let executable = crate::agent::catalog_executable(&request.definition_id)
+        .ok_or_else(|| "This CLI is not installed.".to_string())?;
+
+    {
+        let running = registry.lock();
+        if running.contains_key(&request.thread_id) {
+            return Err("This conversation is still answering.".to_string());
+        }
+    }
+
+    let (program, prefix) = crate::agent::launch_parts(&executable);
+    let mut command = Command::new(&program);
+    command.args(prefix);
+    command.args(turn_arguments(
+        dialect,
+        &working_directory,
+        request.permission,
+        model,
+        request.native_session_id.as_deref(),
+    ));
+    command.current_dir(&working_directory);
+    // A chat turn is its own conversation, not a hook target of whatever
+    // launched LatticeTerm. Inherited markers would make the CLI refuse to
+    // nest, or report its progress to a fleet session it does not belong to.
+    for name in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "HERDR_ENV",
+        "HERDR_PANE_ID",
+        "LATTICETERM_AGENT_REPORTER",
+        "LATTICETERM_AGENT_REPORT_ADDR",
+        "LATTICETERM_AGENT_REPORT_TOKEN",
+        "LATTICETERM_AGENT_SESSION",
+    ] {
+        command.env_remove(name);
+    }
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    command.kill_on_drop(true);
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Cannot start {}: {error}", request.definition_id))?;
+    let stdin = child.stdin.take();
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "The agent's output could not be captured.".to_string())?;
+    let stderr = child.stderr.take();
+
+    {
+        let mut running = registry.lock();
+        running.insert(
+            request.thread_id.clone(),
+            RunningTurn {
+                turn_id: request.turn_id.clone(),
+                child,
+            },
+        );
+    }
+
+    let thread_id = request.thread_id;
+    let turn_id = request.turn_id;
+    let prompt = request.prompt;
+    tauri::async_runtime::spawn(async move {
+        if let Some(mut stdin) = stdin {
+            // A CLI that has already exited closes the pipe; the exit status
+            // explains that better than a write error would.
+            let _ = stdin.write_all(prompt.as_bytes()).await;
+            let _ = stdin.write_all(b"\n").await;
+            let _ = stdin.shutdown().await;
+        }
+
+        let stderr_task = tauri::async_runtime::spawn(async move {
+            let mut tail = String::new();
+            if let Some(mut stderr) = stderr {
+                let mut buffer = Vec::new();
+                let _ = stderr.read_to_end(&mut buffer).await;
+                tail = String::from_utf8_lossy(&buffer).into_owned();
+            }
+            if tail.len() > MAX_STDERR_BYTES {
+                let cut = floor_char_boundary(&tail, tail.len() - MAX_STDERR_BYTES);
+                tail = tail[cut..].to_string();
+            }
+            tail
+        });
+
+        let mut state = TurnState::default();
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match read_bounded_line(&mut reader, &mut line).await {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(LineError::TooLong) => {
+                    sink.event(
+                        &thread_id,
+                        &turn_id,
+                        ChatEvent::Notice {
+                            message: "One message from the agent was too large to show."
+                                .to_string(),
+                        },
+                    );
+                    continue;
+                }
+                Err(LineError::Io) => break,
+            }
+            let text = String::from_utf8_lossy(&line);
+            for event in parse_line(dialect, &mut state, text.trim_end()) {
+                sink.event(&thread_id, &turn_id, event);
+            }
+        }
+
+        let child = {
+            let mut running = registry.lock();
+            match running.get(&thread_id) {
+                Some(turn) if turn.turn_id == turn_id => running.remove(&thread_id),
+                _ => None,
+            }
+        };
+        let status = match child {
+            Some(mut turn) => turn.child.wait().await.ok(),
+            None => None,
+        };
+        let stderr_tail = stderr_task.await.unwrap_or_default();
+
+        let mut error = state.error.take();
+        if error.is_none() {
+            match status {
+                Some(status) if status.success() => {}
+                Some(status) => {
+                    let detail = stderr_tail.trim();
+                    error = Some(if detail.is_empty() {
+                        format!("The agent exited with {status}.")
+                    } else {
+                        detail.to_string()
+                    });
+                }
+                None => error = Some("The agent was stopped.".to_string()),
+            }
+        }
+        sink.event(
+            &thread_id,
+            &turn_id,
+            ChatEvent::Finished {
+                native_session_id: state.native_session_id.take(),
+                usage: state.usage.take(),
+                cost_usd: state.cost_usd,
+                duration_ms: state.duration_ms,
+                error,
+            },
+        );
+    });
+    Ok(())
+}
+
+enum LineError {
+    TooLong,
+    Io,
+}
+
+/// Reads one line, giving up on a line past `MAX_LINE_BYTES` and skipping to
+/// its end so the next line still parses.
+async fn read_bounded_line<R: AsyncBufReadExt + Unpin>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+) -> Result<usize, LineError> {
+    let mut total = 0usize;
+    loop {
+        let available = reader.fill_buf().await.map_err(|_| LineError::Io)?;
+        if available.is_empty() {
+            return Ok(total);
+        }
+        let (chunk, finished) = match available.iter().position(|byte| *byte == b'\n') {
+            Some(index) => (&available[..=index], true),
+            None => (available, false),
+        };
+        let taken = chunk.len();
+        if total + taken <= MAX_LINE_BYTES {
+            line.extend_from_slice(chunk);
+        }
+        total += taken;
+        reader.consume(taken);
+        if finished {
+            if total > MAX_LINE_BYTES {
+                line.clear();
+                return Err(LineError::TooLong);
+            }
+            return Ok(total);
+        }
+    }
+}
+
+#[derive(Default)]
+struct TurnState {
+    native_session_id: Option<String>,
+    usage: Option<ChatUsage>,
+    cost_usd: Option<f64>,
+    duration_ms: Option<u64>,
+    error: Option<String>,
+    /// Claude: the API message whose content blocks the deltas belong to.
+    current_message_id: Option<String>,
+}
+
+fn parse_line(dialect: Dialect, state: &mut TurnState, line: &str) -> Vec<ChatEvent> {
+    if line.trim().is_empty() {
+        return Vec::new();
+    }
+    let value: Value = match serde_json::from_str(line) {
+        Ok(value) => value,
+        // Headless CLIs occasionally print a plain warning between events.
+        Err(_) => {
+            return vec![ChatEvent::Notice {
+                message: truncate(line, 512),
+            }]
+        }
+    };
+    match dialect {
+        Dialect::Claude => parse_claude(state, &value),
+        Dialect::Codex => parse_codex(state, &value),
+    }
+}
+
+fn str_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(Value::as_str)
+}
+
+fn u64_field(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn parse_claude(state: &mut TurnState, value: &Value) -> Vec<ChatEvent> {
+    let mut events = Vec::new();
+    match str_field(value, "type") {
+        Some("system") if str_field(value, "subtype") == Some("init") => {
+            state.native_session_id = str_field(value, "session_id").map(str::to_string);
+            events.push(ChatEvent::Started {
+                native_session_id: state.native_session_id.clone(),
+                model: str_field(value, "model").map(str::to_string),
+            });
+        }
+        Some("stream_event") => {
+            let Some(event) = value.get("event") else {
+                return events;
+            };
+            match str_field(event, "type") {
+                Some("message_start") => {
+                    state.current_message_id = event
+                        .get("message")
+                        .and_then(|message| str_field(message, "id"))
+                        .map(str::to_string);
+                }
+                Some("content_block_delta") => {
+                    let index = u64_field(event, "index");
+                    if let Some(delta) = event.get("delta") {
+                        if str_field(delta, "type") == Some("text_delta") {
+                            if let Some(text) = str_field(delta, "text") {
+                                let message_id = state.current_message_id.as_deref().unwrap_or("m");
+                                events.push(ChatEvent::TextDelta {
+                                    item_id: format!("{message_id}#{index}"),
+                                    delta: text.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Some("assistant") => {
+            let Some(message) = value.get("message") else {
+                return events;
+            };
+            let message_id = str_field(message, "id").unwrap_or("m");
+            let blocks = message
+                .get("content")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for (index, block) in blocks.iter().enumerate() {
+                match str_field(block, "type") {
+                    Some("text") => events.push(ChatEvent::Text {
+                        item_id: format!("{message_id}#{index}"),
+                        text: str_field(block, "text").unwrap_or_default().to_string(),
+                    }),
+                    Some("thinking") => {
+                        let text = str_field(block, "thinking").unwrap_or_default();
+                        if !text.is_empty() {
+                            events.push(ChatEvent::Reasoning {
+                                item_id: format!("{message_id}#{index}"),
+                                text: text.to_string(),
+                            });
+                        }
+                    }
+                    Some("tool_use") => {
+                        let name = str_field(block, "name").unwrap_or("tool").to_string();
+                        let input = block.get("input").cloned().unwrap_or(Value::Null);
+                        events.push(ChatEvent::ToolStarted {
+                            item_id: str_field(block, "id")
+                                .map(str::to_string)
+                                .unwrap_or_else(|| format!("{message_id}#{index}")),
+                            summary: claude_tool_summary(&name, &input),
+                            name,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Some("user") => {
+            let blocks = value
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for block in blocks {
+                if str_field(&block, "type") != Some("tool_result") {
+                    continue;
+                }
+                let Some(item_id) = str_field(&block, "tool_use_id") else {
+                    continue;
+                };
+                events.push(ChatEvent::ToolFinished {
+                    item_id: item_id.to_string(),
+                    name: None,
+                    summary: None,
+                    output: bounded_output(&content_text(block.get("content"))),
+                    is_error: block
+                        .get("is_error")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                });
+            }
+        }
+        Some("result") => {
+            if let Some(id) = str_field(value, "session_id") {
+                state.native_session_id = Some(id.to_string());
+            }
+            state.cost_usd = value.get("total_cost_usd").and_then(Value::as_f64);
+            state.duration_ms = value.get("duration_ms").and_then(Value::as_u64);
+            if let Some(usage) = value.get("usage") {
+                state.usage = Some(ChatUsage {
+                    input_tokens: u64_field(usage, "input_tokens"),
+                    output_tokens: u64_field(usage, "output_tokens"),
+                    cache_read_tokens: u64_field(usage, "cache_read_input_tokens"),
+                    cache_write_tokens: u64_field(usage, "cache_creation_input_tokens"),
+                    reasoning_tokens: usage
+                        .get("output_tokens_details")
+                        .map(|details| u64_field(details, "thinking_tokens"))
+                        .unwrap_or(0),
+                });
+            }
+            let is_error = value
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if is_error {
+                let detail = value
+                    .get("errors")
+                    .and_then(Value::as_array)
+                    .and_then(|errors| errors.first())
+                    .and_then(Value::as_str)
+                    .or_else(|| str_field(value, "result"))
+                    .unwrap_or("The agent reported an error.");
+                state.error = Some(truncate(detail, 2048));
+            }
+        }
+        _ => {}
+    }
+    events
+}
+
+/// The one line that tells a reader what a tool call is about.
+fn claude_tool_summary(name: &str, input: &Value) -> String {
+    let pick = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| str_field(input, key))
+            .map(str::to_string)
+    };
+    let summary = match name {
+        "Bash" => pick(&["command"]),
+        "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
+            pick(&["file_path", "notebook_path"])
+        }
+        "Grep" | "Glob" => pick(&["pattern"]),
+        "WebFetch" => pick(&["url"]),
+        "WebSearch" => pick(&["query"]),
+        "Task" | "Agent" => pick(&["description", "prompt"]),
+        _ => None,
+    };
+    let summary = summary.unwrap_or_else(|| match input {
+        Value::Object(map) if !map.is_empty() => serde_json::to_string(input).unwrap_or_default(),
+        _ => String::new(),
+    });
+    truncate(summary.lines().next().unwrap_or_default(), 200)
+}
+
+fn content_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|block| str_field(block, "text"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn parse_codex(state: &mut TurnState, value: &Value) -> Vec<ChatEvent> {
+    let mut events = Vec::new();
+    match str_field(value, "type") {
+        Some("thread.started") => {
+            state.native_session_id = str_field(value, "thread_id").map(str::to_string);
+            events.push(ChatEvent::Started {
+                native_session_id: state.native_session_id.clone(),
+                model: None,
+            });
+        }
+        Some(kind @ ("item.started" | "item.updated" | "item.completed")) => {
+            let Some(item) = value.get("item") else {
+                return events;
+            };
+            let completed = kind == "item.completed";
+            let item_id = str_field(item, "id").unwrap_or("item").to_string();
+            match str_field(item, "type") {
+                Some("agent_message") => events.push(ChatEvent::Text {
+                    item_id,
+                    text: str_field(item, "text").unwrap_or_default().to_string(),
+                }),
+                Some("reasoning") => {
+                    let text = str_field(item, "text").unwrap_or_default();
+                    if !text.is_empty() {
+                        events.push(ChatEvent::Reasoning {
+                            item_id,
+                            text: text.to_string(),
+                        });
+                    }
+                }
+                Some("command_execution") => {
+                    let summary = truncate(str_field(item, "command").unwrap_or_default(), 200);
+                    if completed {
+                        let failed =
+                            matches!(str_field(item, "status"), Some("failed" | "declined"))
+                                || item
+                                    .get("exit_code")
+                                    .and_then(Value::as_i64)
+                                    .is_some_and(|code| code != 0);
+                        events.push(ChatEvent::ToolFinished {
+                            item_id,
+                            name: Some("command".to_string()),
+                            summary: Some(summary),
+                            output: bounded_output(
+                                str_field(item, "aggregated_output").unwrap_or_default(),
+                            ),
+                            is_error: failed,
+                        });
+                    } else if kind == "item.started" {
+                        events.push(ChatEvent::ToolStarted {
+                            item_id,
+                            name: "command".to_string(),
+                            summary,
+                        });
+                    }
+                }
+                Some("file_change") => {
+                    let changes = item
+                        .get("changes")
+                        .and_then(Value::as_array)
+                        .map(|changes| {
+                            changes
+                                .iter()
+                                .map(|change| {
+                                    format!(
+                                        "{} {}",
+                                        str_field(change, "kind").unwrap_or("update"),
+                                        str_field(change, "path").unwrap_or_default()
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let summary = truncate(&changes.join(", "), 200);
+                    if completed {
+                        events.push(ChatEvent::ToolFinished {
+                            item_id,
+                            name: Some("file_change".to_string()),
+                            summary: Some(summary),
+                            output: bounded_output(&changes.join("\n")),
+                            is_error: str_field(item, "status") == Some("failed"),
+                        });
+                    } else if kind == "item.started" {
+                        events.push(ChatEvent::ToolStarted {
+                            item_id,
+                            name: "file_change".to_string(),
+                            summary,
+                        });
+                    }
+                }
+                Some("mcp_tool_call") => {
+                    let summary = format!(
+                        "{}/{}",
+                        str_field(item, "server").unwrap_or_default(),
+                        str_field(item, "tool").unwrap_or_default()
+                    );
+                    if completed {
+                        let failed = str_field(item, "status") == Some("failed")
+                            || item.get("error").is_some_and(|error| !error.is_null());
+                        let output = item
+                            .get("error")
+                            .filter(|error| !error.is_null())
+                            .or_else(|| item.get("result"))
+                            .map(|output| match output {
+                                Value::String(text) => text.clone(),
+                                other => serde_json::to_string(other).unwrap_or_default(),
+                            })
+                            .unwrap_or_default();
+                        events.push(ChatEvent::ToolFinished {
+                            item_id,
+                            name: Some("mcp".to_string()),
+                            summary: Some(summary),
+                            output: bounded_output(&output),
+                            is_error: failed,
+                        });
+                    } else if kind == "item.started" {
+                        events.push(ChatEvent::ToolStarted {
+                            item_id,
+                            name: "mcp".to_string(),
+                            summary,
+                        });
+                    }
+                }
+                Some("web_search") => {
+                    let summary = truncate(str_field(item, "query").unwrap_or_default(), 200);
+                    if completed {
+                        events.push(ChatEvent::ToolFinished {
+                            item_id,
+                            name: Some("web_search".to_string()),
+                            summary: Some(summary),
+                            output: String::new(),
+                            is_error: false,
+                        });
+                    } else if kind == "item.started" {
+                        events.push(ChatEvent::ToolStarted {
+                            item_id,
+                            name: "web_search".to_string(),
+                            summary,
+                        });
+                    }
+                }
+                Some("todo_list") => {
+                    let text = item
+                        .get("items")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .map(|entry| {
+                                    let done = entry
+                                        .get("completed")
+                                        .and_then(Value::as_bool)
+                                        .unwrap_or(false);
+                                    format!(
+                                        "- [{}] {}",
+                                        if done { "x" } else { " " },
+                                        str_field(entry, "text").unwrap_or_default()
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default();
+                    if !text.is_empty() {
+                        events.push(ChatEvent::Reasoning { item_id, text });
+                    }
+                }
+                Some("error") => {
+                    let message = truncate(str_field(item, "message").unwrap_or("error"), 2048);
+                    state.error = Some(message.clone());
+                    events.push(ChatEvent::Notice { message });
+                }
+                _ => {}
+            }
+        }
+        Some("turn.completed") => {
+            if let Some(usage) = value.get("usage") {
+                state.usage = Some(ChatUsage {
+                    input_tokens: u64_field(usage, "input_tokens"),
+                    output_tokens: u64_field(usage, "output_tokens"),
+                    cache_read_tokens: u64_field(usage, "cached_input_tokens"),
+                    cache_write_tokens: u64_field(usage, "cache_write_input_tokens"),
+                    reasoning_tokens: u64_field(usage, "reasoning_output_tokens"),
+                });
+            }
+        }
+        Some("turn.failed") => {
+            let message = value
+                .get("error")
+                .and_then(|error| str_field(error, "message"))
+                .unwrap_or("The turn failed.");
+            state.error = Some(truncate(message, 2048));
+        }
+        Some("error") => {
+            let message = truncate(str_field(value, "message").unwrap_or("error"), 2048);
+            state.error = Some(message.clone());
+            events.push(ChatEvent::Notice { message });
+        }
+        _ => {}
+    }
+    events
+}
+
+fn bounded_output(output: &str) -> String {
+    if output.len() <= MAX_TOOL_OUTPUT_BYTES {
+        return output.to_string();
+    }
+    let cut = floor_char_boundary(output, MAX_TOOL_OUTPUT_BYTES);
+    format!("{}\n…", &output[..cut])
+}
+
+fn truncate(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let cut = floor_char_boundary(text, max);
+    format!("{}…", &text[..cut])
+}
+
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lines(dialect: Dialect, raw: &str) -> (TurnState, Vec<ChatEvent>) {
+        let mut state = TurnState::default();
+        let mut events = Vec::new();
+        for line in raw.lines() {
+            events.extend(parse_line(dialect, &mut state, line));
+        }
+        (state, events)
+    }
+
+    #[test]
+    fn claude_turn_streams_text_and_reports_the_session() {
+        // Captured from `claude -p --output-format stream-json`.
+        let raw = r#"{"type":"system","subtype":"init","cwd":"/tmp/x","session_id":"45c1fa68-4159-40f0-bd78-261718b2849f","model":"claude-fable-5-1","permissionMode":"plan"}
+{"type":"stream_event","event":{"type":"message_start","message":{"model":"claude-fable-5-1","id":"msg_1","type":"message","role":"assistant","content":[]}},"session_id":"45c1fa68-4159-40f0-bd78-261718b2849f"}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"O"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"K"}}}
+{"type":"assistant","message":{"model":"claude-fable-5-1","id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"OK"}]},"session_id":"45c1fa68-4159-40f0-bd78-261718b2849f"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":4000,"result":"OK","session_id":"45c1fa68-4159-40f0-bd78-261718b2849f","total_cost_usd":0.18,"usage":{"input_tokens":2,"cache_creation_input_tokens":9260,"cache_read_input_tokens":10007,"output_tokens":4,"output_tokens_details":{"thinking_tokens":0}}}"#;
+        let (state, events) = lines(Dialect::Claude, raw);
+
+        assert_eq!(
+            events,
+            vec![
+                ChatEvent::Started {
+                    native_session_id: Some("45c1fa68-4159-40f0-bd78-261718b2849f".into()),
+                    model: Some("claude-fable-5-1".into()),
+                },
+                ChatEvent::TextDelta {
+                    item_id: "msg_1#0".into(),
+                    delta: "O".into(),
+                },
+                ChatEvent::TextDelta {
+                    item_id: "msg_1#0".into(),
+                    delta: "K".into(),
+                },
+                ChatEvent::Text {
+                    item_id: "msg_1#0".into(),
+                    text: "OK".into(),
+                },
+            ]
+        );
+        assert_eq!(state.cost_usd, Some(0.18));
+        assert_eq!(state.duration_ms, Some(4000));
+        assert_eq!(
+            state.usage,
+            Some(ChatUsage {
+                input_tokens: 2,
+                output_tokens: 4,
+                cache_read_tokens: 10007,
+                cache_write_tokens: 9260,
+                reasoning_tokens: 0,
+            })
+        );
+        assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn claude_tool_calls_pair_up_by_tool_use_id() {
+        let raw = r#"{"type":"assistant","message":{"id":"msg_2","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls -la\n","description":"List"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"total 0"}],"is_error":false}]}}"#;
+        let (_, events) = lines(Dialect::Claude, raw);
+
+        assert_eq!(
+            events,
+            vec![
+                ChatEvent::ToolStarted {
+                    item_id: "toolu_1".into(),
+                    name: "Bash".into(),
+                    summary: "ls -la".into(),
+                },
+                ChatEvent::ToolFinished {
+                    item_id: "toolu_1".into(),
+                    name: None,
+                    summary: None,
+                    output: "total 0".into(),
+                    is_error: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_error_result_ends_the_turn_with_its_message() {
+        let raw = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["Not logged in"],"session_id":"s"}"#;
+        let (state, _) = lines(Dialect::Claude, raw);
+        assert_eq!(state.error.as_deref(), Some("Not logged in"));
+    }
+
+    #[test]
+    fn codex_turn_reports_thread_and_usage() {
+        // Captured from `codex exec --json`.
+        let raw = r#"{"type":"thread.started","thread_id":"01a0654c-48dc-77a1-9eef-af49ff5ec3c3"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll run the requested command."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"echo hi","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"echo hi","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"OK"}}
+{"type":"turn.completed","usage":{"input_tokens":39633,"cached_input_tokens":30208,"cache_write_input_tokens":0,"output_tokens":185,"reasoning_output_tokens":66}}"#;
+        let (state, events) = lines(Dialect::Codex, raw);
+
+        assert_eq!(
+            events[0],
+            ChatEvent::Started {
+                native_session_id: Some("01a0654c-48dc-77a1-9eef-af49ff5ec3c3".into()),
+                model: None,
+            }
+        );
+        assert_eq!(
+            events[2],
+            ChatEvent::ToolStarted {
+                item_id: "item_1".into(),
+                name: "command".into(),
+                summary: "echo hi".into(),
+            }
+        );
+        assert_eq!(
+            events[3],
+            ChatEvent::ToolFinished {
+                item_id: "item_1".into(),
+                name: Some("command".into()),
+                summary: Some("echo hi".into()),
+                output: "hi\n".into(),
+                is_error: false,
+            }
+        );
+        assert_eq!(
+            events[4],
+            ChatEvent::Text {
+                item_id: "item_2".into(),
+                text: "OK".into(),
+            }
+        );
+        assert_eq!(
+            state.usage,
+            Some(ChatUsage {
+                input_tokens: 39633,
+                output_tokens: 185,
+                cache_read_tokens: 30208,
+                cache_write_tokens: 0,
+                reasoning_tokens: 66,
+            })
+        );
+    }
+
+    #[test]
+    fn codex_failed_turn_carries_its_error() {
+        let raw = r#"{"type":"turn.failed","error":{"message":"Model overloaded"}}"#;
+        let (state, _) = lines(Dialect::Codex, raw);
+        assert_eq!(state.error.as_deref(), Some("Model overloaded"));
+    }
+
+    #[test]
+    fn a_plain_text_line_becomes_a_notice_not_a_crash() {
+        let (_, events) = lines(Dialect::Codex, "warning: something\n");
+        assert_eq!(
+            events,
+            vec![ChatEvent::Notice {
+                message: "warning: something".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn claude_arguments_put_the_prompt_on_stdin_and_resume_by_id() {
+        let args = turn_arguments(
+            Dialect::Claude,
+            Path::new("/work"),
+            ChatPermission::WorkspaceWrite,
+            Some("opus"),
+            Some("abc-123"),
+        );
+        let args: Vec<String> = args
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+                "--permission-mode",
+                "acceptEdits",
+                "--model",
+                "opus",
+                "--resume",
+                "abc-123",
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_arguments_resume_without_changing_the_model() {
+        let args = turn_arguments(
+            Dialect::Codex,
+            Path::new("/work"),
+            ChatPermission::ReadOnly,
+            Some("gpt-5"),
+            Some("thread-1"),
+        );
+        let args: Vec<String> = args
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "-C",
+                "/work",
+                "-s",
+                "read-only",
+                "resume",
+                "thread-1",
+                "-",
+            ]
+        );
+        assert!(!args.contains(&"-m".to_string()));
+    }
+
+    #[test]
+    fn codex_full_permission_uses_the_explicit_bypass_flag() {
+        let args = turn_arguments(
+            Dialect::Codex,
+            Path::new("/work"),
+            ChatPermission::Full,
+            None,
+            None,
+        );
+        assert!(args.contains(&OsString::from(
+            "--dangerously-bypass-approvals-and-sandbox"
+        )));
+        assert_eq!(args.last(), Some(&OsString::from("-")));
+    }
+
+    #[test]
+    fn identifiers_and_models_are_checked_before_they_reach_a_command_line() {
+        assert!(validate_id("thread-1_a", "thread id").is_ok());
+        assert!(validate_id("", "thread id").is_err());
+        assert!(validate_id("a/b", "thread id").is_err());
+        assert!(validate_model("claude-opus-5").is_ok());
+        assert!(validate_model("-p").is_err());
+        assert!(validate_model("a b").is_err());
+        assert!(validate_native_session_id("01a0654c-48dc-77a1-9eef-af49ff5ec3c3").is_ok());
+        assert!(validate_native_session_id("--last").is_err());
+    }
+
+    #[test]
+    fn tool_output_is_bounded_on_a_character_boundary() {
+        let long = "字".repeat(MAX_TOOL_OUTPUT_BYTES);
+        let bounded = bounded_output(&long);
+        assert!(bounded.len() <= MAX_TOOL_OUTPUT_BYTES + 4);
+        assert!(bounded.ends_with('…'));
+    }
+
+    #[tokio::test]
+    async fn an_oversized_line_is_skipped_and_the_next_one_still_reads() {
+        let long = "x".repeat(MAX_LINE_BYTES + 1);
+        let input = format!("{long}\nshort\n");
+        let mut reader = BufReader::new(input.as_bytes());
+        let mut line = Vec::new();
+        assert!(matches!(
+            read_bounded_line(&mut reader, &mut line).await,
+            Err(LineError::TooLong)
+        ));
+        line.clear();
+        assert!(read_bounded_line(&mut reader, &mut line).await.is_ok());
+        assert_eq!(line, b"short\n");
+    }
+
+    struct RecordingSink(std::sync::mpsc::Sender<ChatEvent>);
+
+    impl ChatSink for RecordingSink {
+        fn event(&self, _thread_id: &str, _turn_id: &str, event: ChatEvent) {
+            let _ = self.0.send(event);
+        }
+    }
+
+    /// Runs one real turn through an installed CLI. Ignored by default: it
+    /// needs the CLI logged in and spends a small amount of the user's
+    /// quota. Run with `LATTICETERM_CHAT_E2E=claude cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn a_real_turn_streams_a_reply_and_reports_the_session() {
+        let definition_id =
+            std::env::var("LATTICETERM_CHAT_E2E").unwrap_or_else(|_| "claude".to_string());
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let registry = Arc::new(AgentChatRegistry::new());
+        tauri::async_runtime::block_on(send(
+            Arc::new(RecordingSink(tx)),
+            Arc::clone(&registry),
+            ChatTurnRequest {
+                thread_id: "e2e-thread".into(),
+                turn_id: "e2e-turn".into(),
+                definition_id,
+                working_directory: workdir.path().display().to_string(),
+                prompt: "Reply with exactly the word OK and nothing else.".into(),
+                permission: ChatPermission::ReadOnly,
+                model: None,
+                native_session_id: None,
+            },
+        ))
+        .expect("turn starts");
+
+        let mut events = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(event) => {
+                    let finished = matches!(event, ChatEvent::Finished { .. });
+                    events.push(event);
+                    if finished {
+                        break;
+                    }
+                }
+                Err(_) => panic!("no Finished event within the deadline; got {events:?}"),
+            }
+        }
+
+        let text: String = events
+            .iter()
+            .filter_map(|event| match event {
+                ChatEvent::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            text.contains("OK"),
+            "reply text was {text:?}; events {events:?}"
+        );
+        match events.last() {
+            Some(ChatEvent::Finished {
+                native_session_id,
+                error,
+                ..
+            }) => {
+                assert!(error.is_none(), "turn failed: {error:?}");
+                assert!(native_session_id.is_some(), "no session id to resume with");
+            }
+            other => panic!("unexpected final event {other:?}"),
+        }
+        assert!(
+            registry.lock().is_empty(),
+            "the finished turn was not released"
+        );
+    }
+}

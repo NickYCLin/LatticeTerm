@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_chat;
 pub mod agent_history;
 pub mod agent_plans;
 pub mod backup;
@@ -471,6 +472,41 @@ fn agent_clear_queue(
     registry: State<'_, Arc<AgentRegistry>>,
 ) -> Result<usize, String> {
     crate::agent::clear_queue(&crate::agent::EventSink(app), registry.inner(), &session_id)
+}
+
+/// The CLIs a chat thread can be started with on this machine.
+#[tauri::command]
+fn agent_chat_supported() -> Vec<String> {
+    crate::agent_chat::supported_definitions()
+        .iter()
+        .map(|id| id.to_string())
+        .collect()
+}
+
+/// Runs one chat turn. Returns once the CLI is running; its reply arrives
+/// as `agent-chat://event` events carrying the same thread and turn ids.
+#[tauri::command]
+async fn agent_chat_send(
+    app: AppHandle,
+    request: crate::agent_chat::ChatTurnRequest,
+    registry: State<'_, Arc<crate::agent_chat::AgentChatRegistry>>,
+) -> Result<(), String> {
+    let registry = Arc::clone(registry.inner());
+    crate::agent_chat::send(
+        Arc::new(crate::agent_chat::EventSink(app)),
+        registry,
+        request,
+    )
+    .await
+}
+
+/// Stops the turn running on a thread, if any.
+#[tauri::command]
+fn agent_chat_stop(
+    thread_id: String,
+    registry: State<'_, Arc<crate::agent_chat::AgentChatRegistry>>,
+) -> Result<bool, String> {
+    registry.stop(&thread_id)
 }
 
 #[tauri::command]
@@ -2240,6 +2276,7 @@ pub fn run() {
             ))
             .map_err(std::io::Error::other)?;
             app.manage(agent_registry);
+            app.manage(Arc::new(crate::agent_chat::AgentChatRegistry::new()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2254,6 +2291,9 @@ pub fn run() {
             agent_broadcast,
             agent_enqueue,
             agent_clear_queue,
+            agent_chat_supported,
+            agent_chat_send,
+            agent_chat_stop,
             agent_paste_clipboard_image,
             agent_export_transcript,
             agent_import_memory_handoff,
@@ -2389,6 +2429,9 @@ pub fn run() {
                 let _ = history.save(registry.terminal_history_snapshots());
             }
             registry.stop_all();
+            handle
+                .state::<Arc<crate::agent_chat::AgentChatRegistry>>()
+                .shutdown();
             handle.state::<Arc<TunnelRegistry>>().stop_all();
             handle.state::<Arc<RdpRegistry>>().stop_all();
             handle.state::<Arc<VncRegistry>>().stop_all();

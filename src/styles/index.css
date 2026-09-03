@@ -9,6 +9,7 @@
 @import "./controls.css";
 @import "./connections.css";
 @import "./agents.css";
+@import "./chat.css";
 @import "./vault.css";
 @import "./remote.css";
 @import "./sftp.css";

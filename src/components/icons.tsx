@@ -257,6 +257,13 @@ export const AgentIcon: Glyph = (props) => (
   </Icon>
 );
 
+export const ChatIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M2.5 3.5A1.5 1.5 0 0 1 4 2h8a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 12 11H7l-3 2.5V11h0A1.5 1.5 0 0 1 2.5 9.5v-6z" />
+    <path d="M5.5 5.5h5M5.5 8h3" />
+  </Icon>
+);
+
 export const FolderIcon: Glyph = (props) => (
   <Icon {...props}>
     <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.5 1.5h4.9A1.5 1.5 0 0 1 14 6v6.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-8z" />
