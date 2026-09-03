@@ -14,8 +14,6 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
-  type Dispatch,
-  type SetStateAction,
 } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -38,7 +36,6 @@ import {
   loadChatAccountProfiles,
   profileCapable,
   profilesFor,
-  saveChatAccountProfiles,
   type ChatAccountProfile,
 } from "../app/chatAccountProfiles";
 import { useI18n } from "../i18n/context";
@@ -75,12 +72,6 @@ const permissionHintKey: Record<ChatPermission, MessageKey> = {
   workspaceWrite: "chat.permission.workspaceWrite.hint",
   full: "chat.permission.full.hint",
 };
-
-interface DiscoveredSkill {
-  name: string;
-  description: string | null;
-  source: string;
-}
 
 function directoryName(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
@@ -122,13 +113,9 @@ export function ChatView({
   const [composingAutomation, setComposingAutomation] = useState(false);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
-  const [accountProfiles, setAccountProfiles] = useState<ChatAccountProfile[]>(() =>
+  const [accountProfiles] = useState<ChatAccountProfile[]>(() =>
     typeof localStorage === "undefined" ? [] : loadChatAccountProfiles(localStorage),
   );
-
-  useEffect(() => {
-    if (typeof localStorage !== "undefined") saveChatAccountProfiles(localStorage, accountProfiles);
-  }, [accountProfiles]);
 
   const cliLabel = (id: ChatDefinitionId) =>
     agents.catalog.find((definition) => definition.id === id)?.label ?? id;
@@ -413,7 +400,6 @@ export function ChatView({
             cliLabel={cliLabel}
             tag={tag}
             accountProfiles={accountProfiles}
-            setAccountProfiles={setAccountProfiles}
             onDelete={() => setPendingDelete(active)}
           />
         )}
@@ -445,7 +431,6 @@ function ThreadPane({
   cliLabel,
   tag,
   accountProfiles,
-  setAccountProfiles,
   onDelete,
 }: {
   thread: ChatThread;
@@ -454,15 +439,12 @@ function ThreadPane({
   cliLabel: (id: ChatDefinitionId) => string;
   tag: string;
   accountProfiles: readonly ChatAccountProfile[];
-  setAccountProfiles: Dispatch<SetStateAction<ChatAccountProfile[]>>;
   onDelete: () => void;
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
-  const [skills, setSkills] = useState<DiscoveredSkill[] | null>(null);
-  const [skillsLoading, setSkillsLoading] = useState(false);
   const [draggingFiles, setDraggingFiles] = useState(false);
   const fresh = threadIsFresh(thread);
   // A new thread needs its directory chosen, so its settings start open;
@@ -493,10 +475,6 @@ function ThreadPane({
     setAttachments([]);
   }, [thread.id]);
 
-  useEffect(() => {
-    setSkills(null);
-  }, [thread.definitionId, thread.workingDirectory, thread.accountProfileId]);
-
   function addAttachments(paths: readonly string[]) {
     const added = attachmentsFromPaths(paths);
     if (added.length === 0) return;
@@ -504,52 +482,6 @@ function ThreadPane({
       const existing = new Set(current.map((attachment) => attachment.path));
       return [...current, ...added.filter((attachment) => !existing.has(attachment.path))];
     });
-  }
-
-  async function addAccountProfile() {
-    const name = window.prompt(t("chat.accountProfile.namePrompt"))?.trim();
-    if (!name) return;
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: t("chat.accountProfile.chooseDirectory"),
-      });
-      if (typeof selected !== "string" || !profileCapable(thread.definitionId)) return;
-      const profile: ChatAccountProfile = {
-        id: crypto.randomUUID(),
-        definitionId: thread.definitionId,
-        name: name.slice(0, 64),
-        configDirectory: selected,
-      };
-      setAccountProfiles((current) => [...current, profile]);
-      chat.handoffThreadAccount(thread.id, profile.id);
-    } catch (reason) {
-      setNotice(t("chat.accountProfile.failed", {
-        detail: reason instanceof Error ? reason.message : String(reason),
-      }));
-    }
-  }
-
-  async function discoverSkills() {
-    if (skillsLoading || !thread.workingDirectory) return;
-    setNotice(null);
-    setSkillsLoading(true);
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const result = await invoke<DiscoveredSkill[]>("agent_chat_skills", {
-        definitionId: thread.definitionId,
-        workingDirectory: thread.workingDirectory,
-        profileConfigPath: activeProfile?.configDirectory ?? null,
-      });
-      setSkills(result);
-    } catch (reason) {
-      setNotice(t("chat.skills.failed", {
-        detail: reason instanceof Error ? reason.message : String(reason),
-      }));
-    } finally {
-      setSkillsLoading(false);
-    }
   }
 
   async function chooseAttachments(kind: "image" | "file") {
@@ -779,43 +711,10 @@ function ThreadPane({
                       <option key={profile.id} value={profile.id}>{profile.name}</option>
                     ))}
                   </select>
-                  <button
-                    type="button"
-                    className="button button--secondary button--sm"
-                    disabled={running}
-                    onClick={() => void addAccountProfile()}
-                  >
-                    {t("chat.accountProfile.add")}
-                  </button>
                 </div>
                 <p className="chat-settings__hint">{t("chat.accountProfile.hint")}</p>
               </div>
             )}
-            <div className="field field--grow">
-              <span className="field__label">{t("chat.skills")}</span>
-              <div className="chat-directory">
-                <button
-                  type="button"
-                  className="button button--secondary button--sm"
-                  disabled={skillsLoading || thread.workingDirectory === ""}
-                  onClick={() => void discoverSkills()}
-                >
-                  {skillsLoading ? t("chat.skills.loading") : t("chat.skills.discover")}
-                </button>
-                {skills && <span className="chat-directory__path">{t("chat.skills.count", { count: skills.length })}</span>}
-              </div>
-              {skills && skills.length > 0 && (
-                <ul className="chat-settings__hint" aria-label={t("chat.skills")}>
-                  {skills.map((skill) => (
-                    <li key={`${skill.source}:${skill.name}`}>
-                      <strong>{skill.name}</strong>{skill.description ? ` · ${skill.description}` : ""} · {skill.source}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {skills?.length === 0 && <p className="chat-settings__hint">{t("chat.skills.empty")}</p>}
-              <p className="chat-settings__hint">{t("chat.skills.hint")}</p>
-            </div>
             <div className="field field--grow">
               <span className="field__label">{t("chat.directory")}</span>
               <div className="chat-directory">

@@ -145,7 +145,7 @@ export interface AgentMemoryHandoffRequest {
 
 export type AgentLaunchPlanDraft = Omit<
   AgentLaunchRequest,
-  "cols" | "rows" | "restoreExistingSession"
+  "cols" | "rows" | "restoreExistingSession" | "profileConfigPath"
 > & {
   /** Free-text memo, e.g. which project this plan is for. "" means none. */
   note: string;
@@ -1135,7 +1135,11 @@ export function useAgentSessions(): AgentApi {
   const savePlan = useCallback(async (draft: AgentLaunchPlanDraft) => {
     const { invoke } = await core();
     const plan = await invoke<AgentLaunchPlan>("agent_plan_save", { draft });
-    setPlans((current) => [...current, plan]);
+    setPlans((current) => {
+      const index = current.findIndex((existing) => existing.id === plan.id);
+      if (index < 0) return [...current, plan];
+      return current.map((existing) => (existing.id === plan.id ? plan : existing));
+    });
     return plan;
   }, []);
 
