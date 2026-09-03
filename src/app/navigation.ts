@@ -9,6 +9,7 @@
 import {
   AgentIcon,
   BellIcon,
+  ChatIcon,
   ConnectionsIcon,
   SettingsIcon,
   TerminalIcon,
@@ -22,6 +23,7 @@ import type { ReactElement } from "react";
 export type ViewId =
   | "connections"
   | "agents"
+  | "chat"
   | "terminal"
   | "tunnels"
   | "vault"
@@ -59,6 +61,14 @@ export const navigationItems: NavigationItem[] = [
     labelKey: "nav.agents",
     descriptionKey: "nav.agents.desc",
     icon: AgentIcon,
+    status: "available",
+    desktopOnly: true,
+  },
+  {
+    id: "chat",
+    labelKey: "nav.chat",
+    descriptionKey: "nav.chat.desc",
+    icon: ChatIcon,
     status: "available",
     desktopOnly: true,
   },

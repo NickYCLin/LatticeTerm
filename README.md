@@ -15,7 +15,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | --- | --- | --- |
 | 桌面連線工作區 | **可用** | Windows、Linux 與 macOS 支援 SSH、SFTP、SSH Tunnel、Web RDP、VNC、主機資源與工作階段管理。 |
 | 安全與資料保護 | **可用** | 嚴格主機信任、作業系統認證儲存、主密碼加密保管庫、敏感剪貼簿與加密備份均已接入真實後端。 |
-| 本機 AI Agent Fleet | **可用** | 多 CLI PTY、Reporter、批次提示、同分頁加開 CLI 並帶入目前對話、安全啟動工作區與同程序重新 attach 已完成。 |
+| 本機 AI Agent Fleet | **可用** | 多 CLI PTY、Reporter、批次提示、同分頁加開 CLI 並帶入目前對話、安全啟動工作區與同程序重新 attach 已完成；另有不必打指令的對話模式（Claude Code 與 Codex）。 |
 | Lattice Remote | **基礎功能可用** | 已完成使用者主動啟動、Noise 端對端加密、主螢幕／純終端分享，以及由分享端分別授權的鍵盤／滑鼠或終端輸入與單一根目錄檔案瀏覽、上下載；另支援自架 lattice-relay 中繼、永久九位數裝置 ID、跨網路連線、裝置金鑰釘選與固定配對碼（無人值守）；以 ID 連線過的裝置會留在「我的連線」，中繼位址失效時可在連線對話框就地更正。目前仍是自架、小規模服務，NAT 直連穿透與多人租戶管理尚未加入。 |
 | 發行與更新 | **可用** | Windows x64、Linux x64／arm64、macOS Apple Silicon 安裝檔、更新簽章、Release PR 與應用程式內更新已自動化。 |
 | Android | **預覽** | 共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面可建置；需要桌面 sidecar 的 RDP、VNC 與 Agent Fleet 不提供。 |
@@ -36,6 +36,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 - **主機資源檢視**：活躍 SSH 工作階段可定期讀取 Linux 主機的 CPU、記憶體、磁碟與開機時間；未連線或不支援的平台會明確說明，不顯示假數值。
 - **本機持久化**：連線設定會存在本機的應用程式資料目錄，關閉再開仍在；檔案只含主機資訊，不含任何認證資料。
 - **AI Agent Fleet**：以原生 PTY 同時執行 Codex、Claude Code、Gemini CLI、Google Antigravity CLI、OpenCode、Hermes 等 13 種本機 LLM CLI；未偵測到工具時可先確認固定的上游安裝指令，再開啟看得到完整輸出的安裝終端。目錄會顯示 Codex、Claude 與 Gemini 自己保存在本機的目前登入帳號標籤，但 token 不會進入 WebView。執行中的 CLI 會分開顯示工具名稱、分頁名稱，以及工具啟動畫面或 `--model` 實際回報的模型；沒有可靠值時會明確標成尚未回報。使用者可選擇保存一份工作區共用啟動指示，讓之後每個全新 CLI 進入互動提示後先讀取；也可把專案根目錄的 `AGENTS.md` 設為 Codex、Claude 與 Gemini 的唯一規則來源，由 LatticeTerm 保留既有內容並安全同步 `CLAUDE.md`／`GEMINI.md` 的原生匯入。自動還原的舊工作階段不會重送啟動指示，且會一併保留原本側欄的資料夾、排序與收合狀態，不會因 CLI 尚在續接而回到最外層。內建繁中 Commit 範本採 `type(scope): subject`、Why／What 與單一意義提交，預設不啟用。通用 Reporter 讓工具 hook 明確回報狀態；Hermes 也會透過官方 `post_api_request` hook 顯示該工作階段與子 Agent 累計的可信 token buckets，不讀取提示或回覆內容。使用者可在二次確認後將同一段提示送給多個已選 Agent，並可選擇「忙碌時排入佇列」——正在工作的 Agent 會等這一輪真的結束才收到，不會插進它做到一半的事情；只有官方整合回報結束才放行，終端 heuristic 的猜測不算，已經閒置的則照舊立刻送出。執行中的分頁可直接加開另一個 CLI，並選擇帶入目前脈絡：Claude 的設定可確認時會寫入其已知的專案記憶，其他 CLI 或未知格式則只傳送一次性交接內容，不會改寫私有 session 檔。CLI 自行結束時，LatticeTerm 會保留唯讀分頁與退出前畫面，直到使用者關閉，不會突然跳回其他專案。啟動項目可加入選填備註並保存到可命名、排序的工作區；重新啟動已保存的 Codex 項目時，會續接同一工作目錄最近的對話，Cursor 項目則使用官方的最近對話續接。同一桌面程序內若 WebView 重新載入，活躍 PTY 會重新 attach 並重播最近 256 KiB 記憶體輸出；正常關閉桌面程式時，這段輸出會以 OS 安全儲存區中的裝置金鑰加密保存，下次還原同一項目時先重播。安全儲存區不可用時不會把輸出寫入磁碟。登入與 token 仍由各 CLI 自行管理。
+- **對話模式**：不想用終端機的人可以在「對話」頁用聊天視窗跟 Claude Code 或 OpenAI Codex 溝通，做法參考 Codex Desktop：每一輪都以該 CLI 官方的 headless JSON 模式執行一次（`claude -p --output-format stream-json`、`codex exec --json`），回覆逐字串流顯示，每個工具呼叫是一張可展開的卡片，結束時顯示耗時、token 與費用。之後的訊息以 CLI 自己的對話 ID 續接，所以登入、模型與對話紀錄都還是 CLI 的。權限用效果命名而不是各家旗標：「唯讀」、「可修改工作目錄」、「全部允許（危險）」分別對應 Claude 的 `plan`／`acceptEdits`／`bypassPermissions` 與 Codex 的 `read-only`／`workspace-write`／bypass sandbox。對話內容只在這台電腦的 LatticeTerm 本機儲存區留一份有界複本；提示走 stdin 而非命令列參數，不會出現在程序清單。
 - **可靠的 Agent 狀態**：Codex、Claude Code、Gemini CLI、OpenCode、GitHub Copilot CLI、Hermes Agent 與 Qwen Code 會以各自官方 lifecycle hook／plugin event 明確回報工作中、完成或等待權限；Claude 與 Qwen 尚有背景工作或排程時不會誤標完成，OpenCode、Copilot 與 Hermes 的子 Agent 結束也不會被當成主工作階段完成。Gemini、OpenCode、Copilot、Hermes 與 Qwen 的整合只套用在該次 LatticeTerm 工作階段，不改使用者設定；若主機已有不可安全合併的程序級設定、專案停用所有 hooks、無法辨識 Hermes 安裝結構，或 CLI 以 pure／safe／bare mode 啟動，就保留原設定並使用保守 heuristic。其他尚未整合 hook 的工具也只使用保守的終端提示 heuristic。狀態不會憑空猜測：只有使用者實際送出打好的提示才算開始工作，單獨按 Enter 接受資料夾信任對話框或清空提示都不會標成執行中；整合始終沒有回報且終端連續 10 分鐘無輸出時，會退回「閒置」而不是謊稱「完成」。
 - **SSH 連線**：以純 Rust 的 russh 實作，可使用密碼或本機 OpenSSH 私鑰建立終端機工作階段。主機金鑰未經確認不會連線，金鑰變更會直接擋下；密碼預設只用於當次連線，使用者可在驗證成功後明確保存到系統認證儲存區，私鑰內容與密語不會保存至連線設定。執行中的 SSH 分頁可一鍵「開啟檔案總管」，以同一台主機、同一組認證開啟 SFTP 圖形化檔案瀏覽（已保存密碼免再輸入）。
 - **SSH Tunnel**：可建立本機、遠端與 SOCKS5 動態轉送，顯示即時狀態與連線數；動態代理若未設定驗證只允許綁定 loopback，遠端轉送則依 SSH 伺服器的 GatewayPorts 政策生效。
@@ -157,6 +158,12 @@ Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示
 每個 CLI 都會收到本機 Reporter 環境變數。工具 hook 可執行 `"$LATTICETERM_AGENT_REPORTER" agent-report done`，並以 `working`、`needs-attention`、`idle` 或 `done` 回報狀態；Windows PowerShell 使用 `& $env:LATTICETERM_AGENT_REPORTER agent-report done`。Reporter 只接受該工作階段的隨機權杖，且只能更新狀態。完整協定與安全邊界請見架構文件。
 
 Agent Fleet 同時會在桌面安裝包可用時提供 `LATTICETERM_REMOTE_CLI`，其值只是受信任的 `lattice-remote` 用戶端絕對路徑，不含主機、配對碼或其他憑證。AI CLI 仍必須由使用者指定連線目標與配對碼來源，LatticeTerm 不會自動部署。
+
+### 用對話框跟 CLI 溝通
+
+側邊導覽的「對話」頁提供聊天視窗，適合不習慣終端機的人。按「新對話」、選 CLI（目前支援 Claude Code 與 OpenAI Codex）與工作目錄，之後輸入訊息按 Enter 即可；Shift+Enter 換行，中文輸入法選字時的 Enter 不會誤送。每一輪 LatticeTerm 會以該 CLI 的 headless JSON 模式跑一次程序、把提示從 stdin 送入，並把回覆、思考摘要、工具呼叫與結束統計即時顯示成訊息與卡片；「停止」會結束該程序。第一輪回報的 CLI 對話 ID 會留在對話裡供續接（`claude --resume`、`codex exec resume`），所以關掉 LatticeTerm 再開仍可接著聊，但正在回覆中的那一輪不會跨重啟存活。
+
+權限選項對應各 CLI 的官方旗標：「唯讀」是 Claude `plan`／Codex `read-only`；「可修改工作目錄」是 Claude `acceptEdits`／Codex `workspace-write`，Claude 在這個模式下遇到需要審核的指令會拒絕並在回覆裡說明，Codex 則在自己的沙箱裡執行；「全部允許」是 Claude `bypassPermissions`／Codex bypass sandbox，CLI 會以你的帳號權限做任何事而不再詢問，介面會明確警告。互動式的逐項核准（像終端機裡按 y／n）尚未實作。對話內容只在本機 WebView 儲存區留一份有界複本（每則工具輸出最多 2 KiB、總量 4 MiB），完整逐字稿仍在各 CLI 自己的紀錄裡；登入資料與 API 金鑰不經過 LatticeTerm。
 
 Herdr 類型的背景服務、完整工具語意 Adapter、跨程序原 PTY 重新 attach 與自建遠端 attach 規劃，請見 [AI Agent Fleet 架構與整合藍圖](docs/AGENT_FLEET_ARCHITECTURE.zh-TW.md)。
 

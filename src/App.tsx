@@ -40,6 +40,7 @@ import { APP_VERSION } from "./app/version";
 import { useStorageStatus } from "./app/useStorageStatus";
 import { useAgentSessions } from "./app/useAgentSessions";
 import { useAgentActivity } from "./app/useAgentActivity";
+import { useAgentChat } from "./app/useAgentChat";
 import { useSshSessions } from "./app/useSshSessions";
 import { useSftpSessions } from "./app/useSftpSessions";
 import { useRemoteSessions } from "./app/useRemoteSessions";
@@ -97,6 +98,11 @@ const ConnectionsView = lazy(() =>
 const AgentsView = lazy(() =>
   import("./views/AgentsView").then((module) => ({
     default: module.AgentsView,
+  })),
+);
+const ChatView = lazy(() =>
+  import("./views/ChatView").then((module) => ({
+    default: module.ChatView,
   })),
 );
 const SessionsView = lazy(() =>
@@ -292,6 +298,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const [view, setView] = useState<ViewId>("connections");
   const activityReturnViewRef = useRef<ViewId>("connections");
   const agentActivity = useAgentActivity(agents.sessions, agents.mode);
+  // Lives here rather than in the view so a reply keeps streaming into its
+  // thread while another view is open.
+  const chat = useAgentChat();
   const [mobileResourceSidebarOpen, setMobileResourceSidebarOpen] =
     useState(false);
   // A desktop-only view reached on mobile (stale state) snaps back home.
@@ -997,6 +1006,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 }}
               />
             )}
+            {view === "chat" && <ChatView agents={agents} chat={chat} />}
             {view === "tunnels" && (
               // Tunnels authenticate with a saved SSH password, so only SSH
               // profiles can serve as the gateway; offering an RDP or Lattice

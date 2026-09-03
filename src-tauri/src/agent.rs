@@ -3722,6 +3722,17 @@ fn detect_agent_account(definition_id: &str) -> AgentAccountInfo {
     }
 }
 
+/// Where the catalog found a CLI, by definition id.
+///
+/// Shared with chat mode so a CLI the fleet can see is a CLI a conversation
+/// can start: both use the same PATH, npm-global and well-known lookups.
+pub(crate) fn catalog_executable(definition_id: &str) -> Option<PathBuf> {
+    AGENTS
+        .iter()
+        .find(|agent| agent.id == definition_id)
+        .and_then(find_agent_executable)
+}
+
 fn find_agent_executable(agent: &AgentSpec) -> Option<PathBuf> {
     find_executable(agent.executable)
         .or_else(|| find_npm_global_agent_executable(agent.executable))
@@ -4096,7 +4107,7 @@ fn plain_win32_path(path: PathBuf) -> PathBuf {
 /// launch paths are first converted out of verbatim form for child
 /// compatibility.
 #[cfg(windows)]
-fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
+pub(crate) fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
     let executable = plain_windows_path(executable);
     let is_script = Path::new(&executable)
         .extension()
@@ -4194,7 +4205,7 @@ fn configure_node_runtime_for_script(command: &mut CommandBuilder, executable: &
 }
 
 #[cfg(not(windows))]
-fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
+pub(crate) fn launch_parts(executable: &Path) -> (OsString, Vec<OsString>) {
     (executable.as_os_str().to_os_string(), Vec::new())
 }
 
