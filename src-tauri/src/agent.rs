@@ -4167,6 +4167,40 @@ fn clear_host_terminal_markers(command: &mut CommandBuilder) {
     command.env_remove("HERDR_PANE_ID");
 }
 
+fn remote_cli_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "lattice-remote.exe"
+    } else {
+        "lattice-remote"
+    }
+}
+
+/// Finds the bundled Lattice Remote client for Agent Fleet children.
+///
+/// The absolute path is exposed as a non-secret environment variable instead
+/// of prepending the application directory to PATH, where unrelated bundled
+/// names could unexpectedly shadow the user's normal commands.
+fn remote_cli_executable() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(parent) = current.parent() {
+            candidates.push(parent.join(remote_cli_executable_name()));
+        }
+    }
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    candidates.push(
+        manifest
+            .join("../crates/lattice-remote/target/debug")
+            .join(remote_cli_executable_name()),
+    );
+    candidates.push(
+        manifest
+            .join("../crates/lattice-remote/target/release")
+            .join(remote_cli_executable_name()),
+    );
+    candidates.into_iter().find(|path| path.is_file())
+}
+
 fn validated_size(cols: u32, rows: u32) -> Result<PtySize, String> {
     if !(1..=1000).contains(&cols) || !(1..=1000).contains(&rows) {
         return Err("Terminal dimensions must be between 1 and 1000.".to_string());
@@ -4966,6 +5000,9 @@ pub fn launch_with_replay(
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     command.env("LATTICETERM_AGENT_SESSION", &session_id);
+    if let Some(remote_cli) = remote_cli_executable() {
+        command.env("LATTICETERM_REMOTE_CLI", remote_cli);
+    }
     if let (Some(endpoint), Some(token)) = (&reporter, &report_token) {
         command.env("LATTICETERM_AGENT_REPORTER", &endpoint.executable);
         command.env(

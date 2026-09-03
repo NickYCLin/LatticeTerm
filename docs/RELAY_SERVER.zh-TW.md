@@ -129,6 +129,14 @@ Cloudflare 的限制以
   分享的是加密的 shell 終端機而不是畫面；檢視端一樣用裝置 ID＋配對碼
   連線，開啟的會是終端分頁。不加 `--allow-input` 則對方只能看不能打字；
   `--file-root` 檔案分享照常可用。
+- **從 Agent Fleet 內的 CLI 操作**：桌面版會把內附的用戶端絕對路徑放在
+  `LATTICETERM_REMOTE_CLI`。PowerShell 以
+  `& $env:LATTICETERM_REMOTE_CLI --relay ... --device ... list /` 呼叫，sh 則以
+  `"$LATTICETERM_REMOTE_CLI" --relay ... --device ... list /` 呼叫；另有
+  `upload LOCAL REMOTE`、`download REMOTE LOCAL` 與 `terminal`。用戶端不接受
+  命令列配對碼，未指定 `--pair-code-file` 時只在互動終端隱藏詢問。上傳多檔
+  部署時建議先打成一個 release 封裝，上傳後再進入互動終端驗證 SHA-256、
+  解壓與切換服務；不提供背景 `exec` 字串入口。
 - **無人值守（固定配對碼）**：桌面內嵌分享不會保存固定碼，並以 stdin
   交給 Agent；獨立常駐服務應把八位數碼放在只有服務帳號可讀的檔案，改用
   `--pair-code-file`，避免秘密出現在程序清單。先在 Agent 帳號下建立檔案：
@@ -168,6 +176,11 @@ Cloudflare 的限制以
 | `ping` / `pong` | 雙向 | 控制連線保活（25 秒） |
 
 `linked` 之後即為既有的 Lattice Remote 加密協定，與直連模式完全相同。
+
+命令列檢視端與桌面檢視端使用同一份 `remote-device-pins.json`。只有在 Noise
+配對完成且收到 Agent 的加密 Hello 後才會寫入第一次看到的永久金鑰指紋；
+後續不同金鑰會拒絕連線。釘選檔只含公開指紋，寫入仍使用跨程序鎖與同目錄
+原子替換，避免 GUI 與 CLI 同時首次連線或程序中斷時遺失既有信任記錄。
 
 ## 版本相容
 

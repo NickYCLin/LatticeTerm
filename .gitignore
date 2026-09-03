@@ -46,7 +46,8 @@ src-tauri/icons/ios/
 # Rust build output
 **/target/
 
-# Built and bundled by scripts/build-*-engine.mjs.
+# Built and bundled by scripts/build-*-engine.mjs / build-remote-agent.mjs.
 src-tauri/binaries/lattice-rdp-engine-*
 src-tauri/binaries/lattice-vnc-engine-*
 src-tauri/binaries/lattice-agent-*
+src-tauri/binaries/lattice-remote-*

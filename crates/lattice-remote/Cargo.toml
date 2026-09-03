@@ -7,7 +7,8 @@ description = "Encrypted direct-connect protocol and agent for Lattice Remote"
 
 [features]
 default = []
-agent = ["dep:enigo", "dep:image", "dep:libc", "dep:portable-pty", "dep:xcap"]
+agent = ["dep:enigo", "dep:image", "dep:portable-pty", "dep:xcap"]
+client-cli = ["dep:clap", "dep:crossterm", "dep:dirs", "dep:rpassword", "tokio/io-std"]
 relay-server = []
 
 [dependencies]
@@ -24,13 +25,20 @@ url = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+clap = { version = "4.5", features = ["derive"], optional = true }
+crossterm = { version = "0.29", optional = true }
+dirs = { version = "6", optional = true }
+fs2 = "0.4"
+rpassword = { version = "7", optional = true }
+tempfile = "3.27"
+zeroize = "1.9"
 # xcap 0.5+ uses pipewire-rs APIs newer than Ubuntu 22.04 headers.
 xcap = { version = "=0.4.1", optional = true }
 enigo = { version = "0.6", optional = true }
 # Terminal mode shares a PTY shell instead of the display; same crate the
 # desktop app already uses for local CLIs.
 portable-pty = { version = "0.9", optional = true }
-libc = { version = "0.2", optional = true }
+libc = "0.2"
 
 [[bin]]
 name = "lattice-agent"
@@ -41,3 +49,8 @@ required-features = ["agent"]
 name = "lattice-relay"
 path = "src/bin/lattice-relay.rs"
 required-features = ["relay-server"]
+
+[[bin]]
+name = "lattice-remote"
+path = "src/bin/lattice-remote.rs"
+required-features = ["client-cli"]

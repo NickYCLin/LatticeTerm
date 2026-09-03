@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
+use zeroize::Zeroizing;
 
 pub(crate) use crate::wire::{read_wire, write_wire};
 
@@ -40,12 +41,12 @@ pub fn normalize_pairing_code(input: &str) -> Result<String, RemoteError> {
     }
 }
 
-fn pairing_key(input: &str) -> Result<[u8; 32], RemoteError> {
-    let code = normalize_pairing_code(input)?;
+fn pairing_key(input: &str) -> Result<Zeroizing<[u8; 32]>, RemoteError> {
+    let code = Zeroizing::new(normalize_pairing_code(input)?);
     let mut digest = Sha256::new();
     digest.update(b"lattice-remote-pairing-v1:");
     digest.update(code.as_bytes());
-    Ok(digest.finalize().into())
+    Ok(Zeroizing::new(digest.finalize().into()))
 }
 
 pub fn generate_pairing_code() -> Result<String, RemoteError> {

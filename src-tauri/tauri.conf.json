@@ -46,7 +46,8 @@
     "externalBin": [
       "binaries/lattice-rdp-engine",
       "binaries/lattice-vnc-engine",
-      "binaries/lattice-agent"
+      "binaries/lattice-agent",
+      "binaries/lattice-remote"
     ]
   },
   "plugins": {

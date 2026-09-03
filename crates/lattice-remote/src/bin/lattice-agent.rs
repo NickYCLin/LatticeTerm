@@ -1,4 +1,5 @@
 use image::{imageops::FilterType, DynamicImage};
+use lattice_remote::credentials::read_pairing_code_file;
 use lattice_remote::relay::{
     format_device_id, normalize_relay_endpoint, read_server_message, write_client_message,
     DeviceIdentity, RelayClientMessage, RelayServerMessage,
@@ -180,34 +181,6 @@ fn set_pairing_code(slot: &mut Option<String>, input: &str) -> Result<(), String
     }
     *slot = Some(normalize_pairing_code(input).map_err(|error| error.to_string())?);
     Ok(())
-}
-
-fn read_pairing_code_file(path: &Path) -> Result<String, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|error| format!("cannot read --pair-code-file: {error}"))?;
-    let metadata = file
-        .metadata()
-        .map_err(|error| format!("cannot inspect --pair-code-file: {error}"))?;
-    if metadata.len() > 64 {
-        return Err("--pair-code-file must be at most 64 bytes".to_string());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(
-                "--pair-code-file must not be accessible by group or other users".to_string(),
-            );
-        }
-    }
-    let mut input = String::new();
-    file.take(65)
-        .read_to_string(&mut input)
-        .map_err(|error| format!("cannot read --pair-code-file: {error}"))?;
-    if input.len() > 64 {
-        return Err("--pair-code-file must be at most 64 bytes".to_string());
-    }
-    Ok(input)
 }
 
 fn read_pairing_code_stdin() -> Result<String, String> {
@@ -3824,7 +3797,7 @@ mod tests {
             std::env::temp_dir().join(format!("lattice-agent-pair-code-{}", std::process::id()));
         std::fs::write(&path, "12345678\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert_eq!(read_pairing_code_file(&path).unwrap(), "12345678\n");
+        assert_eq!(read_pairing_code_file(&path).unwrap(), "12345678");
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(read_pairing_code_file(&path).is_err());

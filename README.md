@@ -127,6 +127,25 @@ cargo run --manifest-path crates/lattice-remote/Cargo.toml --features agent --bi
 
 沒有桌面環境的純文字主機加上 `--terminal` 即可分享加密的 shell 終端機（而非畫面）；搭配擁有者限定讀取的 `--pair-code-file` 即可無人值守重連，避免固定碼直接出現在程序參數。連續五次配對失敗會自動停止；常駐服務不得用無條件自動重啟繞過這個保護。檢視端一樣以裝置 ID＋配對碼連線，開啟的是終端分頁。細節見 `lattice-agent --help` 與上述中繼文件。
 
+### 從 Agent Fleet CLI 傳檔與部署
+
+桌面安裝包也包含 `lattice-remote` 用戶端。由 LatticeTerm 啟動的 Codex、Claude Code 等 CLI 會收到 `LATTICETERM_REMOTE_CLI` 絕對路徑，因此不必猜安裝位置或修改 `PATH`。它支援目錄清單、單檔上下載與互動終端；例如在 PowerShell 中：
+
+```powershell
+$remote = $env:LATTICETERM_REMOTE_CLI
+& $remote --relay wss://relay.example.com --device '123 456 789' `
+  --pair-code-file "$env:USERPROFILE\.config\lattice-remote\pair-code" list /
+& $remote --relay wss://relay.example.com --device '123 456 789' `
+  --pair-code-file "$env:USERPROFILE\.config\lattice-remote\pair-code" `
+  upload .\release.tar.gz /release.tar.gz
+& $remote --relay wss://relay.example.com --device '123 456 789' `
+  --pair-code-file "$env:USERPROFILE\.config\lattice-remote\pair-code" terminal
+```
+
+未指定 `--pair-code-file` 時會在真實終端隱藏詢問配對碼；刻意不提供 `--pair-code`，避免祕密出現在程序清單與 shell 歷程。Relay 裝置沿用桌面版的 TOFU 身分金鑰釘選；上傳與下載使用私人暫存檔、完整收完後才原子發布，並輸出本機計算的 SHA-256。遠端路徑仍受分享端 `--file-root` 限制，既有檔案必須明確加上 `--overwrite` 才能替換。
+
+部署多個檔案時，建議先產生單一版本化封裝檔並上傳，再進入 `terminal` 驗證雜湊、解壓到新 release 目錄、執行檢查後切換服務。CLI 不提供可從參數背景執行任意字串的 `exec`：互動終端要求真實 TTY，且分享端必須同時啟用 `--terminal --allow-input`；按 `Ctrl+]` 可中斷。這保留部署能力，也避免多一條容易發生引號注入或未確認背景執行的介面。
+
 ### 執行 AI Agent Fleet
 
 Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示後端不可用。開啟側邊導覽的「AI Agent Fleet」，選擇工作目錄後即可啟動已偵測到的內建 CLI。未偵測到工具時，卡片會先列出經專案固定的安裝指令；使用者確認後才會開啟安裝終端，LatticeTerm 不會在背景靜默下載或執行安裝。若該平台沒有可直接執行的安全安裝方式，則提供可複製的安裝說明網址。安裝程式若更新 PATH，可能需要重開 LatticeTerm 才會被偵測到。批次提示必須先勾選執行中的目標並再次確認，LatticeTerm 不保存提示內容。
@@ -137,6 +156,8 @@ Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示
 
 每個 CLI 都會收到本機 Reporter 環境變數。工具 hook 可執行 `"$LATTICETERM_AGENT_REPORTER" agent-report done`，並以 `working`、`needs-attention`、`idle` 或 `done` 回報狀態；Windows PowerShell 使用 `& $env:LATTICETERM_AGENT_REPORTER agent-report done`。Reporter 只接受該工作階段的隨機權杖，且只能更新狀態。完整協定與安全邊界請見架構文件。
 
+Agent Fleet 同時會在桌面安裝包可用時提供 `LATTICETERM_REMOTE_CLI`，其值只是受信任的 `lattice-remote` 用戶端絕對路徑，不含主機、配對碼或其他憑證。AI CLI 仍必須由使用者指定連線目標與配對碼來源，LatticeTerm 不會自動部署。
+
 Herdr 類型的背景服務、完整工具語意 Adapter、跨程序原 PTY 重新 attach 與自建遠端 attach 規劃，請見 [AI Agent Fleet 架構與整合藍圖](docs/AGENT_FLEET_ARCHITECTURE.zh-TW.md)。
 
 ### 專案驗證
@@ -144,7 +165,7 @@ Herdr 類型的背景服務、完整工具語意 Adapter、跨程序原 PTY 重�
 ```sh
 npm run check
 npm run build:sidecars
-cargo test --manifest-path crates/lattice-remote/Cargo.toml --features agent
+cargo test --manifest-path crates/lattice-remote/Cargo.toml --features "agent client-cli relay-server"
 cargo test --manifest-path crates/lattice-rdp/Cargo.toml
 cargo test --manifest-path crates/lattice-vnc/Cargo.toml
 cargo fmt --manifest-path src-tauri/Cargo.toml --check

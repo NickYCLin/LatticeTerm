@@ -15,7 +15,7 @@ const triples = {
 };
 const triple = triples[`${process.platform}-${process.arch}`];
 if (!triple) {
-  throw new Error(`Unsupported Lattice Agent target: ${process.platform}-${process.arch}`);
+  throw new Error(`Unsupported Lattice Remote target: ${process.platform}-${process.arch}`);
 }
 
 const environment = { ...process.env };
@@ -31,9 +31,11 @@ const args = [
   "--manifest-path",
   join(root, "crates/lattice-remote/Cargo.toml"),
   "--features",
-  "agent",
+  "agent,client-cli",
   "--bin",
   "lattice-agent",
+  "--bin",
+  "lattice-remote",
 ];
 if (release) args.push("--release");
 execFileSync("cargo", args, {
@@ -44,14 +46,16 @@ execFileSync("cargo", args, {
 
 const extension = process.platform === "win32" ? ".exe" : "";
 const profile = release ? "release" : "debug";
-const source = join(
-  root,
-  "crates/lattice-remote/target",
-  profile,
-  `lattice-agent${extension}`,
-);
 const binaryDir = join(root, "src-tauri/binaries");
-const destination = join(binaryDir, `lattice-agent-${triple}${extension}`);
 mkdirSync(binaryDir, { recursive: true });
-copyFileSync(source, destination);
-console.log(`Prepared ${destination}`);
+for (const binary of ["lattice-agent", "lattice-remote"]) {
+  const source = join(
+    root,
+    "crates/lattice-remote/target",
+    profile,
+    `${binary}${extension}`,
+  );
+  const destination = join(binaryDir, `${binary}-${triple}${extension}`);
+  copyFileSync(source, destination);
+  console.log(`Prepared ${destination}`);
+}
