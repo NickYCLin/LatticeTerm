@@ -2,13 +2,21 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("iOS Tauri 設定", () => {
-  it("使用 In-House profile 對應的識別與開發團隊", () => {
-    const config = JSON.parse(
+  it("只在 iOS 覆寫 In-House profile 對應的識別與開發團隊", () => {
+    const desktopConfig = JSON.parse(
       readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
     );
+    const iosConfig = JSON.parse(
+      readFileSync(
+        new URL("../src-tauri/tauri.ios.conf.json", import.meta.url),
+        "utf8",
+      ),
+    );
 
-    expect(config.identifier).toBe("tw.nickyclin.latticeterm");
-    expect(config.bundle.iOS.developmentTeam).toBe("SQDAQK66UY");
+    expect(desktopConfig.identifier).toBe("io.github.nickyclin.latticeterm");
+    expect(desktopConfig.bundle.iOS).toBeUndefined();
+    expect(iosConfig.identifier).toBe("tw.nickyclin.latticeterm");
+    expect(iosConfig.bundle.iOS.developmentTeam).toBe("SQDAQK66UY");
   });
 
   it("同步 Apple/Xcode 專案的 bundle identifier", () => {
