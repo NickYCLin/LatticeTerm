@@ -205,11 +205,11 @@ export function AutomationPane({
       </header>
       <div className="chat-messages">
         <div className="chat-messages__inner">
-          <details className="chat-reasoning" open>
+          <details className="chat-card chat-card--reasoning" open>
             <summary>
-              <span className="chat-tool__name">{t("automation.instructions")}</span>
+              <span className="chat-card__label">{t("automation.instructions")}</span>
             </summary>
-            <p className="chat-reasoning__text">{selected.instructions}</p>
+            <p className="chat-card__text">{selected.instructions}</p>
           </details>
           <h3 className="automation-runs__title">{t("automation.runs")}</h3>
           {selected.runs.length === 0 ? (

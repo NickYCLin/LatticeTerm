@@ -264,6 +264,13 @@ export const ChatIcon: Glyph = (props) => (
   </Icon>
 );
 
+export const SendIcon: Glyph = (props) => (
+  <Icon {...props}>
+    <path d="M14 2 2 6.5l5.5 2 2 5.5L14 2z" />
+    <path d="M7.5 8.5 14 2" />
+  </Icon>
+);
+
 export const FolderIcon: Glyph = (props) => (
   <Icon {...props}>
     <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.5 1.5h4.9A1.5 1.5 0 0 1 14 6v6.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-8z" />
