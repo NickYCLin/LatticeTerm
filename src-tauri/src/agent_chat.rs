@@ -55,6 +55,11 @@ pub enum ChatPermission {
     /// Everything, with no prompts. Kept behind an explicit choice in the
     /// interface because it hands the CLI the user's full rights.
     Full,
+    /// Each tool call the CLI cannot settle from its own rules is put to the
+    /// user as an approval card, the way the terminal would prompt. Only
+    /// Claude Code offers this headlessly (its stream-json control
+    /// protocol); Codex's `exec` mode has no equivalent.
+    Ask,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,6 +131,15 @@ pub enum ChatEvent {
     Notice {
         message: String,
     },
+    /// The CLI is waiting for the user to allow or deny one tool call.
+    ApprovalRequested {
+        request_id: String,
+        tool_use_id: Option<String>,
+        name: String,
+        summary: String,
+        /// The tool's input, pretty-printed and bounded, for the card.
+        input: String,
+    },
     Finished {
         native_session_id: Option<String>,
         usage: Option<ChatUsage>,
@@ -163,9 +177,18 @@ impl ChatSink for EventSink {
     }
 }
 
+type SharedStdin = Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>;
+
 struct RunningTurn {
     turn_id: String,
     child: Child,
+    /// Kept open for the whole turn only when approvals can be asked; a
+    /// one-shot turn closes stdin right after the prompt.
+    stdin: Option<SharedStdin>,
+    /// Inputs of the tool calls awaiting an answer, by request id. The
+    /// answer echoes the input back, and the interface only has a bounded
+    /// rendering of it.
+    pending_inputs: HashMap<String, Value>,
 }
 
 /// The turns currently running, one per thread at most.
@@ -192,6 +215,8 @@ impl AgentChatRegistry {
         let mut running = self.lock();
         match running.get_mut(thread_id) {
             Some(turn) => {
+                turn.stdin = None;
+                turn.pending_inputs.clear();
                 turn.child
                     .start_kill()
                     .map_err(|error| format!("Cannot stop the agent: {error}"))?;
@@ -315,10 +340,26 @@ fn turn_arguments(
                         ChatPermission::ReadOnly => "plan",
                         ChatPermission::WorkspaceWrite => "acceptEdits",
                         ChatPermission::Full => "bypassPermissions",
+                        // The classic prompt-for-anything-not-allowed mode.
+                        ChatPermission::Ask => "manual",
                     },
                 ]
                 .map(OsString::from),
             );
+            if permission == ChatPermission::Ask {
+                // Bidirectional: the prompt and every approval answer go in
+                // as JSON lines, and permission questions come out as
+                // `control_request` lines instead of being auto-denied.
+                args.extend(
+                    [
+                        "--input-format",
+                        "stream-json",
+                        "--permission-prompt-tool",
+                        "stdio",
+                    ]
+                    .map(OsString::from),
+                );
+            }
             if let Some(model) = model {
                 args.push("--model".into());
                 args.push(model.into());
@@ -347,6 +388,12 @@ fn turn_arguments(
                 }
                 ChatPermission::Full => {
                     args.push("--dangerously-bypass-approvals-and-sandbox".into());
+                }
+                // Refused before the arguments are built; the closest
+                // headless equivalent is the sandbox that changes nothing.
+                ChatPermission::Ask => {
+                    args.push("-s".into());
+                    args.push("read-only".into());
                 }
             }
             match native_session_id {
@@ -384,6 +431,10 @@ pub async fn send<S: ChatSink>(
     validate_id(&request.turn_id, "turn id")?;
     let dialect = Dialect::from_definition(&request.definition_id)
         .ok_or_else(|| "This CLI has no chat mode.".to_string())?;
+    let interactive = request.permission == ChatPermission::Ask;
+    if interactive && dialect != Dialect::Claude {
+        return Err("This CLI cannot ask for approval in chat mode.".to_string());
+    }
     if request.prompt.trim().is_empty() {
         return Err("Type a message first.".to_string());
     }
@@ -452,6 +503,14 @@ pub async fn send<S: ChatSink>(
         .take()
         .ok_or_else(|| "The agent's output could not be captured.".to_string())?;
     let stderr = child.stderr.take();
+    let (one_shot_stdin, mut shared_stdin) = if interactive {
+        (
+            None,
+            stdin.map(|stdin| Arc::new(tokio::sync::Mutex::new(stdin))),
+        )
+    } else {
+        (stdin, None)
+    };
 
     {
         let mut running = registry.lock();
@@ -460,6 +519,8 @@ pub async fn send<S: ChatSink>(
             RunningTurn {
                 turn_id: request.turn_id.clone(),
                 child,
+                stdin: shared_stdin.clone(),
+                pending_inputs: HashMap::new(),
             },
         );
     }
@@ -468,12 +529,19 @@ pub async fn send<S: ChatSink>(
     let turn_id = request.turn_id;
     let prompt = request.prompt;
     tauri::async_runtime::spawn(async move {
-        if let Some(mut stdin) = stdin {
-            // A CLI that has already exited closes the pipe; the exit status
-            // explains that better than a write error would.
+        // A CLI that has already exited closes the pipe; the exit status
+        // explains that better than a write error would.
+        if let Some(mut stdin) = one_shot_stdin {
             let _ = stdin.write_all(prompt.as_bytes()).await;
             let _ = stdin.write_all(b"\n").await;
             let _ = stdin.shutdown().await;
+        } else if let Some(stdin) = &shared_stdin {
+            let mut stdin = stdin.lock().await;
+            for line in interactive_opening_lines(&prompt) {
+                let _ = stdin.write_all(line.as_bytes()).await;
+                let _ = stdin.write_all(b"\n").await;
+            }
+            let _ = stdin.flush().await;
         }
 
         let stderr_task = tauri::async_runtime::spawn(async move {
@@ -514,6 +582,30 @@ pub async fn send<S: ChatSink>(
             let text = String::from_utf8_lossy(&line);
             for event in parse_line(dialect, &mut state, text.trim_end()) {
                 sink.event(&thread_id, &turn_id, event);
+            }
+            if !state.pending_inputs.is_empty() {
+                let mut running = registry.lock();
+                if let Some(turn) = running.get_mut(&thread_id) {
+                    if turn.turn_id == turn_id {
+                        turn.pending_inputs.extend(state.pending_inputs.drain(..));
+                    }
+                }
+                state.pending_inputs.clear();
+            }
+            if state.turn_complete {
+                if let Some(stdin) = shared_stdin.take() {
+                    // The reply is in. Closing stdin is what ends a
+                    // bidirectional CLI; it keeps waiting for input otherwise.
+                    {
+                        let mut running = registry.lock();
+                        if let Some(turn) = running.get_mut(&thread_id) {
+                            turn.stdin = None;
+                            turn.pending_inputs.clear();
+                        }
+                    }
+                    let mut stdin = stdin.lock().await;
+                    let _ = stdin.shutdown().await;
+                }
             }
         }
 
@@ -597,6 +689,101 @@ async fn read_bounded_line<R: AsyncBufReadExt + Unpin>(
     }
 }
 
+/// What a bidirectional Claude turn writes before anything else: the
+/// handshake the SDK sends, then the prompt as a user message.
+fn interactive_opening_lines(prompt: &str) -> Vec<String> {
+    vec![
+        serde_json::json!({
+            "type": "control_request",
+            "request_id": "latticeterm-init",
+            "request": { "subtype": "initialize", "hooks": {} },
+        })
+        .to_string(),
+        serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{ "type": "text", "text": prompt }],
+            },
+        })
+        .to_string(),
+    ]
+}
+
+/// The answer to one `can_use_tool` request, as the CLI expects it. An
+/// allow echoes the original input back; a deny carries a reason the model
+/// sees as the tool's result.
+fn control_response_line(
+    request_id: &str,
+    allow: bool,
+    input: Option<Value>,
+    message: Option<&str>,
+) -> String {
+    let response = if allow {
+        serde_json::json!({
+            "behavior": "allow",
+            "updatedInput": input.unwrap_or(Value::Object(Default::default())),
+        })
+    } else {
+        serde_json::json!({
+            "behavior": "deny",
+            "message": message.unwrap_or("The user declined this tool call."),
+        })
+    };
+    serde_json::json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": response,
+        },
+    })
+    .to_string()
+}
+
+/// Answers a pending approval on `thread_id`.
+pub async fn respond(
+    registry: Arc<AgentChatRegistry>,
+    thread_id: &str,
+    request_id: &str,
+    allow: bool,
+    message: Option<&str>,
+) -> Result<(), String> {
+    validate_id(thread_id, "thread id")?;
+    validate_id(request_id, "request id")?;
+    let message = message.map(|text| truncate(text.trim(), 1024));
+    let (stdin, input) = {
+        let mut running = registry.lock();
+        let turn = running
+            .get_mut(thread_id)
+            .ok_or_else(|| "This conversation is not waiting for an answer.".to_string())?;
+        let input = turn
+            .pending_inputs
+            .remove(request_id)
+            .ok_or_else(|| "This approval has already been answered.".to_string())?;
+        let stdin = turn
+            .stdin
+            .clone()
+            .ok_or_else(|| "This conversation is not waiting for an answer.".to_string())?;
+        (stdin, input)
+    };
+    let line = control_response_line(request_id, allow, Some(input), message.as_deref());
+    let mut stdin = stdin.lock().await;
+    stdin
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|error| format!("Cannot answer the agent: {error}"))?;
+    stdin
+        .write_all(b"\n")
+        .await
+        .map_err(|error| format!("Cannot answer the agent: {error}"))?;
+    stdin
+        .flush()
+        .await
+        .map_err(|error| format!("Cannot answer the agent: {error}"))?;
+    Ok(())
+}
+
 #[derive(Default)]
 struct TurnState {
     native_session_id: Option<String>,
@@ -606,6 +793,12 @@ struct TurnState {
     error: Option<String>,
     /// Claude: the API message whose content blocks the deltas belong to.
     current_message_id: Option<String>,
+    /// The CLI has produced its final result; a bidirectional turn can now
+    /// have its stdin closed.
+    turn_complete: bool,
+    /// Tool inputs behind the `ApprovalRequested` events just emitted,
+    /// handed to the registry so an answer can echo them back.
+    pending_inputs: Vec<(String, Value)>,
 }
 
 fn parse_line(dialect: Dialect, state: &mut TurnState, line: &str) -> Vec<ChatEvent> {
@@ -739,7 +932,35 @@ fn parse_claude(state: &mut TurnState, value: &Value) -> Vec<ChatEvent> {
                 });
             }
         }
+        Some("control_request") => {
+            let Some(request) = value.get("request") else {
+                return events;
+            };
+            if str_field(request, "subtype") != Some("can_use_tool") {
+                return events;
+            }
+            let Some(request_id) = str_field(value, "request_id") else {
+                return events;
+            };
+            let name = str_field(request, "tool_name")
+                .unwrap_or("tool")
+                .to_string();
+            let input = request.get("input").cloned().unwrap_or(Value::Null);
+            let summary = str_field(request, "description")
+                .map(|text| truncate(text, 200))
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| claude_tool_summary(&name, &input));
+            events.push(ChatEvent::ApprovalRequested {
+                request_id: request_id.to_string(),
+                tool_use_id: str_field(request, "tool_use_id").map(str::to_string),
+                name,
+                summary,
+                input: bounded_output(&serde_json::to_string_pretty(&input).unwrap_or_default()),
+            });
+            state.pending_inputs.push((request_id.to_string(), input));
+        }
         Some("result") => {
+            state.turn_complete = true;
             if let Some(id) = str_field(value, "session_id") {
                 state.native_session_id = Some(id.to_string());
             }
@@ -1129,6 +1350,119 @@ mod tests {
     }
 
     #[test]
+    fn claude_approval_request_becomes_a_card_and_keeps_the_input() {
+        // Captured from `claude -p --input-format stream-json
+        // --permission-prompt-tool stdio`.
+        let raw = r#"{"type":"control_request","request_id":"576cb46b-e252-44d9-b1ae-593998a16fdd","request":{"subtype":"can_use_tool","tool_name":"WebFetch","display_name":"WebFetch","input":{"url":"https://example.com","prompt":"What is the page title?"},"description":"https://example.com","permission_suggestions":[],"tool_use_id":"toolu_013DU387kSreb3xCEejeof6e"}}
+{"type":"control_response","response":{"subtype":"success","request_id":"latticeterm-init","response":{"commands":[]}}}"#;
+        let (state, events) = lines(Dialect::Claude, raw);
+
+        assert_eq!(
+            events,
+            vec![ChatEvent::ApprovalRequested {
+                request_id: "576cb46b-e252-44d9-b1ae-593998a16fdd".into(),
+                tool_use_id: Some("toolu_013DU387kSreb3xCEejeof6e".into()),
+                name: "WebFetch".into(),
+                summary: "https://example.com".into(),
+                // serde_json writes object keys in sorted order.
+                input: "{\n  \"prompt\": \"What is the page title?\",\n  \"url\": \"https://example.com\"\n}".into(),
+            }]
+        );
+        assert_eq!(state.pending_inputs.len(), 1);
+        assert_eq!(
+            state.pending_inputs[0].0,
+            "576cb46b-e252-44d9-b1ae-593998a16fdd"
+        );
+        assert!(!state.turn_complete);
+    }
+
+    #[test]
+    fn a_result_marks_the_turn_complete_so_stdin_can_close() {
+        let (state, _) = lines(
+            Dialect::Claude,
+            r#"{"type":"result","subtype":"success","is_error":false,"session_id":"s"}"#,
+        );
+        assert!(state.turn_complete);
+    }
+
+    #[test]
+    fn control_responses_match_what_the_cli_expects() {
+        let allow: Value = serde_json::from_str(&control_response_line(
+            "req-1",
+            true,
+            Some(serde_json::json!({"command": "ls"})),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(allow["type"], "control_response");
+        assert_eq!(allow["response"]["subtype"], "success");
+        assert_eq!(allow["response"]["request_id"], "req-1");
+        assert_eq!(allow["response"]["response"]["behavior"], "allow");
+        assert_eq!(
+            allow["response"]["response"]["updatedInput"]["command"],
+            "ls"
+        );
+
+        let deny: Value =
+            serde_json::from_str(&control_response_line("req-2", false, None, Some("no"))).unwrap();
+        assert_eq!(deny["response"]["response"]["behavior"], "deny");
+        assert_eq!(deny["response"]["response"]["message"], "no");
+    }
+
+    #[test]
+    fn the_interactive_opening_is_a_handshake_then_the_prompt() {
+        let lines = interactive_opening_lines("hi");
+        let init: Value = serde_json::from_str(&lines[0]).unwrap();
+        let user: Value = serde_json::from_str(&lines[1]).unwrap();
+        assert_eq!(init["request"]["subtype"], "initialize");
+        assert_eq!(user["type"], "user");
+        assert_eq!(user["message"]["content"][0]["text"], "hi");
+    }
+
+    #[test]
+    fn ask_mode_makes_claude_bidirectional() {
+        let args = turn_arguments(
+            Dialect::Claude,
+            Path::new("/work"),
+            ChatPermission::Ask,
+            None,
+            None,
+        );
+        assert!(args.contains(&OsString::from("manual")));
+        assert!(args.contains(&OsString::from("--input-format")));
+        assert!(args.contains(&OsString::from("--permission-prompt-tool")));
+    }
+
+    #[test]
+    fn ask_mode_is_refused_for_a_cli_that_cannot_ask() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let error = tauri::async_runtime::block_on(send(
+            Arc::new(RecordingSink(tx)),
+            Arc::new(AgentChatRegistry::new()),
+            ChatTurnRequest {
+                thread_id: "t".into(),
+                turn_id: "u".into(),
+                definition_id: "codex".into(),
+                working_directory: "/".into(),
+                prompt: "hi".into(),
+                permission: ChatPermission::Ask,
+                model: None,
+                native_session_id: None,
+            },
+        ))
+        .unwrap_err();
+        assert!(error.contains("approval"), "{error}");
+    }
+
+    #[test]
+    fn answering_without_a_pending_approval_is_refused() {
+        let registry = Arc::new(AgentChatRegistry::new());
+        let error =
+            tauri::async_runtime::block_on(respond(registry, "t", "r", true, None)).unwrap_err();
+        assert!(error.contains("not waiting"), "{error}");
+    }
+
+    #[test]
     fn claude_error_result_ends_the_turn_with_its_message() {
         let raw = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["Not logged in"],"session_id":"s"}"#;
         let (state, _) = lines(Dialect::Claude, raw);
@@ -1332,6 +1666,65 @@ mod tests {
     /// Runs one real turn through an installed CLI. Ignored by default: it
     /// needs the CLI logged in and spends a small amount of the user's
     /// quota. Run with `LATTICETERM_CHAT_E2E=claude cargo test -- --ignored`.
+    /// Runs one real Claude turn in ask mode: the CLI must raise an approval
+    /// for WebFetch (a tool no default rule allows), the test allows it
+    /// through `respond`, and the turn must then finish on its own. Run with
+    /// `LATTICETERM_CHAT_E2E=claude cargo test a_real_ask -- --ignored`.
+    #[test]
+    #[ignore]
+    fn a_real_ask_turn_waits_for_the_answer_and_then_finishes() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let registry = Arc::new(AgentChatRegistry::new());
+        tauri::async_runtime::block_on(send(
+            Arc::new(RecordingSink(tx)),
+            Arc::clone(&registry),
+            ChatTurnRequest {
+                thread_id: "e2e-ask".into(),
+                turn_id: "e2e-ask-turn".into(),
+                definition_id: "claude".into(),
+                working_directory: workdir.path().display().to_string(),
+                prompt: "Use the WebFetch tool on https://example.com to get the page title, then reply with the single word DONE.".into(),
+                permission: ChatPermission::Ask,
+                model: None,
+                native_session_id: None,
+            },
+        ))
+        .expect("turn starts");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(240);
+        let mut answered = false;
+        let mut finished = None;
+        while finished.is_none() {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(ChatEvent::ApprovalRequested {
+                    request_id, name, ..
+                }) => {
+                    assert_eq!(name, "WebFetch");
+                    tauri::async_runtime::block_on(respond(
+                        Arc::clone(&registry),
+                        "e2e-ask",
+                        &request_id,
+                        true,
+                        None,
+                    ))
+                    .expect("answer is delivered");
+                    answered = true;
+                }
+                Ok(ChatEvent::Finished { error, .. }) => finished = Some(error),
+                Ok(_) => {}
+                Err(_) => panic!("no Finished event within the deadline"),
+            }
+        }
+        assert!(answered, "the CLI never asked for approval");
+        assert_eq!(finished, Some(None), "turn failed");
+        assert!(
+            registry.lock().is_empty(),
+            "the finished turn was not released"
+        );
+    }
+
     #[test]
     #[ignore]
     fn a_real_turn_streams_a_reply_and_reports_the_session() {

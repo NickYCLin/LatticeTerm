@@ -996,9 +996,12 @@ export const zhTW = {
   "chat.directory.none": "尚未選擇",
   "chat.directory.chooseFailed": "無法開啟資料夾選擇器：{detail}",
   "chat.permission": "權限",
+  "chat.permission.ask": "每次詢問",
   "chat.permission.readOnly": "唯讀",
   "chat.permission.workspaceWrite": "可修改工作目錄",
   "chat.permission.full": "全部允許（危險）",
+  "chat.permission.ask.hint":
+    "CLI 自己的規則放行不了的工具呼叫，會在對話裡跳出核准卡片，由你按允許或拒絕；跟終端機裡的詢問一樣。目前只有 Claude Code 支援。",
   "chat.permission.readOnly.hint": "CLI 只能閱讀與分析，不會改任何檔案。",
   "chat.permission.workspaceWrite.hint":
     "可以編輯工作目錄裡的檔案。Claude Code 遇到需要審核的指令會拒絕並在回覆裡說明；Codex 在自己的沙箱裡執行指令。",
@@ -1028,6 +1031,14 @@ export const zhTW = {
   "chat.storage.note":
     "對話內容只保存在這台電腦的 LatticeTerm 裡；登入資料與 API 金鑰不會經過這裡。",
   "chat.stop.failed": "無法停止：{detail}",
+  "chat.approval.title": "需要你的核准",
+  "chat.approval.input": "查看完整參數",
+  "chat.approval.allow": "允許",
+  "chat.approval.deny": "拒絕",
+  "chat.approval.allowed": "已允許",
+  "chat.approval.denied": "已拒絕",
+  "chat.approval.closed": "已失效",
+  "chat.approval.failed": "無法回覆核准：{detail}",
 
   // SFTP ------------------------------------------------------------------
   "sftp.title": "SFTP 檔案工作區",

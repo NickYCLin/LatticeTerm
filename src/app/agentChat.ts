@@ -10,13 +10,33 @@
 export type ChatDefinitionId = "claude" | "codex";
 
 /** What the CLI may do during a turn; see `ChatPermission` in Rust. */
-export type ChatPermission = "readOnly" | "workspaceWrite" | "full";
+export type ChatPermission = "ask" | "readOnly" | "workspaceWrite" | "full";
 
 export const chatPermissions: readonly ChatPermission[] = [
+  "ask",
   "readOnly",
   "workspaceWrite",
   "full",
 ];
+
+/**
+ * The permissions a CLI can honour in chat mode. Asking per tool call needs
+ * a bidirectional headless protocol, which only Claude Code has.
+ */
+export function permissionsFor(
+  definitionId: ChatDefinitionId,
+): readonly ChatPermission[] {
+  return definitionId === "claude"
+    ? chatPermissions
+    : chatPermissions.filter((permission) => permission !== "ask");
+}
+
+/** The permission a new thread starts with: ask when the CLI can. */
+export function defaultPermission(definitionId: ChatDefinitionId): ChatPermission {
+  return definitionId === "claude" ? "ask" : "readOnly";
+}
+
+export type ApprovalDecision = "pending" | "allowed" | "denied" | "closed";
 
 export interface ChatUsage {
   inputTokens: number;
@@ -41,6 +61,14 @@ export type ChatEvent =
       isError: boolean;
     }
   | { kind: "notice"; message: string }
+  | {
+      kind: "approvalRequested";
+      requestId: string;
+      toolUseId: string | null;
+      name: string;
+      summary: string;
+      input: string;
+    }
   | {
       kind: "finished";
       nativeSessionId: string | null;
@@ -70,6 +98,15 @@ export type ChatItem =
       done: boolean;
     }
   | { type: "notice"; id: string; text: string }
+  | {
+      type: "approval";
+      id: string;
+      requestId: string;
+      name: string;
+      summary: string;
+      input: string;
+      decision: ApprovalDecision;
+    }
   | {
       type: "turnEnd";
       id: string;
@@ -294,12 +331,31 @@ export function applyChatEvent(
         ],
         updatedAt: now,
       };
+    case "approvalRequested":
+      return {
+        ...thread,
+        items: [
+          ...thread.items,
+          {
+            type: "approval",
+            id: `${envelope.turnId}:approval:${event.requestId}`,
+            requestId: event.requestId,
+            name: event.name,
+            summary: event.summary,
+            input: event.input,
+            decision: "pending",
+          },
+        ],
+        updatedAt: now,
+      };
     case "finished":
       return {
         ...thread,
         nativeSessionId: event.nativeSessionId ?? thread.nativeSessionId,
         items: [
-          ...thread.items,
+          // An approval nobody answered can no longer be answered: the
+          // process that asked is gone.
+          ...thread.items.map(closePendingApproval),
           {
             type: "turnEnd",
             id: `${envelope.turnId}:end`,
@@ -315,6 +371,31 @@ export function applyChatEvent(
   }
 }
 
+function closePendingApproval(item: ChatItem): ChatItem {
+  if (item.type !== "approval" || item.decision !== "pending") return item;
+  return { ...item, decision: "closed" };
+}
+
+/** Records the user's answer to an approval card. */
+export function decideApproval(
+  thread: ChatThread,
+  requestId: string,
+  decision: "allowed" | "denied",
+  now: number = Date.now(),
+): ChatThread {
+  return {
+    ...thread,
+    items: thread.items.map((item) =>
+      item.type === "approval" &&
+      item.requestId === requestId &&
+      item.decision === "pending"
+        ? { ...item, decision }
+        : item,
+    ),
+    updatedAt: now,
+  };
+}
+
 /** Whether a thread can still switch CLI: nothing has been said yet. */
 export function threadIsFresh(thread: ChatThread): boolean {
   return thread.items.length === 0 && thread.nativeSessionId === null;
@@ -326,6 +407,8 @@ export function threadIsFresh(thread: ChatThread): boolean {
  */
 export function boundThreadForStorage(thread: ChatThread): ChatThread {
   const items = thread.items.slice(-MAX_STORED_ITEMS).map((item) => {
+    // A stored approval is never still answerable.
+    if (item.type === "approval") return closePendingApproval(item);
     if (item.type !== "tool" || item.output === null) return item;
     if (item.output.length <= MAX_STORED_TOOL_OUTPUT) return item;
     return { ...item, output: `${item.output.slice(0, MAX_STORED_TOOL_OUTPUT)}…` };

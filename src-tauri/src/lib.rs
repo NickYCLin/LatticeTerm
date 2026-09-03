@@ -509,6 +509,19 @@ fn agent_chat_stop(
     registry.stop(&thread_id)
 }
 
+/// Allows or denies one tool call a chat turn is waiting on.
+#[tauri::command]
+async fn agent_chat_respond(
+    thread_id: String,
+    request_id: String,
+    allow: bool,
+    message: Option<String>,
+    registry: State<'_, Arc<crate::agent_chat::AgentChatRegistry>>,
+) -> Result<(), String> {
+    let registry = Arc::clone(registry.inner());
+    crate::agent_chat::respond(registry, &thread_id, &request_id, allow, message.as_deref()).await
+}
+
 #[tauri::command]
 fn agent_broadcast(
     app: AppHandle,
@@ -2294,6 +2307,7 @@ pub fn run() {
             agent_chat_supported,
             agent_chat_send,
             agent_chat_stop,
+            agent_chat_respond,
             agent_paste_clipboard_image,
             agent_export_transcript,
             agent_import_memory_handoff,

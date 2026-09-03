@@ -13,6 +13,7 @@ import {
   applyChatEvent,
   beginTurn,
   createThread,
+  decideApproval,
   failTurn,
   loadStoredThreads,
   saveStoredThreads,
@@ -53,6 +54,8 @@ export interface AgentChatApi {
   removeThread: (id: string) => void;
   send: (id: string, prompt: string) => Promise<void>;
   stop: (id: string) => Promise<void>;
+  /** Answers an approval card; rejects with the reason when it cannot. */
+  respond: (id: string, requestId: string, allow: boolean) => Promise<void>;
 }
 
 export function useAgentChat(): AgentChatApi {
@@ -171,6 +174,18 @@ export function useAgentChat(): AgentChatApi {
     }
   }, []);
 
+  const respond = useCallback(async (id: string, requestId: string, allow: boolean) => {
+    const { invoke } = await core();
+    await invoke("agent_chat_respond", { threadId: id, requestId, allow, message: null });
+    setThreads((current) =>
+      current.map((entry) =>
+        entry.id === id
+          ? decideApproval(entry, requestId, allow ? "allowed" : "denied")
+          : entry,
+      ),
+    );
+  }, []);
+
   const stopTurn = useCallback(async (id: string) => {
     const { invoke } = await core();
     await invoke<boolean>("agent_chat_stop", { threadId: id });
@@ -187,7 +202,8 @@ export function useAgentChat(): AgentChatApi {
       removeThread: remove,
       send,
       stop: stopTurn,
+      respond,
     }),
-    [threads, activeThreadId, supported, create, update, remove, send, stopTurn],
+    [threads, activeThreadId, supported, create, update, remove, send, stopTurn, respond],
   );
 }

@@ -318,6 +318,46 @@
   color: var(--text-muted);
 }
 
+.chat-approval {
+  align-self: stretch;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  font-size: var(--text-sm);
+}
+
+.chat-approval--allowed,
+.chat-approval--denied,
+.chat-approval--closed {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.chat-approval__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.chat-approval__details > summary {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.chat-approval__details .chat-tool__output {
+  border-top: 0;
+  padding: var(--space-2) 0 0;
+}
+
+.chat-approval__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 .chat-notice,
 .chat-turn {
   align-self: stretch;
