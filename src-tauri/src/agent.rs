@@ -8129,7 +8129,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             AgentLaunchRequest {
                 definition_id: "custom".to_string(),
                 label: "Immediate exit".to_string(),
-                executable: "/bin/true".to_string(),
+                executable: "/usr/bin/true".to_string(),
                 arguments: Vec::new(),
                 resume_session_id: None,
                 group_id: None,
