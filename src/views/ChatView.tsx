@@ -17,8 +17,9 @@ import {
 } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  chatPermissions,
+  defaultPermission,
   formatTokens,
+  permissionsFor,
   threadIsFresh,
   type ChatDefinitionId,
   type ChatItem,
@@ -36,12 +37,14 @@ import { ChatMarkdown } from "../components/chat/ChatMarkdown";
 import { ChatIcon, FolderIcon, PlusIcon, StopIcon, TrashIcon } from "../components/icons";
 
 const permissionLabelKey: Record<ChatPermission, MessageKey> = {
+  ask: "chat.permission.ask",
   readOnly: "chat.permission.readOnly",
   workspaceWrite: "chat.permission.workspaceWrite",
   full: "chat.permission.full",
 };
 
 const permissionHintKey: Record<ChatPermission, MessageKey> = {
+  ask: "chat.permission.ask.hint",
   readOnly: "chat.permission.readOnly.hint",
   workspaceWrite: "chat.permission.workspaceWrite.hint",
   full: "chat.permission.full.hint",
@@ -68,13 +71,17 @@ export function ChatView({ agents, chat }: { agents: AgentApi; chat: AgentChatAp
     // A fresh thread borrows the last one's choices: the same project and
     // CLI are the likely next conversation too.
     const previous = chat.threads[0];
+    const definitionId =
+      previous && installed.includes(previous.definitionId)
+        ? previous.definitionId
+        : (installed[0] ?? chat.supported[0] ?? "claude");
     chat.createThread({
-      definitionId:
-        previous && installed.includes(previous.definitionId)
-          ? previous.definitionId
-          : (installed[0] ?? chat.supported[0] ?? "claude"),
+      definitionId,
       workingDirectory: previous?.workingDirectory ?? "",
-      permission: previous?.permission ?? "readOnly",
+      permission:
+        previous && permissionsFor(definitionId).includes(previous.permission)
+          ? previous.permission
+          : defaultPermission(definitionId),
       model: "",
     });
   }
@@ -265,6 +272,19 @@ function ThreadPane({
     submit();
   }
 
+  async function answer(requestId: string, allow: boolean) {
+    setNotice(null);
+    try {
+      await chat.respond(thread.id, requestId, allow);
+    } catch (reason) {
+      setNotice(
+        t("chat.approval.failed", {
+          detail: reason instanceof Error ? reason.message : String(reason),
+        }),
+      );
+    }
+  }
+
   async function stop() {
     try {
       await chat.stop(thread.id);
@@ -299,11 +319,17 @@ function ThreadPane({
               className="select"
               value={thread.definitionId}
               disabled={!fresh}
-              onChange={(event) =>
+              onChange={(event) => {
+                const definitionId = event.target.value as ChatDefinitionId;
                 chat.updateThread(thread.id, {
-                  definitionId: event.target.value as ChatDefinitionId,
-                })
-              }
+                  definitionId,
+                  // A permission the new CLI cannot honour falls back to
+                  // its own default rather than being sent and refused.
+                  ...(permissionsFor(definitionId).includes(thread.permission)
+                    ? {}
+                    : { permission: defaultPermission(definitionId) }),
+                });
+              }}
             >
               {chat.supported.map((id) => (
                 <option key={id} value={id}>
@@ -343,7 +369,7 @@ function ThreadPane({
                 })
               }
             >
-              {chatPermissions.map((permission) => (
+              {permissionsFor(thread.definitionId).map((permission) => (
                 <option key={permission} value={permission}>
                   {t(permissionLabelKey[permission])}
                 </option>
@@ -384,6 +410,7 @@ function ThreadPane({
               item={item}
               streaming={running && index === thread.items.length - 1}
               tag={tag}
+              onAnswer={answer}
             />
           ))}
           {running && thread.items[thread.items.length - 1]?.type === "user" && (
@@ -438,13 +465,59 @@ function ChatItemView({
   item,
   streaming,
   tag,
+  onAnswer,
 }: {
   item: ChatItem;
   streaming: boolean;
   tag: string;
+  onAnswer: (requestId: string, allow: boolean) => void;
 }) {
   const { t } = useI18n();
   switch (item.type) {
+    case "approval":
+      return (
+        <div
+          className={`chat-approval chat-approval--${item.decision}`}
+          role="group"
+          aria-label={t("chat.approval.title")}
+        >
+          <div className="chat-approval__head">
+            <span className="chat-tool__name">{item.name}</span>
+            <code className="chat-tool__summary" title={item.summary}>
+              {item.summary}
+            </code>
+            <span className="chat-tool__state">
+              {item.decision === "pending"
+                ? t("chat.approval.title")
+                : t(`chat.approval.${item.decision}` as MessageKey)}
+            </span>
+          </div>
+          {item.input && item.input !== "null" && (
+            <details className="chat-approval__details">
+              <summary>{t("chat.approval.input")}</summary>
+              <pre className="chat-tool__output">{item.input}</pre>
+            </details>
+          )}
+          {item.decision === "pending" && (
+            <div className="chat-approval__actions">
+              <button
+                type="button"
+                className="button button--primary button--sm"
+                onClick={() => onAnswer(item.requestId, true)}
+              >
+                {t("chat.approval.allow")}
+              </button>
+              <button
+                type="button"
+                className="button button--secondary button--sm"
+                onClick={() => onAnswer(item.requestId, false)}
+              >
+                {t("chat.approval.deny")}
+              </button>
+            </div>
+          )}
+        </div>
+      );
     case "user":
       return <div className="chat-msg chat-msg--user">{item.text}</div>;
     case "text":

@@ -1071,9 +1071,12 @@ export const en: Messages = {
   "chat.directory.none": "Not chosen yet",
   "chat.directory.chooseFailed": "Cannot open the folder picker: {detail}",
   "chat.permission": "Permissions",
+  "chat.permission.ask": "Ask each time",
   "chat.permission.readOnly": "Read only",
   "chat.permission.workspaceWrite": "Edit the working directory",
   "chat.permission.full": "Allow everything (dangerous)",
+  "chat.permission.ask.hint":
+    "Tool calls the CLI's own rules cannot settle appear as approval cards for you to allow or deny, like the prompt in a terminal. Claude Code only, for now.",
   "chat.permission.readOnly.hint": "The CLI can read and analyse but changes no files.",
   "chat.permission.workspaceWrite.hint":
     "Files under the working directory may be edited. Claude Code declines commands that would need an approval and says so in its reply; Codex runs them inside its sandbox.",
@@ -1104,6 +1107,14 @@ export const en: Messages = {
   "chat.storage.note":
     "Conversations are kept only in LatticeTerm on this computer; login data and API keys never pass through here.",
   "chat.stop.failed": "Cannot stop: {detail}",
+  "chat.approval.title": "Needs your approval",
+  "chat.approval.input": "Show full input",
+  "chat.approval.allow": "Allow",
+  "chat.approval.deny": "Deny",
+  "chat.approval.allowed": "Allowed",
+  "chat.approval.denied": "Denied",
+  "chat.approval.closed": "No longer answerable",
+  "chat.approval.failed": "Cannot answer the approval: {detail}",
 
   // SFTP ------------------------------------------------------------------
   "sftp.title": "SFTP file workspace",

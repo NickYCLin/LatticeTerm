@@ -4,10 +4,13 @@ import {
   beginTurn,
   boundThreadsForStorage,
   createThread,
+  decideApproval,
+  defaultPermission,
   failTurn,
   formatTokens,
   loadStoredThreads,
   MAX_STORED_TOOL_OUTPUT,
+  permissionsFor,
   saveStoredThreads,
   threadTitle,
   type ChatEventEnvelope,
@@ -138,6 +141,45 @@ describe("applyChatEvent", () => {
     expect(next.items[next.items.length - 1]).toMatchObject({ type: "turnEnd", costUsd: 0.1 });
   });
 
+  it("shows an approval card, records the answer, and closes the rest on finish", () => {
+    const asked = applyChatEvent(
+      running,
+      envelope({
+        kind: "approvalRequested",
+        requestId: "req-1",
+        toolUseId: "toolu_1",
+        name: "WebFetch",
+        summary: "https://example.com",
+        input: "{}",
+      }),
+    );
+    expect(asked.items[asked.items.length - 1]).toMatchObject({
+      type: "approval",
+      requestId: "req-1",
+      decision: "pending",
+    });
+
+    const answered = decideApproval(asked, "req-1", "allowed");
+    expect(answered.items[answered.items.length - 1]).toMatchObject({ decision: "allowed" });
+    // A second answer to the same card changes nothing.
+    expect(decideApproval(answered, "req-1", "denied").items).toEqual(answered.items);
+
+    const unanswered = applyChatEvent(
+      asked,
+      envelope({
+        kind: "finished",
+        nativeSessionId: null,
+        usage: null,
+        costUsd: null,
+        durationMs: null,
+        error: "stopped",
+      }),
+    );
+    expect(unanswered.items.find((item) => item.type === "approval")).toMatchObject({
+      decision: "closed",
+    });
+  });
+
   it("ignores events from a turn that is not the running one", () => {
     // A stopped turn's tail must not land in the next turn's transcript.
     const next = applyChatEvent(
@@ -242,6 +284,13 @@ describe("helpers", () => {
   it("shortens long titles on the first line", () => {
     expect(threadTitle("a".repeat(100))).toHaveLength(60);
     expect(threadTitle("short\nmore")).toBe("short");
+  });
+
+  it("offers asking only where the CLI can ask", () => {
+    expect(permissionsFor("claude")).toContain("ask");
+    expect(permissionsFor("codex")).not.toContain("ask");
+    expect(defaultPermission("claude")).toBe("ask");
+    expect(defaultPermission("codex")).toBe("readOnly");
   });
 
   it("formats token counts compactly", () => {
