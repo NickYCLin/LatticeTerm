@@ -25,6 +25,24 @@ import {
   type ChatThread,
 } from "./agentChat";
 import { hasDesktopBackend } from "./nativeRuntime";
+import {
+  CHAT_SIDEBAR_LAYOUT_KEY,
+  chatFolderNodeId,
+  chatThreadNodeId,
+  reconcileChatLayout,
+} from "./chatThreadLayout";
+import {
+  createSessionSidebarFolder,
+  emptySessionSidebarLayout,
+  expandSessionSidebarAncestors,
+  loadSessionSidebarLayout,
+  moveSessionSidebarNode,
+  removeSessionSidebarFolder,
+  renameSessionSidebarFolder,
+  saveSessionSidebarLayout,
+  toggleSessionSidebarFolder,
+  type SessionSidebarLayout,
+} from "./sessionSidebarLayout";
 
 async function core() {
   return import("@tauri-apps/api/core");
@@ -70,6 +88,13 @@ export interface AgentChatApi {
   /** The models a CLI offers, fetched once per session on first request. */
   models: Record<ChatDefinitionId, ChatModelList>;
   loadModels: (definitionId: ChatDefinitionId) => void;
+  /** Folders and ordering of the thread list. */
+  layout: SessionSidebarLayout;
+  createFolder: (name: string, parentId: string | null) => void;
+  renameFolder: (folderId: string, name: string) => void;
+  removeFolder: (folderId: string) => void;
+  moveNode: (nodeId: string, parentId: string | null, beforeNodeId: string | null) => void;
+  toggleFolder: (folderId: string) => void;
 }
 
 export function useAgentChat(): AgentChatApi {
@@ -86,6 +111,23 @@ export function useAgentChat(): AgentChatApi {
   });
   const modelsRef = useRef(models);
   modelsRef.current = models;
+  const [storedLayout, setStoredLayout] = useState<SessionSidebarLayout>(() =>
+    typeof localStorage === "undefined"
+      ? emptySessionSidebarLayout
+      : loadSessionSidebarLayout(localStorage, CHAT_SIDEBAR_LAYOUT_KEY),
+  );
+  // What the sidebar renders: the saved organisation fitted to the threads
+  // that exist right now.
+  const layout = useMemo(() => reconcileChatLayout(storedLayout, threads), [storedLayout, threads]);
+
+  useEffect(() => {
+    if (typeof localStorage === "undefined") return;
+    try {
+      saveSessionSidebarLayout(localStorage, layout, CHAT_SIDEBAR_LAYOUT_KEY);
+    } catch {
+      // Folders are a convenience; losing them costs no conversation.
+    }
+  }, [layout]);
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
 
@@ -152,14 +194,61 @@ export function useAgentChat(): AgentChatApi {
     );
   }, []);
 
-  // Opening a thread is reading it.
+  // Opening a thread is reading it, and it must be visible: a thread inside
+  // a collapsed folder unfolds its way to the top.
   const activate = useCallback(
     (id: string | null) => {
       setActiveThreadId(id);
-      if (id) markUnread(id, false);
+      if (id) {
+        markUnread(id, false);
+        setStoredLayout((current) =>
+          expandSessionSidebarAncestors(
+            reconcileChatLayout(current, threadsRef.current),
+            chatThreadNodeId(id),
+          ),
+        );
+      }
     },
     [markUnread],
   );
+
+  const createFolder = useCallback((name: string, parentId: string | null) => {
+    setStoredLayout((current) =>
+      createSessionSidebarFolder(
+        reconcileChatLayout(current, threadsRef.current),
+        { id: chatFolderNodeId(), name },
+        parentId,
+      ),
+    );
+  }, []);
+
+  const renameFolder = useCallback((folderId: string, name: string) => {
+    setStoredLayout((current) => renameSessionSidebarFolder(current, folderId, name));
+  }, []);
+
+  const removeFolder = useCallback((folderId: string) => {
+    setStoredLayout((current) =>
+      removeSessionSidebarFolder(reconcileChatLayout(current, threadsRef.current), folderId),
+    );
+  }, []);
+
+  const moveNode = useCallback(
+    (nodeId: string, parentId: string | null, beforeNodeId: string | null) => {
+      setStoredLayout((current) =>
+        moveSessionSidebarNode(
+          reconcileChatLayout(current, threadsRef.current),
+          nodeId,
+          parentId,
+          beforeNodeId,
+        ),
+      );
+    },
+    [],
+  );
+
+  const toggleFolder = useCallback((folderId: string) => {
+    setStoredLayout((current) => toggleSessionSidebarFolder(current, folderId));
+  }, []);
 
   const update = useCallback((id: string, patch: Partial<ChatThreadSettings>) => {
     setThreads((current) =>
@@ -275,6 +364,12 @@ export function useAgentChat(): AgentChatApi {
       respond,
       models,
       loadModels,
+      layout,
+      createFolder,
+      renameFolder,
+      removeFolder,
+      moveNode,
+      toggleFolder,
     }),
     [
       threads,
@@ -290,6 +385,12 @@ export function useAgentChat(): AgentChatApi {
       respond,
       models,
       loadModels,
+      layout,
+      createFolder,
+      renameFolder,
+      removeFolder,
+      moveNode,
+      toggleFolder,
     ],
   );
 }

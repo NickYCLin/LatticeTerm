@@ -40,8 +40,7 @@ import { APP_VERSION } from "./app/version";
 import { useStorageStatus } from "./app/useStorageStatus";
 import { useAgentSessions } from "./app/useAgentSessions";
 import { useAgentActivity } from "./app/useAgentActivity";
-import { useAgentChat } from "./app/useAgentChat";
-import { useAgentAutomations } from "./app/useAgentAutomations";
+import type { ChatRuntimeApi } from "./app/ChatRuntime";
 import { useSshSessions } from "./app/useSshSessions";
 import { useSftpSessions } from "./app/useSftpSessions";
 import { useRemoteSessions } from "./app/useRemoteSessions";
@@ -99,6 +98,11 @@ const ConnectionsView = lazy(() =>
 const AgentsView = lazy(() =>
   import("./views/AgentsView").then((module) => ({
     default: module.AgentsView,
+  })),
+);
+const ChatRuntime = lazy(() =>
+  import("./app/ChatRuntime").then((module) => ({
+    default: module.ChatRuntime,
   })),
 );
 const ChatView = lazy(() =>
@@ -299,12 +303,10 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const [view, setView] = useState<ViewId>("connections");
   const activityReturnViewRef = useRef<ViewId>("connections");
   const agentActivity = useAgentActivity(agents.sessions, agents.mode);
-  // Lives here rather than in the view so a reply keeps streaming into its
-  // thread while another view is open.
-  const chat = useAgentChat();
-  // The schedule clock also lives at the root: a run must fire on time no
-  // matter which view is open.
-  const automations = useAgentAutomations(chat, preferences.locale);
+  // Chat state lives at the root (a reply keeps streaming and a schedule
+  // keeps firing while another view is open) but loads lazily, so its code
+  // stays out of the entry bundle.
+  const [chatRuntime, setChatRuntime] = useState<ChatRuntimeApi | null>(null);
   const [mobileResourceSidebarOpen, setMobileResourceSidebarOpen] =
     useState(false);
   // A desktop-only view reached on mobile (stale state) snaps back home.
@@ -1010,8 +1012,15 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 }}
               />
             )}
-            {view === "chat" && (
-              <ChatView agents={agents} chat={chat} automations={automations} />
+            <Suspense fallback={null}>
+              <ChatRuntime locale={preferences.locale} onChange={setChatRuntime} />
+            </Suspense>
+            {view === "chat" && chatRuntime && (
+              <ChatView
+                agents={agents}
+                chat={chatRuntime.chat}
+                automations={chatRuntime.automations}
+              />
             )}
             {view === "tunnels" && (
               // Tunnels authenticate with a saved SSH password, so only SSH
