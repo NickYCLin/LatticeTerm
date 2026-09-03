@@ -7,8 +7,8 @@
  */
 
 import {
-  ActivityIcon,
   AgentIcon,
+  BellIcon,
   ConnectionsIcon,
   SettingsIcon,
   TerminalIcon,
@@ -80,7 +80,7 @@ export const navigationItems: NavigationItem[] = [
     id: "activity",
     labelKey: "nav.activity",
     descriptionKey: "nav.activity.desc",
-    icon: ActivityIcon,
+    icon: BellIcon,
     status: "available",
   },
   {

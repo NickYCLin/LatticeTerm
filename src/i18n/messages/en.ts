@@ -64,7 +64,7 @@ export const en: Messages = {
   "nav.vault": "Key vault",
   "nav.vault.desc": "Keys, credentials and host trust",
   "nav.activity": "Activity",
-  "nav.activity.desc": "Changes made while this window has been open",
+  "nav.activity.desc": "Unread, running, and waiting CLI work",
   "nav.settings": "Settings",
   "nav.settings.desc": "Appearance, language and security preferences",
 
@@ -248,9 +248,35 @@ export const en: Messages = {
 
   // Activity --------------------------------------------------------------
   "activity.title": "Activity in this window",
-  "activity.note.title": "Only changes made in this window",
+  "activity.note.title": "Follow CLI work that needs attention",
   "activity.note.body":
-    "This records what you did to your connection entries. It never contains passwords, commands or session output, and it is cleared when you close the app.",
+    "Work status is kept across restarts. Only session names, CLIs, folders, status and time are stored; prompts, terminal output and credentials are never stored. The connection audit log below still lasts for this window only.",
+  "activity.navUnread": "Activity, {count} unread",
+  "activity.agent.title": "CLI work activity",
+  "activity.agent.count": "{count} items, {unread} unread",
+  "activity.agent.countFiltered": "Showing {visible} of {total} items",
+  "activity.agent.filterLabel": "Filter CLI work activity",
+  "activity.agent.filter.all": "All",
+  "activity.agent.filter.unread": "Unread",
+  "activity.agent.filter.running": "Running",
+  "activity.agent.filter.waiting": "Waiting for you",
+  "activity.agent.status.running": "Running",
+  "activity.agent.status.waiting": "Waiting for you",
+  "activity.agent.status.ready": "Ready",
+  "activity.agent.status.idle": "Idle",
+  "activity.agent.markAllRead": "Mark all as read",
+  "activity.agent.clear": "Clear activity",
+  "activity.agent.empty.title": "No CLI work activity yet",
+  "activity.agent.empty.body":
+    "Start a CLI and its running, waiting, and ready states will appear here.",
+  "activity.agent.noMatch": "No work matches this filter.",
+  "activity.agent.resetFilter": "Show all activity",
+  "activity.agent.notOpen": "Session is not currently open",
+  "activity.agent.confirmClear.title": "Clear CLI work activity?",
+  "activity.agent.confirmClear.body":
+    "This removes all {count} saved activity items. No CLI session will be closed.",
+  "activity.agent.confirmClear.confirm": "Clear activity",
+  "activity.audit.title": "Changes in this window",
   "activity.empty.title": "Nothing here yet",
   "activity.empty.body":
     "Add, edit or delete a connection and it will appear here with a timestamp.",

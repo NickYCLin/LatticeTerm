@@ -112,6 +112,25 @@
   background: var(--planned);
 }
 
+.rail__badge {
+  position: absolute;
+  top: 0.15rem;
+  right: 0.05rem;
+  display: grid;
+  place-items: center;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.2rem;
+  border: 2px solid var(--surface);
+  border-radius: var(--radius-pill);
+  background: var(--danger);
+  color: white;
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Sidebar ---------------------------------------------------------------- */
 
 .sidebar {

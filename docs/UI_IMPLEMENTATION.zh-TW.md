@@ -26,7 +26,7 @@
 | **SFTP 檔案工作區** | `SftpPane` | `src/components/sftp/SftpPane.tsx` | 遠端路徑瀏覽、上下載、建立資料夾、改名與確認刪除。 |
 | **Web RDP Canvas** | `RdpPane` | `src/components/rdp/RdpPane.tsx` | Canvas 畫面、座標縮放、滑鼠、滾輪、掃描碼鍵盤與失焦釋放。 |
 | **金鑰保管庫** | `VaultView` | `src/views/VaultView.tsx` | 管理 Rust 核心的主機信任、認證參照與 Argon2id／XChaCha20-Poly1305 加密保管庫；可建立、解鎖、鎖定、改主密碼及切換認證後端，但不把密碼內容交給前端。 |
-| **活動紀錄** | `ActivityView` | `src/views/ActivityView.tsx` | 活動日誌清單、關鍵字搜尋、事件類型篩選與純文字日誌匯出。 |
+| **活動中心** | `ActivityView` | `src/views/ActivityView.tsx` | 以鈴鐺與未讀數提示 CLI 執行中、等待回覆及完成狀態；支援直接返回工作階段、全部標為已讀、跨重啟保存與 `Ctrl` + `Alt` + `U`。同頁保留連線操作日誌的搜尋、篩選與匯出。 |
 | **設定檢視** | `SettingsView` | `src/views/SettingsView.tsx` | 外觀設定、安全機制、加密備份／還原與執行環境資訊。 |
 | **加密備份面板** | `EncryptedBackupPanel` | `src/components/settings/EncryptedBackupPanel.tsx` | 收集 allowlist 設定、要求 12 字元以上密碼、匯出加密檔，並在明確確認後執行完整驗證、逐檔原子替換與失敗回滾。 |
 | **狀態列** | `StatusBar` | `src/components/shell/StatusBar.tsx` | 28 px 底部狀態列，顯示連線數、記憶體/儲存模式與認證儲存區就緒狀態。 |
@@ -42,6 +42,9 @@
   - 實作 `serializeProfiles` 與 `parseAndValidateImport`，過濾所有機密，驗證匯入格式。
 - **活動日誌模型 (`src/domain/activity.ts`)**：
   - 提供 `filterActivity` 與 `exportActivityLogText`，維護最新 200 筆視窗活動紀錄。
+- **Agent 活動模型 (`src/app/agentActivity.ts`)**：
+  - 將同一分頁內多個 CLI 合併成一個工作活動，最多保存 100 筆名稱、CLI、資料夾、狀態與時間；不保存提示、終端輸出、認證、程序 ID 或供應商 Token。
+  - 初次載入現況不會製造未讀通知；只有載入完成後新進入等待回覆或完成的狀態才標為未讀。
 - **Workspace Hook (`src/app/useWorkspace.ts`)**：
   - 整合 Profiles 集合、即時搜尋過濾、群組與標籤收集、CRUD 操作與批次匯入。
 - **Preferences Hook (`src/app/preferences.ts`)**：

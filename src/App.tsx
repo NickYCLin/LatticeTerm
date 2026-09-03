@@ -39,6 +39,7 @@ import { useRuntimeSummary } from "./app/useRuntimeSummary";
 import { APP_VERSION } from "./app/version";
 import { useStorageStatus } from "./app/useStorageStatus";
 import { useAgentSessions } from "./app/useAgentSessions";
+import { useAgentActivity } from "./app/useAgentActivity";
 import { useSshSessions } from "./app/useSshSessions";
 import { useSftpSessions } from "./app/useSftpSessions";
 import { useRemoteSessions } from "./app/useRemoteSessions";
@@ -289,6 +290,8 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
       (updater.status === "error" && updater.availableVersion !== null));
 
   const [view, setView] = useState<ViewId>("connections");
+  const activityReturnViewRef = useRef<ViewId>("connections");
+  const agentActivity = useAgentActivity(agents.sessions, agents.mode);
   const [mobileResourceSidebarOpen, setMobileResourceSidebarOpen] =
     useState(false);
   // A desktop-only view reached on mobile (stale state) snaps back home.
@@ -345,6 +348,26 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
   const unrestoredSessionsRef = useRef<readonly SavedWorkspaceSession[]>([]);
   const restoreStartedRef = useRef(false);
   const [sessionRestoreComplete, setSessionRestoreComplete] = useState(false);
+
+  // Opening an Agent terminal is the equivalent of reading its Activity row.
+  // Include unreadCount so a completion that arrives while this tab is already
+  // visible is acknowledged without requiring the user to switch away first.
+  useEffect(() => {
+    if (view !== "terminal" || !activeSessionId) return;
+    const activeAgent = agents.sessions.find(
+      (session) => session.sessionId === activeSessionId,
+    );
+    if (!activeAgent) return;
+    agentActivity.markGroupRead(
+      activeAgent.groupId || activeAgent.sessionId,
+    );
+  }, [
+    activeSessionId,
+    agentActivity.markGroupRead,
+    agentActivity.unreadCount,
+    agents.sessions,
+    view,
+  ]);
 
   // A process cannot survive an application or machine restart. Recreate the
   // safe launch intent instead: agent type/directory/group label, and opaque
@@ -793,6 +816,20 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         return;
       }
 
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.altKey &&
+        event.key.toLowerCase() === "u"
+      ) {
+        event.preventDefault();
+        setView((current) => {
+          if (current === "activity") return activityReturnViewRef.current;
+          activityReturnViewRef.current = current;
+          return "activity";
+        });
+        return;
+      }
+
       if (typing || event.ctrlKey || event.metaKey || event.altKey) return;
 
       if (event.key === "/") {
@@ -821,7 +858,17 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
 
   return (
     <div className={`app${onMobile ? " app--mobile" : ""}`}>
-      <NavRail current={view} onSelect={setView} items={visibleNavigation} />
+      <NavRail
+        current={view}
+        onSelect={(next) => {
+          if (next === "activity" && view !== "activity") {
+            activityReturnViewRef.current = view;
+          }
+          setView(next);
+        }}
+        items={visibleNavigation}
+        activityUnreadCount={agentActivity.unreadCount}
+      />
 
       {showSidebar && (
         <ResourceSidebar
@@ -962,7 +1009,18 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
             {view === "vault" && (
               <VaultView workspace={workspace} vault={vault} />
             )}
-            {view === "activity" && <ActivityView workspace={workspace} />}
+            {view === "activity" && (
+              <ActivityView
+                workspace={workspace}
+                agentActivity={agentActivity}
+                onOpenAgentActivity={(groupId, sessionId) => {
+                  agentActivity.markGroupRead(groupId);
+                  if (!sessionId) return;
+                  setActiveSessionId(sessionId);
+                  setView("terminal");
+                }}
+              />
+            )}
             {view === "settings" && (
               <SettingsView
                 preferences={preferences}
