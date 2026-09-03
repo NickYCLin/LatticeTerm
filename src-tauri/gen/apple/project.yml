@@ -1,6 +1,6 @@
 name: lattice-term
 options:
-  bundleIdPrefix: io.github.nickyclin.latticeterm
+  bundleIdPrefix: tw.nickyclin.latticeterm
   deploymentTarget:
     iOS: 14.0
 fileGroups: [../../src]
@@ -11,7 +11,11 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: LatticeTerm
-      PRODUCT_BUNDLE_IDENTIFIER: io.github.nickyclin.latticeterm
+      PRODUCT_BUNDLE_IDENTIFIER: tw.nickyclin.latticeterm
+      CODE_SIGN_IDENTITY: "iPhone Distribution"
+      CODE_SIGN_STYLE: Manual
+      DEVELOPMENT_TEAM: SQDAQK66UY
+      PROVISIONING_PROFILE_SPECIFIER: InHouse_nickyclinLatticeterm_2026_09_03
 targetTemplates:
   app:
     type: application
@@ -30,7 +34,6 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
-      - path: Externals
       - path: lattice-term_iOS
       - path: assets
         buildPhase: resources

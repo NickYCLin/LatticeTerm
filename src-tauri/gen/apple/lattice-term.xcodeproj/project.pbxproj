@@ -157,13 +157,6 @@
 			path = "lattice-term";
 			sourceTree = "<group>";
 		};
-		77BB74C2754BA6BD7DD4456E /* Externals */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Externals;
-			sourceTree = "<group>";
-		};
 		B239660C9FC2ED003E8C1F01 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -185,7 +178,6 @@
 				95F89287134E893D12B534CF /* assets */,
 				A623DBBAD42E7E69F33EFAEE /* Assets.xcassets */,
 				234E43EC614EF6BE46718DA9 /* LaunchScreen.storyboard */,
-				77BB74C2754BA6BD7DD4456E /* Externals */,
 				4E21F7FF5F9B5C1EB1971FC5 /* lattice-term_iOS */,
 				FFA81170BE6995A51FDA7A29 /* Sources */,
 				3895DD76D86855C5F5993AE7 /* src */,
@@ -242,6 +234,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					C8C30AE23C884A2593F8E0E4 = {
+						DevelopmentTeam = SQDAQK66UY;
+						ProvisioningStyle = Manual;
+					};
 				};
 			};
 			buildConfigurationList = 8D0601A40B7735F127ED9E9A /* Build configuration list for PBXProject "lattice-term" */;
@@ -440,7 +436,9 @@
 				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "lattice-term_iOS/lattice-term_iOS.entitlements";
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "iPhone Distribution";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "SQDAQK66UY";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -454,8 +452,9 @@
 				);
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.nickyclin.latticeterm;
+				PRODUCT_BUNDLE_IDENTIFIER = tw.nickyclin.latticeterm;
 				PRODUCT_NAME = "LatticeTerm";
+				PROVISIONING_PROFILE_SPECIFIER = InHouse_nickyclinLatticeterm_2026_09_03;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -471,7 +470,9 @@
 				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "lattice-term_iOS/lattice-term_iOS.entitlements";
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "iPhone Distribution";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "SQDAQK66UY";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -485,8 +486,9 @@
 				);
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.nickyclin.latticeterm;
+				PRODUCT_BUNDLE_IDENTIFIER = tw.nickyclin.latticeterm;
 				PRODUCT_NAME = "LatticeTerm";
+				PROVISIONING_PROFILE_SPECIFIER = InHouse_nickyclinLatticeterm_2026_09_03;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;

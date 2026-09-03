@@ -12,11 +12,11 @@
 
 ## Global Constraints
 
-- Bundle identifier 維持 `io.github.nickyclin.latticeterm`。
+- Bundle identifier 使用 In-House profile 對應的 `tw.nickyclin.latticeterm`；iOS development team 為 `SQDAQK66UY`。
 - iOS 不包含 `externalBin`，且不得讓 sidecar 功能在行動版顯示為可用。
 - 使用既有 npm lockfile；不得新增未經需求支持的前端或原生相依。
 - 使用繁體中文文件與 `<type>(<scope>): <subject>` 提交標題。
-- 首階段只驗證 Simulator；不宣稱已完成實機簽章或 TestFlight 發布。
+- 已驗證 Simulator 與指定 In-House 描述檔的 IPA 簽章；不宣稱已完成實機安裝、TestFlight 或 App Store 發布。
 
 ---
 
