@@ -526,9 +526,34 @@ async fn agent_chat_respond(
 #[tauri::command]
 async fn agent_chat_models(
     definition_id: String,
+    profile_config_path: Option<String>,
     registry: State<'_, Arc<crate::agent_chat::AgentChatRegistry>>,
 ) -> Result<Vec<crate::agent_chat::ChatModelChoice>, String> {
-    crate::agent_chat::list_models(Arc::clone(registry.inner()), &definition_id).await
+    crate::agent_chat::list_models(
+        Arc::clone(registry.inner()),
+        &definition_id,
+        profile_config_path.as_deref(),
+    )
+    .await
+}
+
+/// Reads skill names/descriptions from the selected local CLI profile and
+/// workspace. It deliberately never returns the skill bodies or auth files.
+#[tauri::command]
+async fn agent_chat_skills(
+    definition_id: String,
+    working_directory: String,
+    profile_config_path: Option<String>,
+) -> Result<Vec<crate::agent_chat::ChatSkill>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::agent_chat::list_skills(
+            &definition_id,
+            &working_directory,
+            profile_config_path.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("Skill discovery task did not complete: {error}"))?
 }
 
 #[tauri::command]
@@ -602,7 +627,7 @@ async fn agent_paste_clipboard_image(
 /// can be handed to another CLI as an opening brief. `None` when the CLI's
 /// history format is unsupported or nothing was found.
 #[tauri::command]
-fn agent_export_transcript(
+async fn agent_export_transcript(
     session_id: String,
     registry: State<'_, Arc<AgentRegistry>>,
 ) -> Result<Option<String>, String> {
@@ -614,30 +639,46 @@ fn agent_export_transcript(
     else {
         return Ok(None);
     };
-    Ok(crate::transcript::export(
-        kind,
-        &summary.working_directory,
-        summary.captured_session_id.as_deref(),
-        MAX_HANDOFF_CHARS,
-    ))
+    // Transcript discovery can walk a large, user-owned CLI history.  It
+    // must never occupy Tauri's command worker and make unrelated sessions,
+    // connections, or UI actions wait behind a handoff.
+    let working_directory = summary.working_directory;
+    let captured_session_id = summary.captured_session_id;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::transcript::export(
+            kind,
+            &working_directory,
+            captured_session_id.as_deref(),
+            MAX_HANDOFF_CHARS,
+        )
+    })
+    .await
+    .map_err(|error| format!("Transcript export task did not complete: {error}"))
 }
 
 /// Persists an opt-in handoff only when the target CLI has a documented,
 /// editable memory format. A false result tells the frontend to keep using the
 /// one-time terminal handoff instead.
 #[tauri::command]
-fn agent_import_memory_handoff(
+async fn agent_import_memory_handoff(
     target_definition_id: String,
     working_directory: String,
     source_label: String,
     transcript: String,
 ) -> Result<bool, String> {
-    crate::transcript::import_handoff_into_memory(
-        &target_definition_id,
-        &working_directory,
-        &source_label,
-        &transcript,
-    )
+    // This can touch a network-mounted project or a CLI memory file.  Keep
+    // the intentional file write off the command executor for the same
+    // reason as export above.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::transcript::import_handoff_into_memory(
+            &target_definition_id,
+            &working_directory,
+            &source_label,
+            &transcript,
+        )
+    })
+    .await
+    .map_err(|error| format!("Memory handoff task did not complete: {error}"))?
 }
 
 #[tauri::command]
@@ -2318,6 +2359,7 @@ pub fn run() {
             agent_chat_stop,
             agent_chat_respond,
             agent_chat_models,
+            agent_chat_skills,
             agent_paste_clipboard_image,
             agent_export_transcript,
             agent_import_memory_handoff,

@@ -156,6 +156,8 @@ export interface ChatThread {
   workingDirectory: string;
   permission: ChatPermission;
   model: string;
+  /** Optional named local config root; credentials stay owned by the CLI. */
+  accountProfileId: string | null;
   /** The CLI's own conversation id, once the first turn announced it. */
   nativeSessionId: string | null;
   /** Model the CLI reported, when it did; never guessed from the name. */
@@ -262,6 +264,31 @@ export function handoffThread(
   };
 }
 
+/** Starts a fresh native session under another local account of the same CLI. */
+export function handoffThreadAccount(
+  thread: ChatThread,
+  accountProfileId: string | null,
+  now: number = Date.now(),
+): ChatThread {
+  if (thread.accountProfileId === accountProfileId || thread.runningTurnId) return thread;
+  const transcript = handoffTranscript(thread.items, thread.definitionId);
+  return {
+    ...thread,
+    accountProfileId,
+    nativeSessionId: null,
+    reportedModel: null,
+    handoff: transcript
+      ? { sourceDefinitionId: thread.definitionId, transcript }
+      : null,
+    items: thread.items.map((item) =>
+      assistantItem(item) && !item.assistantDefinitionId
+        ? { ...item, assistantDefinitionId: thread.definitionId }
+        : item,
+    ),
+    updatedAt: now,
+  };
+}
+
 /** Wraps a handoff transcript so the target treats it as reference, not authority. */
 export function promptForTurn(thread: ChatThread, prompt: string): string {
   if (!thread.handoff) return prompt;
@@ -303,6 +330,7 @@ export function createThread(
     workingDirectory: settings.workingDirectory,
     permission: settings.permission,
     model: settings.model.trim(),
+    accountProfileId: null,
     nativeSessionId: null,
     reportedModel: null,
     handoff: null,
@@ -619,6 +647,8 @@ export function loadStoredThreads(storage: Pick<Storage, "getItem">): ChatThread
         typeof thread.nativeSessionId === "string" ? thread.nativeSessionId : null,
       reportedModel:
         typeof thread.reportedModel === "string" ? thread.reportedModel : null,
+      accountProfileId:
+        typeof thread.accountProfileId === "string" ? thread.accountProfileId : null,
       handoff:
         thread.handoff &&
         typeof thread.handoff === "object" &&

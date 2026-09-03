@@ -13,8 +13,10 @@
 //! the Agent Fleet: nothing here reads a key or a token, and the CLI runs
 //! with the user's own rights, not in a sandbox of LatticeTerm's making.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
+use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -82,6 +84,11 @@ pub struct ChatTurnRequest {
     /// `Finished` event. Absent on the first turn.
     #[serde(default)]
     pub native_session_id: Option<String>,
+    /// An explicitly selected CLI configuration root. It is never read by
+    /// LatticeTerm as credentials; it is passed only as the CLI's documented
+    /// home/config environment variable when that CLI starts.
+    #[serde(default)]
+    pub profile_config_path: Option<String>,
     /// Paths deliberately chosen through the desktop picker or drag-and-drop.
     /// They are validated here and never read into WebView storage.
     #[serde(default)]
@@ -353,6 +360,42 @@ fn validate_working_directory(raw: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+fn profile_config_directory(
+    dialect: Dialect,
+    raw: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(raw) = raw.map(str::trim).filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    if dialect == Dialect::Gemini {
+        return Err("This CLI does not support isolated account profiles here.".to_string());
+    }
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return Err("The account profile directory must be an absolute path.".to_string());
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("The account profile directory cannot be opened: {error}"))?;
+    if !canonical.is_dir() {
+        return Err("The account profile path is not a directory.".to_string());
+    }
+    Ok(Some(canonical))
+}
+
+fn apply_profile_environment(command: &mut Command, dialect: Dialect, directory: Option<&Path>) {
+    let Some(directory) = directory else { return };
+    match dialect {
+        Dialect::Codex => {
+            command.env("CODEX_HOME", directory);
+        }
+        Dialect::Claude => {
+            command.env("CLAUDE_CONFIG_DIR", directory);
+        }
+        Dialect::Gemini => {}
+    }
+}
+
 fn attachment_is_image(path: &Path) -> bool {
     matches!(
         path.extension()
@@ -611,6 +654,154 @@ pub struct ChatModelChoice {
     pub is_default: bool,
 }
 
+/// Metadata from a local `SKILL.md`, deliberately excluding its instructions.
+/// The person can inspect the skill in its own CLI; the chat UI needs only a
+/// safe catalogue to tell which skills the selected account can discover.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSkill {
+    pub name: String,
+    pub description: Option<String>,
+    pub source: String,
+}
+
+const MAX_CHAT_SKILLS: usize = 128;
+const MAX_SKILL_METADATA_BYTES: u64 = 16 * 1024;
+
+fn skill_value(value: &str, max_chars: usize) -> String {
+    value
+        .trim()
+        .trim_matches(['\'', '"'])
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(max_chars)
+        .collect()
+}
+
+fn read_skill_metadata(path: &Path) -> Option<(String, Option<String>)> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return None;
+    }
+    let mut contents = String::new();
+    fs::File::open(path)
+        .ok()?
+        .take(MAX_SKILL_METADATA_BYTES)
+        .read_to_string(&mut contents)
+        .ok()?;
+    let mut lines = contents.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    let mut name = None;
+    let mut description = None;
+    for line in lines.by_ref() {
+        if line.trim() == "---" {
+            break;
+        }
+        if let Some(value) = line.strip_prefix("name:") {
+            let value = skill_value(value, 96);
+            if !value.is_empty() {
+                name = Some(value);
+            }
+        } else if let Some(value) = line.strip_prefix("description:") {
+            let value = skill_value(value, 280);
+            if !value.is_empty() {
+                description = Some(value);
+            }
+        }
+    }
+    let fallback = path.parent()?.file_name()?.to_string_lossy().to_string();
+    Some((name.unwrap_or(fallback), description))
+}
+
+fn append_skills_from_root(
+    root: &Path,
+    source: &str,
+    seen: &mut HashSet<PathBuf>,
+    skills: &mut Vec<ChatSkill>,
+) {
+    let Ok(root_metadata) = fs::symlink_metadata(root) else {
+        return;
+    };
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if skills.len() >= MAX_CHAT_SKILLS {
+            return;
+        }
+        let path = entry.path();
+        let Ok(metadata) = entry.file_type() else {
+            continue;
+        };
+        if metadata.is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        let skill_file = path.join("SKILL.md");
+        let Ok(canonical) = skill_file.canonicalize() else {
+            continue;
+        };
+        if !seen.insert(canonical.clone()) {
+            continue;
+        }
+        if let Some((name, description)) = read_skill_metadata(&canonical) {
+            skills.push(ChatSkill {
+                name,
+                description,
+                source: source.to_string(),
+            });
+        }
+    }
+}
+
+/// Lists only metadata from standard local skill roots. This never opens
+/// account credentials, session transcripts, plugins, or arbitrary files.
+pub fn list_skills(
+    definition_id: &str,
+    working_directory: &str,
+    profile_config_path: Option<&str>,
+) -> Result<Vec<ChatSkill>, String> {
+    let dialect = Dialect::from_definition(definition_id)
+        .ok_or_else(|| "This CLI has no chat mode.".to_string())?;
+    let working_directory = validate_working_directory(working_directory)?;
+    let config_directory = profile_config_directory(dialect, profile_config_path)?;
+    let default_config = match dialect {
+        Dialect::Codex => home_directory().map(|home| home.join(".codex")),
+        Dialect::Claude => home_directory().map(|home| home.join(".claude")),
+        Dialect::Gemini => None,
+    };
+    let config_directory = config_directory.or(default_config);
+    let mut skills = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(config_directory) = config_directory.as_deref() {
+        append_skills_from_root(
+            &config_directory.join("skills"),
+            "帳號",
+            &mut seen,
+            &mut skills,
+        );
+    }
+    for directory in [
+        working_directory.join(".agents").join("skills"),
+        working_directory.join(".claude").join("skills"),
+        working_directory.join(".codex").join("skills"),
+    ] {
+        append_skills_from_root(&directory, "專案", &mut seen, &mut skills);
+    }
+    skills.sort_by_key(|skill| skill.name.to_lowercase());
+    Ok(skills)
+}
+
+fn home_directory() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
 const MODEL_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
 fn gemini_model_choices() -> Vec<ChatModelChoice> {
@@ -651,11 +842,13 @@ fn gemini_model_choices() -> Vec<ChatModelChoice> {
 pub async fn list_models(
     registry: Arc<AgentChatRegistry>,
     definition_id: &str,
+    profile_config_path: Option<&str>,
 ) -> Result<Vec<ChatModelChoice>, String> {
     let dialect = Dialect::from_definition(definition_id)
         .ok_or_else(|| "This CLI has no chat mode.".to_string())?;
     let executable = crate::agent::catalog_executable(definition_id)
         .ok_or_else(|| "This CLI is not installed.".to_string())?;
+    let profile_config_directory = profile_config_directory(dialect, profile_config_path)?;
     if dialect == Dialect::Gemini {
         // Gemini's documented aliases are deliberately stable while their
         // concrete targets can change with account access and CLI updates.
@@ -665,6 +858,7 @@ pub async fn list_models(
     // A turn requested meanwhile waits instead of racing Claude's token refresh.
     let _startup_guard = registry.startup_guard(dialect).await;
     let mut command = headless_command(&executable);
+    apply_profile_environment(&mut command, dialect, profile_config_directory.as_deref());
     let (requests, done_id): (Vec<String>, &str) = match dialect {
         Dialect::Claude => {
             command.args([
@@ -884,6 +1078,8 @@ fn send_with_retry<S: ChatSink>(
             validate_native_session_id(id)?;
         }
         let working_directory = validate_working_directory(&request.working_directory)?;
+        let profile_config_directory =
+            profile_config_directory(dialect, request.profile_config_path.as_deref())?;
         let attachments = validate_attachments(&request.attachments)?;
         let prompt = prompt_with_attachments(&request.prompt, &attachments);
         if prompt.len() > MAX_PROMPT_BYTES {
@@ -905,6 +1101,7 @@ fn send_with_retry<S: ChatSink>(
         }
 
         let mut command = headless_command(&executable);
+        apply_profile_environment(&mut command, dialect, profile_config_directory.as_deref());
         command.args(turn_arguments(
             dialect,
             &working_directory,
@@ -1867,6 +2064,37 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
 mod tests {
     use super::*;
 
+    #[test]
+    fn skill_discovery_reads_only_local_skill_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        let profile = directory.path().join("profile");
+        fs::create_dir_all(project.join(".agents/skills/project-skill")).unwrap();
+        fs::create_dir_all(profile.join("skills/account-skill")).unwrap();
+        fs::write(
+            project.join(".agents/skills/project-skill/SKILL.md"),
+            "---\nname: 專案 Skill\ndescription: 僅顯示這段說明\n---\n# instructions stay private\n",
+        )
+        .unwrap();
+        fs::write(
+            profile.join("skills/account-skill/SKILL.md"),
+            "---\nname: account-skill\n---\nsecret instructions\n",
+        )
+        .unwrap();
+
+        let skills = list_skills(
+            "codex",
+            project.to_str().unwrap(),
+            Some(profile.to_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(skills.len(), 2);
+        assert_eq!(skills[0].name, "account-skill");
+        assert_eq!(skills[0].source, "帳號");
+        assert_eq!(skills[1].name, "專案 Skill");
+        assert_eq!(skills[1].description.as_deref(), Some("僅顯示這段說明"));
+    }
+
     fn lines(dialect: Dialect, raw: &str) -> (TurnState, Vec<ChatEvent>) {
         let mut state = TurnState::default();
         let mut events = Vec::new();
@@ -2097,6 +2325,7 @@ mod tests {
                 permission: ChatPermission::Ask,
                 model: None,
                 native_session_id: None,
+                profile_config_path: None,
                 attachments: vec![],
             },
         ))
@@ -2235,6 +2464,7 @@ mod tests {
         let models = tauri::async_runtime::block_on(list_models(
             Arc::new(AgentChatRegistry::new()),
             &definition_id,
+            None,
         ))
         .expect("models");
         assert!(!models.is_empty());
@@ -2551,6 +2781,7 @@ mod tests {
                 permission: ChatPermission::Ask,
                 model: None,
                 native_session_id: None,
+                profile_config_path: None,
                 attachments: vec![],
             },
         ))
@@ -2609,6 +2840,7 @@ mod tests {
                 permission: ChatPermission::ReadOnly,
                 model: None,
                 native_session_id: None,
+                profile_config_path: None,
                 attachments: vec![],
             },
         ))

@@ -15,6 +15,7 @@ import {
   createThread,
   decideApproval,
   failTurn,
+  handoffThreadAccount,
   handoffThread,
   promptForTurn,
   loadStoredThreads,
@@ -64,6 +65,7 @@ export interface ChatThreadSettings {
   workingDirectory: string;
   permission: ChatPermission;
   model: string;
+  accountProfileId?: string | null;
 }
 
 export interface ChatThreadCreation extends ChatThreadSettings {
@@ -85,8 +87,14 @@ export interface AgentChatApi {
   updateThread: (id: string, patch: Partial<ChatThreadSettings>) => void;
   /** Starts a new native conversation with another CLI and carries safe context. */
   handoffThread: (id: string, definitionId: ChatDefinitionId, model: string) => void;
+  handoffThreadAccount: (id: string, accountProfileId: string | null) => void;
   removeThread: (id: string) => void;
-  send: (id: string, prompt: string, attachments?: readonly ChatAttachment[]) => Promise<void>;
+  send: (
+    id: string,
+    prompt: string,
+    attachments?: readonly ChatAttachment[],
+    profileConfigPath?: string | null,
+  ) => Promise<void>;
   stop: (id: string) => Promise<void>;
   /** Answers an approval card; rejects with the reason when it cannot. */
   respond: (id: string, requestId: string, allow: boolean) => Promise<void>;
@@ -271,6 +279,14 @@ export function useAgentChat(): AgentChatApi {
     );
   }, []);
 
+  const handoffAccount = useCallback((id: string, accountProfileId: string | null) => {
+    setThreads((current) =>
+      current.map((thread) =>
+        thread.id === id ? handoffThreadAccount(thread, accountProfileId) : thread,
+      ),
+    );
+  }, []);
+
   const remove = useCallback((id: string) => {
     const target = threadsRef.current.find((thread) => thread.id === id);
     if (target?.runningTurnId && hasDesktopBackend()) {
@@ -290,6 +306,7 @@ export function useAgentChat(): AgentChatApi {
     id: string,
     prompt: string,
     attachments: readonly ChatAttachment[] = [],
+    profileConfigPath: string | null = null,
   ) => {
     const thread = threadsRef.current.find((entry) => entry.id === id);
     if (!thread || thread.runningTurnId) return;
@@ -311,6 +328,7 @@ export function useAgentChat(): AgentChatApi {
           prompt: promptForTurn(thread, visiblePrompt),
           permission: thread.permission,
           model: thread.model.trim() || null,
+          profileConfigPath,
           nativeSessionId: thread.nativeSessionId,
           attachments: attachments.map(({ path }) => ({ path })),
         },
@@ -382,6 +400,7 @@ export function useAgentChat(): AgentChatApi {
       markUnread,
       updateThread: update,
       handoffThread: handoff,
+      handoffThreadAccount: handoffAccount,
       removeThread: remove,
       send,
       stop: stopTurn,
@@ -404,6 +423,7 @@ export function useAgentChat(): AgentChatApi {
       markUnread,
       update,
       handoff,
+      handoffAccount,
       remove,
       send,
       stopTurn,
