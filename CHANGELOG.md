@@ -4,6 +4,25 @@
 
 ---
 
+## [0.37.0](https://github.com/NickYCLin/lattice-term/compare/v0.36.0...v0.37.0) (2026-09-03)
+
+
+### 🚀 新增功能
+
+* **agent:** 對話介面改版，文案不再提到 CLI ([#122](https://github.com/NickYCLin/lattice-term/issues/122)) ([91cf795](https://github.com/NickYCLin/lattice-term/commit/91cf795bc8a9ce88be4365f628da656bf39844f3))
+* **agent:** 對話模式可從清單選模型；Windows 不再彈出主控台視窗 ([#121](https://github.com/NickYCLin/lattice-term/issues/121)) ([0d5c36d](https://github.com/NickYCLin/lattice-term/commit/0d5c36d23aadaac62c235cd35eedc30bbee0e362))
+* **agent:** 對話模式支援逐項核准工具呼叫 ([#119](https://github.com/NickYCLin/lattice-term/issues/119)) ([782f4ef](https://github.com/NickYCLin/lattice-term/commit/782f4ef2af0b6ef0aa61b973eb2dd894f9a59abb))
+* **agent:** 對話模式的排程任務 ([#120](https://github.com/NickYCLin/lattice-term/issues/120)) ([97aa36e](https://github.com/NickYCLin/lattice-term/commit/97aa36ea6ce31e822288483de6bcb0c3a18c2caa))
+* **agent:** 對話清單支援自訂資料夾階層 ([#123](https://github.com/NickYCLin/lattice-term/issues/123)) ([4ed05cf](https://github.com/NickYCLin/lattice-term/commit/4ed05cf1afe4fca82bcee745cce55efa58d97884))
+* **行動版:** 初始化 iOS Simulator 建置 ([13d9996](https://github.com/NickYCLin/lattice-term/commit/13d99964462706ab9aa9da3fe4a6d7914fc86145))
+
+
+### 🛠️ 問題修正
+
+* **發行:** 累積門檻只在每天排程與手動觸發時套用 ([#117](https://github.com/NickYCLin/lattice-term/issues/117)) ([1a5a1fc](https://github.com/NickYCLin/lattice-term/commit/1a5a1fc3bd89856e2b79ca9e9b15e560aab237e6))
+* **行動版:** 套用 LatticeTerm In-House 簽署 ([f6a6c46](https://github.com/NickYCLin/lattice-term/commit/f6a6c463c32a2050cdaf43e557ca6f7862c28e23))
+* **行動版:** 消除 iOS RDP 編譯警告 ([685306c](https://github.com/NickYCLin/lattice-term/commit/685306c96e222a13250f111b5abb91a3690280b6))
+
 ## [0.36.0](https://github.com/NickYCLin/lattice-term/compare/v0.35.0...v0.36.0) (2026-09-03)
 
 
