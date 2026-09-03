@@ -130,9 +130,10 @@ export function sanitizeSessionSidebarLayout(
 
 export function loadSessionSidebarLayout(
   storage: Pick<SessionSidebarStorage, "getItem">,
+  key: string = SESSION_SIDEBAR_LAYOUT_KEY,
 ): SessionSidebarLayout {
   try {
-    const raw = storage.getItem(SESSION_SIDEBAR_LAYOUT_KEY);
+    const raw = storage.getItem(key);
     if (!raw) return emptySessionSidebarLayout;
     return sanitizeSessionSidebarLayout(JSON.parse(raw)) ?? emptySessionSidebarLayout;
   } catch {
@@ -143,8 +144,9 @@ export function loadSessionSidebarLayout(
 export function saveSessionSidebarLayout(
   storage: Pick<SessionSidebarStorage, "setItem">,
   layout: SessionSidebarLayout,
+  key: string = SESSION_SIDEBAR_LAYOUT_KEY,
 ) {
-  storage.setItem(SESSION_SIDEBAR_LAYOUT_KEY, JSON.stringify(layout));
+  storage.setItem(key, JSON.stringify(layout));
 }
 
 function wouldCreateCycle(

@@ -37,6 +37,7 @@ import { Callout, EmptyState } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
 import { ChatMarkdown } from "../components/chat/ChatMarkdown";
 import { ModelField } from "../components/chat/ModelField";
+import { ChatThreadTree } from "../components/chat/ChatThreadTree";
 import {
   ChatIcon,
   ClockIcon,
@@ -82,6 +83,8 @@ export function ChatView({
   const [mode, setMode] = useState<"threads" | "automations">("threads");
   const [selectedAutomationId, setSelectedAutomationId] = useState<string | null>(null);
   const [composingAutomation, setComposingAutomation] = useState(false);
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
 
   const cliLabel = (id: ChatDefinitionId) =>
     agents.catalog.find((definition) => definition.id === id)?.label ?? id;
@@ -160,31 +163,89 @@ export function ChatView({
               )}
             </button>
           </div>
-          <button
-            type="button"
-            className="button button--primary button--sm"
-            onClick={mode === "threads" ? startThread : startAutomation}
-            disabled={agents.mode !== "ready"}
-            aria-label={mode === "threads" ? t("chat.new") : t("automation.new")}
-            title={mode === "threads" ? t("chat.new") : t("automation.new")}
-          >
-            <PlusIcon />
-          </button>
+          <div className="chat-composer__actions">
+            {mode === "threads" && (
+              <button
+                type="button"
+                className="button button--ghost button--sm"
+                onClick={() => {
+                  setNewFolderOpen((current) => !current);
+                  setNewFolderName("");
+                }}
+                aria-label={t("chat.folder.new")}
+                title={t("chat.folder.new")}
+                aria-expanded={newFolderOpen}
+              >
+                <FolderIcon />
+              </button>
+            )}
+            <button
+              type="button"
+              className="button button--primary button--sm"
+              onClick={mode === "threads" ? startThread : startAutomation}
+              disabled={agents.mode !== "ready"}
+              aria-label={mode === "threads" ? t("chat.new") : t("automation.new")}
+              title={mode === "threads" ? t("chat.new") : t("automation.new")}
+            >
+              <PlusIcon />
+            </button>
+          </div>
         </div>
+        {mode === "threads" && newFolderOpen && (
+          <form
+            className="chat-folder-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const name = newFolderName.trim();
+              if (name) chat.createFolder(name, null);
+              setNewFolderOpen(false);
+              setNewFolderName("");
+            }}
+          >
+            <input
+              className="input"
+              autoFocus
+              value={newFolderName}
+              placeholder={t("chat.folder.name.placeholder")}
+              aria-label={t("chat.folder.name.placeholder")}
+              onChange={(event) => setNewFolderName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setNewFolderOpen(false);
+              }}
+            />
+            <button type="submit" className="button button--primary button--sm">
+              {t("chat.folder.create")}
+            </button>
+          </form>
+        )}
         {mode === "threads" ? (
-          <ul className="chat-threads__list">
-            {chat.threads.map((thread) => (
-              <li key={thread.id}>
-                <button
-                  type="button"
-                  className={`chat-thread${thread.id === chat.activeThreadId ? " is-active" : ""}${thread.unread ? " is-unread" : ""}`}
-                  onClick={() => chat.setActiveThreadId(thread.id)}
+          <div className="chat-threads__list">
+            <ChatThreadTree
+              layout={chat.layout}
+              threads={chat.threads}
+              activeThreadId={chat.activeThreadId}
+              onSelectThread={(id) => chat.setActiveThreadId(id)}
+              onToggleFolder={chat.toggleFolder}
+              onRenameFolder={chat.renameFolder}
+              onRemoveFolder={chat.removeFolder}
+              onCreateFolder={chat.createFolder}
+              onMoveNode={chat.moveNode}
+              renderThread={(thread, active) => (
+                <div
+                  className={`chat-thread${active ? " is-active" : ""}${thread.unread ? " is-unread" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      chat.setActiveThreadId(thread.id);
+                    }
+                  }}
                 >
                   <span>
                     <span className="chat-thread__title">
                       {thread.title || t("chat.untitled")}
                     </span>
-                    <br />
                     <span className="chat-thread__meta">
                       {thread.automationId ? `${t("automation.badge")} · ` : ""}
                       {cliLabel(thread.definitionId)}
@@ -198,10 +259,13 @@ export function ChatView({
                   ) : thread.unread ? (
                     <span className="chat-thread__dot chat-thread__dot--unread" aria-label={t("automation.unread.one")} />
                   ) : null}
-                </button>
-              </li>
-            ))}
-          </ul>
+                </div>
+              )}
+            />
+            {chat.layout.folders.length > 0 && (
+              <p className="chat-threads__hint">{t("chat.folder.dragHint")}</p>
+            )}
+          </div>
         ) : (
           <ul className="chat-threads__list">
             {automations.automations.map((automation) => (
