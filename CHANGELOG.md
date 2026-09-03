@@ -4,6 +4,19 @@
 
 ---
 
+## [0.36.0](https://github.com/NickYCLin/lattice-term/compare/v0.35.0...v0.36.0) (2026-09-03)
+
+
+### 🚀 新增功能
+
+* **agent:** 每個工作階段的提示佇列 ([#112](https://github.com/NickYCLin/lattice-term/issues/112)) ([1858092](https://github.com/NickYCLin/lattice-term/commit/1858092655419f4b8c84db01c383dc757ee21071))
+* **agent:** 用對話框跟 Claude Code 與 Codex 溝通 ([#116](https://github.com/NickYCLin/lattice-term/issues/116)) ([f054bfc](https://github.com/NickYCLin/lattice-term/commit/f054bfc520b925854019285a2837e3b34759eb1a))
+
+
+### 🛠️ 問題修正
+
+* **agent:** 補上活動測試 fixture 的佇列欄位 ([#115](https://github.com/NickYCLin/lattice-term/issues/115)) ([a0a3950](https://github.com/NickYCLin/lattice-term/commit/a0a395039904874ecb03dabf46ea99081999899e))
+
 ## [0.35.0](https://github.com/NickYCLin/lattice-term/compare/v0.34.0...v0.35.0) (2026-09-03)
 
 
