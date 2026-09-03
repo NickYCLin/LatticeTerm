@@ -27,6 +27,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use zeroize::{Zeroize, Zeroizing};
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 static NEXT_SESSION_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -43,14 +44,24 @@ pub struct RemoteConnectRequest {
     pub hostname: String,
     #[serde(default)]
     pub port: u16,
-    /// One-time secret. Never copied into a session record or event.
+    /// One-call secret. Never copied into a session record or event.
     pub pairing_code: String,
+    #[serde(default)]
+    pub use_saved_pairing_code: bool,
+    #[serde(default)]
+    pub remember_pairing_code: bool,
     /// When set, the connection goes through a relay by nine-digit device ID
     /// instead of dialing hostname:port directly.
     #[serde(default)]
     pub device_id: String,
     #[serde(default)]
     pub relay_address: String,
+}
+
+impl Drop for RemoteConnectRequest {
+    fn drop(&mut self) {
+        self.pairing_code.zeroize();
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -700,7 +711,7 @@ pub async fn connect(
         return failed("connect", "The connection target is incomplete.");
     }
     let pairing_code = match normalize_pairing_code(&request.pairing_code) {
-        Ok(code) => code,
+        Ok(code) => Zeroizing::new(code),
         Err(error) => return failed("pairing", error.to_string()),
     };
     // Admission covers dialing, the Noise handshake, authenticated Hello, and
@@ -790,10 +801,10 @@ pub async fn connect(
 
     let session = RemoteSessionSummary {
         session_id: session_id(),
-        profile_id: request.profile_id,
+        profile_id: request.profile_id.clone(),
         host: match &device_id {
             Some(device_id) => format_device_id(device_id),
-            None => request.hostname,
+            None => request.hostname.clone(),
         },
         port: request.port,
         via_relay,

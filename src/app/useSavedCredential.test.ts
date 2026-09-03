@@ -23,8 +23,8 @@ describe("credentialKindFor", () => {
     expect(credentialKindFor(profile("rdp"))).toBe("rdpPassword");
   });
 
-  it("never persists one-time or unsupported protocol secrets", () => {
-    expect(credentialKindFor(profile("lattice"))).toBeNull();
+  it("maps saved Lattice devices to their own secure pairing-code entry", () => {
+    expect(credentialKindFor(profile("lattice"))).toBe("latticePairingCode");
     expect(credentialKindFor(profile("sftp"))).toBe("sftpPassword");
     expect(credentialKindFor(profile("vnc"))).toBe("vncPassword");
   });

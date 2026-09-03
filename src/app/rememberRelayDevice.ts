@@ -4,8 +4,9 @@
  * Dialing a nine-digit device ID used to leave nothing behind, so the next
  * session meant retyping the ID and the relay address even though neither is
  * a secret. Remembering the device puts it in My connections alongside every
- * other host; only the pairing code is asked for again, because that one is a
- * one-time secret that must not be stored.
+ * other host. The pairing code remains absent from profile metadata; on a
+ * later connection, the user can explicitly keep it in the secure credential
+ * backend associated with this permanent device ID.
  */
 
 import {

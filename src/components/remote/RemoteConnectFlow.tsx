@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { relayConnectFollowUp } from "../../app/relayAddressRecovery";
 import type { RemoteApi } from "../../app/useRemoteSessions";
+import { useSavedCredential } from "../../app/useSavedCredential";
 import {
   connectionTarget,
   isRelayProfile,
@@ -9,7 +10,13 @@ import {
 } from "../../domain/connection";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
-import { CloseIcon, ScreenShareIcon, ShieldIcon } from "../icons";
+import {
+  CheckIcon,
+  CloseIcon,
+  ScreenShareIcon,
+  ShieldIcon,
+  TrashIcon,
+} from "../icons";
 import { useModalFocus } from "../overlays/modalFocus";
 
 export function RemoteConnectFlow({
@@ -28,7 +35,11 @@ export function RemoteConnectFlow({
 }) {
   const { t } = useI18n();
   const relay = isRelayProfile(profile);
+  const savedCredential = useSavedCredential(profile.id, "latticePairingCode");
   const [pairingCode, setPairingCode] = useState("");
+  const [useSavedPairingCode, setUseSavedPairingCode] = useState(false);
+  const [rememberPairingCode, setRememberPairingCode] = useState(false);
+  const [removingCredential, setRemovingCredential] = useState(false);
   const [relayAddress, setRelayAddress] = useState(profile.relayAddress ?? "");
   // A quick tunnel hands out a new hostname every restart, so a saved address
   // goes stale on its own. Offering the field only after the relay actually
@@ -51,6 +62,18 @@ export function RemoteConnectFlow({
     if (busy) dialogRef.current?.focus();
   }, [busy]);
 
+  useEffect(() => {
+    if (relay && savedCredential.state.mode === "saved") {
+      setUseSavedPairingCode(true);
+    } else if (savedCredential.state.mode !== "loading") {
+      setUseSavedPairingCode(false);
+    }
+  }, [relay, savedCredential.state.mode]);
+
+  useEffect(() => {
+    if (!useSavedPairingCode) codeRef.current?.focus();
+  }, [useSavedPairingCode]);
+
   // Once the address is the thing to fix, put the caret there rather than
   // leaving it in the pairing code the user already filled in correctly.
   useEffect(() => {
@@ -64,7 +87,7 @@ export function RemoteConnectFlow({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pairingCode.length !== 8) {
+    if (!useSavedPairingCode && pairingCode.length !== 8) {
       setProblem(t("remote.connect.codeInvalid"));
       return;
     }
@@ -75,7 +98,10 @@ export function RemoteConnectFlow({
       profileId: profile.id,
       hostname: profile.hostname,
       port: profile.port,
-      pairingCode,
+      pairingCode: useSavedPairingCode ? "" : pairingCode,
+      useSavedPairingCode,
+      rememberPairingCode:
+        relay && !useSavedPairingCode && rememberPairingCode,
       // A remembered device has no address of its own; the relay finds it by
       // identity, exactly as the connect-by-ID dialog does.
       ...(relay ? { deviceId: profile.deviceId, relayAddress: attempted } : {}),
@@ -96,6 +122,12 @@ export function RemoteConnectFlow({
       onConnected(outcome.sessionId);
       return;
     }
+    if (
+      useSavedPairingCode &&
+      (outcome.stage === "credential" || outcome.stage === "pairing")
+    ) {
+      setUseSavedPairingCode(false);
+    }
     if (followUp.offerAddressRepair) setRelayUnreachable(true);
     setProblem(
       t("remote.connect.failedBody", {
@@ -103,6 +135,23 @@ export function RemoteConnectFlow({
         detail: outcome.detail,
       }),
     );
+  }
+
+  async function removeSavedCredential() {
+    setRemovingCredential(true);
+    setProblem(null);
+    try {
+      await savedCredential.remove();
+      setUseSavedPairingCode(false);
+    } catch (reason) {
+      setProblem(
+        t("credential.removeFailed.body", {
+          detail: reason instanceof Error ? reason.message : String(reason),
+        }),
+      );
+    } finally {
+      setRemovingCredential(false);
+    }
   }
 
   return (
@@ -150,6 +199,51 @@ export function RemoteConnectFlow({
             </Callout>
           )}
 
+          {relay && savedCredential.state.mode === "saved" && (
+            <Callout tone="security" title={t("remote.connect.savedCodeTitle")}>
+              <div className="credential-choice">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={useSavedPairingCode}
+                    disabled={busy || removingCredential}
+                    onChange={(event) =>
+                      setUseSavedPairingCode(event.currentTarget.checked)
+                    }
+                  />
+                  <span className="checkbox__box" aria-hidden="true">
+                    <CheckIcon size={11} />
+                  </span>
+                  {t("remote.connect.useSavedCode", {
+                    provider: savedCredential.state.provider,
+                  })}
+                </label>
+                <button
+                  type="button"
+                  className="button button--ghost button--sm"
+                  disabled={busy || removingCredential}
+                  onClick={() => void removeSavedCredential()}
+                >
+                  <TrashIcon size={13} />
+                  {removingCredential
+                    ? t("credential.removing")
+                    : t("remote.connect.removeSavedCode")}
+                </button>
+              </div>
+            </Callout>
+          )}
+
+          {relay && savedCredential.state.mode === "unavailable" && (
+            <Callout tone="warn" title={t("credential.unavailable.title")}>
+              {t(
+                savedCredential.state.runtimeUnavailable
+                  ? "credential.unavailable.browserBody"
+                  : "credential.unavailable.body",
+                { detail: savedCredential.state.detail },
+              )}
+            </Callout>
+          )}
+
           {relayUnreachable && (
             <div className="field">
               <Callout tone="info" title={t("remote.connect.relayMovedTitle")}>
@@ -173,30 +267,56 @@ export function RemoteConnectFlow({
             </div>
           )}
 
-          <div className="field">
-            <label className="field__label" htmlFor="remote-pairing-code">
-              {t("remote.connect.code")}
-            </label>
-            <div className="remote-code-field">
-              <ShieldIcon size={16} />
-              <input
-                id="remote-pairing-code"
-                ref={codeRef}
-                className="input mono"
-                value={formatted}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                placeholder="0000-0000"
-                disabled={busy}
-                onChange={(event) =>
-                  setPairingCode(
-                    event.currentTarget.value.replace(/\D/g, "").slice(0, 8),
-                  )
-                }
-              />
+          {!useSavedPairingCode && (
+            <div className="field">
+              <label className="field__label" htmlFor="remote-pairing-code">
+                {t("remote.connect.code")}
+              </label>
+              <div className="remote-code-field">
+                <ShieldIcon size={16} />
+                <input
+                  id="remote-pairing-code"
+                  ref={codeRef}
+                  className="input mono"
+                  value={formatted}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="0000-0000"
+                  disabled={busy}
+                  onChange={(event) =>
+                    setPairingCode(
+                      event.currentTarget.value
+                        .replace(/\D/g, "")
+                        .slice(0, 8),
+                    )
+                  }
+                />
+              </div>
+              <p className="field__optional">{t("remote.connect.codeHint")}</p>
             </div>
-            <p className="field__optional">{t("remote.connect.codeHint")}</p>
-          </div>
+          )}
+
+          {relay &&
+            !useSavedPairingCode &&
+            savedCredential.state.mode === "missing" && (
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={rememberPairingCode}
+                  disabled={busy || pairingCode.length !== 8}
+                  onChange={(event) =>
+                    setRememberPairingCode(event.currentTarget.checked)
+                  }
+                />
+                <span className="checkbox__box" aria-hidden="true">
+                  <CheckIcon size={11} />
+                </span>
+                <ShieldIcon size={13} />
+                {t("remote.connect.rememberCode", {
+                  provider: savedCredential.state.provider,
+                })}
+              </label>
+            )}
 
           <div className="dialog__actions">
             <button

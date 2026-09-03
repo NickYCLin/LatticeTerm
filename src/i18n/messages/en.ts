@@ -35,18 +35,18 @@ export const en: Messages = {
   "common.loading": "Loading feature…",
 
   // System credential storage --------------------------------------------
-  "credential.saved.title": "Password stored securely",
-  "credential.useSaved": "Use the password saved in {provider}",
+  "credential.saved.title": "Credential stored securely",
+  "credential.useSaved": "Use the credential saved in {provider}",
   "credential.remember": "Save to {provider} after successful authentication",
-  "credential.remove": "Delete saved password",
+  "credential.remove": "Delete saved credential",
   "credential.removing": "Deleting…",
-  "credential.removeFailed.title": "Could not delete the saved password",
+  "credential.removeFailed.title": "Could not delete the saved credential",
   "credential.removeFailed.body": "The system credential store refused the deletion: {detail}",
   "credential.unavailable.title": "System credential storage is unavailable",
   "credential.unavailable.body":
-    "You can still enter a password for this attempt, but it will not be saved. Reason: {detail}",
+    "You can still enter a credential for this attempt, but it will not be saved. Reason: {detail}",
   "credential.unavailable.browserBody":
-    "The browser preview has no desktop security backend. You can still enter a password for this connection, but it will not be saved.",
+    "The browser preview has no desktop security backend. You can still enter a credential for this connection, but it will not be saved.",
 
   // Navigation ------------------------------------------------------------
   "desktopBackend.required.title": "The LatticeTerm desktop app is required",
@@ -194,17 +194,17 @@ export const en: Messages = {
     "This removes the entry for {host} from this workspace. The remote machine is not touched.",
   "confirm.delete.confirm": "Delete {name}",
   "confirm.delete.credential.title":
-    "Delete the saved password for {name} first",
+    "Delete the saved credential for {name} first",
   "confirm.delete.credential.body":
-    "This connection still has a password in {provider}. Open the Key Vault and explicitly delete it first so no unmanaged credential is left behind.",
+    "This connection still has a credential in {provider}. Open the Key Vault and explicitly delete it first so no unmanaged item is left behind.",
   "confirm.delete.credential.loading":
-    "Checking whether this connection has a saved password…",
+    "Checking whether this connection has a saved credential…",
   "confirm.delete.credential.openVault": "Open Key Vault",
   "confirm.delete.credential.checking": "Checking…",
   "confirm.delete.credential.unavailable.title":
     "This connection cannot be deleted safely right now",
   "confirm.delete.credential.unavailable.body":
-    "LatticeTerm could not verify whether the system credential store still contains a password: {detail}",
+    "LatticeTerm could not verify whether the system credential store still contains a credential: {detail}",
   "confirm.delete.credential.blocked": "Deletion unavailable",
 
   // Inspector -------------------------------------------------------------
@@ -611,7 +611,7 @@ export const en: Messages = {
   "planned.tunnels.cap3.detail":
     "It says whether the port is taken, the connection dropped, or permission was denied.",
   "planned.vault.summary":
-    "One place for what must stay secret: SSH keys, saved passwords, jump host credentials, and the host fingerprints you have trusted.",
+    "One place for what must stay secret: SSH keys, saved passwords and pairing codes, jump host credentials, and the host fingerprints you have trusted.",
   "planned.vault.boundary":
     "Secrets go to the operating system credential store and host trust uses strict checking. Neither exists yet, which is why nothing asks you for a credential today.",
   "planned.vault.cap1.title": "Lock state you can see",
@@ -1061,9 +1061,13 @@ export const en: Messages = {
 
   // Lattice Remote ---------------------------------------------------------
   "remote.connect.title": "Connect to {name}",
-  "remote.connect.securityTitle": "One-time encrypted pairing",
+  "remote.connect.securityTitle": "Encrypted pairing and secure storage",
   "remote.connect.securityBody":
-    "The code is used only for this Noise handshake and is not saved. The host independently authorises keyboard control and file access for each share.",
+    "The code is used only for the Noise handshake and is not saved by default. Only relay connections with a permanent device ID can save it after your explicit choice; the host still authorises keyboard control and file access independently.",
+  "remote.connect.savedCodeTitle": "Pairing code stored securely",
+  "remote.connect.useSavedCode": "Use the pairing code saved in {provider}",
+  "remote.connect.rememberCode": "Save the pairing code to {provider} after pairing succeeds",
+  "remote.connect.removeSavedCode": "Delete saved pairing code",
   "remote.connect.code": "Agent pairing code",
   "remote.connect.codeHint":
     "Enter the eight-digit code shown by lattice-agent on the remote device.",
@@ -1339,30 +1343,30 @@ export const en: Messages = {
   "vault.activity.removed": "Trusted host removed for {target}",
   "vault.credentials.title": "Secure credential storage is active",
   "vault.credentials.body":
-    "This tab lists which connections have a securely stored password without reading or displaying it. Passwords can use the operating-system credential store or the master-password vault; SSH keys stay in the local files you choose, without storing key material or passphrases.",
+    "This tab lists which connections have a securely stored credential without reading or displaying it. Passwords and Lattice Remote pairing codes can use the operating-system credential store or the master-password vault; SSH keys stay in the local files you choose, without storing key material or passphrases.",
   "vault.credentials.loading.title": "Reading the system credential store",
   "vault.credentials.loading.body":
-    "Only connection-to-entry associations are checked; passwords are never loaded into the view.",
+    "Only connection-to-entry associations are checked; credentials are never loaded into the view.",
   "vault.credentials.ready.title": "{provider} connected",
   "vault.credentials.ready.body":
-    "Only the Rust connection core can request a saved password when needed; the WebView never receives its plaintext.",
-  "vault.credentials.empty.title": "No passwords have been saved",
+    "Only the Rust connection core can request a saved credential when needed; the WebView never receives its plaintext.",
+  "vault.credentials.empty.title": "No credentials have been saved",
   "vault.credentials.empty.body":
-    "Choose save when opening an SSH, SFTP, RDP, or VNC connection. The password is written to the selected secure backend only after authentication succeeds.",
+    "Choose save when opening an SSH, SFTP, RDP, VNC, or saved Lattice Relay device. The credential is written to the selected secure backend only after authentication succeeds.",
   "vault.credentials.table.connection": "Connection",
   "vault.credentials.table.protocol": "Protocol",
   "vault.credentials.table.target": "Target",
-  "vault.credentials.removeFor": "Delete the saved password for {name}",
-  "vault.credentials.remove.title": "Delete the saved password for {name}?",
+  "vault.credentials.removeFor": "Delete the saved credential for {name}",
+  "vault.credentials.remove.title": "Delete the saved credential for {name}?",
   "vault.credentials.remove.body":
-    "This does not affect the current session. You must enter the password again next time you connect to {target}.",
+    "This does not affect the current session. You must enter the credential again next time you connect to {target}.",
   "vault.credentials.activity.removed": "Secure credential removed for {name}",
   "vault.credentials.systemStore": "Operating-system credential store",
   "vault.credentials.systemStoreDetail":
-    "Save user-approved passwords with Windows Credential Manager, macOS Keychain, or Linux Secret Service.",
+    "Save user-approved passwords and pairing codes with Windows Credential Manager, macOS Keychain, or Linux Secret Service.",
   "vault.credentials.stronghold": "Master-password encrypted vault",
   "vault.credentials.strongholdDetail":
-    "Protect passwords with Argon2id and XChaCha20-Poly1305 without importing SSH keys or passphrases.",
+    "Protect passwords and pairing codes with Argon2id and XChaCha20-Poly1305 without importing SSH keys or passphrases.",
   "vault.credentials.autoLock": "Auto-lock and idle protection",
   "vault.credentials.autoLockDetail":
     "Clear decrypted state when the window enters the background or times out, then require the master password to unlock again.",

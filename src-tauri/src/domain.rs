@@ -77,8 +77,9 @@ pub struct ConnectionProfile {
     /// instead of a hostname and port. Absent on every other entry, and
     /// skipped when serialising so existing stored files keep their shape.
     ///
-    /// The pairing code is deliberately not here: it is a one-time secret and
-    /// never belongs in stored connection metadata.
+    /// The pairing code is deliberately not here. A permanent relay device's
+    /// code may be kept in the secure credential backend after explicit user
+    /// consent, but never belongs in stored connection metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

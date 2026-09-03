@@ -1115,8 +1115,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
           remote={remote}
           onConnected={(result) => {
             setQuickConnectOpen(false);
-            // Keep the device in My connections so the next session needs
-            // only the pairing code, not the nine digits and the relay too.
+            // Keep the device in My connections so the next session can use
+            // its saved address and optionally remember the pairing code in
+            // the secure credential backend.
             const memory = rememberRelayDevice(workspace.profiles, result);
             if (memory?.action === "add") workspace.addProfile(memory.draft);
             else if (memory) workspace.updateProfile(memory.id, memory.draft);

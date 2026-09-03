@@ -16,12 +16,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use zeroize::{Zeroize, Zeroizing};
 
 const SERVICE: &str = "io.github.NickYCLin.LatticeTerm";
 const MAX_PROFILE_ID_LENGTH: usize = 128;
 const BACKEND_FILE: &str = "credential_backend.json";
 const BOUND_CREDENTIAL_VERSION: u32 = 1;
-const LEGACY_CREDENTIAL_ERROR: &str = "This saved password predates endpoint binding. Re-enter it and choose Remember password again before using saved credentials.";
+const LEGACY_CREDENTIAL_ERROR: &str = "This saved credential predates endpoint binding. Re-enter it and choose Remember again before using saved credentials.";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +30,12 @@ struct BoundCredentialEnvelope {
     version: u32,
     binding_sha256: String,
     secret: String,
+}
+
+impl Drop for BoundCredentialEnvelope {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
 }
 
 /// Where new secrets are written. Reads always cover both.
@@ -103,6 +110,7 @@ pub enum CredentialKind {
     SftpPassword,
     RdpPassword,
     VncPassword,
+    LatticePairingCode,
 }
 
 impl CredentialKind {
@@ -112,6 +120,7 @@ impl CredentialKind {
             Self::SftpPassword => "sftp-password",
             Self::RdpPassword => "rdp-password",
             Self::VncPassword => "vnc-password",
+            Self::LatticePairingCode => "lattice-pairing-code",
         }
     }
 
@@ -121,11 +130,12 @@ impl CredentialKind {
             Self::SftpPassword => Protocol::Sftp,
             Self::RdpPassword => Protocol::Rdp,
             Self::VncPassword => Protocol::Vnc,
+            Self::LatticePairingCode => Protocol::Lattice,
         }
     }
 }
 
-/// Stable, non-secret identity of the endpoint a saved password belongs to.
+/// Stable, non-secret identity of the endpoint a saved credential belongs to.
 /// Length-prefixing prevents ambiguous concatenations. Every endpoint field is
 /// byte-exact so the digest always matches what the protocol engine actually
 /// receives, even for case-sensitive IPv6 zone identifiers or when an IPC
@@ -135,8 +145,9 @@ pub fn profile_binding_sha256(profile: &ConnectionProfile) -> String {
 }
 
 /// Extends the endpoint identity with a protocol-specific authentication
-/// realm. RDP uses this for its optional CredSSP domain; other protocols use
-/// the context-free wrapper above.
+/// realm. RDP uses this for its optional CredSSP domain and Lattice Remote uses
+/// it for the permanent relay device ID; other protocols use the context-free
+/// wrapper above.
 pub fn profile_binding_sha256_with_context(
     profile: &ConnectionProfile,
     authentication_context: &str,
@@ -184,7 +195,7 @@ fn encode_bound_secret_with_context(
 ) -> Result<String, String> {
     validate_bound_kind(profile, kind)?;
     if secret.is_empty() {
-        return Err("An empty password cannot be saved.".to_string());
+        return Err("An empty credential cannot be saved.".to_string());
     }
     serde_json::to_string(&BoundCredentialEnvelope {
         version: BOUND_CREDENTIAL_VERSION,
@@ -218,14 +229,14 @@ fn decode_bound_secret_with_context(
         != profile_binding_sha256_with_context(profile, authentication_context)
     {
         return Err(
-            "The saved password belongs to a different endpoint. Delete it or restore the original host, port, and username before reconnecting."
+            "The saved credential belongs to a different endpoint. Delete it or restore the original connection target before reconnecting."
                 .to_string(),
         );
     }
     if envelope.secret.is_empty() {
-        return Err("The saved password is empty.".to_string());
+        return Err("The saved credential is empty.".to_string());
     }
-    Ok(envelope.secret)
+    Ok(envelope.secret.clone())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -313,7 +324,7 @@ fn keyring_exists(profile_id: &str, kind: CredentialKind) -> Result<bool, String
     match entry(profile_id, kind)?.get_password() {
         Ok(secret) => {
             let mut bytes = secret.into_bytes();
-            zeroize::Zeroize::zeroize(&mut bytes);
+            bytes.zeroize();
             Ok(true)
         }
         Err(Error::NoEntry) => Ok(false),
@@ -322,7 +333,11 @@ fn keyring_exists(profile_id: &str, kind: CredentialKind) -> Result<bool, String
 }
 
 fn vault_exists(profile_id: &str, kind: CredentialKind) -> Result<bool, String> {
-    crate::vault::manager()?.exists_entry(&account(profile_id, kind)?)
+    let vault = crate::vault::manager()?;
+    if !vault.exists() {
+        return Ok(false);
+    }
+    vault.exists_entry(&account(profile_id, kind)?)
 }
 
 fn keyring_load(profile_id: &str, kind: CredentialKind) -> Result<String, String> {
@@ -338,18 +353,32 @@ fn vault_load(profile_id: &str, kind: CredentialKind) -> Result<String, String> 
     crate::vault::manager()?.load(&account(profile_id, kind)?)
 }
 
-/// True in either backend counts; a backend that cannot answer right now (a
-/// locked vault, a missing keyring) simply cannot vouch either way.
+fn merge_exists_results(
+    first: Result<bool, String>,
+    second: Result<bool, String>,
+) -> Result<bool, String> {
+    match (first, second) {
+        (Ok(true), _) | (_, Ok(true)) => Ok(true),
+        (Ok(false), Ok(false)) => Ok(false),
+        (Err(error), Ok(false)) | (Ok(false), Err(error)) => Err(error),
+        (Err(first_error), Err(second_error)) => Err(format!("{first_error}; {second_error}")),
+    }
+}
+
+/// True in either backend counts. If neither backend confirms an entry and one
+/// cannot answer (for example, a locked encrypted vault), fail closed so a
+/// profile cannot be deleted while an orphaned credential may still exist.
 pub fn exists(profile_id: &str, kind: CredentialKind) -> Result<bool, String> {
-    let in_keyring = keyring_exists(profile_id, kind).unwrap_or(false);
-    let in_vault = vault_exists(profile_id, kind).unwrap_or(false);
-    Ok(in_keyring || in_vault)
+    merge_exists_results(
+        keyring_exists(profile_id, kind),
+        vault_exists(profile_id, kind),
+    )
 }
 
 /// New secrets go to the preferred backend only.
 fn store(profile_id: &str, kind: CredentialKind, secret: &str) -> Result<(), String> {
     if secret.is_empty() {
-        return Err("An empty password cannot be saved.".to_string());
+        return Err("An empty credential cannot be saved.".to_string());
     }
     match preferred_backend() {
         CredentialBackend::OsKeyring => entry(profile_id, kind)?
@@ -361,7 +390,7 @@ fn store(profile_id: &str, kind: CredentialKind, secret: &str) -> Result<(), Str
     }
 }
 
-/// Stores a password together with the exact saved endpoint it may be used
+/// Stores a credential together with the exact saved endpoint it may be used
 /// for. Editing or replacing a profile can never silently retarget this
 /// credential because the binding is authenticated by the credential store's
 /// own confidentiality boundary and checked before any connection attempt.
@@ -370,7 +399,7 @@ pub fn store_bound(
     kind: CredentialKind,
     secret: &str,
 ) -> Result<(), String> {
-    let encoded = encode_bound_secret(profile, kind, secret)?;
+    let encoded = Zeroizing::new(encode_bound_secret(profile, kind, secret)?);
     store(&profile.id, kind, &encoded)
 }
 
@@ -380,7 +409,12 @@ pub fn store_bound_with_context(
     authentication_context: &str,
     secret: &str,
 ) -> Result<(), String> {
-    let encoded = encode_bound_secret_with_context(profile, kind, authentication_context, secret)?;
+    let encoded = Zeroizing::new(encode_bound_secret_with_context(
+        profile,
+        kind,
+        authentication_context,
+        secret,
+    )?);
     store(&profile.id, kind, &encoded)
 }
 
@@ -407,7 +441,7 @@ fn load(profile_id: &str, kind: CredentialKind) -> Result<String, String> {
 /// deliberately not guessed or auto-migrated: there is no trustworthy way to
 /// know which endpoint an old profile-id-only secret originally belonged to.
 pub fn load_bound(profile: &ConnectionProfile, kind: CredentialKind) -> Result<String, String> {
-    let encoded = load(&profile.id, kind)?;
+    let encoded = Zeroizing::new(load(&profile.id, kind)?);
     decode_bound_secret(profile, kind, &encoded)
 }
 
@@ -416,7 +450,7 @@ pub fn load_bound_with_context(
     kind: CredentialKind,
     authentication_context: &str,
 ) -> Result<String, String> {
-    let encoded = load(&profile.id, kind)?;
+    let encoded = Zeroizing::new(load(&profile.id, kind)?);
     decode_bound_secret_with_context(profile, kind, authentication_context, &encoded)
 }
 
@@ -436,7 +470,8 @@ pub fn delete(profile_id: &str, kind: CredentialKind) -> Result<bool, String> {
         Ok(vault) if vault.exists() => {
             Err("the vault is locked; unlock it to remove its copy too".to_string())
         }
-        _ => Ok(false),
+        Ok(_) => Ok(false),
+        Err(error) => Err(error),
     };
     match (keyring_result, vault_result) {
         (Ok(a), Ok(b)) => Ok(a || b),
@@ -479,10 +514,26 @@ mod tests {
     }
 
     #[test]
+    fn existence_checks_fail_closed_when_an_unavailable_backend_may_hold_a_secret() {
+        assert!(!merge_exists_results(Ok(false), Ok(false)).unwrap());
+        assert!(merge_exists_results(Ok(true), Err("locked".into())).unwrap());
+        assert!(merge_exists_results(Ok(false), Err("locked".into())).is_err());
+        assert!(merge_exists_results(Err("keyring".into()), Ok(false)).is_err());
+    }
+
+    #[test]
     fn sftp_passwords_have_their_own_namespace() {
         assert_eq!(
             account("profile-123", CredentialKind::SftpPassword).unwrap(),
             "profile:profile-123:sftp-password"
+        );
+    }
+
+    #[test]
+    fn lattice_pairing_codes_have_their_own_namespace() {
+        assert_eq!(
+            account("profile-123", CredentialKind::LatticePairingCode).unwrap(),
+            "profile:profile-123:lattice-pairing-code"
         );
     }
 
@@ -539,6 +590,49 @@ mod tests {
         )
         .unwrap_err()
         .contains("different endpoint"));
+    }
+
+    #[test]
+    fn lattice_pairing_code_is_bound_to_the_permanent_device_identity() {
+        let mut lattice = profile(Protocol::Lattice);
+        lattice.hostname.clear();
+        lattice.port = 0;
+        lattice.username.clear();
+        lattice.device_id = Some("123 456 789".to_string());
+        lattice.relay_address = Some("wss://relay.example.test".to_string());
+        let encoded = encode_bound_secret_with_context(
+            &lattice,
+            CredentialKind::LatticePairingCode,
+            "lattice-relay-device:123456789",
+            "12345678",
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode_bound_secret_with_context(
+                &lattice,
+                CredentialKind::LatticePairingCode,
+                "lattice-relay-device:123456789",
+                &encoded,
+            )
+            .unwrap(),
+            "12345678"
+        );
+        assert!(decode_bound_secret_with_context(
+            &lattice,
+            CredentialKind::LatticePairingCode,
+            "lattice-relay-device:987654321",
+            &encoded,
+        )
+        .unwrap_err()
+        .contains("different endpoint"));
+        assert!(encode_bound_secret_with_context(
+            &lattice,
+            CredentialKind::SshPassword,
+            "lattice-relay-device:123456789",
+            "12345678",
+        )
+        .is_err());
     }
 
     #[test]

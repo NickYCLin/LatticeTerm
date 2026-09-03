@@ -110,8 +110,9 @@ export interface ConnectionProfile {
    * The relay finds the machine by this nine-digit identity, so `hostname`
    * and `port` are unused and stay empty on these entries.
    *
-   * The pairing code is deliberately absent: it is a one-time secret that
-   * belongs in the connect dialog, never in a stored profile.
+   * The pairing code is deliberately absent from metadata. Users may opt to
+   * keep a permanent relay device's code in the secure credential backend,
+   * but it never belongs in a stored profile.
    */
   deviceId?: string;
   /** The relay that resolves `deviceId`, as `wss://host` or `host:port`. */

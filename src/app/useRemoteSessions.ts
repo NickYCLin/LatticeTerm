@@ -69,8 +69,10 @@ export interface RemoteConnectRequest {
   profileId: string;
   hostname: string;
   port: number;
-  /** One-time secret passed to one IPC call and never retained here. */
+  /** One-call secret passed to one IPC call and never retained here. */
   pairingCode: string;
+  useSavedPairingCode?: boolean;
+  rememberPairingCode?: boolean;
   /** When set, the backend dials this nine-digit ID through the relay. */
   deviceId?: string;
   relayAddress?: string;

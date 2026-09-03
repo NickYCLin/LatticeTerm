@@ -784,12 +784,12 @@ async fn delete_connection_profile(
         guard
             .get_profile(&id)
             .map_err(|e| e.to_string())?
-            .and_then(|profile| match profile.protocol {
-                Protocol::Ssh => Some(CredentialKind::SshPassword),
-                Protocol::Sftp => Some(CredentialKind::SftpPassword),
-                Protocol::Rdp => Some(CredentialKind::RdpPassword),
-                Protocol::Vnc => Some(CredentialKind::VncPassword),
-                _ => None,
+            .map(|profile| match profile.protocol {
+                Protocol::Ssh => CredentialKind::SshPassword,
+                Protocol::Sftp => CredentialKind::SftpPassword,
+                Protocol::Rdp => CredentialKind::RdpPassword,
+                Protocol::Vnc => CredentialKind::VncPassword,
+                Protocol::Lattice => CredentialKind::LatticePairingCode,
             })
     };
 
@@ -798,7 +798,7 @@ async fn delete_connection_profile(
         if credential_call(move || crate::credentials::exists(&credential_profile_id, kind)).await?
         {
             return Err(
-                "Delete the saved password from the Key Vault before deleting this connection."
+                "Delete the saved credential from the Key Vault before deleting this connection."
                     .to_string(),
             );
         }
@@ -997,6 +997,37 @@ fn bind_vnc_request_to_profile(
     validate_connection_profile(&request.profile_id, Protocol::Vnc, profile)?;
     request.hostname = profile.hostname.clone();
     request.port = profile.port;
+    Ok(())
+}
+
+fn lattice_pairing_context(profile: &ConnectionProfile) -> Result<String, String> {
+    validate_connection_profile(&profile.id, Protocol::Lattice, profile)?;
+    let device_id = profile.device_id.as_deref().ok_or_else(|| {
+        "Only relay devices with a permanent ID can remember a pairing code.".to_string()
+    })?;
+    let device_id = lattice_remote::relay::normalize_device_id(device_id)
+        .map_err(|_| "The saved Lattice Remote device ID is invalid.".to_string())?;
+    Ok(format!("lattice-relay-device:{device_id}"))
+}
+
+fn bind_remote_request_to_profile(
+    request: &mut RemoteConnectRequest,
+    profile: &ConnectionProfile,
+) -> Result<(), String> {
+    validate_connection_profile(&request.profile_id, Protocol::Lattice, profile)?;
+    request.hostname = profile.hostname.clone();
+    request.port = profile.port;
+
+    if let Some(device_id) = profile.device_id.as_deref() {
+        request.device_id = lattice_remote::relay::normalize_device_id(device_id)
+            .map_err(|_| "The saved Lattice Remote device ID is invalid.".to_string())?;
+        if request.relay_address.trim().is_empty() {
+            request.relay_address = profile.relay_address.clone().unwrap_or_default();
+        }
+    } else {
+        request.device_id.clear();
+        request.relay_address.clear();
+    }
     Ok(())
 }
 
@@ -1480,10 +1511,129 @@ async fn sftp_disconnect(
 #[tauri::command]
 async fn remote_connect(
     app: AppHandle,
-    request: RemoteConnectRequest,
+    mut request: RemoteConnectRequest,
+    storage: State<'_, AppStorage>,
     registry: State<'_, Arc<RemoteRegistry>>,
 ) -> Result<RemoteConnectOutcome, String> {
-    Ok(crate::remote::connect(app, Arc::clone(registry.inner()), request).await)
+    if request.use_saved_pairing_code && request.remember_pairing_code {
+        return Ok(RemoteConnectOutcome::Failed {
+            stage: "credential",
+            detail: "Choose either the saved pairing code or a new code to remember.".to_string(),
+        });
+    }
+
+    let profile = {
+        let guard = storage.lock().map_err(|error| error.to_string())?;
+        guard
+            .get_profile(&request.profile_id)
+            .map_err(|error| error.to_string())?
+    };
+    if let Some(profile) = &profile {
+        if let Err(detail) = bind_remote_request_to_profile(&mut request, profile) {
+            return Ok(RemoteConnectOutcome::Failed {
+                stage: "profile",
+                detail,
+            });
+        }
+    } else if request.use_saved_pairing_code || request.remember_pairing_code {
+        return Ok(RemoteConnectOutcome::Failed {
+            stage: "credential",
+            detail: "Save this Lattice Remote device before remembering its pairing code."
+                .to_string(),
+        });
+    }
+
+    let credential_binding = if request.use_saved_pairing_code || request.remember_pairing_code {
+        let Some(credential_profile) = profile.as_ref() else {
+            return Ok(RemoteConnectOutcome::Failed {
+                stage: "credential",
+                detail: "Save this Lattice Remote device before remembering its pairing code."
+                    .to_string(),
+            });
+        };
+        let context = match lattice_pairing_context(credential_profile) {
+            Ok(context) => context,
+            Err(detail) => {
+                return Ok(RemoteConnectOutcome::Failed {
+                    stage: "credential",
+                    detail,
+                })
+            }
+        };
+        Some((credential_profile.clone(), context))
+    } else {
+        None
+    };
+
+    if request.use_saved_pairing_code {
+        let Some((credential_profile, load_context)) = credential_binding.clone() else {
+            return Ok(RemoteConnectOutcome::Failed {
+                stage: "credential",
+                detail: "The saved pairing code is not bound to this device.".to_string(),
+            });
+        };
+        request.pairing_code = match credential_call(move || {
+            crate::credentials::load_bound_with_context(
+                &credential_profile,
+                CredentialKind::LatticePairingCode,
+                &load_context,
+            )
+        })
+        .await
+        {
+            Ok(code) => code,
+            Err(detail) => {
+                return Ok(RemoteConnectOutcome::Failed {
+                    stage: "credential",
+                    detail,
+                })
+            }
+        };
+    }
+
+    let pairing_code_to_store = if request.remember_pairing_code {
+        match lattice_remote::normalize_pairing_code(&request.pairing_code) {
+            Ok(code) => Some(Zeroizing::new(code)),
+            Err(error) => {
+                return Ok(RemoteConnectOutcome::Failed {
+                    stage: "pairing",
+                    detail: error.to_string(),
+                })
+            }
+        }
+    } else {
+        None
+    };
+
+    let outcome = crate::remote::connect(app.clone(), Arc::clone(registry.inner()), request).await;
+    if let (RemoteConnectOutcome::Connected { session }, Some(pairing_code)) =
+        (&outcome, pairing_code_to_store)
+    {
+        let Some((credential_profile, store_context)) = credential_binding else {
+            let _ = crate::remote::disconnect(&app, registry.inner(), &session.session_id).await;
+            return Ok(RemoteConnectOutcome::Failed {
+                stage: "credential",
+                detail: "The pairing code could not be bound to this device.".to_string(),
+            });
+        };
+        let save_result = credential_call(move || {
+            crate::credentials::store_bound_with_context(
+                &credential_profile,
+                CredentialKind::LatticePairingCode,
+                &store_context,
+                pairing_code.as_str(),
+            )
+        })
+        .await;
+        if let Err(detail) = save_result {
+            let _ = crate::remote::disconnect(&app, registry.inner(), &session.session_id).await;
+            return Ok(RemoteConnectOutcome::Failed {
+                stage: "credential",
+                detail,
+            });
+        }
+    }
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -2398,6 +2548,61 @@ mod tests {
     }
 
     #[test]
+    fn saved_lattice_profile_owns_the_permanent_device_identity() {
+        let mut profile = saved_profile("profile-remote", Protocol::Lattice);
+        profile.hostname.clear();
+        profile.username.clear();
+        profile.port = 0;
+        profile.device_id = Some("123 456 789".to_string());
+        profile.relay_address = Some("wss://saved-relay.example.test".to_string());
+        let mut request = RemoteConnectRequest {
+            profile_id: "profile-remote".to_string(),
+            hostname: "attacker.example".to_string(),
+            port: 44900,
+            pairing_code: "12345678".to_string(),
+            use_saved_pairing_code: true,
+            remember_pairing_code: false,
+            device_id: "987654321".to_string(),
+            relay_address: "wss://current-relay.example.test".to_string(),
+        };
+
+        bind_remote_request_to_profile(&mut request, &profile).unwrap();
+
+        assert_eq!(request.device_id, "123456789");
+        assert_eq!(
+            request.relay_address, "wss://current-relay.example.test",
+            "a user-supplied relay repair must remain usable"
+        );
+        assert_eq!(
+            lattice_pairing_context(&profile).unwrap(),
+            "lattice-relay-device:123456789"
+        );
+    }
+
+    #[test]
+    fn direct_lattice_profile_cannot_remember_a_pairing_code() {
+        let profile = saved_profile("profile-direct", Protocol::Lattice);
+        let mut request = RemoteConnectRequest {
+            profile_id: "profile-direct".to_string(),
+            hostname: "attacker.example".to_string(),
+            port: 44900,
+            pairing_code: "12345678".to_string(),
+            use_saved_pairing_code: false,
+            remember_pairing_code: true,
+            device_id: "987654321".to_string(),
+            relay_address: "wss://attacker.example.test".to_string(),
+        };
+
+        bind_remote_request_to_profile(&mut request, &profile).unwrap();
+
+        assert_eq!(request.hostname, "saved.internal");
+        assert_eq!(request.port, Protocol::Lattice.default_port());
+        assert!(request.device_id.is_empty());
+        assert!(request.relay_address.is_empty());
+        assert!(lattice_pairing_context(&profile).is_err());
+    }
+
+    #[test]
     fn rdp_saved_password_binding_distinguishes_the_authentication_domain() {
         assert_ne!(
             rdp_credential_context(&Some("CORP".to_string())),
@@ -2504,7 +2709,8 @@ mod tests {
         let profile = ConnectionProfile::from_draft(draft, "relay-1".to_string());
 
         let written = serde_json::to_string(&profile).unwrap();
-        // The pairing code is a one-time secret and never reaches storage.
+        // Pairing codes never reach connection-profile storage. An optional
+        // saved code lives in the separate secure credential backend.
         assert!(written.contains("018536454"));
         let restored: ConnectionProfile = serde_json::from_str(&written).unwrap();
         assert_eq!(restored, profile);

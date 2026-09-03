@@ -338,7 +338,7 @@ describe("relay entries", () => {
     expect(profile.port).toBe(0);
   });
 
-  it("carries no pairing code, which is a one-time secret", () => {
+  it("never carries a pairing code in connection metadata", () => {
     const profile = createConnectionProfile(
       { ...draft, pairingCode: "12345678" } as never,
       "relay-a",

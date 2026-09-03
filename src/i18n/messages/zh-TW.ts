@@ -32,18 +32,18 @@ export const zhTW = {
   "common.loading": "正在載入功能…",
 
   // 系統認證儲存 ----------------------------------------------------------
-  "credential.saved.title": "已安全保存密碼",
-  "credential.useSaved": "使用 {provider} 中已儲存的密碼",
+  "credential.saved.title": "已安全保存認證資料",
+  "credential.useSaved": "使用 {provider} 中已儲存的認證資料",
   "credential.remember": "驗證成功後保存到 {provider}",
-  "credential.remove": "刪除已儲存密碼",
+  "credential.remove": "刪除已儲存認證資料",
   "credential.removing": "正在刪除…",
-  "credential.removeFailed.title": "無法刪除已儲存密碼",
+  "credential.removeFailed.title": "無法刪除已儲存認證資料",
   "credential.removeFailed.body": "系統安全儲存區拒絕刪除：{detail}",
   "credential.unavailable.title": "系統安全儲存區目前無法使用",
   "credential.unavailable.body":
-    "這次仍可手動輸入密碼，但不會保存。原因：{detail}",
+    "這次仍可手動輸入認證資料，但不會保存。原因：{detail}",
   "credential.unavailable.browserBody":
-    "瀏覽器預覽沒有桌面安全後端；這次仍可手動輸入密碼，但不會保存。",
+    "瀏覽器預覽沒有桌面安全後端；這次仍可手動輸入認證資料，但不會保存。",
 
   // 導覽 ------------------------------------------------------------------
   "desktopBackend.required.title": "需要 LatticeTerm 桌面應用程式",
@@ -187,15 +187,15 @@ export const zhTW = {
   "confirm.delete.title": "要刪除「{name}」嗎？",
   "confirm.delete.body": "只會從這個工作區移除 {host} 的設定，遠端主機本身不會有任何變動。",
   "confirm.delete.confirm": "刪除「{name}」",
-  "confirm.delete.credential.title": "請先刪除「{name}」保存的密碼",
+  "confirm.delete.credential.title": "請先刪除「{name}」保存的認證資料",
   "confirm.delete.credential.body":
-    "這個連線在 {provider} 仍有密碼。為避免留下無法管理的認證資料，請先前往金鑰保管庫明確刪除密碼。",
-  "confirm.delete.credential.loading": "正在確認這個連線是否有已儲存的密碼…",
+    "這個連線在 {provider} 仍有認證資料。為避免留下無法管理的項目，請先前往金鑰保管庫明確刪除。",
+  "confirm.delete.credential.loading": "正在確認這個連線是否有已儲存的認證資料…",
   "confirm.delete.credential.openVault": "前往金鑰保管庫",
   "confirm.delete.credential.checking": "正在檢查…",
   "confirm.delete.credential.unavailable.title": "目前無法安全刪除連線設定",
   "confirm.delete.credential.unavailable.body":
-    "無法確認系統認證儲存區是否仍有密碼：{detail}",
+    "無法確認系統認證儲存區是否仍有認證資料：{detail}",
   "confirm.delete.credential.blocked": "暫時無法刪除",
 
   // 詳細資料面板 ----------------------------------------------------------
@@ -590,7 +590,7 @@ export const zhTW = {
   "planned.tunnels.cap3.title": "看得懂的錯誤訊息",
   "planned.tunnels.cap3.detail": "會直接說明是連接埠被占用、連線中斷，還是權限不足。",
   "planned.vault.summary":
-    "把必須保密的東西集中管理：SSH 金鑰、儲存的密碼、跳板機認證，以及你信任過的主機指紋。",
+    "把必須保密的東西集中管理：SSH 金鑰、儲存的密碼與配對碼、跳板機認證，以及你信任過的主機指紋。",
   "planned.vault.boundary":
     "機密資料會交給作業系統的認證儲存區，主機信任則採嚴格比對。這兩者都還沒完成，所以現在的版本不會向你要任何認證資料。",
   "planned.vault.cap1.title": "鎖定狀態清清楚楚",
@@ -986,8 +986,12 @@ export const zhTW = {
 
   // Lattice Remote ---------------------------------------------------------
   "remote.connect.title": "連線到 {name}",
-  "remote.connect.securityTitle": "一次性加密配對",
-  "remote.connect.securityBody": "配對碼只用於這次 Noise 加密交握，不會儲存。能否操控鍵鼠或瀏覽檔案由主機端在每次分享時分別授權。",
+  "remote.connect.securityTitle": "加密配對與安全儲存",
+  "remote.connect.securityBody": "配對碼只用於 Noise 加密交握，預設不保存。只有永久裝置 ID 的 Relay 連線可在你明確選擇後保存；能否操控鍵鼠或瀏覽檔案仍由主機端分別授權。",
+  "remote.connect.savedCodeTitle": "配對碼已安全保存",
+  "remote.connect.useSavedCode": "使用 {provider} 中已儲存的配對碼",
+  "remote.connect.rememberCode": "成功配對後將配對碼保存到 {provider}",
+  "remote.connect.removeSavedCode": "刪除已儲存配對碼",
   "remote.connect.code": "Agent 配對碼",
   "remote.connect.codeHint": "請輸入被控端 lattice-agent 顯示的八位數配對碼。",
   "remote.connect.relayMovedTitle": "中繼伺服器連不上",
@@ -1247,29 +1251,29 @@ export const zhTW = {
   "vault.activity.removed": "已移除 {target} 的主機信任",
   "vault.credentials.title": "安全認證儲存已啟用",
   "vault.credentials.body":
-    "這裡只列出哪些連線已有安全保存的密碼，不會讀取或顯示密碼內容。密碼可存於作業系統認證儲存區或主密碼加密保管庫；SSH 私鑰只使用你選擇的本機檔案，不保存私鑰或密語。",
+    "這裡只列出哪些連線已有安全保存的認證資料，不會讀取或顯示內容。密碼與 Lattice Remote 配對碼可存於作業系統認證儲存區或主密碼加密保管庫；SSH 私鑰只使用你選擇的本機檔案，不保存私鑰或密語。",
   "vault.credentials.loading.title": "正在讀取系統認證儲存區",
-  "vault.credentials.loading.body": "只檢查哪些連線有對應項目，不會把密碼載入畫面。",
+  "vault.credentials.loading.body": "只檢查哪些連線有對應項目，不會把認證資料載入畫面。",
   "vault.credentials.ready.title": "{provider} 已連線",
   "vault.credentials.ready.body":
-    "密碼只會由 Rust 連線核心在需要時取用；前端保管庫不會收到明文內容。",
-  "vault.credentials.empty.title": "還沒有保存任何密碼",
+    "認證資料只會由 Rust 連線核心在需要時取用；前端保管庫不會收到明文內容。",
+  "vault.credentials.empty.title": "還沒有保存任何認證資料",
   "vault.credentials.empty.body":
-    "開啟 SSH、SFTP、RDP 或 VNC 連線時勾選保存；只有驗證成功後才會寫入目前選擇的安全儲存區。",
+    "開啟 SSH、SFTP、RDP、VNC 或已儲存的 Lattice Relay 裝置時勾選保存；只有驗證成功後才會寫入目前選擇的安全儲存區。",
   "vault.credentials.table.connection": "連線",
   "vault.credentials.table.protocol": "連線方式",
   "vault.credentials.table.target": "目標",
-  "vault.credentials.removeFor": "刪除「{name}」已儲存的密碼",
-  "vault.credentials.remove.title": "刪除「{name}」已儲存的密碼？",
+  "vault.credentials.removeFor": "刪除「{name}」已儲存的認證資料",
+  "vault.credentials.remove.title": "刪除「{name}」已儲存的認證資料？",
   "vault.credentials.remove.body":
-    "刪除後不影響目前工作階段；下次連到 {target} 時必須重新輸入密碼。",
+    "刪除後不影響目前工作階段；下次連到 {target} 時必須重新輸入認證資料。",
   "vault.credentials.activity.removed": "已刪除「{name}」的安全認證資料",
   "vault.credentials.systemStore": "作業系統認證儲存區",
   "vault.credentials.systemStoreDetail":
-    "由 Windows Credential Manager、macOS Keychain 或 Linux Secret Service 保存使用者明確選擇的密碼。",
+    "由 Windows Credential Manager、macOS Keychain 或 Linux Secret Service 保存使用者明確選擇的密碼與配對碼。",
   "vault.credentials.stronghold": "主密碼加密保管庫",
   "vault.credentials.strongholdDetail":
-    "以 Argon2id 與 XChaCha20-Poly1305 保護密碼；不匯入 SSH 私鑰或 Passphrase。",
+    "以 Argon2id 與 XChaCha20-Poly1305 保護密碼與配對碼；不匯入 SSH 私鑰或 Passphrase。",
   "vault.credentials.autoLock": "自動鎖定與閒置保護",
   "vault.credentials.autoLockDetail":
     "視窗進入背景或閒置逾時時清除解密狀態，之後必須以主密碼重新解鎖。",

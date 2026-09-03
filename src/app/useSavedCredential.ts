@@ -6,7 +6,8 @@ export type CredentialKind =
   | "sshPassword"
   | "sftpPassword"
   | "rdpPassword"
-  | "vncPassword";
+  | "vncPassword"
+  | "latticePairingCode";
 
 export interface CredentialStoreStatus {
   ready: boolean;
@@ -72,6 +73,7 @@ export function credentialKindFor(
   if (profile.protocol === "sftp") return "sftpPassword";
   if (profile.protocol === "rdp") return "rdpPassword";
   if (profile.protocol === "vnc") return "vncPassword";
+  if (profile.protocol === "lattice") return "latticePairingCode";
   return null;
 }
 
