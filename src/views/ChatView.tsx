@@ -42,6 +42,8 @@ import {
   ClockIcon,
   FolderIcon,
   PlusIcon,
+  SendIcon,
+  SettingsIcon,
   StopIcon,
   TrashIcon,
 } from "../components/icons";
@@ -344,13 +346,17 @@ function ThreadPane({
   const { t } = useI18n();
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const fresh = threadIsFresh(thread);
+  // A new thread needs its directory chosen, so its settings start open;
+  // an ongoing conversation keeps them tucked behind the summary chips.
+  const [settingsOpen, setSettingsOpen] = useState(fresh || thread.workingDirectory === "");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
-  const fresh = threadIsFresh(thread);
   const running = thread.runningTurnId !== null;
   const cliInstalled = installed.includes(thread.definitionId);
   const canSend =
     !running && cliInstalled && thread.workingDirectory !== "" && draft.trim() !== "";
+  const assistant = cliLabel(thread.definitionId);
 
   // Follow the reply as it streams, unless the reader scrolled up to look
   // at something earlier.
@@ -395,6 +401,7 @@ function ThreadPane({
     const prompt = draft;
     setDraft("");
     pinnedToBottom.current = true;
+    setSettingsOpen(false);
     void chat.send(thread.id, prompt);
   }
 
@@ -431,96 +438,144 @@ function ThreadPane({
     }
   }
 
+  const modelLabel = (() => {
+    const list = chat.models[thread.definitionId];
+    if (list.state === "ready") {
+      const match = list.models.find((model) => model.value === thread.model);
+      if (match) return match.label;
+    }
+    return thread.model || t("chat.model.default");
+  })();
+
   return (
     <>
       <header className="chat-header">
         <div className="chat-header__title">
-          <h2>{thread.title || t("chat.untitled")}</h2>
-          <button
-            type="button"
-            className="button button--ghost button--danger button--sm"
-            onClick={onDelete}
-            aria-label={t("chat.delete")}
-            title={t("chat.delete")}
-          >
-            <TrashIcon />
-          </button>
-        </div>
-        <div className="chat-settings">
-          <label className="field">
-            <span className="field__label">{t("chat.cli")}</span>
-            <select
-              className="select"
-              value={thread.definitionId}
-              disabled={!fresh}
-              onChange={(event) => {
-                const definitionId = event.target.value as ChatDefinitionId;
-                chat.updateThread(thread.id, {
-                  definitionId,
-                  // A permission the new CLI cannot honour falls back to
-                  // its own default rather than being sent and refused.
-                  ...(permissionsFor(definitionId).includes(thread.permission)
-                    ? {}
-                    : { permission: defaultPermission(definitionId) }),
-                });
-              }}
-            >
-              {chat.supported.map((id) => (
-                <option key={id} value={id}>
-                  {cliLabel(id)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="field field--grow">
-            <span className="field__label">{t("chat.directory")}</span>
-            <div className="chat-directory">
-              <button
-                type="button"
-                className="button button--secondary button--sm"
-                onClick={chooseDirectory}
-                disabled={running}
-              >
-                <FolderIcon />
-                {t("chat.directory.choose")}
-              </button>
-              <span className="chat-directory__path" title={thread.workingDirectory}>
-                {thread.workingDirectory
-                  ? displayPath(thread.workingDirectory)
-                  : t("chat.directory.none")}
-              </span>
+          <div className="chat-header__identity">
+            <span className="chat-avatar" aria-hidden="true">
+              {assistant.slice(0, 1)}
+            </span>
+            <div>
+              <h2>{thread.title || t("chat.untitled")}</h2>
+              <div className="chat-chips">
+                <button
+                  type="button"
+                  className="chat-chip"
+                  onClick={() => setSettingsOpen((current) => !current)}
+                  aria-expanded={settingsOpen}
+                  aria-controls={`chat-settings-${thread.id}`}
+                >
+                  <SettingsIcon />
+                  {assistant}
+                </button>
+                <span className="chat-chip" title={thread.workingDirectory}>
+                  <FolderIcon />
+                  {thread.workingDirectory
+                    ? directoryName(thread.workingDirectory)
+                    : t("chat.directory.none")}
+                </span>
+                <span className="chat-chip">{t(permissionLabelKey[thread.permission])}</span>
+                <span className="chat-chip">{modelLabel}</span>
+              </div>
             </div>
           </div>
-          <label className="field">
-            <span className="field__label">{t("chat.permission")}</span>
-            <select
-              className="select"
-              value={thread.permission}
-              disabled={running}
-              onChange={(event) =>
-                chat.updateThread(thread.id, {
-                  permission: event.target.value as ChatPermission,
-                })
-              }
+          <div className="chat-composer__actions">
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              onClick={() => setSettingsOpen((current) => !current)}
+              aria-expanded={settingsOpen}
             >
-              {permissionsFor(thread.definitionId).map((permission) => (
-                <option key={permission} value={permission}>
-                  {t(permissionLabelKey[permission])}
-                </option>
-              ))}
-            </select>
-          </label>
-          <ModelField
-            definitionId={thread.definitionId}
-            value={thread.model}
-            disabled={running || (thread.definitionId === "codex" && !fresh)}
-            title={thread.definitionId === "codex" && !fresh ? t("chat.model.locked") : undefined}
-            models={chat.models}
-            loadModels={chat.loadModels}
-            onChange={(model) => chat.updateThread(thread.id, { model })}
-          />
+              {settingsOpen ? t("chat.settings.hide") : t("chat.settings")}
+            </button>
+            <button
+              type="button"
+              className="button button--ghost button--danger button--sm"
+              onClick={onDelete}
+              aria-label={t("chat.delete")}
+              title={t("chat.delete")}
+            >
+              <TrashIcon />
+            </button>
+          </div>
         </div>
-        <p className="chat-composer__hint">{t(permissionHintKey[thread.permission])}</p>
+        {settingsOpen && (
+          <div className="chat-settings" id={`chat-settings-${thread.id}`}>
+            <label className="field">
+              <span className="field__label">{t("chat.cli")}</span>
+              <select
+                className="select"
+                value={thread.definitionId}
+                disabled={!fresh}
+                onChange={(event) => {
+                  const definitionId = event.target.value as ChatDefinitionId;
+                  chat.updateThread(thread.id, {
+                    definitionId,
+                    // A permission the new assistant cannot honour falls back
+                    // to its own default rather than being sent and refused.
+                    ...(permissionsFor(definitionId).includes(thread.permission)
+                      ? {}
+                      : { permission: defaultPermission(definitionId) }),
+                  });
+                }}
+              >
+                {chat.supported.map((id) => (
+                  <option key={id} value={id}>
+                    {cliLabel(id)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="field field--grow">
+              <span className="field__label">{t("chat.directory")}</span>
+              <div className="chat-directory">
+                <button
+                  type="button"
+                  className="button button--secondary button--sm"
+                  onClick={chooseDirectory}
+                  disabled={running}
+                >
+                  <FolderIcon />
+                  {t("chat.directory.choose")}
+                </button>
+                <span className="chat-directory__path" title={thread.workingDirectory}>
+                  {thread.workingDirectory
+                    ? displayPath(thread.workingDirectory)
+                    : t("chat.directory.none")}
+                </span>
+              </div>
+            </div>
+            <label className="field">
+              <span className="field__label">{t("chat.permission")}</span>
+              <select
+                className="select"
+                value={thread.permission}
+                disabled={running}
+                onChange={(event) =>
+                  chat.updateThread(thread.id, {
+                    permission: event.target.value as ChatPermission,
+                  })
+                }
+              >
+                {permissionsFor(thread.definitionId).map((permission) => (
+                  <option key={permission} value={permission}>
+                    {t(permissionLabelKey[permission])}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <ModelField
+              definitionId={thread.definitionId}
+              value={thread.model}
+              disabled={running || (thread.definitionId === "codex" && !fresh)}
+              title={thread.definitionId === "codex" && !fresh ? t("chat.model.locked") : undefined}
+              models={chat.models}
+              loadModels={chat.loadModels}
+              onChange={(model) => chat.updateThread(thread.id, { model })}
+            />
+            <p className="chat-settings__hint">{t(permissionHintKey[thread.permission])}</p>
+          </div>
+        )}
         {thread.permission === "full" && (
           <Callout tone="warn">{t("chat.permission.full.hint")}</Callout>
         )}
@@ -534,35 +589,61 @@ function ThreadPane({
 
       <div className="chat-messages" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-messages__inner">
+          {thread.items.length === 0 && (
+            <div className="chat-welcome">
+              <span className="chat-avatar chat-avatar--lg" aria-hidden="true">
+                {assistant.slice(0, 1)}
+              </span>
+              <h3>{t("chat.welcome.title", { assistant })}</h3>
+              <p>
+                {thread.workingDirectory
+                  ? t("chat.welcome.body", { directory: directoryName(thread.workingDirectory) })
+                  : t("chat.welcome.chooseDirectory")}
+              </p>
+            </div>
+          )}
           {thread.items.map((item, index) => (
             <ChatItemView
               key={item.id}
               item={item}
+              assistant={assistant}
               streaming={running && index === thread.items.length - 1}
               tag={tag}
               onAnswer={answer}
             />
           ))}
           {running && thread.items[thread.items.length - 1]?.type === "user" && (
-            <p className="chat-notice chat-cursor">{t("chat.running")}</p>
+            <div className="chat-msg chat-msg--assistant">
+              <span className="chat-avatar" aria-hidden="true">
+                {assistant.slice(0, 1)}
+              </span>
+              <div className="chat-msg__body">
+                <p className="chat-notice chat-cursor">{t("chat.running")}</p>
+              </div>
+            </div>
           )}
         </div>
       </div>
 
       <form className="chat-composer" onSubmit={submit}>
-        <div className="chat-composer__box">
+        <div className={`chat-composer__box${running ? " is-busy" : ""}`}>
           <textarea
-            className="input"
+            className="chat-composer__input"
             value={draft}
-            placeholder={t("chat.composer.placeholder")}
+            placeholder={
+              thread.workingDirectory
+                ? t("chat.composer.placeholder", { assistant })
+                : t("chat.welcome.chooseDirectory")
+            }
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onKeyDown}
-            aria-label={t("chat.composer.placeholder")}
+            aria-label={t("chat.composer.label")}
+            rows={2}
           />
           <div className="chat-composer__row">
             <span className="chat-composer__hint">
               {thread.nativeSessionId
-                ? t("chat.session", { id: thread.nativeSessionId })
+                ? t("chat.composer.shortcut")
                 : t("chat.storage.note")}
             </span>
             <div className="chat-composer__actions">
@@ -578,10 +659,12 @@ function ThreadPane({
               )}
               <button
                 type="submit"
-                className="button button--primary button--sm"
+                className="chat-send"
                 disabled={!canSend}
+                aria-label={t("chat.send")}
+                title={t("chat.send")}
               >
-                {t("chat.send")}
+                <SendIcon />
               </button>
             </div>
           </div>
@@ -593,43 +676,92 @@ function ThreadPane({
 
 function ChatItemView({
   item,
+  assistant,
   streaming,
   tag,
   onAnswer,
 }: {
   item: ChatItem;
+  assistant: string;
   streaming: boolean;
   tag: string;
   onAnswer: (requestId: string, allow: boolean) => void;
 }) {
   const { t } = useI18n();
   switch (item.type) {
+    case "user":
+      return (
+        <div className="chat-msg chat-msg--user">
+          <div className="chat-bubble">{item.text}</div>
+        </div>
+      );
+    case "text":
+      return (
+        <div className="chat-msg chat-msg--assistant">
+          <span className="chat-avatar" aria-hidden="true">
+            {assistant.slice(0, 1)}
+          </span>
+          <div className="chat-msg__body">
+            <span className="chat-msg__name">{assistant}</span>
+            <div className={streaming ? "chat-cursor" : undefined}>
+              <ChatMarkdown source={item.text} />
+            </div>
+          </div>
+        </div>
+      );
+    case "reasoning":
+      return (
+        <details className="chat-card chat-card--reasoning">
+          <summary>
+            <span className="chat-card__label">{t("chat.reasoning")}</span>
+          </summary>
+          <p className="chat-card__text">{item.text}</p>
+        </details>
+      );
+    case "tool":
+      return (
+        <details
+          className={`chat-card chat-card--tool${item.isError ? " is-error" : ""}${!item.done ? " is-running" : ""}`}
+          open={item.isError || undefined}
+        >
+          <summary>
+            <span className="chat-card__label">{item.name}</span>
+            <code className="chat-card__summary" title={item.summary}>
+              {item.summary}
+            </code>
+            <span className="chat-card__state">
+              {!item.done ? t("chat.tool.running") : item.isError ? t("chat.tool.failed") : ""}
+            </span>
+          </summary>
+          {item.output && <pre className="chat-card__output">{item.output}</pre>}
+        </details>
+      );
     case "approval":
       return (
         <div
-          className={`chat-approval chat-approval--${item.decision}`}
+          className={`chat-card chat-card--approval chat-approval--${item.decision}`}
           role="group"
           aria-label={t("chat.approval.title")}
         >
-          <div className="chat-approval__head">
-            <span className="chat-tool__name">{item.name}</span>
-            <code className="chat-tool__summary" title={item.summary}>
+          <div className="chat-card__head">
+            <span className="chat-card__label">{item.name}</span>
+            <code className="chat-card__summary" title={item.summary}>
               {item.summary}
             </code>
-            <span className="chat-tool__state">
+            <span className="chat-card__state">
               {item.decision === "pending"
                 ? t("chat.approval.title")
                 : t(`chat.approval.${item.decision}` as MessageKey)}
             </span>
           </div>
           {item.input && item.input !== "null" && (
-            <details className="chat-approval__details">
+            <details className="chat-card__details">
               <summary>{t("chat.approval.input")}</summary>
-              <pre className="chat-tool__output">{item.input}</pre>
+              <pre className="chat-card__output">{item.input}</pre>
             </details>
           )}
           {item.decision === "pending" && (
-            <div className="chat-approval__actions">
+            <div className="chat-card__actions">
               <button
                 type="button"
                 className="button button--primary button--sm"
@@ -648,41 +780,6 @@ function ChatItemView({
           )}
         </div>
       );
-    case "user":
-      return <div className="chat-msg chat-msg--user">{item.text}</div>;
-    case "text":
-      return (
-        <div className={`chat-msg chat-msg--assistant${streaming ? " chat-cursor" : ""}`}>
-          <ChatMarkdown source={item.text} />
-        </div>
-      );
-    case "reasoning":
-      return (
-        <details className="chat-reasoning">
-          <summary>
-            <span className="chat-tool__name">{t("chat.reasoning")}</span>
-          </summary>
-          <p className="chat-reasoning__text">{item.text}</p>
-        </details>
-      );
-    case "tool":
-      return (
-        <details
-          className={`chat-tool${item.isError ? " chat-tool--error" : ""}`}
-          open={item.isError || undefined}
-        >
-          <summary>
-            <span className="chat-tool__name">{item.name}</span>
-            <code className="chat-tool__summary" title={item.summary}>
-              {item.summary}
-            </code>
-            <span className="chat-tool__state">
-              {!item.done ? t("chat.tool.running") : item.isError ? t("chat.tool.failed") : ""}
-            </span>
-          </summary>
-          {item.output && <pre className="chat-tool__output">{item.output}</pre>}
-        </details>
-      );
     case "notice":
       return <p className="chat-notice">{item.text}</p>;
     case "turnEnd":
@@ -695,9 +792,9 @@ function ChatItemView({
       }
       return (
         <p className="chat-turn">
-          <span>{t("chat.turn.done")}</span>
+          <span className="chat-turn__pill chat-turn__pill--ok">{t("chat.turn.done")}</span>
           {item.durationMs !== null && (
-            <span>
+            <span className="chat-turn__pill">
               {t("chat.turn.duration", {
                 seconds: new Intl.NumberFormat(tag, { maximumFractionDigits: 1 }).format(
                   item.durationMs / 1000,
@@ -706,7 +803,7 @@ function ChatItemView({
             </span>
           )}
           {item.usage && (
-            <span>
+            <span className="chat-turn__pill">
               {t("chat.turn.tokens", {
                 input: formatTokens(item.usage.inputTokens + item.usage.cacheReadTokens),
                 output: formatTokens(item.usage.outputTokens),
@@ -714,7 +811,7 @@ function ChatItemView({
             </span>
           )}
           {item.costUsd !== null && (
-            <span>
+            <span className="chat-turn__pill">
               {t("chat.turn.cost", {
                 cost: new Intl.NumberFormat("en-US", {
                   minimumFractionDigits: 2,
