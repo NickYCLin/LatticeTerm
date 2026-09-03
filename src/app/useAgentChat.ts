@@ -19,6 +19,8 @@ import {
   saveStoredThreads,
   type ChatDefinitionId,
   type ChatEventEnvelope,
+  type ChatModelChoice,
+  type ChatModelList,
   type ChatPermission,
   type ChatThread,
 } from "./agentChat";
@@ -65,6 +67,9 @@ export interface AgentChatApi {
   stop: (id: string) => Promise<void>;
   /** Answers an approval card; rejects with the reason when it cannot. */
   respond: (id: string, requestId: string, allow: boolean) => Promise<void>;
+  /** The models a CLI offers, fetched once per session on first request. */
+  models: Record<ChatDefinitionId, ChatModelList>;
+  loadModels: (definitionId: ChatDefinitionId) => void;
 }
 
 export function useAgentChat(): AgentChatApi {
@@ -75,6 +80,12 @@ export function useAgentChat(): AgentChatApi {
     () => threads[0]?.id ?? null,
   );
   const [supported, setSupported] = useState<ChatDefinitionId[]>(FALLBACK_SUPPORTED);
+  const [models, setModels] = useState<Record<ChatDefinitionId, ChatModelList>>({
+    claude: { state: "idle" },
+    codex: { state: "idle" },
+  });
+  const modelsRef = useRef(models);
+  modelsRef.current = models;
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
 
@@ -212,6 +223,38 @@ export function useAgentChat(): AgentChatApi {
     );
   }, []);
 
+  const loadModels = useCallback((definitionId: ChatDefinitionId) => {
+    if (modelsRef.current[definitionId].state !== "idle") return;
+    if (!hasDesktopBackend()) {
+      setModels((current) => ({
+        ...current,
+        [definitionId]: { state: "unavailable", reason: "browser" },
+      }));
+      return;
+    }
+    setModels((current) => ({ ...current, [definitionId]: { state: "loading" } }));
+    core()
+      .then(({ invoke }) => invoke<ChatModelChoice[]>("agent_chat_models", { definitionId }))
+      .then((list) => {
+        setModels((current) => ({
+          ...current,
+          [definitionId]:
+            list.length > 0
+              ? { state: "ready", models: list }
+              : { state: "unavailable", reason: "empty" },
+        }));
+      })
+      .catch((reason) => {
+        setModels((current) => ({
+          ...current,
+          [definitionId]: {
+            state: "unavailable",
+            reason: reason instanceof Error ? reason.message : String(reason),
+          },
+        }));
+      });
+  }, []);
+
   const stopTurn = useCallback(async (id: string) => {
     const { invoke } = await core();
     await invoke<boolean>("agent_chat_stop", { threadId: id });
@@ -230,6 +273,8 @@ export function useAgentChat(): AgentChatApi {
       send,
       stop: stopTurn,
       respond,
+      models,
+      loadModels,
     }),
     [
       threads,
@@ -243,6 +288,8 @@ export function useAgentChat(): AgentChatApi {
       send,
       stopTurn,
       respond,
+      models,
+      loadModels,
     ],
   );
 }

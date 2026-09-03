@@ -279,7 +279,10 @@ fn validate_model(model: &str) -> Result<(), String> {
     if model.starts_with('-')
         || !model
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/'))
+            // Claude's model aliases carry a context suffix, e.g. `opus[1m]`.
+            .all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/' | '[' | ']')
+            })
     {
         return Err("The model name contains characters a CLI would not accept.".to_string());
     }
@@ -417,6 +420,238 @@ fn turn_arguments(
     args
 }
 
+/// A CLI process driven over pipes, with nothing inherited that would make
+/// it behave as part of something else.
+fn headless_command(executable: &Path) -> Command {
+    let (program, prefix) = crate::agent::launch_parts(executable);
+    let mut command = Command::new(&program);
+    command.args(prefix);
+    // A chat turn is its own conversation, not a hook target of whatever
+    // launched LatticeTerm. Inherited markers would make the CLI refuse to
+    // nest, or report its progress to a fleet session it does not belong to.
+    for name in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "HERDR_ENV",
+        "HERDR_PANE_ID",
+        "LATTICETERM_AGENT_REPORTER",
+        "LATTICETERM_AGENT_REPORT_ADDR",
+        "LATTICETERM_AGENT_REPORT_TOKEN",
+        "LATTICETERM_AGENT_SESSION",
+    ] {
+        command.env_remove(name);
+    }
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    command.kill_on_drop(true);
+    // A console program started from a windowed one gets its own console
+    // window unless told otherwise; a chat reply must not flash a black
+    // window on every turn.
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000 /* CREATE_NO_WINDOW */);
+    command
+}
+
+/// A model the CLI offers, in the shape the model picker shows.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatModelChoice {
+    /// What `--model` receives; empty for the CLI's own default.
+    pub value: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub is_default: bool,
+}
+
+const MODEL_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+
+/// Asks the CLI which models it offers, without starting a conversation.
+///
+/// Claude lists them in its `initialize` handshake reply; Codex answers
+/// `model/list` on its app-server protocol. Either process is killed as
+/// soon as the answer is in. The list is whatever the CLI says today, not
+/// something LatticeTerm knows on its own.
+pub async fn list_models(definition_id: &str) -> Result<Vec<ChatModelChoice>, String> {
+    let dialect = Dialect::from_definition(definition_id)
+        .ok_or_else(|| "This CLI has no chat mode.".to_string())?;
+    let executable = crate::agent::catalog_executable(definition_id)
+        .ok_or_else(|| "This CLI is not installed.".to_string())?;
+    let mut command = headless_command(&executable);
+    let (requests, done_id): (Vec<String>, &str) = match dialect {
+        Dialect::Claude => {
+            command.args([
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--input-format",
+                "stream-json",
+                "--verbose",
+                "--permission-mode",
+                "plan",
+            ]);
+            (
+                vec![serde_json::json!({
+                    "type": "control_request",
+                    "request_id": "latticeterm-models",
+                    "request": { "subtype": "initialize", "hooks": {} },
+                })
+                .to_string()],
+                "latticeterm-models",
+            )
+        }
+        Dialect::Codex => {
+            command.args(["app-server"]);
+            (
+                vec![
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": { "clientInfo": {
+                            "name": "latticeterm",
+                            "title": "LatticeTerm",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        } },
+                    })
+                    .to_string(),
+                    serde_json::json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} })
+                        .to_string(),
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "model/list",
+                        "params": {},
+                    })
+                    .to_string(),
+                ],
+                "2",
+            )
+        }
+    };
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Cannot start {definition_id}: {error}"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "The agent's input could not be opened.".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "The agent's output could not be captured.".to_string())?;
+    for line in &requests {
+        stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|error| format!("Cannot ask {definition_id} for its models: {error}"))?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|error| format!("Cannot ask {definition_id} for its models: {error}"))?;
+    }
+    let _ = stdin.flush().await;
+
+    let answer = tokio::time::timeout(MODEL_LIST_TIMEOUT, async {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match read_bounded_line(&mut reader, &mut line).await {
+                Ok(0) | Err(LineError::Io) => return None,
+                Ok(_) => {}
+                Err(LineError::TooLong) => continue,
+            }
+            let text = String::from_utf8_lossy(&line);
+            let Ok(value) = serde_json::from_str::<Value>(text.trim_end()) else {
+                continue;
+            };
+            if let Some(models) = models_from_reply(dialect, &value, done_id) {
+                return Some(models);
+            }
+        }
+    })
+    .await;
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+    match answer {
+        Ok(Some(models)) => Ok(models),
+        Ok(None) => Err("The agent ended before listing its models.".to_string()),
+        Err(_) => Err("The agent did not list its models in time.".to_string()),
+    }
+}
+
+/// The model list inside one protocol reply, if this is the reply.
+fn models_from_reply(
+    dialect: Dialect,
+    value: &Value,
+    done_id: &str,
+) -> Option<Vec<ChatModelChoice>> {
+    match dialect {
+        Dialect::Claude => {
+            if str_field(value, "type") != Some("control_response") {
+                return None;
+            }
+            let response = value.get("response")?;
+            if str_field(response, "request_id") != Some(done_id) {
+                return None;
+            }
+            let models = response.get("response")?.get("models")?.as_array()?;
+            Some(
+                models
+                    .iter()
+                    .filter_map(|model| {
+                        let raw = str_field(model, "value")?;
+                        // "default" is the CLI's own choice; passing it as
+                        // `--model` says nothing an absent flag would not.
+                        let is_default = raw == "default";
+                        Some(ChatModelChoice {
+                            value: if is_default {
+                                String::new()
+                            } else {
+                                raw.to_string()
+                            },
+                            label: str_field(model, "displayName").unwrap_or(raw).to_string(),
+                            description: str_field(model, "description").map(str::to_string),
+                            is_default,
+                        })
+                    })
+                    .collect(),
+            )
+        }
+        Dialect::Codex => {
+            // JSON-RPC ids come back as numbers; the request used a number too.
+            let id = value.get("id")?.as_u64()?.to_string();
+            if id != done_id {
+                return None;
+            }
+            let data = value.get("result")?.get("data")?.as_array()?;
+            Some(
+                data.iter()
+                    .filter(|model| {
+                        !model
+                            .get("hidden")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    })
+                    .filter_map(|model| {
+                        let id = str_field(model, "id").or_else(|| str_field(model, "model"))?;
+                        Some(ChatModelChoice {
+                            value: id.to_string(),
+                            label: str_field(model, "displayName").unwrap_or(id).to_string(),
+                            description: str_field(model, "description").map(str::to_string),
+                            is_default: model
+                                .get("isDefault")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        })
+                    })
+                    .collect(),
+            )
+        }
+    }
+}
+
 /// Starts one turn. Returns as soon as the process is running; everything
 /// it says arrives through the sink.
 ///
@@ -463,9 +698,7 @@ pub async fn send<S: ChatSink>(
         }
     }
 
-    let (program, prefix) = crate::agent::launch_parts(&executable);
-    let mut command = Command::new(&program);
-    command.args(prefix);
+    let mut command = headless_command(&executable);
     command.args(turn_arguments(
         dialect,
         &working_directory,
@@ -474,25 +707,6 @@ pub async fn send<S: ChatSink>(
         request.native_session_id.as_deref(),
     ));
     command.current_dir(&working_directory);
-    // A chat turn is its own conversation, not a hook target of whatever
-    // launched LatticeTerm. Inherited markers would make the CLI refuse to
-    // nest, or report its progress to a fleet session it does not belong to.
-    for name in [
-        "CLAUDECODE",
-        "CLAUDE_CODE_ENTRYPOINT",
-        "HERDR_ENV",
-        "HERDR_PANE_ID",
-        "LATTICETERM_AGENT_REPORTER",
-        "LATTICETERM_AGENT_REPORT_ADDR",
-        "LATTICETERM_AGENT_REPORT_TOKEN",
-        "LATTICETERM_AGENT_SESSION",
-    ] {
-        command.env_remove(name);
-    }
-    command.stdin(Stdio::piped());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-    command.kill_on_drop(true);
 
     let mut child = command
         .spawn()
@@ -1460,6 +1674,61 @@ mod tests {
         let error =
             tauri::async_runtime::block_on(respond(registry, "t", "r", true, None)).unwrap_err();
         assert!(error.contains("not waiting"), "{error}");
+    }
+
+    #[test]
+    fn claude_models_come_from_the_initialize_reply() {
+        let reply: Value = serde_json::json!({
+            "type": "control_response",
+            "response": {"subtype": "success", "request_id": "latticeterm-models", "response": {
+                "models": [
+                    {"value": "default", "displayName": "Default (recommended)", "description": "Opus 5"},
+                    {"value": "opus[1m]", "displayName": "Opus (1M context)"},
+                    {"value": "haiku", "displayName": "Haiku", "description": "Fastest"}
+                ]
+            }}
+        });
+        let models = models_from_reply(Dialect::Claude, &reply, "latticeterm-models").unwrap();
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0].value, "");
+        assert!(models[0].is_default);
+        assert_eq!(models[1].value, "opus[1m]");
+        assert!(validate_model(&models[1].value).is_ok());
+        assert_eq!(models[2].description.as_deref(), Some("Fastest"));
+        // A reply to something else is not the list.
+        let other: Value = serde_json::json!({"type": "control_response", "response": {"request_id": "x", "response": {"models": []}}});
+        assert!(models_from_reply(Dialect::Claude, &other, "latticeterm-models").is_none());
+    }
+
+    #[test]
+    fn codex_models_come_from_the_model_list_reply_and_skip_hidden_ones() {
+        let reply: Value = serde_json::json!({"id": 2, "result": {"data": [
+            {"id": "gpt-5.6-sol", "displayName": "GPT-5.6-Sol", "description": "Workhorse", "hidden": false, "isDefault": true},
+            {"id": "secret", "displayName": "Hidden", "hidden": true},
+            {"id": "gpt-5.6-terra", "displayName": "GPT-5.6-Terra"}
+        ]}});
+        let models = models_from_reply(Dialect::Codex, &reply, "2").unwrap();
+        assert_eq!(models.len(), 2);
+        assert!(models[0].is_default);
+        assert_eq!(models[1].value, "gpt-5.6-terra");
+        assert!(models_from_reply(
+            Dialect::Codex,
+            &serde_json::json!({"id": 1, "result": {}}),
+            "2"
+        )
+        .is_none());
+    }
+
+    /// Asks a real CLI for its models. Ignored: needs the CLI installed and
+    /// logged in. `LATTICETERM_CHAT_E2E=claude|codex cargo test list_models -- --ignored`.
+    #[test]
+    #[ignore]
+    fn a_real_cli_lists_its_models() {
+        let definition_id =
+            std::env::var("LATTICETERM_CHAT_E2E").unwrap_or_else(|_| "claude".to_string());
+        let models = tauri::async_runtime::block_on(list_models(&definition_id)).expect("models");
+        assert!(!models.is_empty());
+        assert!(models.iter().any(|model| model.is_default), "{models:?}");
     }
 
     #[test]

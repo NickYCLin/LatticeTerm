@@ -38,6 +38,21 @@ export function defaultPermission(definitionId: ChatDefinitionId): ChatPermissio
 
 export type ApprovalDecision = "pending" | "allowed" | "denied" | "closed";
 
+/** A model the CLI offers; `value` is empty for its own default. */
+export interface ChatModelChoice {
+  value: string;
+  label: string;
+  description: string | null;
+  isDefault: boolean;
+}
+
+/** The picker's state for one CLI: not asked yet, asking, the list, or why not. */
+export type ChatModelList =
+  | { state: "idle" }
+  | { state: "loading" }
+  | { state: "ready"; models: ChatModelChoice[] }
+  | { state: "unavailable"; reason: string };
+
 export interface ChatUsage {
   inputTokens: number;
   outputTokens: number;
