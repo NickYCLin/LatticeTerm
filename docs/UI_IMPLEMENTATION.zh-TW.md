@@ -219,6 +219,7 @@
 
 - `App.tsx` 以 `React.lazy` 依功能載入連線清單、Agent Fleet、對話、通道、保管庫、設定、終端工作區與各連線對話框；只開啟連線清單時不會先下載 xterm、RDP/VNC Canvas 與所有設定頁程式。
 - 每個工作區與 overlay 都有可存取的 `Suspense` 載入提示；終端工作區使用獨立邊界，其他頁面的首次載入不會暫停或重設現有終端。
+- `vite.config.ts` 將 React DOM、排程器與 Tauri bridge 拆成可快取的穩定 runtime chunks，讓入口保留應用程式殼層；頁面分包仍由 `React.lazy` 決定，不會改變載入順序或功能可用性。
 - `scripts/check-frontend-entry-size.mjs` 在正式建置後檢查入口檔，超過 500 KiB 直接讓 CI 失敗，避免功能成長後退回單一大型 bundle。
 
 ---
