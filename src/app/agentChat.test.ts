@@ -8,6 +8,7 @@ import {
   defaultPermission,
   failTurn,
   formatTokens,
+  handoffThreadAccount,
   handoffThread,
   handoffTranscript,
   loadStoredThreads,
@@ -240,6 +241,23 @@ describe("applyChatEvent", () => {
 });
 
 describe("cross-assistant handoff", () => {
+  it("starts a fresh native conversation when changing an account profile", () => {
+    const source = thread({
+      accountProfileId: "personal",
+      nativeSessionId: "claude-native",
+      items: [
+        { type: "user", id: "u", text: "保留脈絡", at: 1 },
+        { type: "text", id: "a", text: "前一個帳號的回覆" },
+      ],
+    });
+    const next = handoffThreadAccount(source, "company", 2000);
+    expect(next.definitionId).toBe("claude");
+    expect(next.accountProfileId).toBe("company");
+    expect(next.nativeSessionId).toBeNull();
+    expect(next.handoff?.transcript).toContain("保留脈絡");
+    expect(next.items[1]).toMatchObject({ assistantDefinitionId: "claude" });
+  });
+
   it("starts a target-native conversation with bounded text-only context", () => {
     const source = thread({
       permission: "ask",
