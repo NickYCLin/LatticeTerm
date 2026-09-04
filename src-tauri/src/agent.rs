@@ -467,6 +467,89 @@ pub fn account_profile_directory(
     ))
 }
 
+/// Where a CLI keeps its login inside an account profile directory.
+fn account_profile_auth_file(definition_id: &str, directory: &Path) -> Option<PathBuf> {
+    match definition_id {
+        "codex" => Some(directory.join("auth.json")),
+        "claude" => Some(directory.join(".claude.json")),
+        _ => None,
+    }
+}
+
+const ACCOUNT_FILE_LIMIT: u64 = 256 * 1024;
+
+/// The login state of one account profile, read the same way as the default
+/// account but from the profile's own directory. Only a state, a display
+/// label and the login method leave this function; tokens stay in the file.
+pub fn account_profile_status(definition_id: &str, directory: &Path) -> AgentAccountInfo {
+    let Some(auth_file) = account_profile_auth_file(definition_id, directory) else {
+        return account_info(AgentAccountState::Unsupported, None, None);
+    };
+    if !directory.is_absolute() || !directory.is_dir() {
+        return account_info(AgentAccountState::Unknown, None, None);
+    }
+    let Ok(metadata) = std::fs::metadata(&auth_file) else {
+        // Claude Code writes `.credentials.json` first; a profile that has
+        // only that is signed in even before the account file exists.
+        if definition_id == "claude" && directory.join(".credentials.json").is_file() {
+            return account_info(AgentAccountState::SignedIn, None, Some("Claude.ai"));
+        }
+        return account_info(AgentAccountState::SignedOut, None, None);
+    };
+    if !metadata.is_file() || metadata.len() > ACCOUNT_FILE_LIMIT {
+        return account_info(AgentAccountState::Unknown, None, None);
+    }
+    let Ok(raw) = std::fs::read_to_string(&auth_file) else {
+        return account_info(AgentAccountState::Unknown, None, None);
+    };
+    let info = match definition_id {
+        "codex" => codex_account_from_json(&raw),
+        _ => claude_account_from_json(&raw),
+    };
+    if info.state == AgentAccountState::Unknown
+        && definition_id == "claude"
+        && directory.join(".credentials.json").is_file()
+    {
+        return account_info(AgentAccountState::SignedIn, None, Some("Claude.ai"));
+    }
+    info
+}
+
+/// Removes a profile directory LatticeTerm created itself, login data
+/// included. Only the fixed `agent-profiles/<cli>/<id>` shape is accepted so
+/// a stored path can never point the removal anywhere else.
+pub fn remove_account_profile_directory(
+    data_dir: &Path,
+    definition_id: &str,
+    profile_id: &str,
+) -> Result<bool, String> {
+    if definition_id != "codex" && definition_id != "claude" {
+        return Err("Only Codex and Claude Code support account profiles.".to_string());
+    }
+    if profile_id.is_empty()
+        || profile_id.len() > 64
+        || !profile_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("Invalid account profile id.".to_string());
+    }
+    let directory = data_dir
+        .join("agent-profiles")
+        .join(definition_id)
+        .join(profile_id);
+    match std::fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(&directory)
+            .map(|_| true)
+            .map_err(|error| format!("Cannot remove the account profile directory: {error}")),
+        Ok(_) => Err("The account profile path is not a directory.".to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "Cannot inspect the account profile directory: {error}"
+        )),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentLaunchPlanDraft {
@@ -5969,6 +6052,68 @@ pub fn disconnect(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn account_profile_status_reads_only_the_profile_directory() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let codex = root.path().join("codex");
+        std::fs::create_dir_all(&codex).unwrap();
+        assert_eq!(
+            account_profile_status("codex", &codex).state,
+            AgentAccountState::SignedOut
+        );
+        std::fs::write(codex.join("auth.json"), r#"{"auth_mode":"chatgpt"}"#).unwrap();
+        let info = account_profile_status("codex", &codex);
+        assert_eq!(info.state, AgentAccountState::SignedIn);
+        assert_eq!(info.method.as_deref(), Some("ChatGPT"));
+
+        let claude = root.path().join("claude");
+        std::fs::create_dir_all(&claude).unwrap();
+        assert_eq!(
+            account_profile_status("claude", &claude).state,
+            AgentAccountState::SignedOut
+        );
+        std::fs::write(claude.join(".credentials.json"), "{}").unwrap();
+        assert_eq!(
+            account_profile_status("claude", &claude).state,
+            AgentAccountState::SignedIn
+        );
+        std::fs::write(
+            claude.join(".claude.json"),
+            r#"{"oauthAccount":{"emailAddress":"person@example.com"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            account_profile_status("claude", &claude).label.as_deref(),
+            Some("person@example.com")
+        );
+
+        assert_eq!(
+            account_profile_status("gemini", &claude).state,
+            AgentAccountState::Unsupported
+        );
+        assert_eq!(
+            account_profile_status("codex", &root.path().join("missing")).state,
+            AgentAccountState::Unknown
+        );
+        assert_eq!(
+            account_profile_status("codex", Path::new("relative")).state,
+            AgentAccountState::Unknown
+        );
+    }
+
+    #[test]
+    fn removing_a_profile_directory_only_touches_the_managed_shape() {
+        let data = tempfile::tempdir().expect("tempdir");
+        let created = account_profile_directory(data.path(), "codex", "abc-123").unwrap();
+        std::fs::write(created.join("auth.json"), "{}").unwrap();
+        assert!(remove_account_profile_directory(data.path(), "codex", "abc-123").unwrap());
+        assert!(!created.exists());
+        assert!(!remove_account_profile_directory(data.path(), "codex", "abc-123").unwrap());
+        assert!(remove_account_profile_directory(data.path(), "codex", "../x").is_err());
+        assert!(remove_account_profile_directory(data.path(), "gemini", "abc").is_err());
+        assert!(data.path().join("agent-profiles").join("codex").is_dir());
+    }
     use super::*;
     use std::collections::{HashMap, HashSet};
     use std::time::{Duration, Instant};

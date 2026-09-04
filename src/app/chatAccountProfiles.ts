@@ -12,6 +12,8 @@ export interface ChatAccountProfile {
   definitionId: ProfiledChatDefinitionId;
   name: string;
   configDirectory: string;
+  /** True when LatticeTerm created the directory and may delete it again. */
+  managed?: boolean;
 }
 
 export const CHAT_ACCOUNT_PROFILES_KEY = "latticeterm.chatAccountProfiles.v1";
@@ -34,7 +36,8 @@ function isProfile(value: unknown): value is ChatAccountProfile {
     profile.name.trim().length > 0 &&
     profile.name.length <= MAX_NAME_LENGTH &&
     typeof profile.configDirectory === "string" &&
-    profile.configDirectory.trim().length > 0
+    profile.configDirectory.trim().length > 0 &&
+    (profile.managed === undefined || typeof profile.managed === "boolean")
   );
 }
 

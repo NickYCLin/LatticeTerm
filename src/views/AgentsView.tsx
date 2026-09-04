@@ -15,6 +15,7 @@ import {
   saveChatAccountProfiles,
   type ChatAccountProfile,
 } from "../app/chatAccountProfiles";
+import { accountProfileOptionKey, useAccountProfileStatus } from "../app/useAccountProfileStatus";
 import type { RemoteApi } from "../app/useRemoteSessions";
 import {
   MAX_AGENT_BROADCAST_TARGETS,
@@ -114,7 +115,9 @@ export function AgentsView({
     typeof localStorage === "undefined" ? [] : loadChatAccountProfiles(localStorage),
   );
   const [selectedAccountProfile, setSelectedAccountProfile] = useState<Record<string, string>>({});
+  const { statuses: profileStatuses } = useAccountProfileStatus(accountProfiles);
   const [accountProfileDefinition, setAccountProfileDefinition] = useState<AgentDefinition | null>(null);
+  const [pendingProfileRemoval, setPendingProfileRemoval] = useState<ChatAccountProfile | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [pendingInstall, setPendingInstall] = useState<AgentDefinition | null>(null);
   const [copiedInstallSource, setCopiedInstallSource] = useState<string | null>(null);
@@ -263,6 +266,7 @@ export function AgentsView({
       definitionId: definition.id,
       name: name.slice(0, 64),
       configDirectory,
+      managed: chosenDirectory === null,
     };
     setAccountProfiles((current) => [...current, profile]);
     setSelectedAccountProfile((current) => ({
@@ -270,6 +274,37 @@ export function AgentsView({
       [definition.id]: profile.id,
     }));
     setAccountProfileDefinition(null);
+  }
+
+  // Confirmed in the app's own dialog: `window.confirm` is not a real
+  // prompt inside the desktop WebView and would remove without asking.
+  async function removeAccountProfile(profile: ChatAccountProfile) {
+    setPendingProfileRemoval(null);
+    if (profile.managed) {
+      // Only a directory LatticeTerm created is deleted, and the backend
+      // accepts nothing but the fixed managed path shape.
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("agent_account_profile_remove", {
+          definitionId: profile.definitionId,
+          profileId: profile.id,
+        });
+      } catch (reason) {
+        setError(
+          t("agents.account.removeFailed", {
+            detail: reason instanceof Error ? reason.message : String(reason),
+          }),
+        );
+        return;
+      }
+    }
+    setAccountProfiles((current) => current.filter((candidate) => candidate.id !== profile.id));
+    setSelectedAccountProfile((current) => {
+      if (current[profile.definitionId] !== profile.id) return current;
+      const next = { ...current };
+      delete next[profile.definitionId];
+      return next;
+    });
   }
 
   async function launch(definition: AgentDefinition) {
@@ -736,36 +771,76 @@ export function AgentsView({
                     )}
                   </div>
                 )}
-                {definition.installed && profileCapable(definition.id) && (
-                  <div className="agent-card__profile">
-                    <label className="field">
-                      <span className="field__label">{t("agents.account.profile")}</span>
-                      <select
-                        className="select"
-                        value={selectedAccountProfile[definition.id] ?? ""}
-                        onChange={(event) => setSelectedAccountProfile((current) => ({
-                          ...current,
-                          [definition.id]: event.currentTarget.value,
-                        }))}
-                      >
-                        <option value="">{t("agents.account.default")}</option>
-                        {profilesFor(accountProfiles, definition.id).map((profile) => (
-                          <option key={profile.id} value={profile.id}>{profile.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      type="button"
-                      className="button button--secondary button--sm"
-                      onClick={() => setAccountProfileDefinition(definition)}
-                    >
-                      {t("agents.account.addProfile")}
-                    </button>
-                    <p className="agent-card__profile-hint">
-                      {t("agents.account.profileHint")}
-                    </p>
-                  </div>
-                )}
+                {definition.installed && profileCapable(definition.id) && (() => {
+                  const profiles = profilesFor(accountProfiles, definition.id);
+                  const selected = profiles.find(
+                    (profile) => profile.id === selectedAccountProfile[definition.id],
+                  ) ?? null;
+                  const selectedStatus = selected ? profileStatuses[selected.id] : undefined;
+                  return (
+                    <div className="agent-card__profile">
+                      <label className="field">
+                        <span className="field__label">{t("agents.account.profile")}</span>
+                        <select
+                          className="select"
+                          value={selected?.id ?? ""}
+                          onChange={(event) => setSelectedAccountProfile((current) => ({
+                            ...current,
+                            [definition.id]: event.currentTarget.value,
+                          }))}
+                        >
+                          <option value="">
+                            {definition.account.label
+                              ? t("agents.account.defaultLabeled", { label: definition.account.label })
+                              : t("agents.account.default")}
+                          </option>
+                          {profiles.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {t(accountProfileOptionKey(profileStatuses[profile.id]), {
+                                name: profile.name,
+                                label: profileStatuses[profile.id]?.label ?? "",
+                              })}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {selected && selectedStatus?.state === "signedOut" && (
+                        <p
+                          className="agent-card__profile-status agent-card__profile-status--attention"
+                          role="status"
+                        >
+                          {t("agents.account.loginHowTo")}
+                        </p>
+                      )}
+                      {selected && selectedStatus && selectedStatus.state === "unknown" && (
+                        <p className="agent-card__profile-status" role="status">
+                          {t("agents.account.loginUnknown")}
+                        </p>
+                      )}
+                      <div className="agent-card__profile-actions">
+                        <button
+                          type="button"
+                          className="button button--secondary button--sm"
+                          onClick={() => setAccountProfileDefinition(definition)}
+                        >
+                          {t("agents.account.addProfile")}
+                        </button>
+                        {selected && (
+                          <button
+                            type="button"
+                            className="button button--secondary button--sm"
+                            onClick={() => setPendingProfileRemoval(selected)}
+                          >
+                            {t("agents.account.removeProfile")}
+                          </button>
+                        )}
+                      </div>
+                      <p className="agent-card__profile-hint">
+                        {t("agents.account.profileHint")}
+                      </p>
+                    </div>
+                  );
+                })()}
                 {!definition.installed && definition.install.displayCommand && (
                   <code className="agent-card__install-command">
                     {definition.install.displayCommand}
@@ -1382,6 +1457,21 @@ export function AgentsView({
         />
       )}
 
+      {pendingProfileRemoval && (
+        <ConfirmDialog
+          title={t("agents.account.removeTitle", { name: pendingProfileRemoval.name })}
+          body={
+            pendingProfileRemoval.managed
+              ? t("agents.account.removeConfirm")
+              : t("agents.account.removeConfirmExternal")
+          }
+          confirmLabel={t("agents.account.removeAction")}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => void removeAccountProfile(pendingProfileRemoval)}
+          onCancel={() => setPendingProfileRemoval(null)}
+        />
+      )}
       {accountProfileDefinition && profileCapable(accountProfileDefinition.id) && (
         <AgentAccountProfileDialog
           agentLabel={accountProfileDefinition.label}

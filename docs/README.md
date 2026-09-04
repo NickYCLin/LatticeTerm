@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | 應用程式導覽、頁面切換與全域狀態 | `src/App.tsx`、`src/views/` | `src-tauri/src/lib.rs` | [介面實作現況](UI_IMPLEMENTATION.zh-TW.md) |
 | 本機 AI CLI、Agent Fleet、PTY 與狀態回報 | `src/views/AgentsView.tsx`、`src/app/useAgentSessions.ts`、`src/components/agents/` | `src-tauri/src/agent.rs`、`src-tauri/src/agent_plans.rs` | [Agent Fleet 架構](AGENT_FLEET_ARCHITECTURE.zh-TW.md) |
-| 對話模式（聊天視窗、逐項核准、排程任務、帳號設定檔、對話資料夾） | `src/views/ChatView.tsx`、`src/components/chat/`、`src/app/agentChat.ts`、`agentAutomations.ts`、`chatAccountProfiles.ts`、`chatThreadLayout.ts` | `src-tauri/src/agent_chat.rs` | [Agent Fleet 架構](AGENT_FLEET_ARCHITECTURE.zh-TW.md#對話模式) |
+| 對話模式（聊天視窗、逐項核准、排程任務、多帳號、對話資料夾） | `src/views/ChatView.tsx`、`src/components/chat/`、`src/app/agentChat.ts`、`agentAutomations.ts`、`chatAccountProfiles.ts`、`chatThreadLayout.ts` | `src-tauri/src/agent_chat.rs` | [Agent Fleet 架構](AGENT_FLEET_ARCHITECTURE.zh-TW.md#對話模式) |
 | 工作階段、專案與自訂資料夾 | `src/views/SessionsView.tsx`、`src/components/sessions/`、`src/app/sessionSidebarLayout.ts` | 各工作階段後端模組 | [介面設計摘要](UI_UX_DESIGN_BRIEF.zh-TW.md) |
 | SSH 終端、SFTP 與 Tunnel | `src/components/terminal/`、`src/components/sftp/`、`src/views/TunnelsView.tsx` | `src-tauri/src/ssh.rs`、`sftp.rs`、`sftp_transfers.rs`、`tunnel.rs` | [儲存與安全決策](STORAGE_SECURITY_DECISION.zh-TW.md) |
 | Lattice Remote 畫面／純終端、控制、檔案傳輸與中繼 | `src/components/remote/` | `src-tauri/src/remote.rs`、`remote_host.rs`、`remote_files.rs`、`crates/lattice-remote/` | [中繼部署與安全](RELAY_SERVER.zh-TW.md)、[介面實作現況](UI_IMPLEMENTATION.zh-TW.md) |

@@ -1098,3 +1098,10 @@ button.chat-chip:hover {
     margin-left: 0;
   }
 }
+
+/* An account picked for a thread that has not signed in yet: the send
+   would fail in the assistant, so say so before it happens. */
+.chat-settings__warning {
+  margin: var(--space-1) 0 0;
+  color: var(--warning, var(--text));
+}

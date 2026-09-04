@@ -501,6 +501,40 @@ fn agent_account_profile_directory(
         .map(|path| path.display().to_string())
 }
 
+/// Login state of one account profile, read from its own directory.
+#[tauri::command]
+async fn agent_account_profile_status(
+    definition_id: String,
+    config_directory: String,
+) -> Result<crate::agent::AgentAccountInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::agent::account_profile_status(
+            &definition_id,
+            std::path::Path::new(&config_directory),
+        )
+    })
+    .await
+    .map_err(|error| format!("Account profile status did not complete: {error}"))
+}
+
+/// Removes a profile directory LatticeTerm created, login data included.
+#[tauri::command]
+async fn agent_account_profile_remove(
+    app: AppHandle,
+    definition_id: String,
+    profile_id: String,
+) -> Result<bool, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Cannot locate the application data directory: {error}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::agent::remove_account_profile_directory(&data_dir, &definition_id, &profile_id)
+    })
+    .await
+    .map_err(|error| format!("Account profile removal did not complete: {error}"))?
+}
+
 /// The CLIs a chat thread can be started with on this machine.
 #[tauri::command]
 fn agent_chat_supported() -> Vec<String> {
@@ -2414,6 +2448,8 @@ pub fn run() {
             agent_clear_queue,
             agent_chat_supported,
             agent_account_profile_directory,
+            agent_account_profile_status,
+            agent_account_profile_remove,
             agent_chat_send,
             agent_chat_stop,
             agent_chat_close,
