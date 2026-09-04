@@ -16,6 +16,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write as _;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
@@ -171,6 +172,106 @@ fn without_latticeterm_imports(existing: &str) -> Result<String, String> {
 /// Imports an opt-in handoff into Claude's documented, machine-local project
 /// memory. Returns false for every target whose memory layout is unknown, so
 /// callers can use a one-time terminal handoff instead.
+/// Largest handoff brief written to disk. The exporter already caps what it
+/// produces; this only bounds what a caller can hand in.
+const MAX_HANDOFF_FILE_BYTES: usize = 256 * 1024;
+/// A brief is for the CLI that starts next, not an archive; anything older
+/// than this is swept on the next write.
+const HANDOFF_FILE_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Writes a handoff brief where the next CLI can read it, and returns the
+/// path to point that CLI at.
+///
+/// Pasting tens of kilobytes into a terminal UI is slow (the interface
+/// ingests it a keystroke at a time) and the model then has to digest all
+/// of it before the person can say anything. A file plus a one-line pointer
+/// makes the new CLI interactive at once; it reads the brief with its own
+/// file tool, which is what those tools are fast at. The file lives under
+/// LatticeTerm's data directory, owner-only, and is swept after a day.
+pub fn write_handoff_file(
+    data_dir: &Path,
+    source_label: &str,
+    transcript: &str,
+) -> Result<PathBuf, String> {
+    if transcript.trim().is_empty() {
+        return Err("There is no conversation to hand off.".to_string());
+    }
+    if transcript.len() > MAX_HANDOFF_FILE_BYTES {
+        return Err("The handoff is too large to write.".to_string());
+    }
+    let label: String = source_label
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(64)
+        .collect();
+    let dir = data_dir.join("handoffs");
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("Cannot create the handoff directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+    }
+    prune_handoff_files(&dir, std::time::SystemTime::now());
+
+    let body = format!(
+        "# 交接自 {}\n\n{}\n",
+        if label.is_empty() {
+            "另一個 AI 助理"
+        } else {
+            &label
+        },
+        transcript.trim()
+    );
+    // A random name that cannot collide, created owner-only (0600) and
+    // kept rather than deleted on drop.
+    let mut file = tempfile::Builder::new()
+        .prefix("handoff-")
+        .suffix(".md")
+        .tempfile_in(&dir)
+        .map_err(|error| format!("Cannot write the handoff file: {error}"))?;
+    file.write_all(body.as_bytes())
+        .map_err(|error| format!("Cannot write the handoff file: {error}"))?;
+    file.as_file().sync_all().ok();
+    let path = file
+        .keep()
+        .map_err(|error| format!("Cannot keep the handoff file: {error}"))?
+        .1;
+    Ok(path.canonicalize().unwrap_or(path))
+}
+
+/// Removes briefs past their day; a failure here is not a failure to hand
+/// off, so nothing is reported.
+fn prune_handoff_files(dir: &Path, now: std::time::SystemTime) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_brief = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("handoff-") && name.ends_with(".md"));
+        if !is_brief {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let expired = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > HANDOFF_FILE_TTL);
+        if expired {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
 pub fn import_handoff_into_memory(
     target_definition_id: &str,
     working_directory: &str,
@@ -1040,6 +1141,96 @@ pub fn export(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handoff_files_are_private_named_and_swept_after_a_day() {
+        let data = tempfile::tempdir().unwrap();
+        let path =
+            write_handoff_file(data.path(), "OpenAI Codex", "user: hi\nassistant: hello").unwrap();
+        assert!(path.starts_with(data.path().join("handoffs")));
+        assert!(path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("handoff-"));
+        let body = fs::read_to_string(&path).unwrap();
+        assert!(body.starts_with("# 交接自 OpenAI Codex\n"));
+        assert!(body.contains("assistant: hello"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        // A day-old brief goes on the next write; a fresh one stays.
+        set_modified(&path, 1);
+        let second = write_handoff_file(data.path(), "x", "later").unwrap();
+        assert!(!path.exists(), "expired brief was kept");
+        assert!(second.exists());
+
+        assert!(write_handoff_file(data.path(), "x", "   ").is_err());
+        assert!(
+            write_handoff_file(data.path(), "x", &"a".repeat(MAX_HANDOFF_FILE_BYTES + 1)).is_err()
+        );
+    }
+
+    /// Times a real export against this machine's own histories. Ignored:
+    /// it depends on what the user has on disk. `cargo test time_real_export -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn time_real_export() {
+        let cwd = std::env::var("LATTICETERM_TIMING_CWD")
+            .unwrap_or_else(|_| std::env::current_dir().unwrap().display().to_string());
+        for (label, path) in [
+            (
+                "claude-big",
+                std::env::var("LATTICETERM_TIMING_CLAUDE").ok(),
+            ),
+            ("codex-big", std::env::var("LATTICETERM_TIMING_CODEX").ok()),
+        ] {
+            if let Some(path) = path {
+                let path = PathBuf::from(path);
+                let started = std::time::Instant::now();
+                let out = if label.starts_with("claude") {
+                    parse_claude(&path, 64 * 1024)
+                } else {
+                    parse_codex(&path, 64 * 1024)
+                };
+                eprintln!(
+                    "{label}: parse {:?} bytes={} chars={}",
+                    started.elapsed(),
+                    fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                    out.map(|t| t.chars().count()).unwrap_or(0)
+                );
+            }
+        }
+        for kind in [TranscriptKind::Codex, TranscriptKind::Claude] {
+            let started = std::time::Instant::now();
+            let path = match kind {
+                TranscriptKind::Codex => locate_codex(&cwd, None),
+                TranscriptKind::Claude => locate_claude(&cwd, None),
+                _ => None,
+            };
+            let located = started.elapsed();
+            let parsed = path.as_ref().map(|path| {
+                let started = std::time::Instant::now();
+                let out = match kind {
+                    TranscriptKind::Codex => parse_codex(path, 64 * 1024),
+                    _ => parse_claude(path, 64 * 1024),
+                };
+                (
+                    started.elapsed(),
+                    out.map(|text| text.len()).unwrap_or(0),
+                    fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+                )
+            });
+            eprintln!("{kind:?}: locate {located:?} path={path:?} parse={parsed:?}");
+        }
+    }
 
     fn set_modified(path: &Path, seconds: u64) {
         let times = fs::FileTimes::new()
