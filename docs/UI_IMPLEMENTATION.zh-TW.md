@@ -22,7 +22,7 @@
 | **新增/編輯抽屜** | `ConnectionDrawer` | `src/components/overlays/ConnectionDrawer.tsx` | 抽屜式連線表單，支援即時驗證、Tab 焦點循環鎖定與重複目標提醒。 |
 | **命令面板** | `CommandPalette` | `src/components/overlays/CommandPalette.tsx` | `Ctrl` + `K` 全域命令面板，支援搜尋連線與執行全域快捷動作。 |
 | **工作階段** | `SessionsView` | `src/views/SessionsView.tsx` | 統一管理 SSH 終端機、SFTP 檔案、Lattice Remote、Web RDP 與 VNC Canvas 分頁；執行中的 Agent 分頁可雙擊或按鉛筆就地改名，名稱由後端持久化（重載視窗仍在），並在續接面板點選偵測到的 session 時帶入備註；SSH 分頁可沿用同主機／同認證開啟 SFTP，Lattice Remote 在主機另行授權檔案分享時也可展開同一加密連線的檔案側欄。 |
-| **AI Agent Fleet** | `AgentsView` | `src/views/AgentsView.tsx` | 本機多 CLI 啟動、Reporter 狀態、批次提示、可命名排序的安全啟動工作區，以及同程序 WebView 重載後的 PTY 重新 attach。 |
+| **AI Agent Fleet** | `AgentsView` | `src/views/AgentsView.tsx` | 本機多 CLI 啟動、Reporter 狀態、批次提示與忙碌時排入佇列、帳號設定檔（`AgentAccountProfileDialog`，目錄由 LatticeTerm 自動建立）、Linux 的沙箱勾選（`runtime.agentSandboxAvailable` 才顯示）、可命名排序的安全啟動工作區，以及同程序 WebView 重載後的 PTY 重新 attach。 |
 | **對話** | `ChatView` | `src/views/ChatView.tsx` | 以聊天視窗跟 Claude Code、Codex 或 Gemini CLI 溝通（介面稱「助理」）：可建資料夾整理的對話串側欄（`ChatThreadTree`）、排程分頁（`AutomationPane`）、串流回覆、工具／思考／核准卡片、依助理分組的單一模型下拉（`ModelField`）、結束統計與卡片式輸入框。資料模型與事件折疊在 `src/app/agentChat.ts`，排程在 `agentAutomations.ts`，資料夾在 `chatThreadLayout.ts`，Markdown 讀取器在 `chatMarkdown.ts`；狀態由根層 lazy 元件 `ChatRuntime` 承載。 |
 | **SFTP 檔案工作區** | `SftpPane` | `src/components/sftp/SftpPane.tsx` | 遠端路徑瀏覽、上下載、建立資料夾、改名與確認刪除。 |
 | **Web RDP Canvas** | `RdpPane` | `src/components/rdp/RdpPane.tsx` | Canvas 畫面、座標縮放、滑鼠、滾輪、掃描碼鍵盤與失焦釋放。 |
