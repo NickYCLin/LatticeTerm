@@ -7086,8 +7086,15 @@ model = "gpt-5.3-codex"
             eprintln!("bwrap missing or unprivileged user namespaces blocked; skipping");
             return;
         };
-        let work = tempfile::tempdir().expect("tempdir");
-        let outside = tempfile::tempdir().expect("tempdir");
+        // Both directories live under the home directory, which the sandbox
+        // binds read-only: /tmp is deliberately writable, so a probe there
+        // would prove nothing.
+        let Some(home) = user_home_directory().filter(|home| home.is_dir()) else {
+            eprintln!("no home directory; skipping");
+            return;
+        };
+        let work = tempfile::tempdir_in(&home).expect("tempdir in home");
+        let outside = tempfile::tempdir_in(&home).expect("tempdir in home");
         let script = format!(
             "touch {}/inside && echo inside=$? ; touch {}/outside 2>/dev/null; echo outside=$?",
             work.path().display(),
