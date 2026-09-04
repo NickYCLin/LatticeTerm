@@ -269,7 +269,7 @@ export function TunnelsView({
                 style={{ padding: "0.25rem 0.75rem", fontSize: "var(--text-xs)", height: "auto" }}
                 onClick={() => setTypeFilter(type)}
               >
-                {t(`tunnels.type.${type}` as any)}
+                {t(`tunnels.type.${type}`)}
               </button>
             ))}
           </div>
@@ -367,7 +367,7 @@ export function TunnelsView({
                       {tunnel.name}
                     </h3>
                     <Chip tone={tunnel.type === "local" ? "info" : tunnel.type === "dynamic" ? "planned" : "warn"}>
-                      {t(`tunnels.type.${tunnel.type}` as any)}
+                      {t(`tunnels.type.${tunnel.type}`)}
                     </Chip>
                     {isActive && (
                       <Chip tone="ok">
@@ -680,7 +680,7 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
     if (!result.success && result.errors) {
       const errMap: Record<string, string> = {};
       for (const err of result.errors) {
-        errMap[err.field] = t(err.messageKey as any);
+        errMap[err.field] = t(err.messageKey);
       }
       setErrors(errMap);
     }
@@ -733,7 +733,7 @@ function TunnelFormModal({ initial, profiles, onClose, onSave }: TunnelFormModal
                   style={{ fontSize: "var(--text-xs)", height: "2.5rem" }}
                   onClick={() => setType(tType)}
                 >
-                  {t(`tunnels.type.${tType}` as any)}
+                  {t(`tunnels.type.${tType}`)}
                 </button>
               ))}
             </div>
