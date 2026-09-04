@@ -292,10 +292,11 @@ export function useAgentChat(): AgentChatApi {
   }, []);
 
   const remove = useCallback((id: string) => {
-    const target = threadsRef.current.find((thread) => thread.id === id);
-    if (target?.runningTurnId && hasDesktopBackend()) {
+    // A Codex thread keeps a server alive between turns; closing the thread
+    // must end it whether or not a turn is running.
+    if (hasDesktopBackend()) {
       core()
-        .then(({ invoke }) => invoke("agent_chat_stop", { threadId: id }))
+        .then(({ invoke }) => invoke("agent_chat_close", { threadId: id }))
         .catch(() => {});
     }
     setThreads((current) => current.filter((thread) => thread.id !== id));

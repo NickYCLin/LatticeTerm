@@ -679,16 +679,12 @@ function ThreadPane({
               title={!fresh ? t("chat.model.handoff") : undefined}
               models={chat.models}
               loadModels={chat.loadModels}
-              isSelectionDisabled={({ definitionId, model }) =>
-                thread.definitionId === "codex" &&
-                !fresh &&
-                definitionId === "codex" &&
-                model !== thread.model
-              }
               onChange={({ definitionId, model }) => {
                 if (definitionId !== thread.definitionId) {
                   chat.handoffThread(thread.id, definitionId, model);
-                } else if (thread.definitionId !== "codex") {
+                } else {
+                  // Every assistant takes a model per turn now; Codex too,
+                  // since its server accepts one on `turn/start`.
                   chat.updateThread(thread.id, { model });
                 }
               }}

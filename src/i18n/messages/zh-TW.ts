@@ -1048,7 +1048,6 @@ export const zhTW = {
   "chat.model.placeholder": "留空使用預設模型",
   "chat.model.default": "預設",
   "chat.model.loading": "正在讀取可用模型…",
-  "chat.model.locked": "Codex 的模型在第一則訊息後就固定了",
   "chat.model.handoff": "切換不同助理會建立新的原生對話，並安全轉交近期脈絡。",
   "chat.accountProfile": "帳號設定檔",
   "chat.accountProfile.default": "預設帳號",
