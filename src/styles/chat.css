@@ -409,6 +409,15 @@ button.chat-chip:hover {
   background: var(--surface-hover);
 }
 
+/* Every control in a settings row is exactly this tall, whatever element
+   it is: a select, a text field, the directory box or a button. Rows are
+   aligned on their bottom edge, so one shorter control would make the
+   whole row look ragged. */
+.chat-settings,
+.automation-schedule {
+  --chat-control-height: 2.5rem;
+}
+
 .chat-settings {
   display: flex;
   flex-wrap: wrap;
@@ -420,9 +429,11 @@ button.chat-chip:hover {
   background: var(--surface-raised);
 }
 
-.chat-settings .field {
+.chat-settings .field,
+.automation-schedule .field {
   min-width: 11rem;
   margin: 0;
+  gap: var(--space-1);
 }
 
 .chat-settings .field:first-child {
@@ -433,6 +444,21 @@ button.chat-chip:hover {
   flex: 1 1 14rem;
 }
 
+.chat-settings .field__label,
+.automation-schedule .field__label {
+  min-height: 1rem;
+  line-height: 1rem;
+}
+
+.chat-settings .input,
+.chat-settings select.select,
+.chat-settings .button,
+.automation-schedule .input,
+.automation-schedule select.select,
+.automation-schedule .button {
+  height: var(--chat-control-height);
+}
+
 .chat-settings__hint {
   flex-basis: 100%;
   margin: 0;
@@ -441,14 +467,41 @@ button.chat-chip:hover {
   line-height: var(--leading);
 }
 
+/* The directory control looks like a text field with a button inside, so
+   it lines up with the selects either side of it. */
 .chat-directory {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: var(--control-height);
+  height: var(--chat-control-height, 2.5rem);
+  padding: 0 var(--space-1) 0 var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-hover);
+}
+
+.chat-directory:focus-within {
+  border-color: var(--accent-line);
+}
+
+.chat-directory > select.select {
+  flex: 1;
+  height: 100%;
+  margin: 0 calc(-1 * var(--space-1)) 0 calc(-1 * var(--space-4));
+  border: 0;
+  background-color: transparent;
+}
+
+.chat-directory .button {
+  order: 2;
+  flex: none;
+  height: calc(var(--chat-control-height, 2.5rem) - 0.5rem);
+  padding: 0 var(--space-3);
 }
 
 .chat-directory__path {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--font-mono);
@@ -726,6 +779,11 @@ button.chat-chip:hover {
   padding: 0 var(--space-3);
 }
 
+.chat-callout__lead {
+  margin: 0 0 var(--space-2);
+  color: var(--text);
+}
+
 .chat-notice {
   margin: 0;
   color: var(--text-faint);
@@ -934,12 +992,26 @@ button.chat-chip:hover {
   gap: var(--space-3);
 }
 
+.automation-schedule__kind,
+.automation-schedule__days {
+  align-items: center;
+}
+
 .automation-schedule__kind label,
 .automation-schedule__day {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  min-height: 2rem;
   font-size: var(--text-sm);
+}
+
+.automation-schedule__days .button {
+  height: 2rem;
+}
+
+.automation-schedule__interval > .automation-schedule__day {
+  min-height: var(--chat-control-height, 2.5rem);
 }
 
 .automation-runs__title {
