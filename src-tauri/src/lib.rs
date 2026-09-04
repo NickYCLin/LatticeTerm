@@ -529,6 +529,16 @@ fn agent_chat_stop(
     registry.stop(&thread_id)
 }
 
+/// Ends everything serving a thread: its running turn and, for Codex, the
+/// server kept alive between turns. Called when a thread is deleted.
+#[tauri::command]
+fn agent_chat_close(
+    thread_id: String,
+    registry: State<'_, Arc<crate::agent_chat::AgentChatRegistry>>,
+) -> Result<bool, String> {
+    registry.close(&thread_id)
+}
+
 /// Allows or denies one tool call a chat turn is waiting on.
 #[tauri::command]
 async fn agent_chat_respond(
@@ -2399,6 +2409,7 @@ pub fn run() {
             agent_account_profile_directory,
             agent_chat_send,
             agent_chat_stop,
+            agent_chat_close,
             agent_chat_respond,
             agent_chat_models,
             agent_chat_skills,

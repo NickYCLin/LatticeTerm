@@ -1124,7 +1124,6 @@ export const en: Messages = {
   "chat.model.placeholder": "Leave empty for the default model",
   "chat.model.default": "Default",
   "chat.model.loading": "Reading available models…",
-  "chat.model.locked": "A Codex thread keeps the model chosen for its first message",
   "chat.model.handoff": "Changing assistants starts a new native conversation and safely hands over recent context.",
   "chat.accountProfile": "Account profile",
   "chat.accountProfile.default": "Default account",

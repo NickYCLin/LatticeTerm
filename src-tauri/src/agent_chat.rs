@@ -26,6 +26,8 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
+mod codex_server;
+
 pub const EVENT_CHAT: &str = "agent-chat://event";
 
 /// Largest prompt a single turn accepts. Well above anything typed by hand;
@@ -236,6 +238,8 @@ struct RunningTurn {
 #[derive(Default)]
 pub struct AgentChatRegistry {
     running: Mutex<HashMap<String, RunningTurn>>,
+    /// Long-lived Codex servers, one per chat thread.
+    codex: codex_server::CodexServers,
     /// Claude's OAuth refresh lock is cross-process. Starting a model probe
     /// and a turn at the same instant can make one process report that the
     /// other is refreshing the token even though the saved login is valid.
@@ -267,6 +271,9 @@ impl AgentChatRegistry {
     /// was one; the `Finished` event still arrives once the process exits.
     pub fn stop(&self, thread_id: &str) -> Result<bool, String> {
         validate_id(thread_id, "thread id")?;
+        if codex_server::stop(&self.codex, thread_id)? {
+            return Ok(true);
+        }
         let mut running = self.lock();
         match running.get_mut(thread_id) {
             Some(turn) => {
@@ -283,11 +290,20 @@ impl AgentChatRegistry {
     /// Ends every running turn. Called when the application exits so no CLI
     /// keeps working for a window that is gone.
     pub fn shutdown(&self) {
+        self.codex.shutdown();
         let mut running = self.lock();
         for turn in running.values_mut() {
             let _ = kill_turn(&mut turn.child);
         }
         running.clear();
+    }
+
+    /// Ends whatever serves this thread, running or idle: the thread is
+    /// gone from the interface, so its server has nothing left to do.
+    pub fn close(&self, thread_id: &str) -> Result<bool, String> {
+        validate_id(thread_id, "thread id")?;
+        let stopped = self.stop(thread_id)?;
+        Ok(self.codex.close(thread_id) || stopped)
     }
 }
 
@@ -492,11 +508,11 @@ fn prompt_with_attachments(prompt: &str, attachments: &[ChatAttachment]) -> Stri
 /// the process list.
 fn turn_arguments(
     dialect: Dialect,
-    working_directory: &Path,
+    _working_directory: &Path,
     permission: ChatPermission,
     model: Option<&str>,
     native_session_id: Option<&str>,
-    attachments: &[ChatAttachment],
+    _attachments: &[ChatAttachment],
 ) -> Vec<OsString> {
     let mut args: Vec<OsString> = Vec::new();
     match dialect {
@@ -543,63 +559,7 @@ fn turn_arguments(
                 args.push(id.into());
             }
         }
-        Dialect::Codex => {
-            if permission == ChatPermission::Ask {
-                // Bidirectional JSON-RPC: approvals arrive as server requests
-                // and are answered on stdin. `exec` has no such channel.
-                args.push("app-server".into());
-                return args;
-            }
-            args.push("exec".into());
-            args.push("--json".into());
-            // The user chose the directory; whether it is a git checkout is
-            // not a reason to refuse a conversation.
-            args.push("--skip-git-repo-check".into());
-            args.push("-C".into());
-            args.push(working_directory.as_os_str().to_os_string());
-            match permission {
-                ChatPermission::ReadOnly => {
-                    args.push("-s".into());
-                    args.push("read-only".into());
-                }
-                ChatPermission::WorkspaceWrite => {
-                    args.push("-s".into());
-                    args.push("workspace-write".into());
-                }
-                ChatPermission::Full => {
-                    args.push("--dangerously-bypass-approvals-and-sandbox".into());
-                }
-                // Refused before the arguments are built; the closest
-                // headless equivalent is the sandbox that changes nothing.
-                ChatPermission::Ask => {
-                    args.push("-s".into());
-                    args.push("read-only".into());
-                }
-            }
-            match native_session_id {
-                Some(id) => {
-                    // A Codex thread keeps its model; changing it mid-thread
-                    // is not something `resume` offers.
-                    args.push("resume".into());
-                    args.push(id.into());
-                }
-                None => {
-                    if let Some(model) = model {
-                        args.push("-m".into());
-                        args.push(model.into());
-                    }
-                }
-            }
-            // Codex has a documented first-class image flag for both new and
-            // resumed headless turns. Other files stay as stdin references so
-            // no selected path is exposed in the process list.
-            for attachment in attachments.iter().filter(|attachment| attachment.is_image) {
-                args.push("--image".into());
-                args.push(attachment.path.as_os_str().to_os_string());
-            }
-            // Read the prompt from stdin.
-            args.push("-".into());
-        }
+        Dialect::Codex => unreachable!("Codex turns run on the app-server"),
         Dialect::Gemini => {
             args.extend(["--output-format", "stream-json"].map(OsString::from));
             args.push("--approval-mode".into());
@@ -1149,6 +1109,29 @@ fn send_with_retry<S: ChatSink>(
         let executable = crate::agent::catalog_executable(&request.definition_id)
             .ok_or_else(|| "This CLI is not installed.".to_string())?;
 
+        if dialect == Dialect::Codex {
+            // Codex keeps one app-server per thread across turns, the way
+            // Codex Desktop does; the per-turn process below is for the
+            // CLIs whose headless mode is one-shot.
+            return codex_server::send_turn(
+                sink,
+                &registry.codex,
+                codex_server::TurnRequest {
+                    thread_id: &request.thread_id,
+                    turn_id: &request.turn_id,
+                    prompt: &prompt,
+                    attachments: &attachments,
+                    permission: request.permission,
+                    model,
+                    native_session_id: request.native_session_id.as_deref(),
+                    working_directory: &working_directory,
+                    profile_config_directory: profile_config_directory.as_deref(),
+                    executable: &executable,
+                },
+            )
+            .await;
+        }
+
         // Claude model discovery and other chat threads may start at nearly the
         // same time. Wait for their authentication startup before spawning this
         // process, then keep the guard until this process reports initialization.
@@ -1204,14 +1187,7 @@ fn send_with_retry<S: ChatSink>(
         }
 
         let retry_request = request.clone();
-        let opening = interactive_opening_lines(
-            dialect,
-            &prompt,
-            &working_directory,
-            model,
-            request.native_session_id.as_deref(),
-        );
-        let app_server = interactive && dialect == Dialect::Codex;
+        let opening = interactive_opening_lines(&prompt);
         let thread_id = request.thread_id;
         let turn_id = request.turn_id;
         tauri::async_runtime::spawn(async move {
@@ -1239,11 +1215,6 @@ fn send_with_retry<S: ChatSink>(
             });
 
             let mut state = TurnState::default();
-            if app_server {
-                state.app_server = Some(AppServerTurn {
-                    prompt: prompt.clone(),
-                });
-            }
             let mut had_progress = false;
             let mut reader = BufReader::new(stdout);
             let mut line = Vec::new();
@@ -1316,11 +1287,6 @@ fn send_with_retry<S: ChatSink>(
                             if let Some(turn) = running.get_mut(&thread_id) {
                                 turn.stdin = None;
                                 turn.pending_inputs.clear();
-                                if state.app_server.is_some() {
-                                    // An app-server serves until told
-                                    // otherwise; this turn is what it was for.
-                                    let _ = kill_turn(&mut turn.child);
-                                }
                             }
                         }
                         let mut stdin = stdin.lock().await;
@@ -1343,10 +1309,7 @@ fn send_with_retry<S: ChatSink>(
             let stderr_tail = stderr_task.await.unwrap_or_default();
 
             let mut error = state.error.take();
-            // An app-server is stopped by us once the turn completed; its
-            // exit status says nothing about the turn.
-            let finished_by_protocol = state.app_server.is_some() && state.turn_complete;
-            if error.is_none() && !finished_by_protocol {
+            if error.is_none() {
                 match status {
                     Some(status) if status.success() => {}
                     Some(status) => {
@@ -1454,99 +1417,25 @@ async fn read_bounded_line<R: AsyncBufReadExt + Unpin>(
     }
 }
 
-/// JSON-RPC ids of the two requests a Codex app-server turn makes. The
-/// parser matches responses by these.
-const CODEX_THREAD_REQUEST: u64 = 2;
-const CODEX_TURN_REQUEST: u64 = 3;
-
-/// What a bidirectional turn writes before anything else.
-///
-/// Claude: the SDK handshake, then the prompt as a user message. Codex:
-/// the app-server handshake, then `thread/start` (or `thread/resume`); the
-/// prompt itself follows only once the thread response names the thread,
-/// which the parser handles.
-fn interactive_opening_lines(
-    dialect: Dialect,
-    prompt: &str,
-    working_directory: &Path,
-    model: Option<&str>,
-    native_session_id: Option<&str>,
-) -> Vec<String> {
-    match dialect {
-        Dialect::Codex => {
-            let mut thread = serde_json::json!({
-                "cwd": working_directory.display().to_string(),
-                // Prompt for anything Codex's own rules do not already
-                // trust; keep the workspace-write sandbox underneath.
-                "approvalPolicy": "untrusted",
-                "sandbox": "workspace-write",
-            });
-            let method = match native_session_id {
-                Some(id) => {
-                    thread["threadId"] = Value::String(id.to_string());
-                    "thread/resume"
-                }
-                None => {
-                    if let Some(model) = model {
-                        thread["model"] = Value::String(model.to_string());
-                    }
-                    "thread/start"
-                }
-            };
-            vec![
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": { "clientInfo": {
-                        "name": "latticeterm",
-                        "title": "LatticeTerm",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    } },
-                })
-                .to_string(),
-                serde_json::json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} })
-                    .to_string(),
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": CODEX_THREAD_REQUEST,
-                    "method": method,
-                    "params": thread,
-                })
-                .to_string(),
-            ]
-        }
-        Dialect::Claude | Dialect::Gemini => vec![
-            serde_json::json!({
-                "type": "control_request",
-                "request_id": "latticeterm-init",
-                "request": { "subtype": "initialize", "hooks": {} },
-            })
-            .to_string(),
-            serde_json::json!({
-                "type": "user",
-                "message": {
-                    "role": "user",
-                    "content": [{ "type": "text", "text": prompt }],
-                },
-            })
-            .to_string(),
-        ],
-    }
-}
-
-/// The `turn/start` that carries the prompt once the thread is known.
-fn codex_turn_start_line(thread_id: &str, prompt: &str) -> String {
-    serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": CODEX_TURN_REQUEST,
-        "method": "turn/start",
-        "params": {
-            "threadId": thread_id,
-            "input": [{ "type": "text", "text": prompt }],
-        },
-    })
-    .to_string()
+/// What a bidirectional Claude turn writes before anything else: the SDK
+/// handshake, then the prompt as a user message.
+fn interactive_opening_lines(prompt: &str) -> Vec<String> {
+    vec![
+        serde_json::json!({
+            "type": "control_request",
+            "request_id": "latticeterm-init",
+            "request": { "subtype": "initialize", "hooks": {} },
+        })
+        .to_string(),
+        serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{ "type": "text", "text": prompt }],
+            },
+        })
+        .to_string(),
+    ]
 }
 
 /// The card id for one JSON-RPC request. Numbers and strings are both
@@ -1628,6 +1517,9 @@ pub async fn respond(
         return Err("Invalid request id.".to_string());
     }
     let message = message.map(|text| truncate(text.trim(), 1024));
+    if registry.codex.get(thread_id).is_some() {
+        return codex_server::respond(&registry.codex, thread_id, request_id, allow).await;
+    }
     let (stdin, input) = {
         let mut running = registry.lock();
         let turn = running
@@ -1680,13 +1572,6 @@ struct TurnState {
     pending_inputs: Vec<(String, Value)>,
     /// Lines the parser owes the CLI on stdin; the reader loop sends them.
     pending_writes: Vec<String>,
-    /// Set for a Codex app-server turn; carries what the parser still needs
-    /// to say once the thread is known.
-    app_server: Option<AppServerTurn>,
-}
-
-struct AppServerTurn {
-    prompt: String,
 }
 
 fn parse_line(dialect: Dialect, state: &mut TurnState, line: &str) -> Vec<ChatEvent> {
@@ -1704,8 +1589,8 @@ fn parse_line(dialect: Dialect, state: &mut TurnState, line: &str) -> Vec<ChatEv
     };
     match dialect {
         Dialect::Claude => parse_claude(state, &value),
-        Dialect::Codex if state.app_server.is_some() => parse_codex_app_server(state, &value),
-        Dialect::Codex => parse_codex(state, &value),
+        // Codex lines are read by its own server module.
+        Dialect::Codex => Vec::new(),
         Dialect::Gemini => parse_gemini(state, &value),
     }
 }
@@ -1948,377 +1833,6 @@ fn content_text(content: Option<&Value>) -> String {
             .join("\n"),
         _ => String::new(),
     }
-}
-
-fn parse_codex(state: &mut TurnState, value: &Value) -> Vec<ChatEvent> {
-    let mut events = Vec::new();
-    match str_field(value, "type") {
-        Some("thread.started") => {
-            state.native_session_id = str_field(value, "thread_id").map(str::to_string);
-            events.push(ChatEvent::Started {
-                native_session_id: state.native_session_id.clone(),
-                model: None,
-            });
-        }
-        Some(kind @ ("item.started" | "item.updated" | "item.completed")) => {
-            let Some(item) = value.get("item") else {
-                return events;
-            };
-            let completed = kind == "item.completed";
-            let item_id = str_field(item, "id").unwrap_or("item").to_string();
-            match str_field(item, "type") {
-                Some("agent_message") => events.push(ChatEvent::Text {
-                    item_id,
-                    text: str_field(item, "text").unwrap_or_default().to_string(),
-                }),
-                Some("reasoning") => {
-                    let text = str_field(item, "text").unwrap_or_default();
-                    if !text.is_empty() {
-                        events.push(ChatEvent::Reasoning {
-                            item_id,
-                            text: text.to_string(),
-                        });
-                    }
-                }
-                Some("command_execution") => {
-                    let summary = truncate(str_field(item, "command").unwrap_or_default(), 200);
-                    if completed {
-                        let failed =
-                            matches!(str_field(item, "status"), Some("failed" | "declined"))
-                                || item
-                                    .get("exit_code")
-                                    .and_then(Value::as_i64)
-                                    .is_some_and(|code| code != 0);
-                        events.push(ChatEvent::ToolFinished {
-                            item_id,
-                            name: Some("command".to_string()),
-                            summary: Some(summary),
-                            output: bounded_output(
-                                str_field(item, "aggregated_output").unwrap_or_default(),
-                            ),
-                            is_error: failed,
-                        });
-                    } else if kind == "item.started" {
-                        events.push(ChatEvent::ToolStarted {
-                            item_id,
-                            name: "command".to_string(),
-                            summary,
-                        });
-                    }
-                }
-                Some("file_change") => {
-                    let changes = item
-                        .get("changes")
-                        .and_then(Value::as_array)
-                        .map(|changes| {
-                            changes
-                                .iter()
-                                .map(|change| {
-                                    format!(
-                                        "{} {}",
-                                        str_field(change, "kind").unwrap_or("update"),
-                                        str_field(change, "path").unwrap_or_default()
-                                    )
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    let summary = truncate(&changes.join(", "), 200);
-                    if completed {
-                        events.push(ChatEvent::ToolFinished {
-                            item_id,
-                            name: Some("file_change".to_string()),
-                            summary: Some(summary),
-                            output: bounded_output(&changes.join("\n")),
-                            is_error: str_field(item, "status") == Some("failed"),
-                        });
-                    } else if kind == "item.started" {
-                        events.push(ChatEvent::ToolStarted {
-                            item_id,
-                            name: "file_change".to_string(),
-                            summary,
-                        });
-                    }
-                }
-                Some("mcp_tool_call") => {
-                    let summary = format!(
-                        "{}/{}",
-                        str_field(item, "server").unwrap_or_default(),
-                        str_field(item, "tool").unwrap_or_default()
-                    );
-                    if completed {
-                        let failed = str_field(item, "status") == Some("failed")
-                            || item.get("error").is_some_and(|error| !error.is_null());
-                        let output = item
-                            .get("error")
-                            .filter(|error| !error.is_null())
-                            .or_else(|| item.get("result"))
-                            .map(|output| match output {
-                                Value::String(text) => text.clone(),
-                                other => serde_json::to_string(other).unwrap_or_default(),
-                            })
-                            .unwrap_or_default();
-                        events.push(ChatEvent::ToolFinished {
-                            item_id,
-                            name: Some("mcp".to_string()),
-                            summary: Some(summary),
-                            output: bounded_output(&output),
-                            is_error: failed,
-                        });
-                    } else if kind == "item.started" {
-                        events.push(ChatEvent::ToolStarted {
-                            item_id,
-                            name: "mcp".to_string(),
-                            summary,
-                        });
-                    }
-                }
-                Some("web_search") => {
-                    let summary = truncate(str_field(item, "query").unwrap_or_default(), 200);
-                    if completed {
-                        events.push(ChatEvent::ToolFinished {
-                            item_id,
-                            name: Some("web_search".to_string()),
-                            summary: Some(summary),
-                            output: String::new(),
-                            is_error: false,
-                        });
-                    } else if kind == "item.started" {
-                        events.push(ChatEvent::ToolStarted {
-                            item_id,
-                            name: "web_search".to_string(),
-                            summary,
-                        });
-                    }
-                }
-                Some("todo_list") => {
-                    let text = item
-                        .get("items")
-                        .and_then(Value::as_array)
-                        .map(|items| {
-                            items
-                                .iter()
-                                .map(|entry| {
-                                    let done = entry
-                                        .get("completed")
-                                        .and_then(Value::as_bool)
-                                        .unwrap_or(false);
-                                    format!(
-                                        "- [{}] {}",
-                                        if done { "x" } else { " " },
-                                        str_field(entry, "text").unwrap_or_default()
-                                    )
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        })
-                        .unwrap_or_default();
-                    if !text.is_empty() {
-                        events.push(ChatEvent::Reasoning { item_id, text });
-                    }
-                }
-                Some("error") => {
-                    let message = truncate(str_field(item, "message").unwrap_or("error"), 2048);
-                    state.error = Some(message.clone());
-                    events.push(ChatEvent::Notice { message });
-                }
-                _ => {}
-            }
-        }
-        Some("turn.completed") => {
-            if let Some(usage) = value.get("usage") {
-                state.usage = Some(ChatUsage {
-                    input_tokens: u64_field(usage, "input_tokens"),
-                    output_tokens: u64_field(usage, "output_tokens"),
-                    cache_read_tokens: u64_field(usage, "cached_input_tokens"),
-                    cache_write_tokens: u64_field(usage, "cache_write_input_tokens"),
-                    reasoning_tokens: u64_field(usage, "reasoning_output_tokens"),
-                });
-            }
-        }
-        Some("turn.failed") => {
-            let message = value
-                .get("error")
-                .and_then(|error| str_field(error, "message"))
-                .unwrap_or("The turn failed.");
-            state.error = Some(truncate(message, 2048));
-        }
-        Some("error") => {
-            let message = truncate(str_field(value, "message").unwrap_or("error"), 2048);
-            state.error = Some(message.clone());
-            events.push(ChatEvent::Notice { message });
-        }
-        _ => {}
-    }
-    events
-}
-
-/// Reads one line of Codex's app-server JSON-RPC stream.
-///
-/// Responses are matched by the ids the opening lines used; notifications
-/// carry `method` and `params`; a server request carries both `method` and
-/// `id` and must be answered — approvals through the interface, anything
-/// the interface cannot render with a refusal so the turn goes on.
-fn parse_codex_app_server(state: &mut TurnState, value: &Value) -> Vec<ChatEvent> {
-    let mut events = Vec::new();
-    let method = str_field(value, "method");
-    let id = value.get("id");
-
-    // A response to one of our requests.
-    if method.is_none() {
-        if let Some(id) = id.and_then(Value::as_u64) {
-            if let Some(error) = value.get("error") {
-                let message =
-                    str_field(error, "message").unwrap_or("The agent refused the request.");
-                state.error = Some(truncate(message, 2048));
-                state.turn_complete = true;
-                return events;
-            }
-            if id == CODEX_THREAD_REQUEST {
-                let result = value.get("result");
-                let thread_id = result
-                    .and_then(|result| result.get("thread"))
-                    .and_then(|thread| str_field(thread, "id"))
-                    .map(str::to_string);
-                state.native_session_id = thread_id.clone();
-                events.push(ChatEvent::Started {
-                    native_session_id: thread_id.clone(),
-                    model: result
-                        .and_then(|result| str_field(result, "model"))
-                        .map(str::to_string),
-                });
-                match (thread_id, state.app_server.as_ref()) {
-                    (Some(thread_id), Some(turn)) => {
-                        state
-                            .pending_writes
-                            .push(codex_turn_start_line(&thread_id, &turn.prompt));
-                    }
-                    _ => {
-                        state.error = Some("The agent did not name its thread.".to_string());
-                        state.turn_complete = true;
-                    }
-                }
-            }
-        }
-        return events;
-    }
-    let method = method.unwrap_or_default();
-    let params = value.get("params").cloned().unwrap_or(Value::Null);
-
-    // A server request: something that needs an answer.
-    if let Some(rpc_id) = id {
-        match method {
-            "item/commandExecution/requestApproval"
-            | "item/fileChange/requestApproval"
-            | "item/permissions/requestApproval" => {
-                let request_id = codex_request_id(rpc_id);
-                let (name, summary) = match method {
-                    "item/commandExecution/requestApproval" => (
-                        "command",
-                        str_field(&params, "command")
-                            .unwrap_or_default()
-                            .to_string(),
-                    ),
-                    "item/fileChange/requestApproval" => (
-                        "file_change",
-                        str_field(&params, "reason")
-                            .or_else(|| str_field(&params, "grantRoot"))
-                            .unwrap_or("edit files in the working directory")
-                            .to_string(),
-                    ),
-                    _ => (
-                        "permissions",
-                        str_field(&params, "reason")
-                            .unwrap_or("extra permissions")
-                            .to_string(),
-                    ),
-                };
-                let shown = serde_json::json!({
-                    "command": params.get("command"),
-                    "cwd": params.get("cwd"),
-                    "reason": params.get("reason"),
-                });
-                events.push(ChatEvent::ApprovalRequested {
-                    request_id: request_id.clone(),
-                    tool_use_id: str_field(&params, "itemId").map(str::to_string),
-                    name: name.to_string(),
-                    summary: truncate(&summary, 200),
-                    input: bounded_output(
-                        &serde_json::to_string_pretty(&shown).unwrap_or_default(),
-                    ),
-                });
-                state.pending_inputs.push((
-                    request_id,
-                    serde_json::json!({ "latticeterm_rpc_id": rpc_id }),
-                ));
-            }
-            _ => {
-                // A question the chat window has no card for. Refusing it
-                // lets the turn continue instead of hanging on us.
-                state.pending_writes.push(
-                    serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": rpc_id,
-                        "error": { "code": -32601, "message": "LatticeTerm cannot answer this request" },
-                    })
-                    .to_string(),
-                );
-                events.push(ChatEvent::Notice {
-                    message: format!("The agent asked something the chat window cannot show ({method}); it was declined."),
-                });
-            }
-        }
-        return events;
-    }
-
-    // Notifications.
-    match method {
-        "item/agentMessage/delta" => {
-            if let (Some(item_id), Some(delta)) =
-                (str_field(&params, "itemId"), str_field(&params, "delta"))
-            {
-                events.push(ChatEvent::TextDelta {
-                    item_id: item_id.to_string(),
-                    delta: delta.to_string(),
-                });
-            }
-        }
-        "item/started" | "item/completed" => {
-            if let Some(item) = params.get("item") {
-                events.extend(codex_v2_item_events(item, method == "item/completed"));
-            }
-        }
-        "thread/tokenUsage/updated" => {
-            if let Some(last) = params.get("tokenUsage").and_then(|usage| usage.get("last")) {
-                state.usage = Some(ChatUsage {
-                    input_tokens: u64_field(last, "inputTokens"),
-                    output_tokens: u64_field(last, "outputTokens"),
-                    cache_read_tokens: u64_field(last, "cachedInputTokens"),
-                    cache_write_tokens: u64_field(last, "cacheWriteInputTokens"),
-                    reasoning_tokens: u64_field(last, "reasoningOutputTokens"),
-                });
-            }
-        }
-        "turn/completed" => {
-            if let Some(turn) = params.get("turn") {
-                state.duration_ms = turn.get("durationMs").and_then(Value::as_u64);
-                if let Some(error) = turn.get("error").filter(|error| !error.is_null()) {
-                    state.error = Some(truncate(
-                        str_field(error, "message").unwrap_or("The turn failed."),
-                        2048,
-                    ));
-                }
-            }
-            state.turn_complete = true;
-        }
-        "error" => {
-            let message = truncate(str_field(&params, "message").unwrap_or("error"), 2048);
-            state.error = Some(message.clone());
-            events.push(ChatEvent::Notice { message });
-        }
-        _ => {}
-    }
-    events
 }
 
 /// The events for one app-server (v2, camelCase) thread item.
@@ -2804,245 +2318,12 @@ mod tests {
 
     #[test]
     fn the_interactive_opening_is_a_handshake_then_the_prompt() {
-        let lines = interactive_opening_lines(Dialect::Claude, "hi", Path::new("/w"), None, None);
+        let lines = interactive_opening_lines("hi");
         let init: Value = serde_json::from_str(&lines[0]).unwrap();
         let user: Value = serde_json::from_str(&lines[1]).unwrap();
         assert_eq!(init["request"]["subtype"], "initialize");
         assert_eq!(user["type"], "user");
         assert_eq!(user["message"]["content"][0]["text"], "hi");
-    }
-
-    #[test]
-    fn codex_ask_mode_opens_an_app_server_thread_then_the_turn() {
-        let args = turn_arguments(
-            Dialect::Codex,
-            Path::new("/work"),
-            ChatPermission::Ask,
-            Some("gpt-5.6-sol"),
-            None,
-            &[],
-        );
-        assert_eq!(args, vec![OsString::from("app-server")]);
-
-        let lines = interactive_opening_lines(
-            Dialect::Codex,
-            "hi",
-            Path::new("/work"),
-            Some("gpt-5.6-sol"),
-            None,
-        );
-        let start: Value = serde_json::from_str(&lines[2]).unwrap();
-        assert_eq!(start["method"], "thread/start");
-        assert_eq!(start["id"], CODEX_THREAD_REQUEST);
-        assert_eq!(start["params"]["cwd"], "/work");
-        assert_eq!(start["params"]["approvalPolicy"], "untrusted");
-        assert_eq!(start["params"]["sandbox"], "workspace-write");
-        assert_eq!(start["params"]["model"], "gpt-5.6-sol");
-
-        let resumed = interactive_opening_lines(
-            Dialect::Codex,
-            "hi",
-            Path::new("/work"),
-            Some("gpt-5.6-sol"),
-            Some("thread-1"),
-        );
-        let resume: Value = serde_json::from_str(&resumed[2]).unwrap();
-        assert_eq!(resume["method"], "thread/resume");
-        assert_eq!(resume["params"]["threadId"], "thread-1");
-        assert!(
-            resume["params"].get("model").is_none(),
-            "a resumed thread keeps its model"
-        );
-    }
-
-    #[test]
-    fn codex_app_server_stream_maps_to_chat_events_and_approvals() {
-        // Captured from `codex app-server` with approvalPolicy "untrusted".
-        let mut state = TurnState {
-            app_server: Some(AppServerTurn {
-                prompt: "run it".into(),
-            }),
-            ..TurnState::default()
-        };
-        let mut all = Vec::new();
-        let raw = r#"{"id":2,"result":{"thread":{"id":"01a06a1c-0856-7323-b362-48b07cb250c2"},"model":"gpt-5.6-sol"}}
-{"method":"item/started","params":{"item":{"type":"agentMessage","id":"msg_1","text":"","phase":"commentary"},"threadId":"t","turnId":"u"}}
-{"method":"item/agentMessage/delta","params":{"itemId":"msg_1","delta":"I’ll","threadId":"t","turnId":"u"}}
-{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_1","text":"I’ll run it.","phase":"commentary"}}}
-{"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-1","command":"/bin/bash -lc 'printf hi'","cwd":"/w","status":"inProgress"}}}
-{"method":"item/commandExecution/requestApproval","id":0,"params":{"kind":"command","threadId":"t","turnId":"u","itemId":"exec-1","command":"/bin/bash -lc 'printf hi'","cwd":"/w"}}
-{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-1","command":"/bin/bash -lc 'printf hi'","aggregatedOutput":"hi","exitCode":0,"status":"completed"}}}
-{"method":"thread/tokenUsage/updated","params":{"threadId":"t","turnId":"u","tokenUsage":{"last":{"inputTokens":100,"cachedInputTokens":40,"outputTokens":7,"reasoningOutputTokens":2,"cacheWriteInputTokens":0,"totalTokens":107},"total":{}}}}
-{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_2","text":"DONE","phase":"final_answer"}}}
-{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"u","status":"completed","error":null,"durationMs":1234}}}"#;
-        for line in raw.lines() {
-            all.extend(parse_line(Dialect::Codex, &mut state, line));
-        }
-
-        assert_eq!(
-            all[0],
-            ChatEvent::Started {
-                native_session_id: Some("01a06a1c-0856-7323-b362-48b07cb250c2".into()),
-                model: Some("gpt-5.6-sol".into()),
-            }
-        );
-        // The prompt goes out only once the thread is known.
-        assert_eq!(state.pending_writes.len(), 1);
-        let turn: Value = serde_json::from_str(&state.pending_writes[0]).unwrap();
-        assert_eq!(turn["method"], "turn/start");
-        assert_eq!(
-            turn["params"]["threadId"],
-            "01a06a1c-0856-7323-b362-48b07cb250c2"
-        );
-        assert_eq!(turn["params"]["input"][0]["text"], "run it");
-
-        assert!(all.contains(&ChatEvent::TextDelta {
-            item_id: "msg_1".into(),
-            delta: "I’ll".into()
-        }));
-        assert!(all.contains(&ChatEvent::ToolStarted {
-            item_id: "exec-1".into(),
-            name: "command".into(),
-            summary: "/bin/bash -lc 'printf hi'".into(),
-        }));
-        let approval = all
-            .iter()
-            .find(|event| matches!(event, ChatEvent::ApprovalRequested { .. }))
-            .expect("approval card");
-        match approval {
-            ChatEvent::ApprovalRequested {
-                request_id, name, ..
-            } => {
-                assert_eq!(request_id, "rpc-0");
-                assert_eq!(name, "command");
-            }
-            _ => unreachable!(),
-        }
-        assert_eq!(state.pending_inputs[0].0, "rpc-0");
-        assert_eq!(state.pending_inputs[0].1["latticeterm_rpc_id"], 0);
-        assert!(all.contains(&ChatEvent::ToolFinished {
-            item_id: "exec-1".into(),
-            name: Some("command".into()),
-            summary: Some("/bin/bash -lc 'printf hi'".into()),
-            output: "hi".into(),
-            is_error: false,
-        }));
-        assert!(all.contains(&ChatEvent::Text {
-            item_id: "msg_2".into(),
-            text: "DONE".into()
-        }));
-        assert_eq!(
-            state.usage,
-            Some(ChatUsage {
-                input_tokens: 100,
-                output_tokens: 7,
-                cache_read_tokens: 40,
-                cache_write_tokens: 0,
-                reasoning_tokens: 2,
-            })
-        );
-        assert_eq!(state.duration_ms, Some(1234));
-        assert!(state.turn_complete);
-        assert!(state.error.is_none());
-
-        // The answer goes back as a JSON-RPC result keyed by the request id.
-        let accept: Value =
-            serde_json::from_str(&codex_approval_line(&Value::from(0), true)).unwrap();
-        assert_eq!(accept["id"], 0);
-        assert_eq!(accept["result"]["decision"], "accept");
-        let decline: Value =
-            serde_json::from_str(&codex_approval_line(&Value::from(7), false)).unwrap();
-        assert_eq!(decline["result"]["decision"], "decline");
-    }
-
-    #[test]
-    fn a_question_the_window_cannot_show_is_declined_so_the_turn_goes_on() {
-        let mut state = TurnState {
-            app_server: Some(AppServerTurn { prompt: "x".into() }),
-            ..TurnState::default()
-        };
-        let events = parse_line(
-            Dialect::Codex,
-            &mut state,
-            r#"{"method":"item/tool/requestUserInput","id":4,"params":{"questions":[]}}"#,
-        );
-        assert!(matches!(events[0], ChatEvent::Notice { .. }));
-        let reply: Value = serde_json::from_str(&state.pending_writes[0]).unwrap();
-        assert_eq!(reply["id"], 4);
-        assert!(reply.get("error").is_some());
-        assert!(state.pending_inputs.is_empty());
-    }
-
-    /// Runs one real Codex turn in ask mode through the app-server: Codex
-    /// must raise an approval for a shell command, the test allows it, and
-    /// the turn must then finish. `LATTICETERM_CHAT_E2E=codex cargo test
-    /// a_real_codex_ask -- --ignored`.
-    #[test]
-    #[ignore]
-    fn a_real_codex_ask_turn_waits_for_the_answer_and_then_finishes() {
-        let workdir = tempfile::tempdir().expect("tempdir");
-        let (tx, rx) = std::sync::mpsc::channel();
-        let registry = Arc::new(AgentChatRegistry::new());
-        tauri::async_runtime::block_on(send(
-            Arc::new(RecordingSink(tx)),
-            Arc::clone(&registry),
-            ChatTurnRequest {
-                thread_id: "e2e-codex-ask".into(),
-                turn_id: "e2e-codex-ask-turn".into(),
-                definition_id: "codex".into(),
-                working_directory: workdir.path().display().to_string(),
-                prompt: "Run the shell command `printf approved > approval-probe.txt && cat approval-probe.txt` using the shell, then reply with the single word DONE.".into(),
-                permission: ChatPermission::Ask,
-                model: None,
-                native_session_id: None,
-                attachments: Vec::new(),
-                profile_config_path: None,
-            },
-        ))
-        .expect("turn starts");
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(240);
-        let mut answered = false;
-        let mut finished = None;
-        let mut text = String::new();
-        while finished.is_none() {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            match rx.recv_timeout(remaining) {
-                Ok(ChatEvent::ApprovalRequested {
-                    request_id, name, ..
-                }) => {
-                    assert_eq!(name, "command");
-                    tauri::async_runtime::block_on(respond(
-                        Arc::clone(&registry),
-                        "e2e-codex-ask",
-                        &request_id,
-                        true,
-                        None,
-                    ))
-                    .expect("answer is delivered");
-                    answered = true;
-                }
-                Ok(ChatEvent::Text { text: t, .. }) => text.push_str(&t),
-                Ok(ChatEvent::Finished {
-                    error,
-                    native_session_id,
-                    ..
-                }) => {
-                    assert!(native_session_id.is_some(), "no thread id to resume with");
-                    finished = Some(error);
-                }
-                Ok(_) => {}
-                Err(_) => panic!("no Finished event within the deadline"),
-            }
-        }
-        assert!(answered, "Codex never asked for approval");
-        assert_eq!(finished, Some(None), "turn failed");
-        assert!(text.contains("DONE"), "reply was {text:?}");
-        assert!(workdir.path().join("approval-probe.txt").exists());
-        assert!(
-            registry.lock().is_empty(),
-            "the finished turn was not released"
-        );
     }
 
     #[test]
@@ -3090,17 +2371,22 @@ mod tests {
         assert!(prompt.contains("untrusted reference"));
         assert!(prompt.contains(&image.display().to_string()));
 
-        let args = turn_arguments(
-            Dialect::Codex,
-            directory.path(),
+        let params = codex_server::turn_params(
+            "thread",
+            &prompt,
+            &attachments,
             ChatPermission::ReadOnly,
             None,
-            None,
-            &attachments,
+            directory.path(),
         );
-        assert!(args
-            .windows(2)
-            .any(|pair| { pair[0] == "--image" && pair[1] == image.as_os_str() }));
+        let inputs = params["input"].as_array().expect("inputs");
+        assert_eq!(
+            inputs.len(),
+            2,
+            "only the image rides along as an input item"
+        );
+        assert_eq!(inputs[1]["type"], "localImage");
+        assert_eq!(inputs[1]["path"], image.display().to_string());
         assert!(validate_attachments(&[ChatAttachmentRequest {
             path: directory.path().display().to_string(),
         }])
@@ -3302,69 +2588,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_turn_reports_thread_and_usage() {
-        // Captured from `codex exec --json`.
-        let raw = r#"{"type":"thread.started","thread_id":"01a0654c-48dc-77a1-9eef-af49ff5ec3c3"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll run the requested command."}}
-{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"echo hi","status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"echo hi","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"OK"}}
-{"type":"turn.completed","usage":{"input_tokens":39633,"cached_input_tokens":30208,"cache_write_input_tokens":0,"output_tokens":185,"reasoning_output_tokens":66}}"#;
-        let (state, events) = lines(Dialect::Codex, raw);
-
-        assert_eq!(
-            events[0],
-            ChatEvent::Started {
-                native_session_id: Some("01a0654c-48dc-77a1-9eef-af49ff5ec3c3".into()),
-                model: None,
-            }
-        );
-        assert_eq!(
-            events[2],
-            ChatEvent::ToolStarted {
-                item_id: "item_1".into(),
-                name: "command".into(),
-                summary: "echo hi".into(),
-            }
-        );
-        assert_eq!(
-            events[3],
-            ChatEvent::ToolFinished {
-                item_id: "item_1".into(),
-                name: Some("command".into()),
-                summary: Some("echo hi".into()),
-                output: "hi\n".into(),
-                is_error: false,
-            }
-        );
-        assert_eq!(
-            events[4],
-            ChatEvent::Text {
-                item_id: "item_2".into(),
-                text: "OK".into(),
-            }
-        );
-        assert_eq!(
-            state.usage,
-            Some(ChatUsage {
-                input_tokens: 39633,
-                output_tokens: 185,
-                cache_read_tokens: 30208,
-                cache_write_tokens: 0,
-                reasoning_tokens: 66,
-            })
-        );
-    }
-
-    #[test]
-    fn codex_failed_turn_carries_its_error() {
-        let raw = r#"{"type":"turn.failed","error":{"message":"Model overloaded"}}"#;
-        let (state, _) = lines(Dialect::Codex, raw);
-        assert_eq!(state.error.as_deref(), Some("Model overloaded"));
-    }
-
-    #[test]
     fn gemini_stream_reports_text_tools_usage_and_session() {
         // Captured shape from Gemini CLI's documented stream-json protocol.
         let raw = r#"{"type":"init","timestamp":"2026-09-03T00:00:00Z","session_id":"87cc4aa7-b190-4a9d-a709-b7f9f9c90001","model":"gemini-2.5-flash"}
@@ -3417,7 +2640,7 @@ mod tests {
 
     #[test]
     fn a_plain_text_line_becomes_a_notice_not_a_crash() {
-        let (_, events) = lines(Dialect::Codex, "warning: something\n");
+        let (_, events) = lines(Dialect::Gemini, "warning: something\n");
         assert_eq!(
             events,
             vec![ChatEvent::Notice {
@@ -3456,54 +2679,6 @@ mod tests {
                 "abc-123",
             ]
         );
-    }
-
-    #[test]
-    fn codex_arguments_resume_without_changing_the_model() {
-        let args = turn_arguments(
-            Dialect::Codex,
-            Path::new("/work"),
-            ChatPermission::ReadOnly,
-            Some("gpt-5"),
-            Some("thread-1"),
-            &[],
-        );
-        let args: Vec<String> = args
-            .into_iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(
-            args,
-            vec![
-                "exec",
-                "--json",
-                "--skip-git-repo-check",
-                "-C",
-                "/work",
-                "-s",
-                "read-only",
-                "resume",
-                "thread-1",
-                "-",
-            ]
-        );
-        assert!(!args.contains(&"-m".to_string()));
-    }
-
-    #[test]
-    fn codex_full_permission_uses_the_explicit_bypass_flag() {
-        let args = turn_arguments(
-            Dialect::Codex,
-            Path::new("/work"),
-            ChatPermission::Full,
-            None,
-            None,
-            &[],
-        );
-        assert!(args.contains(&OsString::from(
-            "--dangerously-bypass-approvals-and-sandbox"
-        )));
-        assert_eq!(args.last(), Some(&OsString::from("-")));
     }
 
     #[test]
