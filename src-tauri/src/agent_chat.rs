@@ -1830,12 +1830,18 @@ fn claude_tool_summary(name: &str, input: &Value) -> String {
         }
         "Grep" | "Glob" => pick(&["pattern"]),
         "WebFetch" => pick(&["url"]),
-        "WebSearch" => pick(&["query"]),
+        "WebSearch" | "ToolSearch" => pick(&["query"]),
         "Task" | "Agent" => pick(&["description", "prompt"]),
+        "Skill" => pick(&["skill", "name"]),
         _ => None,
     };
+    // An unknown tool shows its first string argument rather than raw JSON:
+    // that is nearly always the thing a reader wants to know.
     let summary = summary.unwrap_or_else(|| match input {
-        Value::Object(map) if !map.is_empty() => serde_json::to_string(input).unwrap_or_default(),
+        Value::Object(map) => map
+            .values()
+            .find_map(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| serde_json::to_string(input).unwrap_or_default()),
         _ => String::new(),
     });
     truncate(summary.lines().next().unwrap_or_default(), 200)
@@ -2588,6 +2594,36 @@ mod tests {
             })
         );
         assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn tool_summaries_show_the_argument_a_reader_wants() {
+        assert_eq!(
+            claude_tool_summary(
+                "ToolSearch",
+                &serde_json::json!({"query": "select:WebFetch"})
+            ),
+            "select:WebFetch"
+        );
+        assert_eq!(
+            claude_tool_summary(
+                "Skill",
+                &serde_json::json!({"skill": "deploy", "args": "x"})
+            ),
+            "deploy"
+        );
+        // An unknown tool: its first string argument, not a JSON dump.
+        assert_eq!(
+            claude_tool_summary(
+                "mcp__db__query",
+                &serde_json::json!({"limit": 5, "sql": "select 1"})
+            ),
+            "select 1"
+        );
+        assert_eq!(
+            claude_tool_summary("Bash", &serde_json::json!({"command": "ls\nmore"})),
+            "ls"
+        );
     }
 
     #[test]
