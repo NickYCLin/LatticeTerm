@@ -204,17 +204,24 @@ struct EncryptedBackupRestore {
     local_storage: BTreeMap<String, String>,
 }
 
+/// Probing the OS keyring and the sandbox tool can block for seconds when
+/// Secret Service or `bwrap` is slow to answer, so every command that
+/// touches them runs off the main thread; a stuck keyring must not freeze
+/// the whole window.
 #[tauri::command]
-fn runtime_summary() -> RuntimeSummary {
-    let platform = std::env::consts::OS;
-    RuntimeSummary {
-        app_name: "LatticeTerm",
-        version: env!("CARGO_PKG_VERSION"),
-        supported_protocols: supported_protocols_for(platform),
-        credential_storage_ready: crate::credentials::status().ready,
-        platform,
-        agent_sandbox_available: crate::agent::sandbox_tool().is_some(),
-    }
+async fn runtime_summary() -> Result<RuntimeSummary, String> {
+    credential_call(|| {
+        let platform = std::env::consts::OS;
+        Ok(RuntimeSummary {
+            app_name: "LatticeTerm",
+            version: env!("CARGO_PKG_VERSION"),
+            supported_protocols: supported_protocols_for(platform),
+            credential_storage_ready: crate::credentials::status().ready,
+            platform,
+            agent_sandbox_available: crate::agent::sandbox_tool().is_some(),
+        })
+    })
+    .await
 }
 
 fn backup_trust_guard(
@@ -988,20 +995,20 @@ async fn delete_connection_profile(
 }
 
 #[tauri::command]
-fn credential_status() -> CredentialStoreStatus {
-    crate::credentials::status()
+async fn credential_status() -> Result<CredentialStoreStatus, String> {
+    credential_call(|| Ok(crate::credentials::status())).await
 }
 
 #[tauri::command]
-fn credential_backend_get() -> crate::credentials::CredentialBackend {
-    crate::credentials::preferred_backend()
+async fn credential_backend_get() -> Result<crate::credentials::CredentialBackend, String> {
+    credential_call(|| Ok(crate::credentials::preferred_backend())).await
 }
 
 #[tauri::command]
-fn credential_backend_set(
+async fn credential_backend_set(
     backend: crate::credentials::CredentialBackend,
 ) -> Result<crate::credentials::CredentialBackend, String> {
-    crate::credentials::set_preferred_backend(backend)
+    credential_call(move || crate::credentials::set_preferred_backend(backend)).await
 }
 
 #[tauri::command]
@@ -2587,7 +2594,8 @@ mod tests {
 
     #[test]
     fn runtime_summary_reports_the_real_secure_storage_status() {
-        let summary = runtime_summary();
+        let summary =
+            tauri::async_runtime::block_on(runtime_summary()).expect("summary is computed");
 
         assert_eq!(summary.app_name, "LatticeTerm");
         assert_eq!(
