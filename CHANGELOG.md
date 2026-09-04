@@ -4,6 +4,19 @@
 
 ---
 
+## [0.44.0](https://github.com/NickYCLin/lattice-term/compare/v0.43.0...v0.44.0) (2026-09-04)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** 多帳號改成看得懂的流程，顯示每個帳號的登入狀態 ([#156](https://github.com/NickYCLin/lattice-term/issues/156)) ([2738a33](https://github.com/NickYCLin/lattice-term/commit/2738a33ba76618304e3fdd8f9a6590e0ce872f77))
+
+
+### 🛠️ 問題修正
+
+* **憑證:** 查詢 keyring 狀態的指令改在背景執行緒跑，避免整個視窗卡住 ([#155](https://github.com/NickYCLin/lattice-term/issues/155)) ([80d3e1d](https://github.com/NickYCLin/lattice-term/commit/80d3e1dd4e94efe1207b6551881861dd8ba1c3b7))
+* **檔案:** SFTP 與遠端檔案的刪除、覆寫、命名改用應用程式內對話框 ([#159](https://github.com/NickYCLin/lattice-term/issues/159)) ([13c261c](https://github.com/NickYCLin/lattice-term/commit/13c261c5eec93e47dfe8a31dff9345c8812d9c3a))
+
 ## [0.43.0](https://github.com/NickYCLin/lattice-term/compare/v0.42.0...v0.43.0) (2026-09-04)
 
 
