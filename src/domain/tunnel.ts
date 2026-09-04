@@ -1,3 +1,4 @@
+import type { MessageKey } from "../i18n/messages/zh-TW";
 /**
  * SSH Tunnel & Port Forwarding domain model.
  *
@@ -53,7 +54,7 @@ export interface TunnelDraft {
 
 export interface TunnelValidationError {
   field: keyof TunnelDraft;
-  messageKey: string;
+  messageKey: MessageKey;
 }
 
 /**
