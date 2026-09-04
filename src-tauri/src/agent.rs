@@ -3919,6 +3919,48 @@ fn sandbox_home_readonly_paths(definition_id: &str) -> Vec<&'static str> {
     }
 }
 
+/// Bubblewrap can only re-bind a path that already exists, and the rest of
+/// the home directory is read-only inside the sandbox. A CLI that has never
+/// run would therefore fail to create its state directory or, for Claude
+/// Code, its `.claude.json` on first login. Create the empty state first so
+/// the first sandboxed launch behaves like an unsandboxed one. Nothing is
+/// written when the path is already there, and nothing but empty
+/// directories and an empty JSON object is ever created.
+pub fn prepare_sandbox_state(definition_id: &str, home: &Path) -> std::io::Result<()> {
+    for relative in sandbox_home_writable_paths(definition_id) {
+        let path = home.join(relative);
+        if path.exists() {
+            continue;
+        }
+        if relative == ".claude.json" {
+            write_private_file(&path, b"{}\n")?;
+        } else if relative.ends_with(".yml") {
+            // Aider runs without its config file; do not invent one.
+            continue;
+        } else {
+            std::fs::create_dir_all(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(path) {
+        Ok(mut file) => file.write_all(contents),
+        // Created by someone else between the check and now: keep theirs.
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 /// The bubblewrap argument vector that confines one CLI launch.
 ///
 /// The whole filesystem is bound read-only, then the working directory, the
@@ -5467,6 +5509,11 @@ pub fn launch_with_replay(
             );
         };
         let home = user_home_directory();
+        if let Some(home) = home.as_deref() {
+            prepare_sandbox_state(&definition_id, home).map_err(|error| {
+                format!("Cannot prepare the CLI state directory for the sandbox: {error}")
+            })?;
+        }
         let extra: Vec<&Path> = profile_config_path.iter().map(PathBuf::as_path).collect();
         let mut wrapped = sandbox_arguments(
             &working_directory,
@@ -6113,6 +6160,36 @@ mod tests {
         assert!(remove_account_profile_directory(data.path(), "codex", "../x").is_err());
         assert!(remove_account_profile_directory(data.path(), "gemini", "abc").is_err());
         assert!(data.path().join("agent-profiles").join("codex").is_dir());
+    }
+
+    #[test]
+    fn preparing_sandbox_state_creates_only_the_missing_empty_state() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        std::fs::write(home.path().join(".claude/settings.json"), "{\"kept\":true}").unwrap();
+
+        prepare_sandbox_state("claude", home.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(".claude.json")).unwrap(),
+            "{}\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap(),
+            "{\"kept\":true}"
+        );
+        assert!(home.path().join(".cache").is_dir());
+        assert!(home.path().join(".local/state").is_dir());
+
+        std::fs::write(home.path().join(".claude.json"), "{\"mine\":1}").unwrap();
+        prepare_sandbox_state("claude", home.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(".claude.json")).unwrap(),
+            "{\"mine\":1}"
+        );
+
+        prepare_sandbox_state("aider", home.path()).unwrap();
+        assert!(home.path().join(".aider").is_dir());
+        assert!(!home.path().join(".aider.conf.yml").exists());
     }
     use super::*;
     use std::collections::{HashMap, HashSet};
