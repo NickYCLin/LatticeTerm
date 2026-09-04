@@ -404,7 +404,9 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
         const restoredAgents = [...agents.sessions];
         const restoredSsh = [...ssh.sessions];
 
-        if (snapshot && agents.sessions.length === 0) {
+        // Sessions the background service still holds re-attach by themselves;
+        // only the desktop-owned ones decide whether saved tabs need restoring.
+        if (snapshot && agents.sessions.every((session) => session.detached)) {
           const renamedGroups = new Set<string>();
           for (const saved of snapshot.sessions) {
             if (saved.kind !== "agent") continue;

@@ -11,6 +11,7 @@ import {
   fakeAgentApi,
   fakeDefinition,
   fakeRemoteApi,
+  fakeSession,
   installFakeStorage,
 } from "../app/testFixtures/agentApis";
 import { I18nProvider } from "../i18n";
@@ -71,6 +72,15 @@ describe("AgentsView", () => {
 
     expect(markup).toContain("npm install -g @openai/codex");
     expect(markup).not.toContain("啟動時使用的帳號");
+  });
+
+  it("offers keeping a session in the background and badges one that is", () => {
+    const markup = render(fakeAgentApi({
+      sessions: [fakeSession({ detached: true, label: "夜間批次" })],
+    }));
+    expect(markup).toContain("留在背景");
+    expect(markup).toContain("夜間批次");
+    expect(markup).toContain(">背景<");
   });
 
   it("offers the sandbox only when bubblewrap was probed to work", () => {

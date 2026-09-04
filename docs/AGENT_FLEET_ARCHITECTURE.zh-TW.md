@@ -143,7 +143,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態或用量訊息。Registr
 | 原生 CLI Session 續接 | 相容保留 | 不再顯示手動設定；Adapter v1 僅供舊工作區還原 |
 | 同程序介面重新 attach | 已完成 | 先訂閱事件再 hydration；session 關閉不會被舊快照復活，最近 256 KiB PTY 輸出依 offset 去重重播 |
 | 工具專用語意 Adapter | 部分完成 | Codex `notify`、Claude Code、Gemini CLI、Hermes Agent、Qwen Code lifecycle hooks，以及 OpenCode、GitHub Copilot CLI plugin events 已接上 Reporter；Hermes 已提供 token buckets，舊工作區續接 recipe 與保守的 session ID 擷取仍保留，其他工具 hook、token 與 cost 擷取尚未完成 |
-| 跨程序背景 daemon 與重新 attach | 未完成 | 關閉 LatticeTerm 後不保留工作階段；目前只支援同一桌面程序內的 WebView 重新 attach |
+| 跨程序背景 daemon 與重新 attach | 已完成（第一版） | 勾選「留在背景」的工作階段由 `lattice-term agent-daemon` 持有：同一份 `AgentRegistry` 在 daemon 程序裡跑，桌面透過使用者專屬本機 socket 以 JSON 行協定 attach，關閉視窗後 CLI 繼續，下次開啟接回並重播 256 KiB 尾端；未勾選的仍隨桌面結束。保存的啟動項目尚未記住此選項，對話排程也仍只在桌面執行 |
 | 跨重啟還原 | 部分完成 | 已保存的 Codex 項目會續接同工作目錄最近的對話，Cursor 項目會使用 `agent --continue` 續接最近對話；正常關閉時，每個 Agent 最近 256 KiB 終端輸出會以 OS 安全儲存區中的裝置金鑰加密保存，重啟同一項目後先重播。若安全儲存區不可用就不落地輸出；原 PTY 程序與可互動 pane 仍無法跨程序存活 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 對話模式 | 已完成 | Claude Code 與 Gemini CLI 以官方 headless JSON 模式逐輪執行，Codex 每個對話常駐一個 app-server 加速追問；串流文字、工具卡片、用量統計與以 CLI 對話 ID 續接；Claude（stream-json 控制協定）與 Codex（app-server JSON-RPC）支援逐項核准；Gemini 的非互動模式無對應機制 |
@@ -158,7 +158,15 @@ Reporter 傳輸與狀態模型已完成，Codex、Claude Code、Gemini CLI、Ope
 
 ### 2. Lattice Agent daemon
 
-將 PTY owner 從 Tauri 程序抽成使用者自行啟動的本機背景服務。桌面 UI 透過使用者專屬的 local socket attach，daemon 保存 workspace／tab／pane metadata，並使用 CLI 原生 session ID 還原。只有使用者明確選擇「留在背景」的工作階段才可脫離 UI。
+第一版已完成（`src-tauri/src/agent_daemon/`）。做法不是把 registry 拆開，而是**整個 `AgentRegistry` 原封不動在另一個程序裡跑**：
+
+- **程序**：daemon 就是同一個 `lattice-term` 執行檔以 `agent-daemon --data-dir <app data>` 啟動（`main.rs` 在建立視窗前就分派），由桌面在第一次需要時以 `setsid`（Windows：`DETACHED_PROCESS | CREATE_NO_WINDOW`）脫離啟動，stderr 導到資料目錄的 `agent-daemon.log`（只記連線與錯誤，不記提示、輸出或權杖，超過 1 MiB 截斷）。沒有工作階段也沒有客戶端連著 60 秒後自行結束；收到 SIGTERM／Ctrl+C 或 `shutdown` 請求時先 `stop_all` 再退出。
+- **通道**：Unix 是資料目錄下 0600 的 `agent-daemon.sock`（綁定前先嘗試連線，連得上代表已有 daemon 在跑，連不上才清掉舊檔），Windows 是以資料目錄雜湊命名的具名管道。第一個 frame 必須是 `hello`，帶 `agent-daemon.token`（0600，首次自動產生）與協定版本，不符就關連線。
+- **協定**：換行分隔的 JSON frame（`request`／`response`／`event`），請求以 id 對應回應可亂序；`launch`、`send`、`enqueue`、`clearQueue`、`broadcast`、`resize`、`disconnect`、`rename`、`sessions`、`snapshots`、`stageImage`、`shutdown` 對應桌面既有的指令；`event` 轉送 registry sink 的 `data`／`state`／`closed`／`captured`／`model`／`usage`／`queue`，payload 與桌面事件完全相同，桌面端原樣 `emit` 到同名 Tauri 事件，前端不知道也不需要知道是哪個程序持有。
+- **路由**：daemon 的 registry 用 `agent-bg-session-` 前綴發 id，桌面的 `agent_*` 指令依前綴決定走本機 registry 還是 daemon；`agent_sessions`／`agent_output_snapshots` 合併兩邊（daemon 不在就只回本機，不會為了查詢把它拉起來）。貼上圖片時 PNG 走 socket 由 daemon 建暫存檔並綁定 PTY 生命週期；交接逐字稿用 daemon 回報的 summary 在桌面讀取。
+- **Reporter 與佇列**：因為整個 registry 都在 daemon 裡，Reporter 的 loopback 監聽、每個工作階段的權杖、提示佇列放行與整合用暫存檔全部跟著 CLI 活，與桌面是否連著無關。
+- **重播**：daemon 的 `OutputBuffer` offset 跨 attach 單調遞增；新視窗從 `hello`／`snapshots` 拿到 `startOffset`／`endOffset` 尾端，前端既有的依 offset 去重直接適用。連線斷掉時桌面端把 daemon 的每個工作階段以 `closed` 事件關掉。
+- **範圍與限制**：只有啟動表單勾選「留在背景」的工作階段走 daemon；工作區快照不保存 detached 的工作階段（它們自己會接回），保存的啟動項目也還沒記住這個選項；daemon 本身若被殺，PTY 隨之消失；對話模式的排程仍只在桌面執行；Windows 具名管道路徑尚未在 CI 驗證。
 
 ### 3. 自建遠端 Fleet
 

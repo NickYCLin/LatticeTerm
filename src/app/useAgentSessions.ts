@@ -115,6 +115,8 @@ export interface AgentSessionSummary {
   capturedSessionId: string | null;
   /** Runs inside the file-scope sandbox. */
   sandboxed?: boolean;
+  /** Owned by the background service: survives closing the window. */
+  detached?: boolean;
   /** Frontend-only close state retained so terminal output does not disappear. */
   closedReason?: string | null;
 }
@@ -135,6 +137,8 @@ export interface AgentLaunchRequest {
   profileConfigPath?: string | null;
   /** Confine writes to the working directory and the CLI's own state. */
   sandbox?: boolean;
+  /** Hand the session to the background service so it outlives the window. */
+  detached?: boolean;
   workingDirectory: string;
   cols: number;
   rows: number;

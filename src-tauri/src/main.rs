@@ -2,6 +2,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    // The background daemon is this same binary; it must not start a window.
+    if let Some(code) = latticeterm_lib::agent_daemon::server::run_cli(std::env::args_os().skip(1))
+    {
+        std::process::exit(code);
+    }
     if let Some(code) = latticeterm_lib::agent::run_reporter_cli(std::env::args_os().skip(1)) {
         std::process::exit(code);
     }

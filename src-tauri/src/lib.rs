@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod agent_chat;
+pub mod agent_daemon;
 pub mod agent_history;
 pub mod agent_plans;
 pub mod backup;
@@ -68,6 +69,7 @@ use zeroize::Zeroizing;
 
 type AppStorage = Mutex<FileStorage>;
 type AppAgentHistory = Mutex<AgentTerminalHistoryStore>;
+type AppDaemon = Arc<crate::agent_daemon::client::DaemonClient>;
 type AppAgentPlans = Mutex<FileAgentPlanStore>;
 
 const MAX_CLIPBOARD_IMAGE_EDGE: u32 = 16_384;
@@ -403,12 +405,13 @@ fn agent_default_working_directory() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn agent_launch(
+async fn agent_launch(
     app: AppHandle,
     mut request: AgentLaunchRequest,
     registry: State<'_, Arc<AgentRegistry>>,
     plans: State<'_, AppAgentPlans>,
     history: State<'_, AppAgentHistory>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<AgentSessionSummary, String> {
     let replay_key = request
         .group_id
@@ -427,12 +430,32 @@ fn agent_launch(
         .snapshot()
         .startup_instructions;
     crate::agent::apply_startup_instructions(&mut request, &startup_instructions)?;
-    let launched = crate::agent::launch_with_replay(
-        Arc::new(crate::agent::EventSink(app)),
-        Arc::clone(registry.inner()),
-        request,
-        restored_output,
-    )?;
+    let launched = if request.detached {
+        // The background daemon owns this one; it replays the same tail the
+        // desktop would have, then keeps running after the window is gone.
+        use base64::Engine as _;
+        let restored_output = restored_output
+            .as_deref()
+            .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes));
+        let value = daemon
+            .request(
+                true,
+                crate::agent_daemon::Request::Launch {
+                    request: Box::new(request),
+                    restored_output,
+                },
+            )
+            .await?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("The background service answered oddly: {error}"))?
+    } else {
+        crate::agent::launch_with_replay(
+            Arc::new(crate::agent::EventSink(app)),
+            Arc::clone(registry.inner()),
+            request,
+            restored_output,
+        )?
+    };
     if let Some((group_id, definition_id)) = replay_key {
         if let Ok(mut store) = history.lock() {
             store.consume_replay(&group_id, &definition_id);
@@ -442,18 +465,29 @@ fn agent_launch(
 }
 
 #[tauri::command]
-fn agent_send(
+async fn agent_send(
     app: AppHandle,
     session_id: String,
     data: String,
     registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<(), String> {
-    crate::agent::send(
-        &crate::agent::EventSink(app),
-        registry.inner(),
-        &session_id,
-        &data,
-    )
+    if crate::agent_daemon::owns(&session_id) {
+        daemon
+            .request(
+                false,
+                crate::agent_daemon::Request::Send { session_id, data },
+            )
+            .await
+            .map(|_| ())
+    } else {
+        crate::agent::send(
+            &crate::agent::EventSink(app),
+            registry.inner(),
+            &session_id,
+            &data,
+        )
+    }
 }
 
 /// Lines a prompt up behind whatever the agent is already doing.
@@ -461,28 +495,50 @@ fn agent_send(
 /// Returns how many prompts are now waiting; zero means the agent was free
 /// and took it immediately.
 #[tauri::command]
-fn agent_enqueue(
+async fn agent_enqueue(
     app: AppHandle,
     session_id: String,
     data: String,
     registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<usize, String> {
-    crate::agent::enqueue(
-        &crate::agent::EventSink(app),
-        registry.inner(),
-        &session_id,
-        &data,
-    )
+    if crate::agent_daemon::owns(&session_id) {
+        let value = daemon
+            .request(
+                false,
+                crate::agent_daemon::Request::Enqueue { session_id, data },
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|error| error.to_string())
+    } else {
+        crate::agent::enqueue(
+            &crate::agent::EventSink(app),
+            registry.inner(),
+            &session_id,
+            &data,
+        )
+    }
 }
 
 /// Drops every prompt still waiting for this agent, reporting how many went.
 #[tauri::command]
-fn agent_clear_queue(
+async fn agent_clear_queue(
     app: AppHandle,
     session_id: String,
     registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<usize, String> {
-    crate::agent::clear_queue(&crate::agent::EventSink(app), registry.inner(), &session_id)
+    if crate::agent_daemon::owns(&session_id) {
+        let value = daemon
+            .request(
+                false,
+                crate::agent_daemon::Request::ClearQueue { session_id },
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|error| error.to_string())
+    } else {
+        crate::agent::clear_queue(&crate::agent::EventSink(app), registry.inner(), &session_id)
+    }
 }
 
 /// Creates (or finds) LatticeTerm's own configuration directory for one
@@ -628,18 +684,56 @@ async fn agent_chat_skills(
 }
 
 #[tauri::command]
-fn agent_broadcast(
+async fn agent_broadcast(
     app: AppHandle,
     session_ids: Vec<String>,
     data: String,
     registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<Vec<AgentBroadcastOutcome>, String> {
-    crate::agent::broadcast(
-        &crate::agent::EventSink(app),
-        registry.inner(),
-        &session_ids,
-        &data,
-    )
+    let (background, local): (Vec<String>, Vec<String>) = session_ids
+        .into_iter()
+        .partition(|session_id| crate::agent_daemon::owns(session_id));
+    let mut outcomes = if local.is_empty() {
+        Vec::new()
+    } else {
+        crate::agent::broadcast(
+            &crate::agent::EventSink(app),
+            registry.inner(),
+            &local,
+            &data,
+        )?
+    };
+    if !background.is_empty() {
+        match daemon
+            .request(
+                false,
+                crate::agent_daemon::Request::Broadcast {
+                    session_ids: background.clone(),
+                    data,
+                },
+            )
+            .await
+        {
+            Ok(value) => {
+                let more: Vec<AgentBroadcastOutcome> =
+                    serde_json::from_value(value).map_err(|error| error.to_string())?;
+                outcomes.extend(more);
+            }
+            Err(error) => {
+                outcomes.extend(
+                    background
+                        .into_iter()
+                        .map(|session_id| AgentBroadcastOutcome {
+                            session_id,
+                            delivered: false,
+                            error: Some(error.clone()),
+                        }),
+                )
+            }
+        }
+    }
+    Ok(outcomes)
 }
 
 /// Writes an image sitting on the clipboard to a temp PNG and returns its path.
@@ -653,9 +747,51 @@ async fn agent_paste_clipboard_image(
     session_id: String,
     registry: State<'_, Arc<AgentRegistry>>,
     clipboard: State<'_, Arc<SensitiveClipboard>>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<Option<String>, String> {
     let registry = Arc::clone(registry.inner());
     let clipboard = Arc::clone(clipboard.inner());
+    if crate::agent_daemon::owns(&session_id) {
+        // The daemon owns the PTY, so it owns the staged file too; the PNG
+        // travels over the socket instead of through a shared temp path.
+        let encoded = tauri::async_runtime::spawn_blocking(move || {
+            let Some((width, height, rgba)) = clipboard.read_image_rgba(&app)? else {
+                return Ok::<Option<String>, String>(None);
+            };
+            if width == 0 || height == 0 {
+                return Ok(None);
+            }
+            validate_clipboard_image(width, height, rgba.len())?;
+            let mut png_bytes = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut png_bytes, width, height);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder.set_depth(png::BitDepth::Eight);
+                let mut png_writer = encoder
+                    .write_header()
+                    .map_err(|err| format!("Cannot encode the pasted image: {err}"))?;
+                png_writer
+                    .write_image_data(&rgba)
+                    .map_err(|err| format!("Cannot encode the pasted image: {err}"))?;
+            }
+            use base64::Engine as _;
+            Ok(Some(
+                base64::engine::general_purpose::STANDARD.encode(png_bytes),
+            ))
+        })
+        .await
+        .map_err(|error| format!("Clipboard image operation did not complete: {error}"))??;
+        let Some(png) = encoded else {
+            return Ok(None);
+        };
+        let value = daemon
+            .request(
+                false,
+                crate::agent_daemon::Request::StageImage { session_id, png },
+            )
+            .await?;
+        return Ok(value.as_str().map(str::to_string));
+    }
     tauri::async_runtime::spawn_blocking(move || {
         // Validate the target before reading potentially sensitive clipboard data.
         if registry.session_summary(&session_id).is_none() {
@@ -701,9 +837,15 @@ async fn agent_paste_clipboard_image(
 async fn agent_export_transcript(
     session_id: String,
     registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<Option<String>, String> {
     const MAX_HANDOFF_CHARS: usize = 12000;
-    let Some(summary) = registry.session_summary(&session_id) else {
+    let summary = if crate::agent_daemon::owns(&session_id) {
+        daemon.session_summary(&session_id).await
+    } else {
+        registry.session_summary(&session_id)
+    };
+    let Some(summary) = summary else {
         return Ok(None);
     };
     let Some(kind) = crate::transcript::TranscriptKind::from_definition(&summary.definition_id)
@@ -774,41 +916,120 @@ async fn agent_write_handoff_file(
 }
 
 #[tauri::command]
-fn agent_resize(
+async fn agent_resize(
     session_id: String,
     cols: u32,
     rows: u32,
     registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<(), String> {
-    crate::agent::resize(registry.inner(), &session_id, cols, rows)
+    if crate::agent_daemon::owns(&session_id) {
+        daemon
+            .request(
+                false,
+                crate::agent_daemon::Request::Resize {
+                    session_id,
+                    cols,
+                    rows,
+                },
+            )
+            .await
+            .map(|_| ())
+    } else {
+        crate::agent::resize(registry.inner(), &session_id, cols, rows)
+    }
 }
 
 #[tauri::command]
-fn agent_disconnect(
+async fn agent_disconnect(
     app: AppHandle,
     session_id: String,
     registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<(), String> {
-    crate::agent::disconnect(&crate::agent::EventSink(app), registry.inner(), &session_id)
+    if crate::agent_daemon::owns(&session_id) {
+        daemon
+            .request(
+                false,
+                crate::agent_daemon::Request::Disconnect { session_id },
+            )
+            .await
+            .map(|_| ())
+    } else {
+        crate::agent::disconnect(&crate::agent::EventSink(app), registry.inner(), &session_id)
+    }
+}
+
+/// Desktop sessions plus whatever the background daemon holds, if it runs.
+#[tauri::command]
+async fn agent_sessions(
+    registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
+) -> Result<Vec<AgentSessionSummary>, String> {
+    let mut sessions = registry.list();
+    sessions.extend(daemon.sessions().await);
+    Ok(sessions)
 }
 
 #[tauri::command]
-fn agent_sessions(registry: State<'_, Arc<AgentRegistry>>) -> Vec<AgentSessionSummary> {
-    registry.list()
-}
-
-#[tauri::command]
-fn agent_rename(
+async fn agent_rename(
     session_id: String,
     label: String,
     registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<AgentSessionSummary, String> {
-    registry.rename(&session_id, &label)
+    if crate::agent_daemon::owns(&session_id) {
+        let value = daemon
+            .request(
+                false,
+                crate::agent_daemon::Request::Rename { session_id, label },
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|error| error.to_string())
+    } else {
+        registry.rename(&session_id, &label)
+    }
 }
 
 #[tauri::command]
-fn agent_output_snapshots(registry: State<'_, Arc<AgentRegistry>>) -> Vec<AgentOutputSnapshot> {
-    registry.output_snapshots()
+async fn agent_output_snapshots(
+    registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
+) -> Result<Vec<AgentOutputSnapshot>, String> {
+    let mut snapshots = registry.output_snapshots();
+    snapshots.extend(daemon.snapshots().await);
+    Ok(snapshots)
+}
+
+/// Whether the background service is up and how many sessions it holds.
+#[tauri::command]
+async fn agent_daemon_status(daemon: State<'_, AppDaemon>) -> Result<AgentDaemonStatus, String> {
+    let sessions = daemon.sessions().await;
+    Ok(AgentDaemonStatus {
+        running: daemon.is_running().await,
+        sessions: sessions.len(),
+    })
+}
+
+/// Ends every background session and the service itself. The window asks
+/// for confirmation first; nothing here is recoverable.
+#[tauri::command]
+async fn agent_daemon_stop(daemon: State<'_, AppDaemon>) -> Result<bool, String> {
+    match daemon
+        .request(false, crate::agent_daemon::Request::Shutdown)
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(error) if daemon.is_running().await => Err(error),
+        Err(_) => Ok(false),
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentDaemonStatus {
+    running: bool,
+    sessions: usize,
 }
 
 #[tauri::command]
@@ -2431,6 +2652,11 @@ pub fn run() {
             ))
             .map_err(std::io::Error::other)?;
             app.manage(agent_registry);
+            let data_dir = app.path().app_data_dir().map_err(std::io::Error::other)?;
+            app.manage(Arc::new(crate::agent_daemon::client::DaemonClient::new(
+                app.handle().clone(),
+                &data_dir,
+            )));
             app.manage(Arc::new(crate::agent_chat::AgentChatRegistry::new()));
             Ok(())
         })
@@ -2465,6 +2691,8 @@ pub fn run() {
             agent_sessions,
             agent_rename,
             agent_output_snapshots,
+            agent_daemon_status,
+            agent_daemon_stop,
             agent_shared_rules_inspect,
             agent_shared_rules_save,
             agent_plan_snapshot,
