@@ -19,6 +19,8 @@ export interface RuntimeSummary {
   credentialStorageReady: boolean;
   /** "windows" | "macos" | "linux" | "android" | "ios". */
   platform: string;
+  /** A file-scope sandbox tool (bubblewrap) is installed on this machine. */
+  agentSandboxAvailable?: boolean;
 }
 
 export interface RuntimeState {

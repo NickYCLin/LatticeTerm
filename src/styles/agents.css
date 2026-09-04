@@ -138,6 +138,25 @@
   max-width: 54rem;
 }
 
+.agents-sandbox {
+  align-items: flex-start;
+}
+
+.agents-sandbox__label {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.agents-sandbox__badge {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-pill);
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+
 .agents-field-hint {
   color: var(--text-faint);
   font-size: var(--text-2xs);

@@ -355,6 +355,7 @@ mod tests {
             arguments: vec!["--version".to_string()],
             resume_session_id: None,
             note: String::new(),
+            sandbox: false,
             working_directory: directory.display().to_string(),
         }
     }
@@ -455,6 +456,7 @@ mod tests {
                 arguments: Vec::new(),
                 resume_session_id: Some("  architecture review  ".to_string()),
                 note: "  接手上週的重構  ".to_string(),
+                sandbox: false,
                 working_directory: directory.display().to_string(),
             })
             .unwrap();
