@@ -7,7 +7,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 [下載安裝](#-下載與安裝-downloads) · [功能現況](#完成度總覽) · [程式碼與文件導覽](docs/README.md) · [安全性](SECURITY.md) · [參與貢獻](CONTRIBUTING.md) · [English project map](llms.txt)
 
 > [!NOTE]
-> LatticeTerm 目前處於 **公開測試與功能成熟化階段**。桌面端的連線管理、SSH／SFTP／Tunnel、Web RDP、VNC、本機 AI Agent Fleet、安全保管庫、備份、跨平台安裝檔與自動更新已可實際使用，Lattice Remote 亦支援自架中繼、數字裝置 ID、遠端控制／檔案傳輸與純終端分享；背景 Agent daemon、遠端 Fleet、NAT 直連穿透與 iOS 實機發布等進階能力仍依後續藍圖開發。
+> LatticeTerm 目前處於 **公開測試與功能成熟化階段**。桌面端的連線管理、SSH／SFTP／Tunnel、Web RDP、VNC、本機 AI Agent Fleet、安全保管庫、備份、跨平台安裝檔與自動更新已可實際使用，Lattice Remote 亦支援自架中繼、數字裝置 ID、遠端控制／檔案傳輸與純終端分享；Agent Fleet 的工作階段可勾選「留在背景」交給本機背景服務，關閉 LatticeTerm 後繼續執行並在下次開啟時接回；遠端 Fleet、NAT 直連穿透與 iOS 實機發布等進階能力仍依後續藍圖開發。
 
 ## 完成度總覽
 
@@ -20,7 +20,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | 發行與更新 | **可用** | Windows x64、Linux x64／arm64、macOS Apple Silicon 安裝檔、更新簽章、Release PR 與應用程式內更新已自動化。 |
 | Android | **預覽** | 共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面可建置；需要桌面 sidecar 的 RDP、VNC 與 Agent Fleet 不提供。 |
 | iOS | **預覽** | 已在 iPhone 17 Simulator 編譯、安裝及啟動共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面；已產出並驗證 In-House 企業版 IPA 簽章，實機安裝、TestFlight 與上架仍未驗證。 |
-| 進階 Agent 與行動能力 | **部分完成** | 排程任務、接續執行與同時執行上限、提示佇列，以及 Linux 的 bubblewrap 檔案範圍沙箱已完成；跨程序 daemon、遠端 Fleet、macOS／Windows 的沙箱與 iOS 上架仍待完成。 |
+| 進階 Agent 與行動能力 | **部分完成** | 排程任務、接續執行與同時執行上限、提示佇列，Linux 的 bubblewrap 檔案範圍沙箱，以及跨程序背景服務（勾選「留在背景」的工作階段在關閉 LatticeTerm 後繼續執行、下次開啟自動接回）已完成；遠端 Fleet、macOS／Windows 的沙箱與 iOS 上架仍待完成。 |
 
 ## 主要特色
 
@@ -68,7 +68,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 介面必須讓使用者一眼分辨「已經可用」與「還在開發」：
 
 - 尚未實作的功能標示為「即將推出」，不使用看起來可按、實際上停用的假按鈕。
-- AI Agent Fleet、SSH、SFTP、Lattice Remote、Web RDP 與 VNC 會啟動真正的工作階段；Agent Fleet 可在同一桌面程序內重新 attach 活躍 PTY，正常關閉時也能加密保存並在下次重播終端尾端輸出，但不會假裝舊程序本身可跨應用程式重啟存活。跨程序背景 daemon 與原 PTY 重新 attach 仍明確標示開發狀態。
+- AI Agent Fleet、SSH、SFTP、Lattice Remote、Web RDP 與 VNC 會啟動真正的工作階段；Agent Fleet 可在同一桌面程序內重新 attach 活躍 PTY，正常關閉時也能加密保存並在下次重播終端尾端輸出，但不會假裝舊程序本身可跨應用程式重啟存活；只有勾選「留在背景」的工作階段由獨立的背景服務持有，才會真的跨視窗關閉存活並在下次開啟時接回。
 - 主機資源分頁只顯示活躍 SSH 工作階段取得的真實 Linux 指標；尚未連線或不支援的平台會直接說明原因，不顯示假的 CPU 或記憶體數字。
 - SSH/SFTP/RDP/VNC 密碼與已儲存 Lattice Relay 裝置的配對碼永遠不寫入連線設定檔；預設只供當次驗證，勾選後也只有驗證成功才會寫入使用者選擇的作業系統認證儲存區或已解鎖加密保管庫。
 - Key Vault 的主機信任、認證與加密保管庫分頁都顯示真正的本機狀態；認證分頁只列連線參照，不顯示密碼或配對碼內容。
@@ -79,7 +79,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 ## 後續開發重點
 
 1. **Lattice Remote 連線範圍**：鍵盤／滑鼠遠端控制已可用（由分享端明確授權）；免帳戶數字裝置 ID、自架 Relay（`docs/RELAY_SERVER.zh-TW.md`）、裝置金鑰釘選（TOFU）與固定配對碼無人值守已可用；接著加入 NAT 直連穿透。連線清單先保存在本機，帳戶只作為日後跨裝置同步與團隊權限的選配層。
-2. **Agent 常駐與遠端能力**：把 PTY owner 抽成使用者自行啟動的背景 daemon，支援跨程序重新 attach，並先以 SSH transport 實作遠端 Agent Fleet。
+2. **Agent 常駐與遠端能力**：背景服務已能持有勾選「留在背景」的工作階段並跨視窗關閉接回；下一步是讓保存的啟動項目記住這個選擇、讓背景服務也跑對話排程，並先以 SSH transport 實作遠端 Agent Fleet。
 3. **Agent 編排與隔離**：補齊其他工具的 hook 與 token／cost 可觀測事件；排程、佇列、接續執行與同時執行上限已完成，Linux 檔案範圍沙箱已完成，接著是 macOS／Windows 的對應隔離與網路／資源限制。
 4. **平台完整度**：設計安全的 Windows npm shim adapter、持續強化 Android 發行流程，並完成 iOS 實機安裝、TestFlight 與上架驗證。
 5. **正式發行信任**：自動更新包已有 Tauri 簽章；Windows Authenticode 與 Apple Developer ID／notarization 仍需發行者憑證。
@@ -155,6 +155,8 @@ $remote = $env:LATTICETERM_REMOTE_CLI
 Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示後端不可用。開啟側邊導覽的「AI Agent Fleet」，選擇工作目錄後即可啟動已偵測到的內建 CLI。未偵測到工具時，卡片會先列出經專案固定的安裝指令；使用者確認後才會開啟安裝終端，LatticeTerm 不會在背景靜默下載或執行安裝。若該平台沒有可直接執行的安全安裝方式，則提供可複製的安裝說明網址。安裝程式若更新 PATH，可能需要重開 LatticeTerm 才會被偵測到。批次提示必須先勾選執行中的目標並再次確認，LatticeTerm 不保存提示內容。
 
 要同時用兩個以上的 Codex 或 Claude Code 帳號（例如個人與公司各一個），在卡片上按「新增另一個帳號…」取個名字即可；LatticeTerm 會替它建立專屬的設定目錄（`CODEX_HOME`／`CLAUDE_CONFIG_DIR`），登入資料由 CLI 自己存在那裡，LatticeTerm 只記名稱、不碰密碼或 token。加入後在「啟動時使用的帳號」選它按「啟動」，在開出來的終端機裡照 CLI 的提示登入一次（Claude Code 輸入 `/login`，Codex 會直接顯示登入選項），之後清單裡會標示「已登入：email」，選它就直接可用；還沒登入的帳號會標示「尚未登入」並在卡片上說明怎麼登入。「移除這個帳號」會先確認，LatticeTerm 自己建立的目錄連登入資料一起刪除，自行指定的既有設定目錄（對話框的「進階」）則只從清單移除。對話頁的帳號選單也用同一份清單。
+
+勾選「留在背景（關閉 LatticeTerm 後繼續執行）」啟動的工作階段，會交給 LatticeTerm 自己的本機背景服務持有：關掉視窗它照跑，下次開啟 LatticeTerm 會自動接回並重播最近 256 KiB 的輸出，分頁上以「背景」標示。背景服務就是同一個 `lattice-term` 執行檔以 `agent-daemon` 子命令啟動，只監聽應用程式資料目錄下使用者專屬的本機 socket（Windows 為具名管道），連線要先出示同目錄下只有你讀得到的權杖；它沒有工作階段也沒有視窗連著 60 秒後會自己結束。想一次結束所有背景工作階段，按啟動表單下方的「結束背景服務」（會先確認）；沒有勾選的工作階段行為與以前完全一樣，仍隨 LatticeTerm 結束。
 
 若要讓另一個 CLI 接手，請在執行中的工作階段分頁選擇「加開 CLI」；來源為 Codex、Claude Code、Gemini CLI 或 Google Antigravity CLI 時，可勾選「帶入目前對話」。任何已安裝的新 CLI 都會收到整理過的對話交接內容，但不會搬移模型內部狀態、登入資料或憑證。交接內容不再整段貼進新 CLI 的終端機（終端機介面吃大段貼上很慢，模型也得先啃完才能互動），而是寫成 LatticeTerm 資料目錄下擁有者限定的 `handoffs/handoff-*.md`，只貼一行指向該檔案的提示，新 CLI 立刻可用、需要時自己讀檔；檔案一天後自動清掉。Codex 有明確 Session ID 時只接受 metadata 完全相符且不是 subagent 的 rollout；沒有 ID 時則只選同一 canonical 工作目錄的主 CLI 對話。Claude 也以 JSONL metadata 的 Session ID 精確尋找已驗證的主工作階段；沒有 ID 時才依 canonical 工作目錄選取，不依可能碰撞的專案資料夾 slug。Gemini 依官方 JSONL state records 還原 rewind 後的有效訊息，並用程序 hook 回報的 Session ID 區分同一資料夾的多個 CLI。Antigravity 則以該次程序限定的暫存 log 捕捉 Conversation ID，只讀對應 `transcript.jsonl` 的明確使用者輸入與最終回覆。所有有界歷程讀取都不跟隨最終符號連結。若勾選帶入但來源對話尚未寫入或無法安全讀取，新的 CLI 不會開啟，原工作階段會保留並顯示原因。
 

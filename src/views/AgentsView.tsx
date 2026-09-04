@@ -28,6 +28,7 @@ import { AgentSkillsPanel } from "../components/agents/AgentSkillsPanel";
 import { SharedAgentRulesPanel } from "../components/agents/SharedAgentRulesPanel";
 import { Callout } from "../components/common/Callout";
 import { ConfirmDialog } from "../components/overlays/ConfirmDialog";
+import { useAgentDaemon } from "../app/useAgentDaemon";
 import {
   AgentIcon,
   ChevronDownIcon,
@@ -110,6 +111,9 @@ export function AgentsView({
   const [workingDirectory, setWorkingDirectory] = useState("");
   const [launchNote, setLaunchNote] = useState("");
   const [sandbox, setSandbox] = useState(false);
+  const [detached, setDetached] = useState(false);
+  const daemon = useAgentDaemon(agents.sessions.length);
+  const [confirmingDaemonStop, setConfirmingDaemonStop] = useState(false);
   const [launching, setLaunching] = useState<string | null>(null);
   const [accountProfiles, setAccountProfiles] = useState<ChatAccountProfile[]>(() =>
     typeof localStorage === "undefined" ? [] : loadChatAccountProfiles(localStorage),
@@ -230,6 +234,7 @@ export function AgentsView({
       note: launchNote.trim(),
       profileConfigPath: profile?.configDirectory ?? null,
       sandbox: sandboxAvailable && sandbox,
+      detached,
       workingDirectory,
     };
   }
@@ -659,6 +664,33 @@ export function AgentsView({
               <span className="agents-field-hint">{t("agents.sandbox.hint")}</span>
             </span>
           </label>
+        )}
+
+        <label className="checkbox agents-sandbox">
+          <input
+            type="checkbox"
+            checked={detached}
+            onChange={(event) => setDetached(event.currentTarget.checked)}
+          />
+          <span className="checkbox__box" aria-hidden="true">
+            ✓
+          </span>
+          <span className="agents-sandbox__label">
+            <strong>{t("agents.detached")}</strong>
+            <span className="agents-field-hint">{t("agents.detached.hint")}</span>
+          </span>
+        </label>
+        {daemon.status.running && (
+          <p className="agents-daemon" role="status">
+            <span>{t("agents.daemon.running", { count: daemon.status.sessions })}</span>
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              onClick={() => setConfirmingDaemonStop(true)}
+            >
+              {t("agents.daemon.stop")}
+            </button>
+          </p>
         )}
 
         <section className="agents-startup-instructions">
@@ -1233,6 +1265,9 @@ export function AgentsView({
                   {session.sandboxed && (
                     <span className="agents-sandbox__badge">{t("agents.sandbox.badge")}</span>
                   )}
+                  {session.detached && (
+                    <span className="agents-sandbox__badge">{t("agents.detached.badge")}</span>
+                  )}
                   <span className="mono">{displayPath(session.workingDirectory)}</span>
                   {session.queuedPrompts > 0 && (
                     <small className="field__optional">
@@ -1457,6 +1492,22 @@ export function AgentsView({
         />
       )}
 
+      {confirmingDaemonStop && (
+        <ConfirmDialog
+          title={t("agents.daemon.stopConfirm.title")}
+          body={t("agents.daemon.stopConfirm.body", { count: daemon.status.sessions })}
+          confirmLabel={t("agents.daemon.stopConfirm.action")}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => {
+            setConfirmingDaemonStop(false);
+            void daemon.stop().catch((reason: unknown) => {
+              setError(reason instanceof Error ? reason.message : String(reason));
+            });
+          }}
+          onCancel={() => setConfirmingDaemonStop(false)}
+        />
+      )}
       {pendingProfileRemoval && (
         <ConfirmDialog
           title={t("agents.account.removeTitle", { name: pendingProfileRemoval.name })}

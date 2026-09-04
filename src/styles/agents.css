@@ -147,6 +147,16 @@
   gap: var(--space-1);
 }
 
+.agents-daemon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
 .agents-sandbox__badge {
   display: inline-block;
   padding: 0 var(--space-2);

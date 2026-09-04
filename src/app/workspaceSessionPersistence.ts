@@ -277,12 +277,15 @@ export function snapshotLiveWorkspaceSessions(
   // that exits must also remain recoverable: otherwise one provider-specific
   // startup failure silently deletes that tab and its sidebar placement. The
   // user can still remove it explicitly by closing the tab.
+  // A detached session lives on in the background service and is attached
+  // again on the next start; saving it too would launch a duplicate.
   const restorableAgents = agents.filter(
     (session) =>
-      !session.closedReason ||
+      !session.detached &&
+      (!session.closedReason ||
       session.restoreExistingSession === true ||
       (session.capturedSessionId !== null &&
-        /\bcode:\s*0\b/.test(session.closedReason)),
+        /\bcode:\s*0\b/.test(session.closedReason))),
   );
   const activeAgent = restorableAgents.find(
     (session) => session.sessionId === activeSessionId,

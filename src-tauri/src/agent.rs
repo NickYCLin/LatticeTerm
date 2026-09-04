@@ -272,14 +272,14 @@ pub enum AgentLifecycle {
     Done,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentStateSource {
     Heuristic,
     Integration,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTokenUsage {
     pub input_tokens: u64,
@@ -308,7 +308,7 @@ impl AgentTokenUsage {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionSummary {
     pub session_id: String,
@@ -344,9 +344,12 @@ pub struct AgentSessionSummary {
     /// True when the process runs inside the file-scope sandbox.
     #[serde(default)]
     pub sandboxed: bool,
+    /// Owned by the background daemon: survives closing the window.
+    #[serde(default)]
+    pub detached: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentBroadcastOutcome {
     pub session_id: String,
@@ -354,7 +357,7 @@ pub struct AgentBroadcastOutcome {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentOutputSnapshot {
     pub session_id: String,
@@ -363,7 +366,7 @@ pub struct AgentOutputSnapshot {
     pub base64: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentLaunchRequest {
     pub definition_id: String,
@@ -397,6 +400,9 @@ pub struct AgentLaunchRequest {
     /// no sandbox tool exists rather than silently running unconfined.
     #[serde(default)]
     pub sandbox: bool,
+    /// Hand the session to the background daemon so it outlives the window.
+    #[serde(default)]
+    pub detached: bool,
     pub working_directory: String,
     pub cols: u32,
     pub rows: u32,
@@ -1708,6 +1714,9 @@ pub struct AgentRegistry {
     sessions: Mutex<HashMap<String, Arc<AgentSessionEntry>>>,
     counter: AtomicU64,
     reporter: Option<ReporterEndpoint>,
+    /// Session ids start with this; the background daemon uses its own so
+    /// the desktop can route by prefix. `None` is the desktop default.
+    id_prefix: Option<String>,
 }
 
 impl AgentRegistry {
@@ -1718,12 +1727,24 @@ impl AgentRegistry {
     pub fn with_local_reporter(sink: Arc<dyn AgentSink>) -> Result<Arc<Self>, String> {
         let executable = std::env::current_exe()
             .map_err(|error| format!("Cannot locate the LatticeTerm executable: {error}"))?;
-        Self::with_local_reporter_executable(sink, executable)
+        Self::with_local_reporter_executable(sink, executable, None)
+    }
+
+    /// A registry whose session ids start with `prefix`, for the background
+    /// daemon: same reporter, same everything, distinguishable ids.
+    pub fn with_local_reporter_prefixed(
+        sink: Arc<dyn AgentSink>,
+        prefix: &str,
+    ) -> Result<Arc<Self>, String> {
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("Cannot locate the LatticeTerm executable: {error}"))?;
+        Self::with_local_reporter_executable(sink, executable, Some(prefix.to_string()))
     }
 
     fn with_local_reporter_executable(
         sink: Arc<dyn AgentSink>,
         executable: PathBuf,
+        id_prefix: Option<String>,
     ) -> Result<Arc<Self>, String> {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .map_err(|error| format!("Cannot start the local agent reporter: {error}"))?;
@@ -1735,6 +1756,7 @@ impl AgentRegistry {
                 address,
                 executable,
             }),
+            id_prefix,
             ..Self::default()
         });
         let thread_registry = Arc::clone(&registry);
@@ -1751,7 +1773,8 @@ impl AgentRegistry {
 
     fn next_id(&self) -> String {
         let n = self.counter.fetch_add(1, Ordering::Relaxed) + 1;
-        format!("agent-session-{n}")
+        let prefix = self.id_prefix.as_deref().unwrap_or("agent-session-");
+        format!("{prefix}{n}")
     }
 
     fn insert(
@@ -2288,7 +2311,7 @@ fn terminate_agent_entry(entry: &AgentSessionEntry) -> Result<(), String> {
     result.map_err(|error| format!("Cannot stop the agent process: {error}"))
 }
 
-fn random_report_token() -> Result<String, String> {
+pub(crate) fn random_report_token() -> Result<String, String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes)
         .map_err(|error| format!("Cannot create an agent reporter token: {error}"))?;
@@ -4943,6 +4966,7 @@ pub fn launch_request_from_plan(
         // workspace plan must never retain a machine-local credential root.
         profile_config_path: None,
         sandbox: validated.sandbox,
+        detached: false,
         working_directory: validated.working_directory,
         cols,
         rows,
@@ -5638,6 +5662,7 @@ pub fn launch_with_replay(
         // fresh announcement in the output still overwrites it.
         captured_session_id: request.resume_session_id.clone(),
         sandboxed: request.sandbox,
+        detached: false,
     };
     let antigravity_capture_path = match integration_settings.as_ref() {
         Some(AgentIntegrationSettings::Antigravity(log)) => Some(log.path.clone()),
@@ -6440,6 +6465,7 @@ session id: 0199aa11-"
             restore_existing_session: true,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 120,
             rows: 32,
@@ -6474,6 +6500,7 @@ session id: 0199aa11-"
             restore_existing_session: false,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 120,
             rows: 32,
@@ -6497,6 +6524,7 @@ session id: 0199aa11-"
             restore_existing_session: false,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 120,
             rows: 32,
@@ -6667,6 +6695,7 @@ session id: 0199aa11-"
                 restore_existing_session: false,
                 profile_config_path: None,
                 sandbox: false,
+                detached: false,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -7087,7 +7116,7 @@ model = "gpt-5.3-codex"
             "build the real reporter first with `cargo build --bin lattice-term`"
         );
         let registry =
-            AgentRegistry::with_local_reporter_executable(sink.clone(), reporter_executable)
+            AgentRegistry::with_local_reporter_executable(sink.clone(), reporter_executable, None)
                 .unwrap();
         let request = AgentLaunchRequest {
             definition_id: "hermes".to_string(),
@@ -7104,6 +7133,7 @@ model = "gpt-5.3-codex"
             restore_existing_session: false,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 100,
             rows: 30,
@@ -8554,6 +8584,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             restore_existing_session: false,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8636,6 +8667,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             restore_existing_session: false,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8867,6 +8899,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             restore_existing_session: false,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8920,6 +8953,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             restore_existing_session: false,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8981,6 +9015,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 restore_existing_session: false,
                 profile_config_path: None,
                 sandbox: false,
+                detached: false,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -9020,6 +9055,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             restore_existing_session: false,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -9065,6 +9101,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             restore_existing_session: false,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -9152,6 +9189,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 restore_existing_session: false,
                 profile_config_path: None,
                 sandbox: false,
+                detached: false,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -9191,6 +9229,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 restore_existing_session: false,
                 profile_config_path: None,
                 sandbox: false,
+                detached: false,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -9238,6 +9277,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 restore_existing_session: false,
                 profile_config_path: None,
                 sandbox: false,
+                detached: false,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -9473,6 +9513,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                         restore_existing_session: false,
                         profile_config_path: None,
                         sandbox: false,
+                        detached: false,
                         working_directory: std::env::current_dir().unwrap().display().to_string(),
                         cols: 80,
                         rows: 24,
@@ -9537,6 +9578,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             restore_existing_session: false,
             profile_config_path: None,
             sandbox: false,
+            detached: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
