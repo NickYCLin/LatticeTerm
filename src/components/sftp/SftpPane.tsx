@@ -14,6 +14,7 @@ import { useI18n } from "../../i18n/context";
 import { formatBytes } from "../../domain/metrics";
 import { Callout } from "../common/Callout";
 import { FileEntryIcon } from "../files/FileEntryIcon";
+import { useAppDialogs } from "../overlays/useAppDialogs";
 import {
   CloseIcon,
   EditIcon,
@@ -108,6 +109,17 @@ export function SftpPane({
       });
   }, [directory?.path, list, session.sessionId, sessionTransfers]);
 
+  const { confirm, prompt, dialogs } = useAppDialogs();
+
+  function askOverwrite(name: string) {
+    return confirm({
+      title: t("sftp.dialog.overwriteTitle", { name }),
+      body: t("sftp.overwriteConfirm", { name }),
+      confirmLabel: t("sftp.dialog.overwrite"),
+      cancelLabel: t("common.cancel"),
+    });
+  }
+
   async function mutate(operation: () => Promise<void>) {
     setBusy(true);
     setProblem(null);
@@ -126,24 +138,41 @@ export function SftpPane({
     void open(pathInput);
   }
 
-  function createFolder() {
-    const name = window.prompt(t("sftp.createPrompt"));
+  async function createFolder() {
+    const name = await prompt({
+      title: t("sftp.createPrompt"),
+      label: t("sftp.dialog.nameLabel"),
+      confirmLabel: t("sftp.dialog.create"),
+      cancelLabel: t("common.cancel"),
+    });
     if (!name?.trim() || !directory) return;
     void mutate(() =>
       sftp.createDirectory(session.sessionId, directory.path, name.trim()),
     );
   }
 
-  function rename(entry: SftpEntry) {
-    const name = window.prompt(t("sftp.renamePrompt"), entry.name);
+  async function rename(entry: SftpEntry) {
+    const name = await prompt({
+      title: t("sftp.renamePrompt"),
+      label: t("sftp.dialog.nameLabel"),
+      initialValue: entry.name,
+      confirmLabel: t("sftp.dialog.rename"),
+      cancelLabel: t("common.cancel"),
+    });
     if (!name?.trim() || name.trim() === entry.name) return;
     void mutate(() =>
       sftp.rename(session.sessionId, entry.path, name.trim()),
     );
   }
 
-  function remove(entry: SftpEntry) {
-    if (!window.confirm(t("sftp.deleteConfirm", { name: entry.name }))) return;
+  async function remove(entry: SftpEntry) {
+    const confirmed = await confirm({
+      title: t("sftp.dialog.deleteTitle", { name: entry.name }),
+      body: t("sftp.deleteConfirm", { name: entry.name }),
+      confirmLabel: t("sftp.dialog.delete"),
+      cancelLabel: t("common.cancel"),
+    });
+    if (!confirmed) return;
     void mutate(() =>
       sftp.remove(
         session.sessionId,
@@ -172,10 +201,7 @@ export function SftpPane({
       if (uploadRef.current) uploadRef.current.value = "";
       return;
     }
-    if (
-      existing &&
-      !window.confirm(t("sftp.overwriteConfirm", { name: file.name }))
-    ) {
+    if (existing && !(await askOverwrite(file.name))) {
       if (uploadRef.current) uploadRef.current.value = "";
       return;
     }
@@ -201,7 +227,7 @@ export function SftpPane({
         setProblem(t("sftp.overwriteDirectory", { name }));
         continue;
       }
-      if (existing && !window.confirm(t("sftp.overwriteConfirm", { name }))) {
+      if (existing && !(await askOverwrite(name))) {
         continue;
       }
       try {
@@ -428,7 +454,7 @@ export function SftpPane({
                         type="button"
                         className="icon-button icon-button--sm"
                         disabled={busy}
-                        onClick={() => rename(entry)}
+                        onClick={() => void rename(entry)}
                         aria-label={t("sftp.rename")}
                         data-tooltip={t("sftp.rename")}
                       >
@@ -438,7 +464,7 @@ export function SftpPane({
                         type="button"
                         className="icon-button icon-button--sm"
                         disabled={busy}
-                        onClick={() => remove(entry)}
+                        onClick={() => void remove(entry)}
                         aria-label={t("sftp.delete")}
                         data-tooltip={t("sftp.delete")}
                       >
@@ -539,6 +565,7 @@ export function SftpPane({
         </div>
       )}
 
+      {dialogs}
       {dragging && directory && (
         <div className="sftp-dropzone" aria-hidden="true">
           <div className="sftp-dropzone__card">

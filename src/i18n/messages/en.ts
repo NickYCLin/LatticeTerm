@@ -1222,6 +1222,13 @@ export const en: Messages = {
   "sftp.deleteConfirm": "Delete “{name}”? This action cannot be undone.",
   "sftp.overwriteConfirm":
     "“{name}” already exists. Overwrite it? This action cannot be undone.",
+  "sftp.dialog.overwrite": "Overwrite",
+  "sftp.dialog.overwriteTitle": "Overwrite “{name}”",
+  "sftp.dialog.delete": "Delete",
+  "sftp.dialog.deleteTitle": "Delete “{name}”",
+  "sftp.dialog.rename": "Rename",
+  "sftp.dialog.create": "Create folder",
+  "sftp.dialog.nameLabel": "Name",
   "sftp.overwriteDirectory":
     "“{name}” is a folder and cannot be overwritten by an uploaded file.",
   "sftp.transfer.done": "Done",
@@ -1282,6 +1289,8 @@ export const en: Messages = {
     "“{name}” is a folder or link and cannot be replaced by an upload.",
   "remote.files.overwriteConfirm":
     "“{name}” already exists remotely. Replace it safely?",
+  "remote.files.dialog.overwrite": "Replace safely",
+  "remote.files.dialog.overwriteTitle": "Replace “{name}”",
   "remote.files.transfer.done": "Completed",
   "remote.files.transfer.error": "Failed",
   "remote.files.transfer.cancelled": "Cancelled",
