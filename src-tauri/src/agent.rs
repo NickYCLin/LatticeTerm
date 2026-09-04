@@ -3821,6 +3821,21 @@ fn sandbox_home_writable_paths(definition_id: &str) -> Vec<&'static str> {
     paths
 }
 
+/// Files under the home directory that decide what a CLI *does* — its
+/// hooks, MCP servers, execution policy — bound read-only on top of the
+/// writable state root, so a runaway sandboxed run cannot plant something
+/// that executes at the next unsandboxed launch.
+fn sandbox_home_readonly_paths(definition_id: &str) -> Vec<&'static str> {
+    match definition_id {
+        "claude" => vec![".claude/settings.json", ".claude/settings.local.json"],
+        "codex" => vec![".codex/config.toml", ".codex/rules"],
+        "gemini" | "antigravity" => vec![".gemini/settings.json"],
+        "qwen" => vec![".qwen/settings.json"],
+        "cursor" => vec![".cursor/hooks.json", ".cursor/mcp.json"],
+        _ => vec![],
+    }
+}
+
 /// The bubblewrap argument vector that confines one CLI launch.
 ///
 /// The whole filesystem is bound read-only, then the working directory, the
@@ -3862,6 +3877,18 @@ pub fn sandbox_arguments(
     }
     for path in extra_writable {
         bind(path);
+    }
+    if let Some(home) = home {
+        // Later binds win: the policy files stay read-only inside the
+        // writable state root.
+        for relative in sandbox_home_readonly_paths(definition_id) {
+            let path = home.join(relative);
+            if exists(&path) {
+                args.push("--ro-bind".into());
+                args.push(path.as_os_str().to_os_string());
+                args.push(path.as_os_str().to_os_string());
+            }
+        }
     }
     args.extend(["--unshare-pid", "--die-with-parent", "--chdir"].map(OsString::from));
     args.push(working_directory.as_os_str().to_os_string());
@@ -4382,12 +4409,12 @@ fn plain_windows_path(path: &Path) -> OsString {
 /// given, and detected executable paths show up on the Agent Fleet cards.
 /// Every canonicalized path is stripped back to plain Win32 form.
 #[cfg(windows)]
-fn plain_win32_path(path: PathBuf) -> PathBuf {
+pub(crate) fn plain_win32_path(path: PathBuf) -> PathBuf {
     PathBuf::from(plain_windows_path(&path))
 }
 
 #[cfg(not(windows))]
-fn plain_win32_path(path: PathBuf) -> PathBuf {
+pub(crate) fn plain_win32_path(path: PathBuf) -> PathBuf {
     path
 }
 
@@ -7045,6 +7072,7 @@ model = "gpt-5.3-codex"
                 Some("/work")
                     | Some("/home/u/.claude")
                     | Some("/home/u/.claude.json")
+                    | Some("/home/u/.claude/settings.json")
                     | Some("/home/u/.cache")
             )
         };
@@ -7063,6 +7091,15 @@ model = "gpt-5.3-codex"
         // refuse to start, and there is nothing there to protect anyway.
         assert!(!joined.contains(".npm"));
         assert!(!joined.contains(".codex"));
+        // The hooks file is bound read-only after the writable state root, so
+        // the later bind shadows it.
+        let rw = joined
+            .find("--bind /home/u/.claude /home/u/.claude")
+            .unwrap();
+        let ro = joined
+            .find("--ro-bind /home/u/.claude/settings.json /home/u/.claude/settings.json")
+            .unwrap();
+        assert!(ro > rw);
         assert!(joined.ends_with("--unshare-pid --die-with-parent --chdir /work --"));
 
         // An account profile directory is writable too.

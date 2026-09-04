@@ -821,7 +821,7 @@ export const zhTW = {
   "agents.cwd.placeholder": "例如 /home/me/project",
   "agents.cwd.hint": "Agent 會從這個資料夾啟動，並能依自身權限讀寫其中的檔案。",
   "agents.sandbox": "沙箱：只能改工作目錄",
-  "agents.sandbox.hint": "以 bubblewrap 啟動：整個檔案系統唯讀，只有工作目錄、這個工具自己的登入與狀態目錄和 /tmp 可寫；網路照常。只在 Linux 且已安裝 bwrap 時提供。",
+  "agents.sandbox.hint": "以 bubblewrap 啟動：只限制寫入——整個檔案系統唯讀，只有工作目錄、這個工具自己的登入與狀態目錄和 /tmp 可寫（工具的 hooks／MCP 設定檔仍唯讀）。讀取與網路不受限，它看得到你的家目錄。只在 Linux 且 bwrap 可用時提供。",
   "agents.sandbox.badge": "沙箱",
   "agents.launchNote": "備註（選填）",
   "agents.launchNote.placeholder": "例如：這個 CLI 專門顧 payments 專案",

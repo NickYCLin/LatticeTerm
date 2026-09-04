@@ -860,7 +860,7 @@ export const en: Messages = {
   "agents.cwd.hint":
     "The agent starts in this folder and may read or change its files according to the CLI's permissions.",
   "agents.sandbox": "Sandbox: only the working directory may change",
-  "agents.sandbox.hint": "Launch through bubblewrap: the whole filesystem is read-only except the working directory, this tool's own login and state directories, and /tmp; network stays on. Offered only on Linux with bwrap installed.",
+  "agents.sandbox.hint": "Launch through bubblewrap: writes only — the whole filesystem is read-only except the working directory, this tool's own login and state directories and /tmp (its hooks/MCP config files stay read-only). Reads and network are not confined; it can still see your home directory. Offered only on Linux where bwrap works.",
   "agents.sandbox.badge": "Sandbox",
   "agents.launchNote": "Note (optional)",
   "agents.launchNote.placeholder": "e.g. this CLI handles the payments project",

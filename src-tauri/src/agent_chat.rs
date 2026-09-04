@@ -206,6 +206,20 @@ impl ChatSink for EventSink {
 
 type SharedStdin = Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>;
 
+/// Ends a turn's CLI and, on Unix, everything it spawned into its process
+/// group. `start_kill` alone leaves grandchildren alive and holding pipes.
+fn kill_turn(child: &mut Child) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        // SAFETY: plain syscall on a pid we own; a failure (already gone)
+        // is ignored and the direct kill below still applies.
+        unsafe {
+            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    child.start_kill()
+}
+
 struct RunningTurn {
     turn_id: String,
     child: Child,
@@ -258,8 +272,7 @@ impl AgentChatRegistry {
             Some(turn) => {
                 turn.stdin = None;
                 turn.pending_inputs.clear();
-                turn.child
-                    .start_kill()
+                kill_turn(&mut turn.child)
                     .map_err(|error| format!("Cannot stop the agent: {error}"))?;
                 Ok(true)
             }
@@ -272,7 +285,7 @@ impl AgentChatRegistry {
     pub fn shutdown(&self) {
         let mut running = self.lock();
         for turn in running.values_mut() {
-            let _ = turn.child.start_kill();
+            let _ = kill_turn(&mut turn.child);
         }
         running.clear();
     }
@@ -351,9 +364,10 @@ fn validate_working_directory(raw: &str) -> Result<PathBuf, String> {
     if raw.trim().is_empty() || !path.is_absolute() {
         return Err("Choose a working directory first.".to_string());
     }
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| format!("The working directory cannot be opened: {error}"))?;
+    let canonical = crate::agent::plain_win32_path(
+        path.canonicalize()
+            .map_err(|error| format!("The working directory cannot be opened: {error}"))?,
+    );
     if !canonical.is_dir() {
         return Err("The working directory is not a directory.".to_string());
     }
@@ -374,9 +388,10 @@ fn profile_config_directory(
     if !path.is_absolute() {
         return Err("The account profile directory must be an absolute path.".to_string());
     }
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| format!("The account profile directory cannot be opened: {error}"))?;
+    let canonical = crate::agent::plain_win32_path(
+        path.canonicalize()
+            .map_err(|error| format!("The account profile directory cannot be opened: {error}"))?,
+    );
     if !canonical.is_dir() {
         return Err("The account profile path is not a directory.".to_string());
     }
@@ -418,9 +433,10 @@ fn validate_attachments(requests: &[ChatAttachmentRequest]) -> Result<Vec<ChatAt
         if raw.is_empty() || !path.is_absolute() {
             return Err("An attachment path is invalid.".to_string());
         }
-        let path = path
-            .canonicalize()
-            .map_err(|error| format!("An attachment cannot be opened: {error}"))?;
+        let path = crate::agent::plain_win32_path(
+            path.canonicalize()
+                .map_err(|error| format!("An attachment cannot be opened: {error}"))?,
+        );
         let metadata = std::fs::metadata(&path)
             .map_err(|error| format!("An attachment cannot be inspected: {error}"))?;
         if !metadata.is_file() {
@@ -641,6 +657,11 @@ fn headless_command(executable: &Path) -> Command {
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     command.kill_on_drop(true);
+    // Its own process group, so stopping a turn also ends whatever the CLI
+    // spawned: a shell command it left running would otherwise keep the
+    // stdout pipe open and the turn "answering" forever.
+    #[cfg(unix)]
+    command.process_group(0);
     // A console program started from a windowed one gets its own console
     // window unless told otherwise; a chat reply must not flash a black
     // window on every turn.
@@ -928,6 +949,9 @@ pub async fn list_models(
         .stdout
         .take()
         .ok_or_else(|| "The agent's output could not be captured.".to_string())?;
+    // Drained, not read: a probe that never looks at stderr must still not
+    // let a chatty CLI block on a full pipe.
+    tauri::async_runtime::spawn(stderr_tail(child.stderr.take()));
     for line in &requests {
         stdin
             .write_all(line.as_bytes())
@@ -1041,6 +1065,34 @@ fn models_from_reply(
     }
 }
 
+/// Drains a child's stderr, keeping only the tail that explains a failure.
+/// Reading everything into memory first would let a chatty CLI grow the
+/// buffer without bound for the length of the turn.
+async fn stderr_tail(stderr: Option<tokio::process::ChildStderr>) -> String {
+    let mut tail: Vec<u8> = Vec::new();
+    if let Some(mut stderr) = stderr {
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match stderr.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(count) => {
+                    tail.extend_from_slice(&chunk[..count]);
+                    if tail.len() > MAX_STDERR_BYTES * 2 {
+                        let drop = tail.len() - MAX_STDERR_BYTES;
+                        tail.drain(..drop);
+                    }
+                }
+            }
+        }
+    }
+    let mut text = String::from_utf8_lossy(&tail).into_owned();
+    if text.len() > MAX_STDERR_BYTES {
+        let cut = floor_char_boundary(&text, text.len() - MAX_STDERR_BYTES);
+        text = text[cut..].to_string();
+    }
+    text
+}
+
 /// Starts one turn. Returns as soon as the process is running; everything
 /// it says arrives through the sink.
 ///
@@ -1102,13 +1154,6 @@ fn send_with_retry<S: ChatSink>(
         // process, then keep the guard until this process reports initialization.
         let mut startup_guard = registry.startup_guard(dialect).await;
 
-        {
-            let running = registry.lock();
-            if running.contains_key(&request.thread_id) {
-                return Err("This conversation is still answering.".to_string());
-            }
-        }
-
         let mut command = headless_command(&executable);
         apply_profile_environment(&mut command, dialect, profile_config_directory.as_deref());
         command.args(turn_arguments(
@@ -1140,7 +1185,13 @@ fn send_with_retry<S: ChatSink>(
         };
 
         {
+            // Checked and claimed under one lock: two sends racing for the
+            // same thread must not both get a process.
             let mut running = registry.lock();
+            if running.contains_key(&request.thread_id) {
+                let _ = kill_turn(&mut child);
+                return Err("This conversation is still answering.".to_string());
+            }
             running.insert(
                 request.thread_id.clone(),
                 RunningTurn {
@@ -1164,33 +1215,27 @@ fn send_with_retry<S: ChatSink>(
         let thread_id = request.thread_id;
         let turn_id = request.turn_id;
         tauri::async_runtime::spawn(async move {
-            // A CLI that has already exited closes the pipe; the exit status
-            // explains that better than a write error would.
-            if let Some(mut stdin) = one_shot_stdin {
-                let _ = stdin.write_all(prompt.as_bytes()).await;
-                let _ = stdin.write_all(b"\n").await;
-                let _ = stdin.shutdown().await;
-            } else if let Some(stdin) = &shared_stdin {
-                let mut stdin = stdin.lock().await;
-                for line in &opening {
-                    let _ = stdin.write_all(line.as_bytes()).await;
+            // Readers come up before anything is written: a CLI that fills
+            // its stderr or stdout pipe while we are still pushing a large
+            // prompt into stdin would otherwise deadlock with us.
+            let stderr_task = tauri::async_runtime::spawn(stderr_tail(stderr));
+            let writer_prompt = prompt.clone();
+            let writer_stdin = shared_stdin.clone();
+            tauri::async_runtime::spawn(async move {
+                // A CLI that has already exited closes the pipe; the exit
+                // status explains that better than a write error would.
+                if let Some(mut stdin) = one_shot_stdin {
+                    let _ = stdin.write_all(writer_prompt.as_bytes()).await;
                     let _ = stdin.write_all(b"\n").await;
+                    let _ = stdin.shutdown().await;
+                } else if let Some(stdin) = writer_stdin {
+                    let mut stdin = stdin.lock().await;
+                    for line in &opening {
+                        let _ = stdin.write_all(line.as_bytes()).await;
+                        let _ = stdin.write_all(b"\n").await;
+                    }
+                    let _ = stdin.flush().await;
                 }
-                let _ = stdin.flush().await;
-            }
-
-            let stderr_task = tauri::async_runtime::spawn(async move {
-                let mut tail = String::new();
-                if let Some(mut stderr) = stderr {
-                    let mut buffer = Vec::new();
-                    let _ = stderr.read_to_end(&mut buffer).await;
-                    tail = String::from_utf8_lossy(&buffer).into_owned();
-                }
-                if tail.len() > MAX_STDERR_BYTES {
-                    let cut = floor_char_boundary(&tail, tail.len() - MAX_STDERR_BYTES);
-                    tail = tail[cut..].to_string();
-                }
-                tail
             });
 
             let mut state = TurnState::default();
@@ -1274,7 +1319,7 @@ fn send_with_retry<S: ChatSink>(
                                 if state.app_server.is_some() {
                                     // An app-server serves until told
                                     // otherwise; this turn is what it was for.
-                                    let _ = turn.child.start_kill();
+                                    let _ = kill_turn(&mut turn.child);
                                 }
                             }
                         }
@@ -1504,6 +1549,29 @@ fn codex_turn_start_line(thread_id: &str, prompt: &str) -> String {
     .to_string()
 }
 
+/// The card id for one JSON-RPC request. Numbers and strings are both
+/// legal ids; collapsing every string to one value would make cards
+/// overwrite each other.
+fn codex_request_id(rpc_id: &Value) -> String {
+    let raw = match rpc_id {
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    let safe: String = raw
+        .chars()
+        .take(96)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("rpc-{safe}")
+}
+
 /// The answer to one app-server approval request.
 fn codex_approval_line(rpc_id: &Value, allow: bool) -> String {
     serde_json::json!({
@@ -1554,7 +1622,11 @@ pub async fn respond(
     message: Option<&str>,
 ) -> Result<(), String> {
     validate_id(thread_id, "thread id")?;
-    validate_id(request_id, "request id")?;
+    // The request id is the CLI's own token, used here only as a map key,
+    // so its alphabet is the CLI's business; only the size is bounded.
+    if request_id.is_empty() || request_id.len() > 256 {
+        return Err("Invalid request id.".to_string());
+    }
     let message = message.map(|text| truncate(text.trim(), 1024));
     let (stdin, input) = {
         let mut running = registry.lock();
@@ -1754,12 +1826,31 @@ fn parse_claude(state: &mut TurnState, value: &Value) -> Vec<ChatEvent> {
             let Some(request) = value.get("request") else {
                 return events;
             };
-            if str_field(request, "subtype") != Some("can_use_tool") {
-                return events;
-            }
             let Some(request_id) = str_field(value, "request_id") else {
                 return events;
             };
+            if str_field(request, "subtype") != Some("can_use_tool") {
+                // Anything else the CLI asks for has no card here. Refusing
+                // it keeps the turn moving instead of waiting on us forever.
+                state.pending_writes.push(
+                    serde_json::json!({
+                        "type": "control_response",
+                        "response": {
+                            "subtype": "error",
+                            "request_id": request_id,
+                            "error": "LatticeTerm cannot answer this request",
+                        },
+                    })
+                    .to_string(),
+                );
+                events.push(ChatEvent::Notice {
+                    message: format!(
+                        "The agent asked something the chat window cannot show ({}); it was declined.",
+                        str_field(request, "subtype").unwrap_or("request")
+                    ),
+                });
+                return events;
+            }
             let name = str_field(request, "tool_name")
                 .unwrap_or("tool")
                 .to_string();
@@ -2114,7 +2205,7 @@ fn parse_codex_app_server(state: &mut TurnState, value: &Value) -> Vec<ChatEvent
             "item/commandExecution/requestApproval"
             | "item/fileChange/requestApproval"
             | "item/permissions/requestApproval" => {
-                let request_id = format!("rpc-{}", rpc_id.as_u64().unwrap_or_default());
+                let request_id = codex_request_id(rpc_id);
                 let (name, summary) = match method {
                     "item/commandExecution/requestApproval" => (
                         "command",
@@ -3139,6 +3230,32 @@ mod tests {
         .expect("models");
         assert!(!models.is_empty());
         assert!(models.iter().any(|model| model.is_default), "{models:?}");
+    }
+
+    #[test]
+    fn an_unknown_claude_control_request_is_refused_so_the_turn_goes_on() {
+        let mut state = TurnState::default();
+        let events = parse_line(
+            Dialect::Claude,
+            &mut state,
+            r#"{"type":"control_request","request_id":"req-9","request":{"subtype":"hook_callback"}}"#,
+        );
+        assert!(matches!(events[0], ChatEvent::Notice { .. }));
+        let reply: Value = serde_json::from_str(&state.pending_writes[0]).unwrap();
+        assert_eq!(reply["response"]["subtype"], "error");
+        assert_eq!(reply["response"]["request_id"], "req-9");
+        assert!(state.pending_inputs.is_empty());
+    }
+
+    #[test]
+    fn codex_request_ids_keep_string_and_number_ids_apart() {
+        assert_eq!(codex_request_id(&Value::from(7)), "rpc-7");
+        assert_eq!(codex_request_id(&Value::from("abc-1")), "rpc-abc-1");
+        assert_eq!(codex_request_id(&Value::from("a b/c")), "rpc-a_b_c");
+        assert_ne!(
+            codex_request_id(&Value::from("x")),
+            codex_request_id(&Value::from("y"))
+        );
     }
 
     #[test]
