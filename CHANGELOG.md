@@ -4,6 +4,19 @@
 
 ---
 
+## [0.42.0](https://github.com/NickYCLin/lattice-term/compare/v0.41.0...v0.42.0) (2026-09-04)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** Linux 可用 bubblewrap 沙箱啟動 CLI，只允許改工作目錄 ([#144](https://github.com/NickYCLin/lattice-term/issues/144)) ([ba90e05](https://github.com/NickYCLin/lattice-term/commit/ba90e055457623d55f803a6269b33a4c25adc9c6))
+* **對話:** Codex 也支援逐項核准，走 app-server 的 JSON-RPC ([#146](https://github.com/NickYCLin/lattice-term/issues/146)) ([2dee4bf](https://github.com/NickYCLin/lattice-term/commit/2dee4bf725021454a079fbbc7b3123523572a3e9))
+
+
+### 🛠️ 問題修正
+
+* **對話:** 實機測試發現的版面與文案問題 ([#149](https://github.com/NickYCLin/lattice-term/issues/149)) ([0458e12](https://github.com/NickYCLin/lattice-term/commit/0458e12215c24911beec606bbc93ab728a9cd9cb))
+
 ## [0.41.0](https://github.com/NickYCLin/lattice-term/compare/v0.40.0...v0.41.0) (2026-09-04)
 
 
