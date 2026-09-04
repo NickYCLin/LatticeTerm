@@ -61,6 +61,14 @@ const SILENT_WORKING_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 /// Every interactive CLI redraws an elapsed-time or token counter while it
 /// works, so a PTY this quiet is parked at its prompt.
 const SILENT_WORKING_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long a prompt-ready control code has to be followed by silence before
+/// a CLI without a lifecycle integration is called done. A spinner redraws
+/// many times a second, so a CLI still working never stays quiet this long;
+/// a CLI parked at its prompt prints nothing at all.
+#[cfg(not(test))]
+const PROMPT_READY_SETTLE: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const PROMPT_READY_SETTLE: Duration = Duration::from_millis(150);
 
 const AGENT_ADAPTER_VERSION: u32 = 1;
 
@@ -410,6 +418,47 @@ fn profile_config_directory(
     Ok(Some(path))
 }
 
+/// A configuration root of LatticeTerm's own for one account profile,
+/// created on first use under the app's data directory.
+///
+/// Claude Code and Codex keep their login inside their config directory, so
+/// a second account needs a second directory or the logins overwrite each
+/// other. Making that directory here means the person only names the
+/// account; the CLI then logs in there the first time it starts. Nothing is
+/// written into it by LatticeTerm, and nothing is read back.
+pub fn account_profile_directory(
+    data_dir: &Path,
+    definition_id: &str,
+    profile_id: &str,
+) -> Result<PathBuf, String> {
+    if definition_id != "codex" && definition_id != "claude" {
+        return Err("Only Codex and Claude Code support account profiles.".to_string());
+    }
+    if profile_id.is_empty()
+        || profile_id.len() > 64
+        || !profile_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("Invalid account profile id.".to_string());
+    }
+    let directory = data_dir
+        .join("agent-profiles")
+        .join(definition_id)
+        .join(profile_id);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("Cannot create the account profile directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // The CLI will keep a login token in here.
+        let _ = std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(plain_win32_path(
+        directory.canonicalize().unwrap_or(directory),
+    ))
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentLaunchPlanDraft {
@@ -609,6 +658,10 @@ struct AgentSessionEntry {
     /// When this PTY last produced output, used to release a heuristic
     /// "working" guess that no lifecycle integration ever confirmed.
     last_output_at: Mutex<Instant>,
+    /// A prompt-ready control code seen at this instant, waiting to see
+    /// whether the terminal goes quiet afterwards. TUIs re-enable bracketed
+    /// paste on ordinary redraws too, so the code alone proves nothing.
+    prompt_ready_at: Mutex<Option<Instant>>,
     /// An official CLI lifecycle hook will report completion for this session,
     /// so prompt-rendering control codes must never guess that it is done.
     integrated_completion: AtomicBool,
@@ -922,7 +975,9 @@ impl CompletionReadiness {
                 .windows(b"\x1b[?2004h".len())
                 .any(|window| window == b"\x1b[?2004h");
         if prompt_ready {
-            self.submitted = false;
+            // `submitted` stays set: this may be a redraw rather than the
+            // prompt, and if it is, the real prompt-ready must still count.
+            // The registry clears it once the terminal has gone quiet.
             self.control_window.clear();
             return Some(AgentLifecycle::Done);
         }
@@ -937,6 +992,18 @@ impl CompletionReadiness {
         self.submitted = false;
         self.control_window.clear();
     }
+}
+
+/// What became of a prompt-ready sighting once its quiet window elapsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PromptReadySettle {
+    /// The terminal stayed quiet: the CLI is at its prompt.
+    Done,
+    /// More output arrived; check again this long after the newest of it.
+    Retry(Instant),
+    /// Something authoritative moved the state, or the sighting was
+    /// superseded; nothing to show.
+    Dropped,
 }
 
 /// Decides whether a session that only *looks* busy should be released. The
@@ -1693,6 +1760,71 @@ impl AgentRegistry {
         summary.state = AgentLifecycle::Working;
         summary.state_source = AgentStateSource::Heuristic;
         true
+    }
+
+    /// Notes a prompt-ready control code and says whether a settle check
+    /// should be scheduled for it. One check at a time is enough: a redraw
+    /// storm would otherwise spawn a thread per frame.
+    fn note_prompt_ready(&self, session_id: &str) -> Option<Instant> {
+        let entry = self.get(session_id).ok()?;
+        let mut pending = entry.prompt_ready_at.lock().ok()?;
+        if pending.is_some() {
+            return None;
+        }
+        let now = Instant::now();
+        *pending = Some(now);
+        Some(now)
+    }
+
+    /// Turns a prompt-ready guess into "done" if, and only if, the terminal
+    /// has said nothing since and nothing authoritative moved the state in
+    /// the meantime. Output that arrived after the sighting moves the quiet
+    /// window forward instead of ending the check: a CLI that was redrawing
+    /// still parks at its prompt eventually, and that moment is what counts.
+    fn settle_prompt_ready(&self, session_id: &str, marker: Instant) -> PromptReadySettle {
+        let Ok(entry) = self.get(session_id) else {
+            return PromptReadySettle::Dropped;
+        };
+        let Ok(mut pending) = entry.prompt_ready_at.lock() else {
+            return PromptReadySettle::Dropped;
+        };
+        if *pending != Some(marker) {
+            return PromptReadySettle::Dropped;
+        }
+        let still_guessing = matches!(
+            entry.summary.lock().as_deref(),
+            Ok(summary)
+                if summary.state == AgentLifecycle::Working
+                    && summary.state_source == AgentStateSource::Heuristic
+        );
+        if !still_guessing {
+            *pending = None;
+            return PromptReadySettle::Dropped;
+        }
+        let last_output_at = match entry.last_output_at.lock() {
+            Ok(at) => *at,
+            Err(_) => {
+                *pending = None;
+                return PromptReadySettle::Dropped;
+            }
+        };
+        if last_output_at > marker {
+            *pending = Some(last_output_at);
+            return PromptReadySettle::Retry(last_output_at);
+        }
+        *pending = None;
+        drop(pending);
+        if !self.update_state(
+            session_id,
+            AgentLifecycle::Done,
+            AgentStateSource::Heuristic,
+        ) {
+            return PromptReadySettle::Dropped;
+        }
+        if let Ok(mut completion) = entry.completion_gate.lock() {
+            completion.cancel();
+        }
+        PromptReadySettle::Done
     }
 
     /// Releases a heuristic "working" guess for a PTY that has produced no
@@ -5232,6 +5364,7 @@ pub fn launch_with_replay(
         startup_gate: StartupGate::default(),
         completion_gate: Mutex::new(CompletionReadiness::default()),
         last_output_at: Mutex::new(launched_at),
+        prompt_ready_at: Mutex::new(None),
         integrated_completion: AtomicBool::new(integrated_completion),
         copilot_activity,
         hermes_activity,
@@ -5287,7 +5420,34 @@ pub fn launch_with_replay(
                     } else {
                         Some(lifecycle_from_output(bytes))
                     };
-                    if let Some(state) = state {
+                    if state == Some(AgentLifecycle::Done) {
+                        // A guess, not a verdict: wait for the terminal to go
+                        // quiet before showing it. Redraws re-enable bracketed
+                        // paste too, and a CLI mid-task must not read as done.
+                        if let Some(marker) = reader_registry.note_prompt_ready(&reader_id) {
+                            let settle_id = reader_id.clone();
+                            let settle_registry = Arc::clone(&reader_registry);
+                            let settle_sink = Arc::clone(&reader_sink);
+                            std::thread::spawn(move || {
+                                let mut marker = marker;
+                                loop {
+                                    std::thread::sleep(PROMPT_READY_SETTLE);
+                                    match settle_registry.settle_prompt_ready(&settle_id, marker) {
+                                        PromptReadySettle::Done => {
+                                            settle_sink.state(
+                                                &settle_id,
+                                                AgentLifecycle::Done,
+                                                AgentStateSource::Heuristic,
+                                            );
+                                            break;
+                                        }
+                                        PromptReadySettle::Retry(next) => marker = next,
+                                        PromptReadySettle::Dropped => break,
+                                    }
+                                }
+                            });
+                        }
+                    } else if let Some(state) = state {
                         if reader_registry.update_state(
                             &reader_id,
                             state,
@@ -6068,7 +6228,68 @@ session id: 0199aa11-"
             readiness.observe_output(b"04h", false),
             Some(AgentLifecycle::Done)
         );
+        // Still a guess: a redraw re-enabling bracketed paste reports it
+        // again, and the registry decides whether the terminal went quiet.
+        assert_eq!(
+            readiness.observe_output(b"\x1b[?2004h", false),
+            Some(AgentLifecycle::Done)
+        );
+        readiness.cancel();
         assert_eq!(readiness.observe_output(b"\x1b[?2004h", false), None);
+    }
+
+    /// A TUI re-enables bracketed paste on ordinary redraws, so the code
+    /// alone must not flip the sidebar to "done" while the CLI is mid-task.
+    #[cfg(unix)]
+    #[test]
+    fn a_prompt_ready_code_only_counts_once_the_terminal_goes_quiet() {
+        let sink: Arc<dyn AgentSink> = Arc::new(TestSink::default());
+        let registry = Arc::new(AgentRegistry::new());
+        let session = launch(
+            sink.clone(),
+            registry.clone(),
+            AgentLaunchRequest {
+                definition_id: "custom".to_string(),
+                label: "Prompt ready".to_string(),
+                executable: "/bin/cat".to_string(),
+                arguments: Vec::new(),
+                resume_session_id: None,
+                group_id: None,
+                seed_input: None,
+                restore_existing_session: false,
+                profile_config_path: None,
+                working_directory: std::env::current_dir().unwrap().display().to_string(),
+                cols: 80,
+                rows: 24,
+            },
+        )
+        .unwrap();
+        let id = session.session_id.clone();
+
+        send_bytes(sink.as_ref(), &registry, &id, b"do the task\r").unwrap();
+        assert_eq!(registry.list()[0].state, AgentLifecycle::Working);
+
+        // cat echoes the code back, so every one of these is a "prompt ready"
+        // sighting followed by more output within the settle window.
+        for _ in 0..6 {
+            send_bytes(sink.as_ref(), &registry, &id, b"\x1b[?2004h redraw\r").unwrap();
+            std::thread::sleep(PROMPT_READY_SETTLE / 3);
+        }
+        assert_eq!(
+            registry.list()[0].state,
+            AgentLifecycle::Working,
+            "a redraw storm must not read as done"
+        );
+
+        // Now the terminal goes quiet: the last sighting settles into done.
+        let deadline = Instant::now() + PROMPT_READY_SETTLE * 20;
+        while registry.list()[0].state != AgentLifecycle::Done {
+            assert!(Instant::now() < deadline, "a quiet terminal never settled");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(registry.list()[0].state_source, AgentStateSource::Heuristic);
+
+        registry.stop_all();
     }
 
     #[test]
@@ -6624,6 +6845,34 @@ model = "gpt-5.3-codex"
 
         assert!(command.get_env("HERDR_ENV").is_none());
         assert!(command.get_env("HERDR_PANE_ID").is_none());
+    }
+
+    #[test]
+    fn account_profile_directories_are_created_under_the_data_dir_and_checked() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let created =
+            account_profile_directory(root.path(), "claude", "profile-1").expect("created");
+        assert!(created.is_dir());
+        assert!(created.ends_with(Path::new("agent-profiles/claude/profile-1")));
+        // Creating it again is fine; the existing directory is returned.
+        assert_eq!(
+            account_profile_directory(root.path(), "claude", "profile-1").unwrap(),
+            created
+        );
+        // It passes the same check a chosen directory does.
+        assert!(profile_config_directory("claude", Some(&created.display().to_string())).is_ok());
+
+        assert!(account_profile_directory(root.path(), "gemini", "p").is_err());
+        assert!(account_profile_directory(root.path(), "codex", "../escape").is_err());
+        assert!(account_profile_directory(root.path(), "codex", "").is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&created).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
     }
 
     #[test]

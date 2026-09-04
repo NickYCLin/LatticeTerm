@@ -474,6 +474,22 @@ fn agent_clear_queue(
     crate::agent::clear_queue(&crate::agent::EventSink(app), registry.inner(), &session_id)
 }
 
+/// Creates (or finds) LatticeTerm's own configuration directory for one
+/// account profile and returns its path.
+#[tauri::command]
+fn agent_account_profile_directory(
+    app: AppHandle,
+    definition_id: String,
+    profile_id: String,
+) -> Result<String, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Cannot locate the application data directory: {error}"))?;
+    crate::agent::account_profile_directory(&data_dir, &definition_id, &profile_id)
+        .map(|path| path.display().to_string())
+}
+
 /// The CLIs a chat thread can be started with on this machine.
 #[tauri::command]
 fn agent_chat_supported() -> Vec<String> {
@@ -2355,6 +2371,7 @@ pub fn run() {
             agent_enqueue,
             agent_clear_queue,
             agent_chat_supported,
+            agent_account_profile_directory,
             agent_chat_send,
             agent_chat_stop,
             agent_chat_respond,

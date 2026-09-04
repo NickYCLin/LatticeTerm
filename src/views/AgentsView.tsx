@@ -226,14 +226,35 @@ export function AgentsView({
     };
   }
 
-  function addAccountProfile(
+  async function addAccountProfile(
     definition: AgentDefinition,
     name: string,
-    configDirectory: string,
+    chosenDirectory: string | null,
   ) {
     if (!profileCapable(definition.id)) return;
+    const id = crypto.randomUUID();
+    let configDirectory = chosenDirectory;
+    if (configDirectory === null) {
+      // No directory chosen: LatticeTerm keeps one of its own per profile,
+      // so a second account never shares the first one's login.
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        configDirectory = await invoke<string>("agent_account_profile_directory", {
+          definitionId: definition.id,
+          profileId: id,
+        });
+      } catch (reason) {
+        setError(
+          t("agents.account.profileFailed", {
+            detail: reason instanceof Error ? reason.message : String(reason),
+          }),
+        );
+        setAccountProfileDefinition(null);
+        return;
+      }
+    }
     const profile: ChatAccountProfile = {
-      id: crypto.randomUUID(),
+      id,
       definitionId: definition.id,
       name: name.slice(0, 64),
       configDirectory,
@@ -1337,7 +1358,7 @@ export function AgentsView({
         <AgentAccountProfileDialog
           agentLabel={accountProfileDefinition.label}
           onSave={(name, configDirectory) =>
-            addAccountProfile(accountProfileDefinition, name, configDirectory)}
+            void addAccountProfile(accountProfileDefinition, name, configDirectory)}
           onCancel={() => setAccountProfileDefinition(null)}
         />
       )}
