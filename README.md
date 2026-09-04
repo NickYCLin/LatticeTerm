@@ -79,7 +79,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 ## 後續開發重點
 
 1. **Lattice Remote 連線範圍**：鍵盤／滑鼠遠端控制已可用（由分享端明確授權）；免帳戶數字裝置 ID、自架 Relay（`docs/RELAY_SERVER.zh-TW.md`）、裝置金鑰釘選（TOFU）與固定配對碼無人值守已可用；接著加入 NAT 直連穿透。連線清單先保存在本機，帳戶只作為日後跨裝置同步與團隊權限的選配層。
-2. **Agent 常駐與遠端能力**：背景服務已能持有勾選「留在背景」的工作階段並跨視窗關閉接回；下一步是讓保存的啟動項目記住這個選擇、讓背景服務也跑對話排程，並先以 SSH transport 實作遠端 Agent Fleet。
+2. **Agent 常駐與遠端能力**：背景服務已能持有勾選「留在背景」的工作階段並跨視窗關閉接回；保存的啟動項目也會記住這個選擇，還原時直接回到背景；下一步是讓背景服務也跑對話排程，並先以 SSH transport 實作遠端 Agent Fleet。
 3. **Agent 編排與隔離**：補齊其他工具的 hook 與 token／cost 可觀測事件；排程、佇列、接續執行與同時執行上限已完成，Linux 檔案範圍沙箱已完成，接著是 macOS／Windows 的對應隔離與網路／資源限制。
 4. **平台完整度**：設計安全的 Windows npm shim adapter、持續強化 Android 發行流程，並完成 iOS 實機安裝、TestFlight 與上架驗證。
 5. **正式發行信任**：自動更新包已有 Tauri 簽章；Windows Authenticode 與 Apple Developer ID／notarization 仍需發行者憑證。
@@ -160,7 +160,7 @@ Agent Fleet 只在 Tauri 桌面版啟動本機 CLI；網頁預覽會誠實顯示
 
 若要讓另一個 CLI 接手，請在執行中的工作階段分頁選擇「加開 CLI」；來源為 Codex、Claude Code、Gemini CLI 或 Google Antigravity CLI 時，可勾選「帶入目前對話」。任何已安裝的新 CLI 都會收到整理過的對話交接內容，但不會搬移模型內部狀態、登入資料或憑證。交接內容不再整段貼進新 CLI 的終端機（終端機介面吃大段貼上很慢，模型也得先啃完才能互動），而是寫成 LatticeTerm 資料目錄下擁有者限定的 `handoffs/handoff-*.md`，只貼一行指向該檔案的提示，新 CLI 立刻可用、需要時自己讀檔；檔案一天後自動清掉。Codex 有明確 Session ID 時只接受 metadata 完全相符且不是 subagent 的 rollout；沒有 ID 時則只選同一 canonical 工作目錄的主 CLI 對話。Claude 也以 JSONL metadata 的 Session ID 精確尋找已驗證的主工作階段；沒有 ID 時才依 canonical 工作目錄選取，不依可能碰撞的專案資料夾 slug。Gemini 依官方 JSONL state records 還原 rewind 後的有效訊息，並用程序 hook 回報的 Session ID 區分同一資料夾的多個 CLI。Antigravity 則以該次程序限定的暫存 log 捕捉 Conversation ID，只讀對應 `transcript.jsonl` 的明確使用者輸入與最終回覆。所有有界歷程讀取都不跟隨最終符號連結。若勾選帶入但來源對話尚未寫入或無法安全讀取，新的 CLI 不會開啟，原工作階段會保留並顯示原因。
 
-「保存啟動項目」會記錄內建 CLI 類型、標籤、工作目錄與選填備註，最多 32 個；工作區名稱與項目順序也會保存。密碼、Token、API Key、Passphrase、Secret 參數與 Reporter 權杖都不會寫入工作區 JSON。下次開啟應用程式時，使用者可逐項或依保存順序整批確認並啟動 CLI 程序；沒有額外參數或舊版明確 Session ID 的 Codex 項目會執行 `codex resume --last`，由 Codex 在該工作目錄內續接最近的對話；Cursor 項目會執行官方的 `agent --continue` 續接最近對話，不需讓 LatticeTerm 保存或讀取 Session ID。既有 `agent-workspaces.json` 若包含舊版自訂 CLI 或原生 Session 續接項目，Rust 核心仍會重新驗證後相容還原，避免升級後破壞原有資料；新介面不再提供這兩種設定。Rust 核心會為每個活躍 PTY 保留最近 256 KiB 輸出，供同一桌面程序內的 WebView 重新 attach；正常關閉時，這段輸出以 XChaCha20-Poly1305 加密寫入裝置本機，隨機金鑰只留在 OS 安全儲存區，不進入 WebView、工作區 JSON 或備份。若安全儲存區不可用，輸出仍只存於記憶體。停止工作階段或關閉應用程式仍會終止 CLI 程序，但重開同一項目時可先重播加密保存的畫面尾端，再由對應 CLI 的原生續接功能恢復對話。
+「保存啟動項目」會記錄內建 CLI 類型、標籤、工作目錄、選填備註，以及是否「留在背景」（還原時直接交給背景服務），最多 32 個；工作區名稱與項目順序也會保存。密碼、Token、API Key、Passphrase、Secret 參數與 Reporter 權杖都不會寫入工作區 JSON。下次開啟應用程式時，使用者可逐項或依保存順序整批確認並啟動 CLI 程序；沒有額外參數或舊版明確 Session ID 的 Codex 項目會執行 `codex resume --last`，由 Codex 在該工作目錄內續接最近的對話；Cursor 項目會執行官方的 `agent --continue` 續接最近對話，不需讓 LatticeTerm 保存或讀取 Session ID。既有 `agent-workspaces.json` 若包含舊版自訂 CLI 或原生 Session 續接項目，Rust 核心仍會重新驗證後相容還原，避免升級後破壞原有資料；新介面不再提供這兩種設定。Rust 核心會為每個活躍 PTY 保留最近 256 KiB 輸出，供同一桌面程序內的 WebView 重新 attach；正常關閉時，這段輸出以 XChaCha20-Poly1305 加密寫入裝置本機，隨機金鑰只留在 OS 安全儲存區，不進入 WebView、工作區 JSON 或備份。若安全儲存區不可用，輸出仍只存於記憶體。停止工作階段或關閉應用程式仍會終止 CLI 程序，但重開同一項目時可先重播加密保存的畫面尾端，再由對應 CLI 的原生續接功能恢復對話。
 
 每個 CLI 都會收到本機 Reporter 環境變數。工具 hook 可執行 `"$LATTICETERM_AGENT_REPORTER" agent-report done`，並以 `working`、`needs-attention`、`idle` 或 `done` 回報狀態；Windows PowerShell 使用 `& $env:LATTICETERM_AGENT_REPORTER agent-report done`。Reporter 只接受該工作階段的隨機權杖，且只能更新狀態。完整協定與安全邊界請見架構文件。
 

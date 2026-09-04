@@ -573,6 +573,9 @@ pub struct AgentLaunchPlanDraft {
     pub note: String,
     #[serde(default)]
     pub sandbox: bool,
+    /// Restore into the background service so it outlives the window.
+    #[serde(default)]
+    pub detached: bool,
     pub working_directory: String,
 }
 
@@ -592,6 +595,8 @@ pub struct AgentLaunchPlan {
     /// Whether this plan launches inside the file-scope sandbox.
     #[serde(default)]
     pub sandbox: bool,
+    #[serde(default)]
+    pub detached: bool,
     pub working_directory: String,
 }
 
@@ -4898,6 +4903,7 @@ pub fn normalize_launch_plan(
         resume_session_id,
         note,
         sandbox: draft.sandbox,
+        detached: draft.detached,
         working_directory: working_directory.display().to_string(),
     })
 }
@@ -4917,6 +4923,7 @@ pub fn launch_request_from_plan(
             resume_session_id: plan.resume_session_id.clone(),
             note: plan.note.clone(),
             sandbox: plan.sandbox,
+            detached: plan.detached,
             working_directory: plan.working_directory.clone(),
         },
     )?;
@@ -4966,7 +4973,7 @@ pub fn launch_request_from_plan(
         // workspace plan must never retain a machine-local credential root.
         profile_config_path: None,
         sandbox: validated.sandbox,
-        detached: false,
+        detached: validated.detached,
         working_directory: validated.working_directory,
         cols,
         rows,
@@ -6124,6 +6131,35 @@ pub fn disconnect(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_saved_plan_keeps_its_background_choice_through_restore() {
+        let directory = tempfile::tempdir().unwrap();
+        let plan = normalize_launch_plan(
+            "plan-bg".to_string(),
+            AgentLaunchPlanDraft {
+                definition_id: "codex".to_string(),
+                label: "night batch".to_string(),
+                executable: String::new(),
+                arguments: vec![],
+                resume_session_id: None,
+                note: String::new(),
+                sandbox: false,
+                detached: true,
+                working_directory: directory.path().display().to_string(),
+            },
+        )
+        .unwrap();
+        assert!(plan.detached);
+        let request = launch_request_from_plan(&plan, 120, 32).unwrap();
+        assert!(request.detached);
+        let json = serde_json::to_string(&plan).unwrap();
+        assert!(json.contains("\"detached\":true"));
+        // An older plan file without the field restores into the desktop.
+        let legacy: AgentLaunchPlan =
+            serde_json::from_str(&json.replace(",\"detached\":true", "")).unwrap();
+        assert!(!legacy.detached);
+    }
 
     #[test]
     fn account_profile_status_reads_only_the_profile_directory() {
@@ -7516,6 +7552,7 @@ model = "gpt-5.3-codex"
                 resume_session_id: None,
                 note: "  審查 payments 專案  ".to_string(),
                 sandbox: false,
+                detached: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7542,6 +7579,7 @@ model = "gpt-5.3-codex"
                     resume_session_id: None,
                     note: String::new(),
                     sandbox: false,
+                    detached: false,
                     working_directory: directory.display().to_string(),
                 },
             )
@@ -7564,6 +7602,7 @@ model = "gpt-5.3-codex"
                     resume_session_id: None,
                     note: note.to_string(),
                     sandbox: false,
+                    detached: false,
                     working_directory: directory.display().to_string(),
                 },
             )
@@ -7587,6 +7626,7 @@ model = "gpt-5.3-codex"
                 resume_session_id: Some("  session-42  ".to_string()),
                 note: String::new(),
                 sandbox: false,
+                detached: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7613,6 +7653,7 @@ model = "gpt-5.3-codex"
                 resume_session_id: None,
                 note: String::new(),
                 sandbox: false,
+                detached: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7633,6 +7674,7 @@ model = "gpt-5.3-codex"
                 resume_session_id: None,
                 note: String::new(),
                 sandbox: false,
+                detached: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7654,6 +7696,7 @@ model = "gpt-5.3-codex"
                 resume_session_id: None,
                 note: String::new(),
                 sandbox: false,
+                detached: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7672,6 +7715,7 @@ model = "gpt-5.3-codex"
                 resume_session_id: None,
                 note: String::new(),
                 sandbox: false,
+                detached: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7690,6 +7734,7 @@ model = "gpt-5.3-codex"
                 resume_session_id: None,
                 note: String::new(),
                 sandbox: false,
+                detached: false,
                 working_directory: directory.display().to_string(),
             },
         )

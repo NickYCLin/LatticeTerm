@@ -1097,11 +1097,12 @@ fn agent_plan_reorder(
 }
 
 #[tauri::command]
-fn agent_plan_restore(
+async fn agent_plan_restore(
     app: AppHandle,
     plan_ids: Vec<String>,
     plans: State<'_, AppAgentPlans>,
     registry: State<'_, Arc<AgentRegistry>>,
+    daemon: State<'_, AppDaemon>,
 ) -> Result<Vec<AgentRestoreOutcome>, String> {
     if plan_ids.is_empty() {
         return Err("Select at least one saved launch plan.".to_string());
@@ -1136,32 +1137,52 @@ fn agent_plan_restore(
         (selected, guard.snapshot().startup_instructions)
     };
     let sink: Arc<dyn crate::agent::AgentSink> = Arc::new(crate::agent::EventSink(app));
-    Ok(selected
-        .into_iter()
-        .map(|plan| {
-            let plan_id = plan.id.clone();
-            let label = plan.label.clone();
-            let launched =
-                crate::agent::launch_request_from_plan(&plan, 120, 32).and_then(|mut request| {
-                    crate::agent::apply_startup_instructions(&mut request, &startup_instructions)?;
-                    crate::agent::launch(Arc::clone(&sink), Arc::clone(registry.inner()), request)
-                });
-            match launched {
-                Ok(session) => AgentRestoreOutcome {
-                    plan_id,
-                    label,
-                    session: Some(session),
-                    error: None,
-                },
-                Err(error) => AgentRestoreOutcome {
-                    plan_id,
-                    label,
-                    session: None,
-                    error: Some(error),
-                },
+    let mut outcomes = Vec::with_capacity(selected.len());
+    for plan in selected {
+        let plan_id = plan.id.clone();
+        let label = plan.label.clone();
+        let prepared =
+            crate::agent::launch_request_from_plan(&plan, 120, 32).and_then(|mut request| {
+                crate::agent::apply_startup_instructions(&mut request, &startup_instructions)?;
+                Ok(request)
+            });
+        let launched = match prepared {
+            // A plan saved with "keep in the background" comes back the same
+            // way: the daemon owns it again after this restart.
+            Ok(request) if request.detached => daemon
+                .request(
+                    true,
+                    crate::agent_daemon::Request::Launch {
+                        request: Box::new(request),
+                        restored_output: None,
+                    },
+                )
+                .await
+                .and_then(|value| {
+                    serde_json::from_value::<AgentSessionSummary>(value)
+                        .map_err(|error| format!("The background service answered oddly: {error}"))
+                }),
+            Ok(request) => {
+                crate::agent::launch(Arc::clone(&sink), Arc::clone(registry.inner()), request)
             }
-        })
-        .collect())
+            Err(error) => Err(error),
+        };
+        outcomes.push(match launched {
+            Ok(session) => AgentRestoreOutcome {
+                plan_id,
+                label,
+                session: Some(session),
+                error: None,
+            },
+            Err(error) => AgentRestoreOutcome {
+                plan_id,
+                label,
+                session: None,
+                error: Some(error),
+            },
+        });
+    }
+    Ok(outcomes)
 }
 
 /// Where connection data lives, and whether anything had to be rescued on the

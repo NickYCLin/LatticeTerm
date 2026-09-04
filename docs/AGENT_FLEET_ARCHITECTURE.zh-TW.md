@@ -143,7 +143,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態或用量訊息。Registr
 | 原生 CLI Session 續接 | 相容保留 | 不再顯示手動設定；Adapter v1 僅供舊工作區還原 |
 | 同程序介面重新 attach | 已完成 | 先訂閱事件再 hydration；session 關閉不會被舊快照復活，最近 256 KiB PTY 輸出依 offset 去重重播 |
 | 工具專用語意 Adapter | 部分完成 | Codex `notify`、Claude Code、Gemini CLI、Hermes Agent、Qwen Code lifecycle hooks，以及 OpenCode、GitHub Copilot CLI plugin events 已接上 Reporter；Hermes 已提供 token buckets，舊工作區續接 recipe 與保守的 session ID 擷取仍保留，其他工具 hook、token 與 cost 擷取尚未完成 |
-| 跨程序背景 daemon 與重新 attach | 已完成（第一版） | 勾選「留在背景」的工作階段由 `lattice-term agent-daemon` 持有：同一份 `AgentRegistry` 在 daemon 程序裡跑，桌面透過使用者專屬本機 socket 以 JSON 行協定 attach，關閉視窗後 CLI 繼續，下次開啟接回並重播 256 KiB 尾端；未勾選的仍隨桌面結束。保存的啟動項目尚未記住此選項，對話排程也仍只在桌面執行 |
+| 跨程序背景 daemon 與重新 attach | 已完成（第一版） | 勾選「留在背景」的工作階段由 `lattice-term agent-daemon` 持有：同一份 `AgentRegistry` 在 daemon 程序裡跑，桌面透過使用者專屬本機 socket 以 JSON 行協定 attach，關閉視窗後 CLI 繼續，下次開啟接回並重播 256 KiB 尾端；未勾選的仍隨桌面結束。保存的啟動項目記住此選項，還原時直接交給 daemon；對話排程仍只在桌面執行 |
 | 跨重啟還原 | 部分完成 | 已保存的 Codex 項目會續接同工作目錄最近的對話，Cursor 項目會使用 `agent --continue` 續接最近對話；正常關閉時，每個 Agent 最近 256 KiB 終端輸出會以 OS 安全儲存區中的裝置金鑰加密保存，重啟同一項目後先重播。若安全儲存區不可用就不落地輸出；原 PTY 程序與可互動 pane 仍無法跨程序存活 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 對話模式 | 已完成 | Claude Code 與 Gemini CLI 以官方 headless JSON 模式逐輪執行，Codex 每個對話常駐一個 app-server 加速追問；串流文字、工具卡片、用量統計與以 CLI 對話 ID 續接；Claude（stream-json 控制協定）與 Codex（app-server JSON-RPC）支援逐項核准；Gemini 的非互動模式無對應機制 |
@@ -166,7 +166,7 @@ Reporter 傳輸與狀態模型已完成，Codex、Claude Code、Gemini CLI、Ope
 - **路由**：daemon 的 registry 用 `agent-bg-session-` 前綴發 id，桌面的 `agent_*` 指令依前綴決定走本機 registry 還是 daemon；`agent_sessions`／`agent_output_snapshots` 合併兩邊（daemon 不在就只回本機，不會為了查詢把它拉起來）。貼上圖片時 PNG 走 socket 由 daemon 建暫存檔並綁定 PTY 生命週期；交接逐字稿用 daemon 回報的 summary 在桌面讀取。
 - **Reporter 與佇列**：因為整個 registry 都在 daemon 裡，Reporter 的 loopback 監聽、每個工作階段的權杖、提示佇列放行與整合用暫存檔全部跟著 CLI 活，與桌面是否連著無關。
 - **重播**：daemon 的 `OutputBuffer` offset 跨 attach 單調遞增；新視窗從 `hello`／`snapshots` 拿到 `startOffset`／`endOffset` 尾端，前端既有的依 offset 去重直接適用。連線斷掉時桌面端把 daemon 的每個工作階段以 `closed` 事件關掉。
-- **範圍與限制**：只有啟動表單勾選「留在背景」的工作階段走 daemon；工作區快照不保存 detached 的工作階段（它們自己會接回），保存的啟動項目也還沒記住這個選項；daemon 本身若被殺，PTY 隨之消失；對話模式的排程仍只在桌面執行；Windows 具名管道路徑尚未在 CI 驗證。
+- **範圍與限制**：只有啟動表單勾選「留在背景」的工作階段走 daemon；工作區快照不保存 detached 的工作階段（它們自己會接回）；保存的啟動項目帶著 `detached`，`agent_plan_restore` 依它決定交給 daemon 還是本機；daemon 本身若被殺，PTY 隨之消失；對話模式的排程仍只在桌面執行；Windows 具名管道路徑尚未在 CI 驗證。
 
 ### 3. 自建遠端 Fleet
 

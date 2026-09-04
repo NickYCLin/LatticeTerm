@@ -83,6 +83,25 @@ describe("AgentsView", () => {
     expect(markup).toContain(">背景<");
   });
 
+  it("badges a saved launch plan that restores into the background", () => {
+    const markup = render(fakeAgentApi({
+      plans: [{
+        id: "plan-1",
+        definitionId: "codex",
+        label: "夜間批次",
+        executable: "",
+        arguments: [],
+        resumeSessionId: null,
+        note: "",
+        sandbox: false,
+        detached: true,
+        workingDirectory: "/work",
+      }],
+    }));
+    expect(markup).toContain("夜間批次");
+    expect(markup).toContain(">背景<");
+  });
+
   it("offers the sandbox only when bubblewrap was probed to work", () => {
     expect(render(fakeAgentApi(), { sandboxAvailable: true })).toContain("bubblewrap");
     expect(render(fakeAgentApi(), { sandboxAvailable: false })).not.toContain("bubblewrap");
