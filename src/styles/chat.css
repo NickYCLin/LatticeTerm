@@ -983,12 +983,10 @@ button.chat-chip:hover {
 }
 
 /* A legend sits on the fieldset border by default and looked struck
-   through; flow it as an ordinary heading inside the box instead. */
+   through; `display: contents` drops that special placement so the label
+   inside flows as an ordinary heading in the box. */
 .automation-schedule > legend {
-  float: left;
-  width: 100%;
-  margin: 0 0 var(--space-1);
-  padding: 0;
+  display: contents;
 }
 
 .automation-schedule {
