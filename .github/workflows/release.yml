@@ -4,10 +4,9 @@ on:
   push:
     branches: [main]
   # Release Please only opens the PR; something has to merge it or nothing
-  # ever ships. This daily pass publishes it when it is due — see
-  # scripts/decide-release.mjs for what "due" means.
-  schedule:
-    - cron: "0 18 * * *"
+  # ever ships. Every push to main re-checks whether enough work has
+  # accumulated and publishes the moment it has — see
+  # scripts/decide-release.mjs for what "enough" means.
   workflow_dispatch:
     inputs:
       force:
@@ -105,10 +104,6 @@ jobs:
         id: due
         env:
           RELEASE_FORCE: ${{ inputs.force }}
-          # On a push only a breaking change ships at once; the accumulation
-          # rule is applied by the daily schedule (or a manual dispatch), so
-          # ordinary work is batched instead of released on the third push.
-          RELEASE_TRIGGER: ${{ github.event_name }}
         run: node scripts/decide-release.mjs
 
       - name: Find the pending Release PR
