@@ -79,7 +79,7 @@ export function AgentAccountProfileDialog({
               {t("agents.account.dialogTitle", { name: agentLabel })}
             </h2>
             <p className="dialog__body" id="agent-account-profile-body">
-              {t("agents.account.dialogBody")}
+              {t("agents.account.dialogBody", { name: agentLabel })}
             </p>
           </div>
           <button
@@ -95,6 +95,11 @@ export function AgentAccountProfileDialog({
         </header>
 
         <div className="dialog__stack">
+          <ol className="agent-account-profile-dialog__steps">
+            <li>{t("agents.account.step1")}</li>
+            <li>{t("agents.account.step2")}</li>
+            <li>{t("agents.account.step3")}</li>
+          </ol>
           <label className="field" htmlFor="agent-account-profile-name">
             <span className="field__label">{t("agents.account.profileName")}</span>
             <input

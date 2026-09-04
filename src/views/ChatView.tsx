@@ -38,6 +38,7 @@ import {
   profilesFor,
   type ChatAccountProfile,
 } from "../app/chatAccountProfiles";
+import { accountProfileOptionKey, useAccountProfileStatus } from "../app/useAccountProfileStatus";
 import { useI18n } from "../i18n/context";
 import type { MessageKey } from "../i18n/messages/zh-TW";
 import { Callout, EmptyState } from "../components/common/Callout";
@@ -456,6 +457,9 @@ function ThreadPane({
   const cliInstalled = installed.includes(thread.definitionId);
   const availableProfiles = profilesFor(accountProfiles, thread.definitionId);
   const activeProfile = availableProfiles.find((profile) => profile.id === thread.accountProfileId) ?? null;
+  const { statuses: profileStatuses } = useAccountProfileStatus(availableProfiles);
+  const activeProfileSignedOut =
+    activeProfile !== null && profileStatuses[activeProfile.id]?.state === "signedOut";
   const canSend =
     !running &&
     cliInstalled &&
@@ -704,10 +708,20 @@ function ThreadPane({
                   >
                     <option value="">{t("chat.accountProfile.default")}</option>
                     {availableProfiles.map((profile) => (
-                      <option key={profile.id} value={profile.id}>{profile.name}</option>
+                      <option key={profile.id} value={profile.id}>
+                        {t(accountProfileOptionKey(profileStatuses[profile.id]), {
+                          name: profile.name,
+                          label: profileStatuses[profile.id]?.label ?? "",
+                        })}
+                      </option>
                     ))}
                   </select>
                 </div>
+                {activeProfileSignedOut && (
+                  <p className="field__hint chat-settings__warning" role="status">
+                    {t("chat.accountProfile.notSignedIn")}
+                  </p>
+                )}
               </div>
             )}
             <div className="field field--grow">

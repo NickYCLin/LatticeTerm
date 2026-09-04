@@ -24,10 +24,13 @@ describe("chat account profiles", () => {
         { id: "personal", definitionId: "claude", name: "duplicate", configDirectory: "/x" },
         { id: "key", definitionId: "gemini", name: "bad", configDirectory: "/x" },
         { id: "secret", definitionId: "codex", name: "", configDirectory: "/x" },
+        { id: "flag", definitionId: "codex", name: "bad flag", configDirectory: "/x", managed: "yes" },
+        { id: "managed", definitionId: "codex", name: "自建", configDirectory: "/x", managed: true },
       ]),
     });
     expect(loadChatAccountProfiles(store)).toEqual([
       { id: "personal", definitionId: "codex", name: "個人", configDirectory: "/profiles/personal" },
+      { id: "managed", definitionId: "codex", name: "自建", configDirectory: "/x", managed: true },
     ]);
   });
 

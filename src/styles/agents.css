@@ -487,6 +487,33 @@
   line-height: 1.4;
 }
 
+.agent-card__profile-status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+}
+
+.agent-card__profile-status--attention {
+  color: var(--warning, var(--text));
+}
+
+.agent-card__profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.agent-account-profile-dialog__steps {
+  margin: 0;
+  padding-left: 1.25em;
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
 .agent-account-profile-dialog .dialog__title {
   margin-bottom: var(--space-1);
 }
