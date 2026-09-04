@@ -281,7 +281,10 @@ describe("cross-assistant handoff", () => {
     const next = handoffThread(source, "codex", "gpt-5.6-sol", 2000);
     expect(next.definitionId).toBe("codex");
     expect(next.model).toBe("gpt-5.6-sol");
-    expect(next.permission).toBe("readOnly");
+    // Codex can ask each time too, so the permission carries over; only a
+    // target without an approval channel would fall back to read-only.
+    expect(next.permission).toBe("ask");
+    expect(handoffThread(source, "gemini", "flash", 2000).permission).toBe("readOnly");
     expect(next.nativeSessionId).toBeNull();
     expect(next.reportedModel).toBeNull();
     expect(next.items[1]).toMatchObject({ assistantDefinitionId: "claude" });
@@ -397,9 +400,11 @@ describe("helpers", () => {
 
   it("offers asking only where the CLI can ask", () => {
     expect(permissionsFor("claude")).toContain("ask");
-    expect(permissionsFor("codex")).not.toContain("ask");
+    expect(permissionsFor("codex")).toContain("ask");
+    expect(permissionsFor("gemini")).not.toContain("ask");
     expect(defaultPermission("claude")).toBe("ask");
-    expect(defaultPermission("codex")).toBe("readOnly");
+    expect(defaultPermission("codex")).toBe("ask");
+    expect(defaultPermission("gemini")).toBe("readOnly");
   });
 
   it("formats token counts compactly", () => {

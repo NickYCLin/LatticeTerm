@@ -15,7 +15,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | --- | --- | --- |
 | 桌面連線工作區 | **可用** | Windows、Linux 與 macOS 支援 SSH、SFTP、SSH Tunnel、Web RDP、VNC、主機資源與工作階段管理。 |
 | 安全與資料保護 | **可用** | 嚴格主機信任、作業系統認證儲存、主密碼加密保管庫、敏感剪貼簿與加密備份均已接入真實後端。 |
-| 本機 AI Agent Fleet | **可用** | 多 CLI PTY、Reporter、批次提示、同分頁加開 CLI 並帶入目前對話、安全啟動工作區與同程序重新 attach 已完成；另有不必打指令的對話模式（Claude Code、Codex 與 Gemini CLI，Claude 含逐項核准）與應用程式開著時執行的排程任務。 |
+| 本機 AI Agent Fleet | **可用** | 多 CLI PTY、Reporter、批次提示、同分頁加開 CLI 並帶入目前對話、安全啟動工作區與同程序重新 attach 已完成；另有不必打指令的對話模式（Claude Code、Codex 與 Gemini CLI，Claude 與 Codex 含逐項核准）與應用程式開著時執行的排程任務。 |
 | Lattice Remote | **基礎功能可用** | 已完成使用者主動啟動、Noise 端對端加密、主螢幕／純終端分享，以及由分享端分別授權的鍵盤／滑鼠或終端輸入與單一根目錄檔案瀏覽、上下載；另支援自架 lattice-relay 中繼、永久九位數裝置 ID、跨網路連線、裝置金鑰釘選與固定配對碼（無人值守）；以 ID 連線過的裝置會留在「我的連線」，中繼位址失效時可在連線對話框就地更正。目前仍是自架、小規模服務，NAT 直連穿透與多人租戶管理尚未加入。 |
 | 發行與更新 | **可用** | Windows x64、Linux x64／arm64、macOS Apple Silicon 安裝檔、更新簽章、Release PR 與應用程式內更新已自動化。 |
 | Android | **預覽** | 共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面可建置；需要桌面 sidecar 的 RDP、VNC 與 Agent Fleet 不提供。 |
@@ -165,7 +165,7 @@ Agent Fleet 同時會在桌面安裝包可用時提供 `LATTICETERM_REMOTE_CLI`�
 
 側邊導覽的「對話」頁提供聊天視窗，適合不習慣終端機的人。按「新對話」、從單一模型選單選擇 Claude Code、OpenAI Codex 或 Gemini CLI 的模型與工作目錄，之後輸入訊息按 Enter 即可；Shift+Enter 換行，中文輸入法選字時的 Enter 不會誤送。每一輪 LatticeTerm 會以該 CLI 的 headless JSON 模式跑一次程序、把提示從 stdin 送入，並把回覆、思考摘要、工具呼叫與結束統計即時顯示成訊息與卡片；「停止」會結束該程序。第一輪回報的 CLI 對話 ID 會留在對話裡供續接（`claude --resume`、`codex exec resume`、`gemini --resume`），所以關掉 LatticeTerm 再開仍可接著聊，但正在回覆中的那一輪不會跨重啟存活。
 
-權限選項對應各 CLI 的官方旗標：「唯讀」是 Claude `plan`／Codex `read-only`／Gemini `plan`；「可修改工作目錄」是 Claude `acceptEdits`／Codex `workspace-write`／Gemini `auto_edit`，Claude 與 Gemini 在這個模式下遇到仍需審核的指令會拒絕並在回覆裡說明，Codex 則在自己的沙箱裡執行；「全部允許」是 Claude `bypassPermissions`／Codex bypass sandbox／Gemini `yolo`，CLI 會以你的帳號權限做任何事而不再詢問，介面會明確警告。Claude Code 另有「每次詢問」（新對話的預設）：CLI 自己的規則放行不了的工具呼叫會在對話裡變成一張核准卡片，按允許或拒絕才會繼續，跟終端機裡的詢問一樣；這走 Claude 的 stream-json 控制協定，Codex 與 Gemini 的非互動模式沒有對應機制所以不提供。對話內容只在本機 WebView 儲存區留一份有界複本（每則工具輸出最多 2 KiB、總量 4 MiB），完整逐字稿仍在各 CLI 自己的紀錄裡；登入資料與 API 金鑰不經過 LatticeTerm。
+權限選項對應各 CLI 的官方旗標：「唯讀」是 Claude `plan`／Codex `read-only`／Gemini `plan`；「可修改工作目錄」是 Claude `acceptEdits`／Codex `workspace-write`／Gemini `auto_edit`，Claude 與 Gemini 在這個模式下遇到仍需審核的指令會拒絕並在回覆裡說明，Codex 則在自己的沙箱裡執行；「全部允許」是 Claude `bypassPermissions`／Codex bypass sandbox／Gemini `yolo`，CLI 會以你的帳號權限做任何事而不再詢問，介面會明確警告。Claude Code 與 Codex 另有「每次詢問」（新對話的預設）：助理自己的規則放行不了的工具呼叫會在對話裡變成一張核准卡片，按允許或拒絕才會繼續，跟終端機裡的詢問一樣。Claude 走 stream-json 控制協定；Codex 走 `codex app-server` 的 JSON-RPC，指令、檔案修改與額外權限的請求都會變成卡片；Gemini 的非互動模式沒有對應機制所以不提供。對話內容只在本機 WebView 儲存區留一份有界複本（每則工具輸出最多 2 KiB、總量 4 MiB），完整逐字稿仍在各 CLI 自己的紀錄裡；登入資料與 API 金鑰不經過 LatticeTerm。
 
 ### 排程任務
 
