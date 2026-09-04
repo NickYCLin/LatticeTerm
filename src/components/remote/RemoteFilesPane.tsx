@@ -10,6 +10,7 @@ import { formatBytes } from "../../domain/metrics";
 import { useI18n } from "../../i18n/context";
 import { Callout } from "../common/Callout";
 import { FileEntryIcon } from "../files/FileEntryIcon";
+import { useAppDialogs } from "../overlays/useAppDialogs";
 import {
   CloseIcon,
   ExportIcon,
@@ -75,6 +76,8 @@ export function RemoteFilesPane({
     }
   }
 
+  const { confirm, dialogs } = useAppDialogs();
+
   async function upload(file: File | undefined) {
     if (!file || !directory) return;
     const existing = directory.entries.find((entry) => entry.name === file.name);
@@ -85,7 +88,12 @@ export function RemoteFilesPane({
     }
     if (
       existing &&
-      !window.confirm(t("remote.files.overwriteConfirm", { name: file.name }))
+      !(await confirm({
+        title: t("remote.files.dialog.overwriteTitle", { name: file.name }),
+        body: t("remote.files.overwriteConfirm", { name: file.name }),
+        confirmLabel: t("remote.files.dialog.overwrite"),
+        cancelLabel: t("common.cancel"),
+      }))
     ) {
       if (uploadRef.current) uploadRef.current.value = "";
       return;
@@ -310,6 +318,7 @@ export function RemoteFilesPane({
           })}
         </div>
       )}
+      {dialogs}
     </div>
   );
 }
