@@ -4,6 +4,19 @@
 
 ---
 
+## [0.45.0](https://github.com/NickYCLin/lattice-term/compare/v0.44.0...v0.45.0) (2026-09-04)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** 保存的啟動項目記住「留在背景」，還原時直接交給背景服務 ([#167](https://github.com/NickYCLin/lattice-term/issues/167)) ([f81999d](https://github.com/NickYCLin/lattice-term/commit/f81999d8f203f3acf40282a83fc47ed5743635a3))
+* **Agent Fleet:** 跨程序背景服務，勾選「留在背景」的工作階段在關閉 LatticeTerm 後繼續執行 ([#166](https://github.com/NickYCLin/lattice-term/issues/166)) ([59d9b6a](https://github.com/NickYCLin/lattice-term/commit/59d9b6a1712c6e89a1e9746d451801229b4a1708))
+
+
+### 🛠️ 問題修正
+
+* **Agent Fleet:** 沙箱啟動前先建好 CLI 的狀態目錄，第一次登入才寫得進去 ([#160](https://github.com/NickYCLin/lattice-term/issues/160)) ([7535e04](https://github.com/NickYCLin/lattice-term/commit/7535e04104e822e161fb319d403c900a7f42b0ce))
+
 ## [0.44.0](https://github.com/NickYCLin/lattice-term/compare/v0.43.0...v0.44.0) (2026-09-04)
 
 
