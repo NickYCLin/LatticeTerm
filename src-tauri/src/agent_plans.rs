@@ -356,6 +356,7 @@ mod tests {
             resume_session_id: None,
             note: String::new(),
             sandbox: false,
+            detached: false,
             working_directory: directory.display().to_string(),
         }
     }
@@ -457,6 +458,7 @@ mod tests {
                 resume_session_id: Some("  architecture review  ".to_string()),
                 note: "  接手上週的重構  ".to_string(),
                 sandbox: false,
+                detached: false,
                 working_directory: directory.display().to_string(),
             })
             .unwrap();

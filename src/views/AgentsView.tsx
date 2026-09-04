@@ -1089,6 +1089,9 @@ export function AgentsView({
                   {plan.sandbox && (
                     <span className="agents-sandbox__badge">{t("agents.sandbox.badge")}</span>
                   )}
+                  {plan.detached && (
+                    <span className="agents-sandbox__badge">{t("agents.detached.badge")}</span>
+                  )}
                   <span className="mono">{displayPath(plan.workingDirectory)}</span>
                   <small>
                     {plan.resumeSessionId
