@@ -394,13 +394,18 @@ function isSchedule(value: unknown): value is AutomationSchedule {
   if (!value || typeof value !== "object") return false;
   const schedule = value as Partial<AutomationSchedule> & { kind?: string };
   if (schedule.kind === "daily") {
+    const weekdays = (schedule as { weekdays?: unknown }).weekdays;
     return (
       typeof (schedule as { time?: unknown }).time === "string" &&
-      Array.isArray((schedule as { weekdays?: unknown }).weekdays)
+      Array.isArray(weekdays) &&
+      weekdays.every((day) => Number.isInteger(day) && day >= 0 && day <= 6)
     );
   }
   if (schedule.kind === "interval") {
-    return typeof (schedule as { everyMinutes?: unknown }).everyMinutes === "number";
+    const minutes = (schedule as { everyMinutes?: unknown }).everyMinutes;
+    // NaN or a fraction would make the next run NaN and the automation
+    // silently never fire.
+    return typeof minutes === "number" && Number.isInteger(minutes) && minutes > 0;
   }
   if (schedule.kind === "after") {
     return typeof (schedule as { automationId?: unknown }).automationId === "string";
@@ -431,14 +436,17 @@ export function loadStoredAutomations(storage: Pick<Storage, "getItem">): Automa
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isAutomation).map((automation) =>
+    return parsed.filter(isAutomation).slice(0, automationLimits.count).map((automation) =>
       closeStaleRuns({
         ...automation,
         model: typeof automation.model === "string" ? automation.model : "",
         enabled: automation.enabled !== false,
         createdAt: typeof automation.createdAt === "number" ? automation.createdAt : 0,
         updatedAt: typeof automation.updatedAt === "number" ? automation.updatedAt : 0,
-        nextRunAt: typeof automation.nextRunAt === "number" ? automation.nextRunAt : null,
+        nextRunAt:
+          typeof automation.nextRunAt === "number" && Number.isFinite(automation.nextRunAt)
+            ? automation.nextRunAt
+            : null,
         lastRunAt: typeof automation.lastRunAt === "number" ? automation.lastRunAt : null,
         // A stored "ask" cannot run unattended; the read-only sandbox is the
         // one choice that changes nothing without being told.

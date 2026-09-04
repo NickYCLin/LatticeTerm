@@ -647,6 +647,18 @@ export function loadStoredThreads(storage: Pick<Storage, "getItem">): ChatThread
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isThread).map((thread) => ({
       ...thread,
+      // A malformed stored item must not take persistence down with it:
+      // saving re-bounds every tool output and would throw on a missing one.
+      items: thread.items.filter(
+        (item): item is ChatItem =>
+          !!item &&
+          typeof item === "object" &&
+          typeof (item as { id?: unknown }).id === "string" &&
+          typeof (item as { type?: unknown }).type === "string" &&
+          ((item as { type: string }).type !== "tool" ||
+            (item as { output?: unknown }).output === null ||
+            typeof (item as { output?: unknown }).output === "string"),
+      ),
       title: typeof thread.title === "string" ? thread.title : "",
       model: typeof thread.model === "string" ? thread.model : "",
       nativeSessionId:

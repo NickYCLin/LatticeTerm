@@ -196,6 +196,10 @@ export function useAgentChat(): AgentChatApi {
 
   const create = useCallback((settings: ChatThreadCreation) => {
     const thread = createThread(settings);
+    // The ref is what `send` consults, and a caller that creates a thread
+    // and sends into it in the same tick (an automation firing) runs before
+    // React has rendered the new state. Keep the ref current now.
+    threadsRef.current = [thread, ...threadsRef.current];
     setThreads((current) => [thread, ...current]);
     if (settings.activate !== false) setActiveThreadId(thread.id);
     return thread;
