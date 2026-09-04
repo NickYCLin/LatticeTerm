@@ -972,6 +972,23 @@ button.chat-chip:hover {
   margin: 0;
 }
 
+/* `.input` fixes a one-line height for text fields; the instructions are a
+   paragraph and need their rows back. */
+.automation-form textarea.input {
+  height: auto;
+  min-height: 7.5rem;
+  padding: var(--space-3) var(--space-4);
+  line-height: var(--leading);
+  resize: vertical;
+}
+
+/* A legend sits on the fieldset border by default and looked struck
+   through; `display: contents` drops that special placement so the label
+   inside flows as an ordinary heading in the box. */
+.automation-schedule > legend {
+  display: contents;
+}
+
 .automation-schedule {
   display: grid;
   gap: var(--space-3);

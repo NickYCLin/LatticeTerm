@@ -1162,7 +1162,7 @@ export const en: Messages = {
   "chat.composer.shortcut": "Enter sends, Shift+Enter adds a line",
   "chat.welcome.title": "Start a conversation with {assistant}",
   "chat.welcome.body": "This conversation works in \u201c{directory}\u201d. Say what you want done, or press Adjust to change permissions and model first.",
-  "chat.welcome.chooseDirectory": "Press Adjust and choose a working directory first, so the assistant knows where to work.",
+  "chat.welcome.chooseDirectory": "Choose a working directory above first, so the assistant knows where to work.",
   "chat.stop": "Stop",
   "chat.running": "Replying…",
   "chat.reasoning": "Reasoning",
