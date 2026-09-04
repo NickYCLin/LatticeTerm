@@ -4,6 +4,19 @@
 
 ---
 
+## [0.43.0](https://github.com/NickYCLin/lattice-term/compare/v0.42.0...v0.43.0) (2026-09-04)
+
+
+### 🚀 新增功能
+
+* **Agent Fleet:** 加開 CLI 的交接改寫成檔案，只貼一行指標 ([#151](https://github.com/NickYCLin/lattice-term/issues/151)) ([8766491](https://github.com/NickYCLin/lattice-term/commit/87664913f8cec29fc1633f6d5acd788b2313ec5a))
+* **對話:** Codex 改為每個對話一個常駐 app-server ([#153](https://github.com/NickYCLin/lattice-term/issues/153)) ([a28251d](https://github.com/NickYCLin/lattice-term/commit/a28251dc19978a1f970947897b09d0655a7bd554))
+
+
+### 🛠️ 問題修正
+
+* **對話:** 修正審查發現的問題——排程從未送出訊息、停止殺不掉子程序等 ([#150](https://github.com/NickYCLin/lattice-term/issues/150)) ([226fba2](https://github.com/NickYCLin/lattice-term/commit/226fba2952ecf665d89efd289852444bf9fc4a15))
+
 ## [0.42.0](https://github.com/NickYCLin/lattice-term/compare/v0.41.0...v0.42.0) (2026-09-04)
 
 
