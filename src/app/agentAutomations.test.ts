@@ -10,6 +10,7 @@ import {
   nextRunAfter,
   saveStoredAutomations,
   setAutomationEnabled,
+  triggerDependents,
   updateAutomation,
   validateAutomationDraft,
   type AutomationDraft,
@@ -33,6 +34,12 @@ describe("nextRunAfter", () => {
     expect(next).toEqual(wednesday(9));
   });
 
+  it("has no time of its own for a chained automation", () => {
+    expect(
+      nextRunAfter({ kind: "after", automationId: "a", onlyOnSuccess: true }, wednesday(8)),
+    ).toBeNull();
+  });
+
   it("moves to tomorrow once the time has passed, and never returns now", () => {
     const next = nextRunAfter({ kind: "daily", time: "09:00", weekdays: [] }, wednesday(9));
     expect(next).toEqual(new Date(2026, 8, 3, 9, 0));
@@ -45,7 +52,7 @@ describe("nextRunAfter", () => {
       wednesday(20),
     );
     expect(next).toEqual(new Date(2026, 8, 7, 7, 30));
-    expect(next.getDay()).toBe(1);
+    expect(next?.getDay()).toBe(1);
   });
 
   it("adds the interval to now", () => {
@@ -75,6 +82,24 @@ describe("validateAutomationDraft", () => {
       validateAutomationDraft(draft({ schedule: { kind: "interval", everyMinutes: 5 } }))
         .everyMinutes,
     ).toBe("range");
+  });
+
+  it("checks a chain for a missing source, itself, and a cycle", () => {
+    const a = createAutomation(draft({ name: "A" }), "a", wednesday(8));
+    const bAfterA = createAutomation(
+      draft({ name: "B", schedule: { kind: "after", automationId: "a", onlyOnSuccess: true } }),
+      "b",
+      wednesday(8),
+    );
+    const after = (automationId: string) =>
+      draft({ schedule: { kind: "after", automationId, onlyOnSuccess: false } });
+
+    expect(validateAutomationDraft(after(""), [a]).after).toBe("required");
+    expect(validateAutomationDraft(after("zzz"), [a]).after).toBe("missing");
+    expect(validateAutomationDraft(after("a"), [a], "a").after).toBe("cycle");
+    // Editing A to follow B, while B already follows A.
+    expect(validateAutomationDraft(after("b"), [a, bAfterA], "a").after).toBe("cycle");
+    expect(validateAutomationDraft(after("a"), [a], "c").after).toBeUndefined();
   });
 
   it("requires a name, instructions and a directory", () => {
@@ -154,6 +179,57 @@ describe("runs and scheduling", () => {
       wednesday(8),
     );
     expect(edited.nextRunAt).toBe(wednesday(9).getTime());
+  });
+
+  it("makes a chained automation due when its source ends, respecting the success rule", () => {
+    // Created after its 09:00 slot, so the source itself is not due today
+    // and only the chained ones show up below.
+    const source = createAutomation(draft({ name: "A" }), "a", wednesday(9, 30));
+    const always = createAutomation(
+      draft({ name: "B", schedule: { kind: "after", automationId: "a", onlyOnSuccess: false } }),
+      "b",
+      wednesday(8),
+    );
+    const onlyOk = createAutomation(
+      draft({ name: "C", schedule: { kind: "after", automationId: "a", onlyOnSuccess: true } }),
+      "c",
+      wednesday(8),
+    );
+    expect(always.nextRunAt).toBeNull();
+    // Only the timed source is due; a chained one waits for its trigger.
+    // Only the timed source is due; a chained one waits for its trigger.
+    expect(dueAutomations([source, always, onlyOk], wednesday(23).getTime())).toEqual([]);
+
+    const failed = triggerDependents([source, always, onlyOk], "a", "error", wednesday(9));
+    expect(failed.map((entry) => entry.nextRunAt)).toEqual([
+      source.nextRunAt,
+      wednesday(9).getTime(),
+      null,
+    ]);
+
+    const succeeded = triggerDependents([source, always, onlyOk], "a", "ok", wednesday(9));
+    expect(dueAutomations(succeeded, wednesday(9).getTime()).map((entry) => entry.id)).toEqual([
+      "b",
+      "c",
+    ]);
+
+    // Starting consumes the due mark; it does not schedule a next time.
+    const started = beginAutomationRun(succeeded[1], { runId: "r", threadId: "t" }, wednesday(9), true);
+    expect(started.nextRunAt).toBeNull();
+  });
+
+  it("never lets more than the cap start at once, and keeps the rest due", () => {
+    const due = [1, 2, 3, 4].map((n) =>
+      createAutomation(
+        draft({ name: `A${n}`, schedule: { kind: "interval", everyMinutes: 60 } }),
+        `a${n}`,
+        wednesday(7, n),
+      ),
+    );
+    const picked = dueAutomations(due, wednesday(9).getTime());
+    expect(picked.map((entry) => entry.id)).toEqual(["a1", "a2"]);
+    // Two already running (or reserved) leaves no room.
+    expect(dueAutomations(due, wednesday(9).getTime(), 2)).toEqual([]);
   });
 
   it("closes runs left running by a previous session", () => {

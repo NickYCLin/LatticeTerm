@@ -314,7 +314,7 @@ export function ChatView({
                     <br />
                     <span className="chat-thread__meta">
                       {automation.enabled
-                        ? describeSchedule(automation.schedule, t)
+                        ? describeSchedule(automation.schedule, t, automations.automations)
                         : t("automation.paused")}
                     </span>
                   </span>

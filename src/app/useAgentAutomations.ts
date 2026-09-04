@@ -20,6 +20,7 @@ import {
   loadStoredAutomations,
   saveStoredAutomations,
   setAutomationEnabled,
+  triggerDependents,
   updateAutomation,
   type Automation,
   type AutomationDraft,
@@ -59,6 +60,9 @@ export function useAgentAutomations(chat: AgentChatApi, locale: string): AgentAu
   automationsRef.current = automations;
   const chatRef = useRef(chat);
   chatRef.current = chat;
+  // Starts whose run entry is not in state yet. They count against the cap
+  // so two ticks in one render cycle cannot overshoot it.
+  const inFlight = useRef(new Set<string>());
 
   useEffect(() => {
     if (typeof localStorage === "undefined") return;
@@ -80,6 +84,7 @@ export function useAgentAutomations(chat: AgentChatApi, locale: string): AgentAu
         activate: false,
       });
       const runId = crypto.randomUUID();
+      inFlight.current.add(automation.id);
       setAutomations((current) =>
         current.map((entry) =>
           entry.id === automation.id
@@ -92,19 +97,32 @@ export function useAgentAutomations(chat: AgentChatApi, locale: string): AgentAu
     [locale],
   );
 
-  // The clock. Only the desktop backend can run a CLI, so the browser
-  // preview never ticks.
-  useEffect(() => {
+  const tick = useCallback(() => {
     if (!hasDesktopBackend()) return;
-    const tick = () => {
-      for (const automation of dueAutomations(automationsRef.current, Date.now())) {
-        start(automation, true);
-      }
-    };
+    const current = automationsRef.current;
+    for (const id of inFlight.current) {
+      const entry = current.find((automation) => automation.id === id);
+      if (!entry || isAutomationRunning(entry)) inFlight.current.delete(id);
+    }
+    for (const automation of dueAutomations(current, Date.now(), inFlight.current.size)) {
+      if (inFlight.current.has(automation.id)) continue;
+      start(automation, true);
+    }
+  }, [start]);
+
+  // The clock. Only the desktop backend can run a CLI, so the browser
+  // preview never ticks. A change to the list (a run ending frees a slot,
+  // a chained automation becoming due) is checked at once rather than at
+  // the next half minute.
+  useEffect(() => {
     tick();
     const timer = setInterval(tick, TICK_MS);
     return () => clearInterval(timer);
-  }, [start]);
+  }, [tick]);
+
+  useEffect(() => {
+    tick();
+  }, [automations, tick]);
 
   // A run ends when its thread's turn does. The thread's last item says
   // how; the thread is then news until someone opens it.
@@ -129,10 +147,14 @@ export function useAgentAutomations(chat: AgentChatApi, locale: string): AgentAu
         if (!last || last.type !== "turnEnd") continue;
         const outcome = last.error === null ? "ok" : "error";
         setAutomations((current) =>
-          current.map((entry) =>
-            entry.id === automation.id
-              ? finishAutomationRun(entry, run.runId, outcome, last.error)
-              : entry,
+          triggerDependents(
+            current.map((entry) =>
+              entry.id === automation.id
+                ? finishAutomationRun(entry, run.runId, outcome, last.error)
+                : entry,
+            ),
+            automation.id,
+            outcome,
           ),
         );
         if (chat.activeThreadId !== thread.id) chat.markUnread(thread.id, true);

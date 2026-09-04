@@ -9,6 +9,7 @@ import { useState, type FormEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   automationLimits,
+  chainReaches,
   draftFromAutomation,
   emptyAutomationDraft,
   isAutomationRunning,
@@ -61,13 +62,24 @@ const errorKey: Record<string, MessageKey> = {
   "time.invalid": "automation.error.time",
   "weekdays.invalid": "automation.error.weekdays",
   "everyMinutes.range": "automation.error.interval",
+  "after.required": "automation.error.afterRequired",
+  "after.missing": "automation.error.afterMissing",
+  "after.cycle": "automation.error.afterCycle",
 };
 
 /** The schedule in words, for the list and the detail header. */
 export function describeSchedule(
   schedule: AutomationSchedule,
   t: (key: MessageKey, values?: Record<string, string | number>) => string,
+  automations: readonly Automation[] = [],
 ): string {
+  if (schedule.kind === "after") {
+    const source = automations.find((entry) => entry.id === schedule.automationId);
+    const name = source?.name ?? t("automation.after.missing");
+    return t(schedule.onlyOnSuccess ? "automation.after.success" : "automation.after.any", {
+      name,
+    });
+  }
   if (schedule.kind === "interval") {
     const minutes = schedule.everyMinutes;
     if (minutes % 1440 === 0) return t("automation.every.days", { count: minutes / 1440 });
@@ -122,6 +134,8 @@ export function AutomationPane({
       <AutomationForm
         key={selected && editingExisting ? selected.id : "new"}
         initial={initial}
+        others={automations.automations}
+        selfId={selected && editingExisting ? selected.id : null}
         installed={installed}
         cliLabel={cliLabel}
         models={models}
@@ -188,14 +202,26 @@ export function AutomationPane({
           </div>
         </div>
         <p className="chat-composer__hint">
-          {describeSchedule(selected.schedule, t)} · {cliLabel(selected.definitionId)} ·{" "}
+          {describeSchedule(selected.schedule, t, automations.automations)} ·{" "}
+          {cliLabel(selected.definitionId)} ·{" "}
           {t(permissionLabelKey[selected.permission])} ·{" "}
           <span title={selected.workingDirectory}>{displayPath(selected.workingDirectory)}</span>
         </p>
         <p className="chat-composer__hint">
-          {selected.enabled && selected.nextRunAt !== null
-            ? t("automation.next", { at: new Date(selected.nextRunAt).toLocaleString() })
-            : t("automation.paused")}
+          {!selected.enabled
+            ? t("automation.paused")
+            : selected.nextRunAt !== null
+              ? t("automation.next", { at: new Date(selected.nextRunAt).toLocaleString() })
+              : selected.schedule.kind === "after"
+                ? t("automation.waiting", {
+                    name:
+                      automations.automations.find(
+                        (entry) =>
+                          selected.schedule.kind === "after" &&
+                          entry.id === selected.schedule.automationId,
+                      )?.name ?? t("automation.after.missing"),
+                  })
+                : t("automation.paused")}
         </p>
         {!installed.includes(selected.definitionId) && (
           <Callout tone="warn">
@@ -262,6 +288,8 @@ function RunRow({ run, onOpen }: { run: AutomationRun; onOpen: () => void }) {
 
 function AutomationForm({
   initial,
+  others,
+  selfId,
   installed,
   cliLabel,
   models,
@@ -270,6 +298,8 @@ function AutomationForm({
   onCancel,
 }: {
   initial: AutomationDraft;
+  others: readonly Automation[];
+  selfId: string | null;
   installed: readonly ChatDefinitionId[];
   cliLabel: (id: ChatDefinitionId) => string;
   models: Record<ChatDefinitionId, ChatModelList>;
@@ -313,7 +343,7 @@ function AutomationForm({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    const found = validateAutomationDraft(draft);
+    const found = validateAutomationDraft(draft, others, selfId);
     setErrors(found);
     if (Object.keys(found).length > 0) return;
     onSave(draft);
@@ -322,6 +352,10 @@ function AutomationForm({
   const schedule = draft.schedule;
   const intervalUnit =
     schedule.kind === "interval" && schedule.everyMinutes % 60 === 0 ? "hours" : "minutes";
+  // Only sources that would not close a loop are offered.
+  const chainSources = others.filter(
+    (entry) => entry.id !== selfId && !(selfId && chainReaches(others, entry.id, selfId)),
+  );
 
   return (
     <form className="automation-form" onSubmit={submit}>
@@ -428,8 +462,56 @@ function AutomationForm({
                 />
                 {t("automation.schedule.interval")}
               </label>
+              <label>
+                <input
+                  type="radio"
+                  name="schedule-kind"
+                  checked={schedule.kind === "after"}
+                  disabled={chainSources.length === 0}
+                  onChange={() =>
+                    patch({
+                      schedule: {
+                        kind: "after",
+                        automationId: chainSources[0]?.id ?? "",
+                        onlyOnSuccess: true,
+                      },
+                    })
+                  }
+                />
+                {t("automation.schedule.after")}
+              </label>
             </div>
-            {schedule.kind === "daily" ? (
+            {schedule.kind === "after" ? (
+              <div className="automation-schedule__interval">
+                <label className="field">
+                  <span className="field__label">{t("automation.after.source")}</span>
+                  <select
+                    className={`select${errors.after ? " is-invalid" : ""}`}
+                    value={schedule.automationId}
+                    onChange={(event) =>
+                      patch({ schedule: { ...schedule, automationId: event.target.value } })
+                    }
+                  >
+                    {chainSources.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="automation-schedule__day">
+                  <input
+                    type="checkbox"
+                    checked={schedule.onlyOnSuccess}
+                    onChange={(event) =>
+                      patch({ schedule: { ...schedule, onlyOnSuccess: event.target.checked } })
+                    }
+                  />
+                  {t("automation.after.onlyOnSuccess")}
+                </label>
+                {message("after") && <span className="field__error">{message("after")}</span>}
+              </div>
+            ) : schedule.kind === "daily" ? (
               <div className="automation-schedule__daily">
                 <label className="field">
                   <span className="field__label">{t("automation.time")}</span>
@@ -531,7 +613,10 @@ function AutomationForm({
               </div>
             )}
           </fieldset>
-          <p className="chat-composer__hint">{t("automation.schedule.hint")}</p>
+          <p className="chat-composer__hint">
+            {t("automation.schedule.hint")}{" "}
+            {t("automation.concurrency.hint", { count: automationLimits.maxConcurrentRuns })}
+          </p>
           {message("permission") && <Callout tone="danger">{message("permission")}</Callout>}
           {notice && <Callout tone="danger">{notice}</Callout>}
         </div>

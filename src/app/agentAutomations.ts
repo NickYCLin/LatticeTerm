@@ -9,6 +9,12 @@
  * start and then continues from there. Unattended runs never use the
  * ask-each-time permission, because nobody is there to answer.
  *
+ * An automation can also be chained after another one instead of having a
+ * time of its own: when the source's run ends (or ends well), the dependent
+ * becomes due. Chains form a graph that must stay acyclic, and every start
+ * is subject to one concurrency cap so a fan-out cannot launch a dozen
+ * assistants at once; what does not fit waits its turn.
+ *
  * Pure rules only; `useAgentAutomations` wires them to the clock and to
  * chat mode.
  */
@@ -23,7 +29,14 @@ export type AutomationSchedule =
       /** Days of the week as `Date.getDay()` numbers; empty means every day. */
       weekdays: number[];
     }
-  | { kind: "interval"; everyMinutes: number };
+  | { kind: "interval"; everyMinutes: number }
+  | {
+      /** Runs when another automation's run ends. */
+      kind: "after";
+      automationId: string;
+      /** Only follow a run that completed without error. */
+      onlyOnSuccess: boolean;
+    };
 
 export type AutomationRunOutcome = "running" | "ok" | "error" | "stopped";
 
@@ -48,7 +61,8 @@ export interface Automation {
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
-  /** Next due time, or null while paused. */
+  /** Next due time, or null while paused. A chained automation has one
+   *  only between its source finishing and its own start. */
   nextRunAt: number | null;
   lastRunAt: number | null;
   /** Most recent runs, newest first. */
@@ -73,6 +87,8 @@ export const automationLimits = {
   maxIntervalMinutes: 7 * 24 * 60,
   runsKept: 20,
   count: 50,
+  /** Runs allowed at once across all automations; the rest wait. */
+  maxConcurrentRuns: 2,
 } as const;
 
 export type AutomationField =
@@ -82,13 +98,23 @@ export type AutomationField =
   | "permission"
   | "time"
   | "weekdays"
-  | "everyMinutes";
+  | "everyMinutes"
+  | "after";
 
 export type AutomationErrors = Partial<Record<AutomationField, string>>;
 
 const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
-export function validateAutomationDraft(draft: AutomationDraft): AutomationErrors {
+/**
+ * @param others every existing automation, so a chain can be checked for a
+ *   missing source or a cycle.
+ * @param selfId the automation being edited, if any; it cannot follow itself.
+ */
+export function validateAutomationDraft(
+  draft: AutomationDraft,
+  others: readonly Automation[] = [],
+  selfId: string | null = null,
+): AutomationErrors {
   const errors: AutomationErrors = {};
   const name = draft.name.trim();
   if (!name) errors.name = "required";
@@ -109,6 +135,12 @@ export function validateAutomationDraft(draft: AutomationDraft): AutomationError
     if (draft.schedule.weekdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) {
       errors.weekdays = "invalid";
     }
+  } else if (draft.schedule.kind === "after") {
+    const sourceId = draft.schedule.automationId;
+    if (!sourceId) errors.after = "required";
+    else if (sourceId === selfId) errors.after = "cycle";
+    else if (!others.some((entry) => entry.id === sourceId)) errors.after = "missing";
+    else if (selfId && chainReaches(others, sourceId, selfId)) errors.after = "cycle";
   } else {
     const minutes = draft.schedule.everyMinutes;
     if (
@@ -123,11 +155,34 @@ export function validateAutomationDraft(draft: AutomationDraft): AutomationError
 }
 
 /**
- * The first time the schedule fires strictly after `after`, in local time.
- * A daily schedule scans at most eight days ahead, which always contains
- * one allowed weekday.
+ * Whether following the `after` links from `fromId` ever arrives at
+ * `targetId`. Used to keep the chain graph acyclic: a cycle would make two
+ * automations trigger each other forever.
  */
-export function nextRunAfter(schedule: AutomationSchedule, after: Date): Date {
+export function chainReaches(
+  automations: readonly Automation[],
+  fromId: string,
+  targetId: string,
+): boolean {
+  const visited = new Set<string>();
+  let cursor: string | null = fromId;
+  while (cursor && !visited.has(cursor)) {
+    if (cursor === targetId) return true;
+    visited.add(cursor);
+    const entry = automations.find((automation) => automation.id === cursor);
+    cursor = entry?.schedule.kind === "after" ? entry.schedule.automationId : null;
+  }
+  return false;
+}
+
+/**
+ * The first time the schedule fires strictly after `after`, in local time,
+ * or null for a chained automation, which has no time of its own. A daily
+ * schedule scans at most eight days ahead, which always contains one
+ * allowed weekday.
+ */
+export function nextRunAfter(schedule: AutomationSchedule, after: Date): Date | null {
+  if (schedule.kind === "after") return null;
   if (schedule.kind === "interval") {
     return new Date(after.getTime() + schedule.everyMinutes * 60_000);
   }
@@ -170,10 +225,14 @@ export function createAutomation(
     enabled: true,
     createdAt: now.getTime(),
     updatedAt: now.getTime(),
-    nextRunAt: nextRunAfter(draft.schedule, now).getTime(),
+    nextRunAt: plannedRun(draft.schedule, now),
     lastRunAt: null,
     runs: [],
   };
+}
+
+function plannedRun(schedule: AutomationSchedule, now: Date): number | null {
+  return nextRunAfter(schedule, now)?.getTime() ?? null;
 }
 
 /** Applies an edited draft; the next run is recomputed from the new schedule. */
@@ -192,7 +251,7 @@ export function updateAutomation(
     model: draft.model.trim(),
     schedule: draft.schedule,
     updatedAt: now.getTime(),
-    nextRunAt: automation.enabled ? nextRunAfter(draft.schedule, now).getTime() : null,
+    nextRunAt: automation.enabled ? plannedRun(draft.schedule, now) : null,
   };
 }
 
@@ -205,7 +264,7 @@ export function setAutomationEnabled(
     ...automation,
     enabled,
     updatedAt: now.getTime(),
-    nextRunAt: enabled ? nextRunAfter(automation.schedule, now).getTime() : null,
+    nextRunAt: enabled ? plannedRun(automation.schedule, now) : null,
   };
 }
 
@@ -214,17 +273,57 @@ export function isAutomationRunning(automation: Automation): boolean {
 }
 
 /**
- * Automations whose time has come. One that is still running is skipped
- * rather than started twice; it catches up when its next time arrives.
+ * Automations whose time has come, oldest due first, no more than the
+ * concurrency cap leaves room for. One that is still running is skipped
+ * rather than started twice; a timed one catches up at its next time, and a
+ * chained one keeps its due mark until it can start.
+ *
+ * @param reserved starts already in flight that the caller has not yet
+ *   recorded as runs, so they count against the cap too.
  */
-export function dueAutomations(automations: Automation[], now: number): Automation[] {
-  return automations.filter(
-    (automation) =>
-      automation.enabled &&
-      automation.nextRunAt !== null &&
-      automation.nextRunAt <= now &&
-      !isAutomationRunning(automation),
-  );
+export function dueAutomations(
+  automations: Automation[],
+  now: number,
+  reserved = 0,
+): Automation[] {
+  const running = automations.filter(isAutomationRunning).length + reserved;
+  const room = Math.max(0, automationLimits.maxConcurrentRuns - running);
+  return automations
+    .filter(
+      (automation) =>
+        automation.enabled &&
+        automation.nextRunAt !== null &&
+        automation.nextRunAt <= now &&
+        !isAutomationRunning(automation),
+    )
+    .sort((a, b) => (a.nextRunAt ?? 0) - (b.nextRunAt ?? 0))
+    .slice(0, room);
+}
+
+/**
+ * Marks every automation chained after `finishedId` as due, when the
+ * outcome qualifies. They then start through the same clock and cap as
+ * timed ones, which is what keeps a fan-out orderly.
+ */
+export function triggerDependents(
+  automations: Automation[],
+  finishedId: string,
+  outcome: Exclude<AutomationRunOutcome, "running">,
+  now: Date = new Date(),
+): Automation[] {
+  return automations.map((automation) => {
+    const { schedule } = automation;
+    if (
+      schedule.kind !== "after" ||
+      schedule.automationId !== finishedId ||
+      !automation.enabled ||
+      (schedule.onlyOnSuccess && outcome !== "ok") ||
+      automation.nextRunAt !== null
+    ) {
+      return automation;
+    }
+    return { ...automation, nextRunAt: now.getTime(), updatedAt: now.getTime() };
+  });
 }
 
 /**
@@ -249,10 +348,10 @@ export function beginAutomationRun(
   return {
     ...automation,
     lastRunAt: now.getTime(),
+    // A chained automation's due mark is consumed by starting; a timed one
+    // moves on to its next time.
     nextRunAt:
-      scheduled && automation.enabled
-        ? nextRunAfter(automation.schedule, now).getTime()
-        : automation.nextRunAt,
+      scheduled && automation.enabled ? plannedRun(automation.schedule, now) : automation.nextRunAt,
     runs: [entry, ...automation.runs].slice(0, automationLimits.runsKept),
     updatedAt: now.getTime(),
   };
@@ -302,6 +401,9 @@ function isSchedule(value: unknown): value is AutomationSchedule {
   }
   if (schedule.kind === "interval") {
     return typeof (schedule as { everyMinutes?: unknown }).everyMinutes === "number";
+  }
+  if (schedule.kind === "after") {
+    return typeof (schedule as { automationId?: unknown }).automationId === "string";
   }
   return false;
 }
