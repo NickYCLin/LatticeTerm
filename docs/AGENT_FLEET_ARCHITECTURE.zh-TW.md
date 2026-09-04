@@ -57,7 +57,7 @@ Agent Fleet 的每個工作階段都是真正的 PTY，但不是每個人都想�
 
 - **一輪一個程序**。每則訊息以該 CLI 的官方 headless JSON 模式啟動一次程序：Claude Code 是 `claude -p --output-format stream-json --verbose --include-partial-messages`，Codex 是 `codex exec --json`，Gemini 是 `gemini --output-format stream-json`。提示從 stdin 送入並關閉，不放在命令列參數，因此不受參數長度限制也不會出現在程序清單。程序以使用者權限執行，工作目錄由使用者選擇並經 canonicalize 與 is_dir 驗證。
 - **續接靠 CLI 自己的對話 ID**。第一輪的 `system/init`（Claude）、`thread.started`（Codex）或 `init`（Gemini）回報的 ID 隨 `Started`／`Finished` 事件交給前端，下一輪以 `claude --resume <id>`、`codex exec … resume <id> -`、`gemini --resume <id>` 續接。LatticeTerm 不讀寫任何 CLI 的原生對話檔；Codex 的模型在第一輪後固定（`resume` 不提供換模型），Claude 與 Gemini 每輪都可指定 `--model`。
-- **帳號設定檔與 Skills**。對話可為 Codex 或 Claude Code 命名多個本機設定目錄；選用設定檔時，子程序分別收到 `CODEX_HOME` 或 `CLAUDE_CONFIG_DIR`，因此個人、公司與專案帳號不共用 CLI 的登入狀態。LatticeTerm 只保存顯示名稱與使用者挑選的目錄，從不讀取或寫入 token；切換設定檔會建立新的 CLI 原生對話，並以既有的受限文字交接保留脈絡。設定面板也可只讀探索設定檔與工作目錄的標準 `SKILL.md`，僅顯示名稱與說明，不讀取憑證、對話或 Skill 指示內容。
+- **帳號設定檔與 Skills**。對話可為 Codex 或 Claude Code 命名多個帳號設定檔；選用設定檔時，子程序分別收到 `CODEX_HOME` 或 `CLAUDE_CONFIG_DIR`，因此個人、公司與專案帳號不共用 CLI 的登入狀態。新增時只需取名：`agent_account_profile_directory` 在 app data 下建立 `agent-profiles/<cli>/<id>`（Unix 為 0700）並回傳路徑，第一次啟動時在 CLI 內照常登入；要沿用既有設定目錄的放在對話框的「進階」。LatticeTerm 只保存顯示名稱與目錄，從不讀取或寫入 token；切換設定檔會建立新的 CLI 原生對話，並以既有的受限文字交接保留脈絡。設定面板也可只讀探索設定檔與工作目錄的標準 `SKILL.md`，僅顯示名稱與說明，不讀取憑證、對話或 Skill 指示內容。
 - **記憶交接不阻塞**。舊 CLI 的對話檔掃描與 Claude 自動記憶匯入都在背景 blocking worker 進行；大型或網路掛載的歷史目錄不會占用 Tauri 命令執行緒，因此其他對話、連線與工作階段仍可操作。
 - **跨模型轉交不共用 session**。既有對話可在設定的單一模型選單改選另一家 CLI；目標 CLI 必定以新的原生對話啟動，絕不接收來源 CLI 的 session ID。下一則訊息前端只附帶最多 48 KiB、近期的使用者訊息與最終文字回覆，並用明確界線標為不可信參考：它不能授權工具、修改指示或覆蓋目前使用者要求。推理內容、工具輸入／輸出與核准資料都不轉交；目標開始回報原生 session 後才會清除待轉交內容，因此啟動失敗可以安全重試。歷史回覆會保留其原助理標籤。
 - **圖片與檔案附件**。編輯器可由原生檔案選擇器加入圖片／檔案，或把本機檔案拖進視窗；送出前能逐一移除，歷史訊息只保存檔名、路徑與類型，不複製檔案內容。後端 canonicalize 後只接受一般檔案，最多 10 個、單檔 32 MiB、合計 96 MiB，並把路徑列成「使用者明確選取、內容不可信」的 stdin 參考；檔案內容不能授權工具或改寫指示。Codex 的 PNG/JPEG/GIF/WebP/BMP 另使用官方 `--image` 傳給新建或續接回合；其他 CLI 依其正常檔案讀取與權限模型處理路徑。這些路徑不會出現在一般 prompt 命令列參數中。
@@ -115,7 +115,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態或用量訊息。Registr
 - LatticeTerm 不讀取、不複製也不保存模型 API 金鑰；登入仍由各 CLI 自行處理。
 - 安裝指令由內建目錄固定，參數分開傳入；執行前顯示完整指令並要求確認，下載與安裝輸出留在使用者可見的終端。LatticeTerm 不自動代填憑證，也不把遠端安裝腳本當成已簽章成品。
 - CLI 以啟動 LatticeTerm 的使用者權限執行，不是沙箱。使用者只能加入自己信任的程式。
-- 狀態只在有依據時才說「執行中」。官方 lifecycle hook／plugin 事件是唯一權威來源；heuristic 僅在使用者實際送出打好的提示時標記執行中，單獨的 Enter（接受資料夾信任對話框、清空提示）不算新工作，只有目前為待確認時才視為回答並恢復該輪。若某工作階段的整合始終沒有回報，而 PTY 連續 10 分鐘沒有任何輸出（每個互動式 CLI 都會持續重畫計時或 token 計數），該 heuristic 猜測會退回「閒置」而不是「完成」：沒有任何東西觀察到結果，也不會觸發完成提示音。
+- 狀態只在有依據時才說「執行中」。官方 lifecycle hook／plugin 事件是唯一權威來源；heuristic 僅在使用者實際送出打好的提示時標記執行中，單獨的 Enter（接受資料夾信任對話框、清空提示）不算新工作，只有目前為待確認時才視為回答並恢復該輪。沒有整合的 CLI 判「完成」的依據是送出提示後提示列重新開啟 bracketed paste（`CSI ? 2004 h`），但 TUI 一般重繪也會送這個碼，所以看到之後還要再安靜 `PROMPT_READY_SETTLE`（2 秒）才成立；期間有任何輸出就以最新輸出重新起算，直到終端真的停下、或整合事件／使用者輸入改變了狀態。若某工作階段的整合始終沒有回報，而 PTY 連續 10 分鐘沒有任何輸出（每個互動式 CLI 都會持續重畫計時或 token 計數），該 heuristic 猜測會退回「閒置」而不是「完成」：沒有任何東西觀察到結果，也不會觸發完成提示音。
 - Agent 終端的圖片貼上只在目標工作階段仍存在時讀取系統剪貼簿；原生層拒絕超限或不一致的像素資料，並以擁有者限定權限建立工作階段專屬暫存檔。每個 PTY 最多保留 32 張／256 MiB，工作階段停止、程序自然結束或應用程式離開時全部刪除。
 - 執行中的工作階段只存在記憶體，Rust registry 最多接受 32 個活躍 session；每個 PTY 保留最近 256 KiB 有界輸出與單調 byte offset，因此重播尾端總上限為 8 MiB。WebView 重新載入可重新 attach 並避免快照／即時事件重複。使用者停止或應用程式結束／重啟時仍會終止已登記的 CLI。
 - CLI 自行退出時，WebView 會把該項標成完成、保留唯讀分頁與已收到的終端輸出，直到使用者明確關閉；即使程序早於啟動回應結束，也會在取得工作階段資料後建立這個可檢視分頁。退出項目不會寫入跨重啟工作階段快照；只有無法對應任何既有或進行中啟動要求的關閉事件才使用全域通知，且 `code 0` 會標為正常結束而非連線中斷。
