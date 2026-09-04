@@ -1035,7 +1035,7 @@ export const zhTW = {
   "chat.permission.workspaceWrite": "可修改工作目錄",
   "chat.permission.full": "全部允許（危險）",
   "chat.permission.ask.hint":
-    "助理 自己的規則放行不了的工具呼叫，會在對話裡跳出核准卡片，由你按允許或拒絕；跟終端機裡的詢問一樣。目前只有 Claude Code 支援。",
+    "助理 自己的規則放行不了的工具呼叫，會在對話裡跳出核准卡片，由你按允許或拒絕；跟終端機裡的詢問一樣。Claude Code 與 Codex 支援，Gemini 尚無對應機制。",
   "chat.permission.readOnly.hint": "助理 只能閱讀與分析，不會改任何檔案。",
   "chat.permission.workspaceWrite.hint":
     "可以編輯工作目錄裡的檔案。Claude Code 遇到需要審核的指令會拒絕並在回覆裡說明；Codex 在自己的沙箱裡執行指令。",

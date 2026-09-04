@@ -1111,7 +1111,7 @@ export const en: Messages = {
   "chat.permission.workspaceWrite": "Edit the working directory",
   "chat.permission.full": "Allow everything (dangerous)",
   "chat.permission.ask.hint":
-    "Tool calls the assistant's own rules cannot settle appear as approval cards for you to allow or deny, like the prompt in a terminal. Claude Code only, for now.",
+    "Tool calls the assistant's own rules cannot settle appear as approval cards for you to allow or deny, like the prompt in a terminal. Claude Code and Codex support it; Gemini has no channel for it.",
   "chat.permission.readOnly.hint": "The assistant can read and analyse but changes no files.",
   "chat.permission.workspaceWrite.hint":
     "Files under the working directory may be edited. Claude Code declines commands that would need an approval and says so in its reply; Codex runs them inside its sandbox.",

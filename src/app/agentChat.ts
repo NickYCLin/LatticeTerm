@@ -21,19 +21,25 @@ export const chatPermissions: readonly ChatPermission[] = [
 
 /**
  * The permissions a CLI can honour in chat mode. Asking per tool call needs
- * a bidirectional headless protocol, which only Claude Code has.
+ * a bidirectional headless protocol: Claude Code's stream-json control
+ * channel and Codex's app-server JSON-RPC have one; Gemini's headless mode
+ * does not.
  */
 export function permissionsFor(
   definitionId: ChatDefinitionId,
 ): readonly ChatPermission[] {
-  return definitionId === "claude"
+  return canAskEachTime(definitionId)
     ? chatPermissions
     : chatPermissions.filter((permission) => permission !== "ask");
 }
 
+export function canAskEachTime(definitionId: ChatDefinitionId): boolean {
+  return definitionId === "claude" || definitionId === "codex";
+}
+
 /** The permission a new thread starts with: ask when the CLI can. */
 export function defaultPermission(definitionId: ChatDefinitionId): ChatPermission {
-  return definitionId === "claude" ? "ask" : "readOnly";
+  return canAskEachTime(definitionId) ? "ask" : "readOnly";
 }
 
 export type ApprovalDecision = "pending" | "allowed" | "denied" | "closed";
