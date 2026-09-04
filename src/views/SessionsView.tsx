@@ -821,7 +821,21 @@ export function SessionsView({
         } catch {
           // A direct-memory failure must not lose the transfer.
         }
-        if (!imported) seedInput = t("terminal.handoff.frame", { transcript });
+        if (!imported) {
+          // A file and a one-line pointer instead of pasting the whole
+          // transcript: terminal UIs ingest a large paste one keystroke at a
+          // time, and the new CLI is usable only once the model has read it
+          // all. Pointing at a file makes it interactive immediately.
+          try {
+            const path = await agents.writeHandoffFile(source?.label ?? "", transcript);
+            seedInput = t("terminal.handoff.filePointer", {
+              path,
+              source: source?.label ?? t("terminal.handoff.anotherAssistant"),
+            });
+          } catch {
+            seedInput = t("terminal.handoff.frame", { transcript });
+          }
+        }
       } catch {
         setAddCliError({
           title: t("terminal.handoff.exportFailedTitle"),

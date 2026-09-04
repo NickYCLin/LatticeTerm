@@ -820,6 +820,9 @@ export const en: Messages = {
   "terminal.handoff.exportFailedTitle": "Could not carry the current memory",
   "terminal.handoff.exportFailed":
     "The current CLI conversation has not been saved yet or could not be read, so no new CLI was opened. Let the current task finish and try again, or turn off “Bring current memory to the new CLI.”",
+  "terminal.handoff.anotherAssistant": "another AI assistant",
+  "terminal.handoff.filePointer":
+    "I just handed this work over to you from {source}. The full earlier conversation is in this file: {path}\nRead it first for context, tell me in two or three sentences what you understood, then wait for my next instruction.",
   "terminal.handoff.frame":
     "Below is my full earlier conversation with another AI assistant. Please read it for context, then take over and keep helping me — I'll give you my next instruction shortly.\n\n===== earlier conversation start =====\n{transcript}\n===== earlier conversation end =====",
   "terminal.backToList": "Back to connections",

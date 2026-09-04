@@ -631,6 +631,8 @@ export interface AgentApi {
   exportTranscript: (sessionId: string) => Promise<string | null>;
   /** Writes an opt-in handoff to a target's known memory format, if supported. */
   importMemoryHandoff: (request: AgentMemoryHandoffRequest) => Promise<boolean>;
+  /** Writes the handoff brief to a private file and returns its path. */
+  writeHandoffFile: (sourceLabel: string, transcript: string) => Promise<string>;
   broadcast: (
     sessionIds: string[],
     prompt: string,
@@ -1244,6 +1246,14 @@ export function useAgentSessions(): AgentApi {
     [],
   );
 
+  const writeHandoffFile = useCallback(
+    async (sourceLabel: string, transcript: string): Promise<string> => {
+      const { invoke } = await core();
+      return invoke<string>("agent_write_handoff_file", { sourceLabel, transcript });
+    },
+    [],
+  );
+
   /**
    * Lines a prompt up behind whatever the agent is already doing.
    *
@@ -1382,6 +1392,7 @@ export function useAgentSessions(): AgentApi {
     pasteClipboardImage,
     exportTranscript,
     importMemoryHandoff,
+    writeHandoffFile,
     broadcast,
     enqueue,
     clearQueue,

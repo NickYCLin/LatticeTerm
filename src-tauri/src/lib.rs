@@ -701,6 +701,27 @@ async fn agent_import_memory_handoff(
     .map_err(|error| format!("Memory handoff task did not complete: {error}"))?
 }
 
+/// Writes a handoff brief to LatticeTerm's data directory and returns its
+/// path, so the next CLI can be pointed at it instead of having the whole
+/// text pasted into its terminal.
+#[tauri::command]
+async fn agent_write_handoff_file(
+    app: AppHandle,
+    source_label: String,
+    transcript: String,
+) -> Result<String, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Cannot locate the application data directory: {error}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::transcript::write_handoff_file(&data_dir, &source_label, &transcript)
+            .map(|path| crate::agent::plain_win32_path(path).display().to_string())
+    })
+    .await
+    .map_err(|error| format!("Handoff file task did not complete: {error}"))?
+}
+
 #[tauri::command]
 fn agent_resize(
     session_id: String,
@@ -2384,6 +2405,7 @@ pub fn run() {
             agent_paste_clipboard_image,
             agent_export_transcript,
             agent_import_memory_handoff,
+            agent_write_handoff_file,
             agent_resize,
             agent_disconnect,
             agent_sessions,

@@ -788,6 +788,9 @@ export const zhTW = {
   "terminal.handoff.exportFailedTitle": "無法帶入目前記憶",
   "terminal.handoff.exportFailed":
     "目前 CLI 的對話尚未寫入或無法讀取，因此沒有開啟新的 CLI。請讓目前工作完成後再試一次，或取消「將目前記憶帶到新 CLI」。",
+  "terminal.handoff.anotherAssistant": "另一個 AI 助理",
+  "terminal.handoff.filePointer":
+    "我剛從 {source} 把工作交接給你。先前的完整對話已存在這個檔案：{path}\n請先讀完它掌握脈絡，用兩三句話告訴我你理解到哪裡，然後等我下一個指示。",
   "terminal.handoff.frame":
     "以下是我和另一個 AI 助理先前的完整對話。請先讀懂脈絡，接著接手繼續協助我，我馬上會給你下一個指示。\n\n===== 先前對話開始 =====\n{transcript}\n===== 先前對話結束 =====",
   "terminal.backToList": "回到連線清單",
