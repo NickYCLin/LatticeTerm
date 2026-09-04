@@ -1203,6 +1203,7 @@ export const en: Messages = {
   "automation.pause": "Pause",
   "automation.resume": "Resume",
   "automation.runNow": "Run now",
+  "automation.background.hint": "Runs here while LatticeTerm is open; while it is closed the background service runs it on time, and the result shows up as an unread conversation the next time you open the app.",
   "automation.running": "Running",
   "automation.runs": "Runs",
   "automation.runs.none": "Has not run yet.",

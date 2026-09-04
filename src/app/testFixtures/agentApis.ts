@@ -154,6 +154,7 @@ export function fakeChatApi(overrides: Partial<AgentChatApi> = {}): AgentChatApi
     setActiveThreadId: vi.fn(),
     supported: ["claude", "codex", "gemini"],
     createThread: vi.fn(() => fakeThread()),
+    importRecordedTurn: vi.fn(() => fakeThread({ unread: true })),
     markUnread: vi.fn(),
     updateThread: vi.fn(),
     handoffThread: vi.fn(),

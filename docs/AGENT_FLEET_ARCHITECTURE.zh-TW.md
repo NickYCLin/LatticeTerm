@@ -78,7 +78,7 @@ Agent Fleet 的每個工作階段都是真正的 PTY，但不是每個人都想�
 - **定義與時鐘都在前端**（`src/app/agentAutomations.ts`、`useAgentAutomations.ts`）。沒有 chrono 相依，下一次執行時間直接用 JS `Date` 在本機時區計算並存成 unix ms；`useAgentAutomations` 掛在 App 根層，每 30 秒問純函式 `dueAutomations` 有哪些到期，逐一以 `chat.createThread`＋`chat.send` 執行。執行前先把 `nextRunAt` 推到下一次，所以同一個時刻不會重複觸發；上一輪還在跑的排程直接跳過這一輪。
 - **每次執行就是一個對話串**，帶 `automationId` 與「名稱 · 時間」標題，不搶目前畫面。對話的回合結束時（最後一則是 `turnEnd`）記錄結果為完成／失敗，並把該串標成未讀；點開即已讀。對話串被刪掉時記為中斷。
 - **無人值守限制**：`ask` 權限在驗證、儲存讀取與啟動三處都被擋下並退回唯讀；預設唯讀。
-- **沒有 daemon**：關著時錯過的排程在下次開啟時（第一次 tick）補跑一次，之後照原時間；上一個程序中還在「執行中」的紀錄載入時標為中斷。
+- **關著時由背景服務執行**：桌面每次改動排程清單（以及每次 attach、每 30 秒）都把整份清單送給 `agent-daemon`（`automationsReplace`，有任何啟用的排程就會把 daemon 拉起來並讓它保持常駐）；視窗連著時 daemon 不動、由桌面照舊執行並串流；沒有視窗連著時 daemon 用同一套到期規則與同時執行上限（2）自己跑，`ask` 權限降為唯讀，每次執行把整輪 `ChatEvent` 錄成 `automations/runs/<run>.json`（0600，上限 4000 個事件／4 MiB，先丟串流 delta），並照桌面的 `triggerDependents` 讓接續的排程到期。下次開啟時桌面先 `automationsTakeRuns`（一次交付、交付即刪檔）把每筆紀錄用同一個 reducer 折成未讀對話並記進執行歷史，再送出清單同步；daemon 的 `replace` 會保留比桌面新的 `lastRunAt`／`nextRunAt`，桌面也只在 daemon 比較新時採用它的標記，所以兩邊都不會重跑同一輪。背景服務沒在跑時，關著時錯過的排程仍在下次開啟時補跑一次；上一個程序中還在「執行中」的紀錄載入時標為中斷。
 - **保存**：`localStorage` 的 `latticeterm.agentAutomations.v1`，最多 50 個排程、每個保留最近 20 次執行；隨加密備份匯出。指示是使用者明確寫下的任務內容，屬於刻意保存的設定，不是單次提示。
 - **排程表達式**：`daily`（`HH:MM` 加星期集合，空集合為每天）與 `interval`（15 分鐘到 7 天）。沒有做 RRULE；Codex 也是以預設為主、進階才露出 RRULE。
 
@@ -143,7 +143,7 @@ Reporter 每次只傳一個最多 4 KiB 的 JSON 狀態或用量訊息。Registr
 | 原生 CLI Session 續接 | 相容保留 | 不再顯示手動設定；Adapter v1 僅供舊工作區還原 |
 | 同程序介面重新 attach | 已完成 | 先訂閱事件再 hydration；session 關閉不會被舊快照復活，最近 256 KiB PTY 輸出依 offset 去重重播 |
 | 工具專用語意 Adapter | 部分完成 | Codex `notify`、Claude Code、Gemini CLI、Hermes Agent、Qwen Code lifecycle hooks，以及 OpenCode、GitHub Copilot CLI plugin events 已接上 Reporter；Hermes 已提供 token buckets，舊工作區續接 recipe 與保守的 session ID 擷取仍保留，其他工具 hook、token 與 cost 擷取尚未完成 |
-| 跨程序背景 daemon 與重新 attach | 已完成（第一版） | 勾選「留在背景」的工作階段由 `lattice-term agent-daemon` 持有：同一份 `AgentRegistry` 在 daemon 程序裡跑，桌面透過使用者專屬本機 socket 以 JSON 行協定 attach，關閉視窗後 CLI 繼續，下次開啟接回並重播 256 KiB 尾端；未勾選的仍隨桌面結束。保存的啟動項目記住此選項，還原時直接交給 daemon；對話排程仍只在桌面執行 |
+| 跨程序背景 daemon 與重新 attach | 已完成（第一版） | 勾選「留在背景」的工作階段由 `lattice-term agent-daemon` 持有：同一份 `AgentRegistry` 在 daemon 程序裡跑，桌面透過使用者專屬本機 socket 以 JSON 行協定 attach，關閉視窗後 CLI 繼續，下次開啟接回並重播 256 KiB 尾端；未勾選的仍隨桌面結束。保存的啟動項目記住此選項，還原時直接交給 daemon；對話排程在沒有視窗連著時由 daemon 執行，結果交回桌面成為未讀對話 |
 | 跨重啟還原 | 部分完成 | 已保存的 Codex 項目會續接同工作目錄最近的對話，Cursor 項目會使用 `agent --continue` 續接最近對話；正常關閉時，每個 Agent 最近 256 KiB 終端輸出會以 OS 安全儲存區中的裝置金鑰加密保存，重啟同一項目後先重播。若安全儲存區不可用就不落地輸出；原 PTY 程序與可互動 pane 仍無法跨程序存活 |
 | 遠端 Agent Fleet | 未完成 | 尚未透過 SSH 或 Lattice Remote 控制遠端 PTY |
 | 對話模式 | 已完成 | Claude Code 與 Gemini CLI 以官方 headless JSON 模式逐輪執行，Codex 每個對話常駐一個 app-server 加速追問；串流文字、工具卡片、用量統計與以 CLI 對話 ID 續接；Claude（stream-json 控制協定）與 Codex（app-server JSON-RPC）支援逐項核准；Gemini 的非互動模式無對應機制 |
@@ -166,7 +166,7 @@ Reporter 傳輸與狀態模型已完成，Codex、Claude Code、Gemini CLI、Ope
 - **路由**：daemon 的 registry 用 `agent-bg-session-` 前綴發 id，桌面的 `agent_*` 指令依前綴決定走本機 registry 還是 daemon；`agent_sessions`／`agent_output_snapshots` 合併兩邊（daemon 不在就只回本機，不會為了查詢把它拉起來）。貼上圖片時 PNG 走 socket 由 daemon 建暫存檔並綁定 PTY 生命週期；交接逐字稿用 daemon 回報的 summary 在桌面讀取。
 - **Reporter 與佇列**：因為整個 registry 都在 daemon 裡，Reporter 的 loopback 監聽、每個工作階段的權杖、提示佇列放行與整合用暫存檔全部跟著 CLI 活，與桌面是否連著無關。
 - **重播**：daemon 的 `OutputBuffer` offset 跨 attach 單調遞增；新視窗從 `hello`／`snapshots` 拿到 `startOffset`／`endOffset` 尾端，前端既有的依 offset 去重直接適用。連線斷掉時桌面端把 daemon 的每個工作階段以 `closed` 事件關掉。
-- **範圍與限制**：只有啟動表單勾選「留在背景」的工作階段走 daemon；工作區快照不保存 detached 的工作階段（它們自己會接回）；保存的啟動項目帶著 `detached`，`agent_plan_restore` 依它決定交給 daemon 還是本機；daemon 本身若被殺，PTY 隨之消失；對話模式的排程仍只在桌面執行；Windows 具名管道路徑尚未在 CI 驗證。
+- **範圍與限制**：只有啟動表單勾選「留在背景」的工作階段走 daemon；工作區快照不保存 detached 的工作階段（它們自己會接回）；保存的啟動項目帶著 `detached`，`agent_plan_restore` 依它決定交給 daemon 還是本機；daemon 本身若被殺，PTY 隨之消失；對話排程由 daemon 在無視窗時執行（見對話模式一節）；daemon 只在 LatticeTerm 開過之後才會存在，開機後未曾開啟 LatticeTerm 就不會有人跑排程；Windows 具名管道路徑尚未在 CI 驗證。
 
 ### 3. 自建遠端 Fleet
 

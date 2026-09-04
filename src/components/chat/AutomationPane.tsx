@@ -166,6 +166,7 @@ export function AutomationPane({
       <header className="chat-header">
         <div className="chat-header__title">
           <h2>{selected.name}</h2>
+          <p className="automation-background-hint">{t("automation.background.hint")}</p>
           <div className="chat-composer__actions">
             <button
               type="button"

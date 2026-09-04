@@ -126,6 +126,8 @@ async fn a_desktop_attaches_launches_and_reattaches_over_the_socket() {
         token.clone(),
         Arc::clone(&registry),
         Arc::clone(&sink),
+        Arc::new(super::automations::Scheduler::open(dir.path())),
+        Arc::new(crate::agent_chat::AgentChatRegistry::new()),
         Duration::from_secs(600),
         Arc::new(Logger::silent()),
     ));
@@ -253,6 +255,8 @@ async fn an_idle_daemon_exits_by_itself() {
         token,
         registry,
         sink,
+        Arc::new(super::automations::Scheduler::open(dir.path())),
+        Arc::new(crate::agent_chat::AgentChatRegistry::new()),
         Duration::from_millis(1),
         Arc::new(Logger::silent()),
     ));
