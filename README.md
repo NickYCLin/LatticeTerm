@@ -20,7 +20,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | 發行與更新 | **可用** | Windows x64、Linux x64／arm64、macOS Apple Silicon 安裝檔、更新簽章、Release PR 與應用程式內更新已自動化。 |
 | Android | **預覽** | 共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面可建置；需要桌面 sidecar 的 RDP、VNC 與 Agent Fleet 不提供。 |
 | iOS | **預覽** | 已在 iPhone 17 Simulator 編譯、安裝及啟動共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面；已產出並驗證 In-House 企業版 IPA 簽章，實機安裝、TestFlight 與上架仍未驗證。 |
-| 進階 Agent 與行動能力 | **規劃中** | 跨程序 daemon、遠端 Fleet、任務編排與每 Agent 沙箱仍待完成。 |
+| 進階 Agent 與行動能力 | **部分完成** | 排程任務、接續執行與同時執行上限、提示佇列，以及 Linux 的 bubblewrap 檔案範圍沙箱已完成；跨程序 daemon、遠端 Fleet、macOS／Windows 的沙箱與 iOS 上架仍待完成。 |
 
 ## 主要特色
 
