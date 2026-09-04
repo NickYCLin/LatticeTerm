@@ -506,7 +506,8 @@
 
 .agent-account-profile-dialog__steps {
   margin: 0;
-  padding-left: 1.25em;
+  padding-left: 1.5em;
+  list-style: decimal;
   display: grid;
   gap: var(--space-1);
   color: var(--text-muted);

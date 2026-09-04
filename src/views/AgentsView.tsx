@@ -117,6 +117,7 @@ export function AgentsView({
   const [selectedAccountProfile, setSelectedAccountProfile] = useState<Record<string, string>>({});
   const { statuses: profileStatuses } = useAccountProfileStatus(accountProfiles);
   const [accountProfileDefinition, setAccountProfileDefinition] = useState<AgentDefinition | null>(null);
+  const [pendingProfileRemoval, setPendingProfileRemoval] = useState<ChatAccountProfile | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [pendingInstall, setPendingInstall] = useState<AgentDefinition | null>(null);
   const [copiedInstallSource, setCopiedInstallSource] = useState<string | null>(null);
@@ -275,11 +276,10 @@ export function AgentsView({
     setAccountProfileDefinition(null);
   }
 
+  // Confirmed in the app's own dialog: `window.confirm` is not a real
+  // prompt inside the desktop WebView and would remove without asking.
   async function removeAccountProfile(profile: ChatAccountProfile) {
-    const question = profile.managed
-      ? t("agents.account.removeConfirm", { name: profile.name })
-      : t("agents.account.removeConfirmExternal", { name: profile.name });
-    if (!window.confirm(question)) return;
+    setPendingProfileRemoval(null);
     if (profile.managed) {
       // Only a directory LatticeTerm created is deleted, and the backend
       // accepts nothing but the fixed managed path shape.
@@ -828,8 +828,8 @@ export function AgentsView({
                         {selected && (
                           <button
                             type="button"
-                            className="button button--ghost button--sm"
-                            onClick={() => void removeAccountProfile(selected)}
+                            className="button button--secondary button--sm"
+                            onClick={() => setPendingProfileRemoval(selected)}
                           >
                             {t("agents.account.removeProfile")}
                           </button>
@@ -1457,6 +1457,21 @@ export function AgentsView({
         />
       )}
 
+      {pendingProfileRemoval && (
+        <ConfirmDialog
+          title={t("agents.account.removeTitle", { name: pendingProfileRemoval.name })}
+          body={
+            pendingProfileRemoval.managed
+              ? t("agents.account.removeConfirm")
+              : t("agents.account.removeConfirmExternal")
+          }
+          confirmLabel={t("agents.account.removeAction")}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          onConfirm={() => void removeAccountProfile(pendingProfileRemoval)}
+          onCancel={() => setPendingProfileRemoval(null)}
+        />
+      )}
       {accountProfileDefinition && profileCapable(accountProfileDefinition.id) && (
         <AgentAccountProfileDialog
           agentLabel={accountProfileDefinition.label}
