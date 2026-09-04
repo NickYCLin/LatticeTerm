@@ -113,6 +113,8 @@ export interface AgentSessionSummary {
   queuedPrompts: number;
   /** The CLI's own session id, once its output announced one. */
   capturedSessionId: string | null;
+  /** Runs inside the file-scope sandbox. */
+  sandboxed?: boolean;
   /** Frontend-only close state retained so terminal output does not disappear. */
   closedReason?: string | null;
 }
@@ -131,6 +133,8 @@ export interface AgentLaunchRequest {
   restoreExistingSession?: boolean;
   /** Ephemeral local config root for a Codex/Claude account profile. */
   profileConfigPath?: string | null;
+  /** Confine writes to the working directory and the CLI's own state. */
+  sandbox?: boolean;
   workingDirectory: string;
   cols: number;
   rows: number;

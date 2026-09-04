@@ -165,6 +165,9 @@ struct RuntimeSummary {
     /// "windows" | "macos" | "linux" | "android" | "ios" — the interface
     /// hides desktop-only areas (agents, sidecar engines) on mobile.
     platform: &'static str,
+    /// Whether a file-scope sandbox tool (bubblewrap) is available, so the
+    /// launch form only offers the option where it can be honoured.
+    agent_sandbox_available: bool,
 }
 
 const DESKTOP_PROTOCOLS: &[&str] = &["ssh", "sftp", "rdp", "vnc", "lattice"];
@@ -210,6 +213,7 @@ fn runtime_summary() -> RuntimeSummary {
         supported_protocols: supported_protocols_for(platform),
         credential_storage_ready: crate::credentials::status().ready,
         platform,
+        agent_sandbox_available: crate::agent::sandbox_tool().is_some(),
     }
 }
 

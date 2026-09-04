@@ -426,6 +426,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                 groupId: saved.groupKey,
                 seedInput: null,
                 restoreExistingSession: true,
+                sandbox: saved.sandbox === true,
                 workingDirectory: saved.workingDirectory,
                 cols: 120,
                 rows: 32,
@@ -446,6 +447,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                     groupId: saved.groupKey,
                     seedInput: null,
                     restoreExistingSession: false,
+                    sandbox: saved.sandbox === true,
                     workingDirectory: saved.workingDirectory,
                     cols: 120,
                     rows: 32,
@@ -1015,6 +1017,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
               <AgentsView
                 agents={agents}
                 remote={remote}
+                sandboxAvailable={runtime.summary?.agentSandboxAvailable === true}
                 onOpen={(sessionId) => {
                   setActiveSessionId(sessionId);
                   setView("terminal");

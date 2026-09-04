@@ -341,6 +341,9 @@ pub struct AgentSessionSummary {
     /// The CLI's own session id, when its output announced one — the value
     /// native resume takes. Never guessed: absent until actually seen.
     pub captured_session_id: Option<String>,
+    /// True when the process runs inside the file-scope sandbox.
+    #[serde(default)]
+    pub sandboxed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -389,6 +392,11 @@ pub struct AgentLaunchRequest {
     /// machine-local account paths must not be restored or shared by a plan.
     #[serde(default)]
     pub profile_config_path: Option<String>,
+    /// Run the CLI in a file-scope sandbox: everything read-only except the
+    /// working directory, its own state directories and /tmp. Refused where
+    /// no sandbox tool exists rather than silently running unconfined.
+    #[serde(default)]
+    pub sandbox: bool,
     pub working_directory: String,
     pub cols: u32,
     pub rows: u32,
@@ -474,6 +482,8 @@ pub struct AgentLaunchPlanDraft {
     /// Free-text memo, e.g. which project this CLI works on. Never launched.
     #[serde(default)]
     pub note: String,
+    #[serde(default)]
+    pub sandbox: bool,
     pub working_directory: String,
 }
 
@@ -490,6 +500,9 @@ pub struct AgentLaunchPlan {
     /// Free-text memo shown in the saved list so a plan's purpose is obvious.
     #[serde(default)]
     pub note: String,
+    /// Whether this plan launches inside the file-scope sandbox.
+    #[serde(default)]
+    pub sandbox: bool,
     pub working_directory: String,
 }
 
@@ -3739,6 +3752,123 @@ fn safe_account_label(value: &str) -> Option<String> {
         .then(|| value.to_string())
 }
 
+/// The sandbox tool this machine offers, if any. Only bubblewrap is
+/// supported: it is unprivileged, ubiquitous on Linux, and its bind-mount
+/// model maps directly onto "this directory may change, nothing else may".
+///
+/// Finding the binary is not enough: a kernel or AppArmor policy that
+/// forbids unprivileged user namespaces makes every launch fail with
+/// "setting up uid map: Permission denied". The tool is probed once with a
+/// trivial command, and the interface offers the option only when that
+/// probe succeeded, rather than letting a launch fail later.
+pub fn sandbox_tool() -> Option<PathBuf> {
+    static PROBED: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    PROBED
+        .get_or_init(|| {
+            if !cfg!(target_os = "linux") {
+                return None;
+            }
+            let bwrap = find_executable("bwrap")?;
+            let works = std::process::Command::new(&bwrap)
+                .args([
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--dev",
+                    "/dev",
+                    "--proc",
+                    "/proc",
+                    "--unshare-pid",
+                    "--die-with-parent",
+                    "--",
+                    "/bin/true",
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            works.then_some(bwrap)
+        })
+        .clone()
+}
+
+/// Directories a CLI must still be able to write while sandboxed, relative
+/// to the home directory: its own login and state. Anything not listed
+/// stays read-only, so a runaway command cannot touch the rest of the home.
+fn sandbox_home_writable_paths(definition_id: &str) -> Vec<&'static str> {
+    let mut paths: Vec<&'static str> = vec![".cache", ".npm", ".local/state"];
+    paths.extend(match definition_id {
+        "claude" => vec![".claude", ".claude.json"],
+        "codex" => vec![".codex"],
+        "gemini" | "antigravity" => vec![".gemini", ".antigravity"],
+        "qwen" => vec![".qwen"],
+        "opencode" => vec![".config/opencode", ".local/share/opencode"],
+        "copilot" => vec![".copilot"],
+        "hermes" => vec![".hermes"],
+        "cursor" => vec![
+            ".cursor",
+            ".config/cursor-agent",
+            ".local/share/cursor-agent",
+        ],
+        "aider" => vec![".aider", ".aider.conf.yml"],
+        "kimi" => vec![".kimi"],
+        "droid" => vec![".factory"],
+        "grok" => vec![".grok"],
+        _ => vec![],
+    });
+    paths
+}
+
+/// The bubblewrap argument vector that confines one CLI launch.
+///
+/// The whole filesystem is bound read-only, then the working directory, the
+/// CLI's own state under the home directory, an account profile directory
+/// when one is in use, and /tmp are re-bound writable. Network stays shared:
+/// the CLI has to reach its model. PIDs are unshared so the CLI cannot see
+/// or signal the desktop, and the sandbox dies with LatticeTerm.
+pub fn sandbox_arguments(
+    working_directory: &Path,
+    definition_id: &str,
+    home: Option<&Path>,
+    extra_writable: &[&Path],
+    exists: &dyn Fn(&Path) -> bool,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        "--ro-bind".into(),
+        "/".into(),
+        "/".into(),
+        "--dev".into(),
+        "/dev".into(),
+        "--proc".into(),
+        "/proc".into(),
+        "--bind".into(),
+        "/tmp".into(),
+        "/tmp".into(),
+    ];
+    let mut bind = |path: &Path| {
+        if exists(path) {
+            args.push("--bind".into());
+            args.push(path.as_os_str().to_os_string());
+            args.push(path.as_os_str().to_os_string());
+        }
+    };
+    bind(working_directory);
+    if let Some(home) = home {
+        for relative in sandbox_home_writable_paths(definition_id) {
+            bind(&home.join(relative));
+        }
+    }
+    for path in extra_writable {
+        bind(path);
+    }
+    args.extend(["--unshare-pid", "--die-with-parent", "--chdir"].map(OsString::from));
+    args.push(working_directory.as_os_str().to_os_string());
+    args.push("--".into());
+    args
+}
+
 fn user_home_directory() -> Option<PathBuf> {
     #[cfg(windows)]
     let variable = "USERPROFILE";
@@ -4592,6 +4722,7 @@ pub fn normalize_launch_plan(
         arguments,
         resume_session_id,
         note,
+        sandbox: draft.sandbox,
         working_directory: working_directory.display().to_string(),
     })
 }
@@ -4610,6 +4741,7 @@ pub fn launch_request_from_plan(
             arguments: plan.arguments.clone(),
             resume_session_id: plan.resume_session_id.clone(),
             note: plan.note.clone(),
+            sandbox: plan.sandbox,
             working_directory: plan.working_directory.clone(),
         },
     )?;
@@ -4658,6 +4790,7 @@ pub fn launch_request_from_plan(
         // Account profiles are intentionally an ephemeral launch choice. A
         // workspace plan must never retain a machine-local credential root.
         profile_config_path: None,
+        sandbox: validated.sandbox,
         working_directory: validated.working_directory,
         cols,
         rows,
@@ -5214,7 +5347,29 @@ pub fn launch_with_replay(
     let pair = native_pty_system()
         .openpty(size)
         .map_err(|error| format!("Cannot create a local terminal: {error}"))?;
-    let (program, prefix_args) = launch_parts(&executable);
+    let (mut program, mut prefix_args) = launch_parts(&executable);
+    if request.sandbox {
+        let Some(bwrap) = sandbox_tool() else {
+            return Err(
+                "Sandboxed launch needs bubblewrap (bwrap) and permission to create user \
+                 namespaces; this machine has neither or blocks them."
+                    .to_string(),
+            );
+        };
+        let home = user_home_directory();
+        let extra: Vec<&Path> = profile_config_path.iter().map(PathBuf::as_path).collect();
+        let mut wrapped = sandbox_arguments(
+            &working_directory,
+            &definition_id,
+            home.as_deref(),
+            &extra,
+            &|path| path.exists(),
+        );
+        wrapped.push(program);
+        wrapped.extend(prefix_args);
+        program = bwrap.into_os_string();
+        prefix_args = wrapped;
+    }
     let mut command = CommandBuilder::new(&program);
     clear_host_terminal_markers(&mut command);
     #[cfg(windows)]
@@ -5325,6 +5480,7 @@ pub fn launch_with_replay(
         // A session launched as a native resume already knows its id; a
         // fresh announcement in the output still overwrites it.
         captured_session_id: request.resume_session_id.clone(),
+        sandboxed: request.sandbox,
     };
     let antigravity_capture_path = match integration_settings.as_ref() {
         Some(AgentIntegrationSettings::Antigravity(log)) => Some(log.path.clone()),
@@ -6034,6 +6190,7 @@ session id: 0199aa11-"
             seed_input: None,
             restore_existing_session: true,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 120,
             rows: 32,
@@ -6067,6 +6224,7 @@ session id: 0199aa11-"
             seed_input: None,
             restore_existing_session: false,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 120,
             rows: 32,
@@ -6089,6 +6247,7 @@ session id: 0199aa11-"
             seed_input: Some("Continue the previous review.".to_string()),
             restore_existing_session: false,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 120,
             rows: 32,
@@ -6258,6 +6417,7 @@ session id: 0199aa11-"
                 seed_input: None,
                 restore_existing_session: false,
                 profile_config_path: None,
+                sandbox: false,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -6694,6 +6854,7 @@ model = "gpt-5.3-codex"
             seed_input: None,
             restore_existing_session: false,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 100,
             rows: 30,
@@ -6876,6 +7037,85 @@ model = "gpt-5.3-codex"
     }
 
     #[test]
+    fn sandbox_arguments_open_only_the_working_directory_and_the_cli_state() {
+        let home = Path::new("/home/u");
+        let existing = |path: &Path| {
+            matches!(
+                path.to_str(),
+                Some("/work")
+                    | Some("/home/u/.claude")
+                    | Some("/home/u/.claude.json")
+                    | Some("/home/u/.cache")
+            )
+        };
+        let args = sandbox_arguments(Path::new("/work"), "claude", Some(home), &[], &existing);
+        let args: Vec<String> = args
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let joined = args.join(" ");
+        assert!(joined.starts_with("--ro-bind / / --dev /dev --proc /proc --bind /tmp /tmp"));
+        assert!(joined.contains("--bind /work /work"));
+        assert!(joined.contains("--bind /home/u/.claude /home/u/.claude"));
+        assert!(joined.contains("--bind /home/u/.claude.json /home/u/.claude.json"));
+        assert!(joined.contains("--bind /home/u/.cache /home/u/.cache"));
+        // A state directory that does not exist is not bound: bwrap would
+        // refuse to start, and there is nothing there to protect anyway.
+        assert!(!joined.contains(".npm"));
+        assert!(!joined.contains(".codex"));
+        assert!(joined.ends_with("--unshare-pid --die-with-parent --chdir /work --"));
+
+        // An account profile directory is writable too.
+        let profile = Path::new("/data/profiles/x");
+        let args = sandbox_arguments(Path::new("/work"), "codex", None, &[profile], &|_| true);
+        let joined = args
+            .iter()
+            .map(|a| a.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.contains("--bind /data/profiles/x /data/profiles/x"));
+        assert!(!joined.contains(".codex"), "no home, no home binds");
+    }
+
+    /// Runs bubblewrap for real when it is installed: the sandbox must stop
+    /// a write outside the working directory and allow one inside it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_real_sandbox_confines_writes_to_the_working_directory() {
+        let Some(bwrap) = sandbox_tool() else {
+            eprintln!("bwrap missing or unprivileged user namespaces blocked; skipping");
+            return;
+        };
+        // Both directories live under the home directory, which the sandbox
+        // binds read-only: /tmp is deliberately writable, so a probe there
+        // would prove nothing.
+        let Some(home) = user_home_directory().filter(|home| home.is_dir()) else {
+            eprintln!("no home directory; skipping");
+            return;
+        };
+        let work = tempfile::tempdir_in(&home).expect("tempdir in home");
+        let outside = tempfile::tempdir_in(&home).expect("tempdir in home");
+        let script = format!(
+            "touch {}/inside && echo inside=$? ; touch {}/outside 2>/dev/null; echo outside=$?",
+            work.path().display(),
+            outside.path().display()
+        );
+        let mut args = sandbox_arguments(work.path(), "custom", None, &[], &|path| path.exists());
+        args.push("/bin/sh".into());
+        args.push("-c".into());
+        args.push(script.into());
+        let output = std::process::Command::new(&bwrap)
+            .args(&args)
+            .output()
+            .expect("bwrap runs");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("inside=0"), "stdout: {stdout}");
+        assert!(stdout.contains("outside=1"), "stdout: {stdout}");
+        assert!(work.path().join("inside").exists());
+        assert!(!outside.path().join("outside").exists());
+    }
+
+    #[test]
     fn account_profiles_accept_only_local_codex_or_claude_directories() {
         let directory = tempfile::tempdir().unwrap();
         let raw = directory.path().display().to_string();
@@ -6986,6 +7226,7 @@ model = "gpt-5.3-codex"
                 arguments: vec!["--full-auto".to_string()],
                 resume_session_id: None,
                 note: "  審查 payments 專案  ".to_string(),
+                sandbox: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7011,6 +7252,7 @@ model = "gpt-5.3-codex"
                     arguments: vec![argument.to_string()],
                     resume_session_id: None,
                     note: String::new(),
+                    sandbox: false,
                     working_directory: directory.display().to_string(),
                 },
             )
@@ -7032,6 +7274,7 @@ model = "gpt-5.3-codex"
                     arguments: Vec::new(),
                     resume_session_id: None,
                     note: note.to_string(),
+                    sandbox: false,
                     working_directory: directory.display().to_string(),
                 },
             )
@@ -7054,6 +7297,7 @@ model = "gpt-5.3-codex"
                 arguments: Vec::new(),
                 resume_session_id: Some("  session-42  ".to_string()),
                 note: String::new(),
+                sandbox: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7079,6 +7323,7 @@ model = "gpt-5.3-codex"
                 arguments: Vec::new(),
                 resume_session_id: None,
                 note: String::new(),
+                sandbox: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7098,6 +7343,7 @@ model = "gpt-5.3-codex"
                 arguments: vec!["--model".to_string(), "sonnet".to_string()],
                 resume_session_id: None,
                 note: String::new(),
+                sandbox: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7118,6 +7364,7 @@ model = "gpt-5.3-codex"
                 arguments: Vec::new(),
                 resume_session_id: None,
                 note: String::new(),
+                sandbox: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7135,6 +7382,7 @@ model = "gpt-5.3-codex"
                 arguments: Vec::new(),
                 resume_session_id: None,
                 note: String::new(),
+                sandbox: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -7152,6 +7400,7 @@ model = "gpt-5.3-codex"
                 arguments: Vec::new(),
                 resume_session_id: None,
                 note: String::new(),
+                sandbox: false,
                 working_directory: directory.display().to_string(),
             },
         )
@@ -8045,6 +8294,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             seed_input: None,
             restore_existing_session: false,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8126,6 +8376,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             seed_input: None,
             restore_existing_session: false,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8356,6 +8607,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             seed_input: None,
             restore_existing_session: false,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8408,6 +8660,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             seed_input: None,
             restore_existing_session: false,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8468,6 +8721,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 seed_input: None,
                 restore_existing_session: false,
                 profile_config_path: None,
+                sandbox: false,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -8506,6 +8760,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             seed_input: None,
             restore_existing_session: false,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8550,6 +8805,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             seed_input: None,
             restore_existing_session: false,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,
@@ -8636,6 +8892,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 seed_input: None,
                 restore_existing_session: false,
                 profile_config_path: None,
+                sandbox: false,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -8674,6 +8931,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 seed_input: None,
                 restore_existing_session: false,
                 profile_config_path: None,
+                sandbox: false,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -8720,6 +8978,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                 seed_input: None,
                 restore_existing_session: false,
                 profile_config_path: None,
+                sandbox: false,
                 working_directory: std::env::current_dir().unwrap().display().to_string(),
                 cols: 80,
                 rows: 24,
@@ -8954,6 +9213,7 @@ notify = ["notify.exe", "turn-ended"]"#,
                         seed_input: None,
                         restore_existing_session: false,
                         profile_config_path: None,
+                        sandbox: false,
                         working_directory: std::env::current_dir().unwrap().display().to_string(),
                         cols: 80,
                         rows: 24,
@@ -9017,6 +9277,7 @@ notify = ["notify.exe", "turn-ended"]"#,
             seed_input: None,
             restore_existing_session: false,
             profile_config_path: None,
+            sandbox: false,
             working_directory: std::env::current_dir().unwrap().display().to_string(),
             cols: 80,
             rows: 24,

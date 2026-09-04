@@ -14,6 +14,8 @@ export interface SavedAgentSession {
   launchArguments: string[];
   workingDirectory: string;
   resumeSessionId: string | null;
+  /** Relaunch inside the file-scope sandbox. */
+  sandbox?: boolean;
 }
 
 export interface SavedSshSession {
@@ -127,6 +129,7 @@ export function sanitizeWorkspaceSessionSnapshot(
       launchArguments: launchArguments as string[],
       workingDirectory,
       resumeSessionId,
+      ...(entry.sandbox === true ? { sandbox: true } : {}),
     });
   }
 
@@ -295,6 +298,7 @@ export function snapshotLiveWorkspaceSessions(
     launchArguments: session.launchArguments,
     workingDirectory: session.workingDirectory,
     resumeSessionId: session.capturedSessionId,
+    ...(session.sandboxed ? { sandbox: true } : {}),
   }));
   const seenProfiles = new Set<string>();
   for (const session of ssh) {

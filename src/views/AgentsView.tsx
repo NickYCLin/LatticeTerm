@@ -87,10 +87,13 @@ function accountKey(definition: AgentDefinition): MessageKey {
 export function AgentsView({
   agents,
   remote,
+  sandboxAvailable,
   onOpen,
 }: {
   agents: AgentApi;
   remote: RemoteApi;
+  /** bubblewrap is installed, so the file-scope sandbox can be offered. */
+  sandboxAvailable: boolean;
   onOpen: (sessionId: string) => void;
 }) {
   const { t, tag } = useI18n();
@@ -105,6 +108,7 @@ export function AgentsView({
   );
   const [workingDirectory, setWorkingDirectory] = useState("");
   const [launchNote, setLaunchNote] = useState("");
+  const [sandbox, setSandbox] = useState(false);
   const [launching, setLaunching] = useState<string | null>(null);
   const [accountProfiles, setAccountProfiles] = useState<ChatAccountProfile[]>(() =>
     typeof localStorage === "undefined" ? [] : loadChatAccountProfiles(localStorage),
@@ -222,6 +226,7 @@ export function AgentsView({
       resumeSessionId: null,
       note: launchNote.trim(),
       profileConfigPath: profile?.configDirectory ?? null,
+      sandbox: sandboxAvailable && sandbox,
       workingDirectory,
     };
   }
@@ -604,6 +609,23 @@ export function AgentsView({
           <span className="agents-field-hint">{t("agents.launchNote.hint")}</span>
         </label>
 
+        {sandboxAvailable && (
+          <label className="checkbox agents-sandbox">
+            <input
+              type="checkbox"
+              checked={sandbox}
+              onChange={(event) => setSandbox(event.currentTarget.checked)}
+            />
+            <span className="checkbox__box" aria-hidden="true">
+              ✓
+            </span>
+            <span className="agents-sandbox__label">
+              <strong>{t("agents.sandbox")}</strong>
+              <span className="agents-field-hint">{t("agents.sandbox.hint")}</span>
+            </span>
+          </label>
+        )}
+
         <section className="agents-startup-instructions">
           <div className="agents-startup-instructions__heading">
             <div>
@@ -957,6 +979,9 @@ export function AgentsView({
                   {plan.note && (
                     <span className="agent-plan-row__note">{plan.note}</span>
                   )}
+                  {plan.sandbox && (
+                    <span className="agents-sandbox__badge">{t("agents.sandbox.badge")}</span>
+                  )}
                   <span className="mono">{displayPath(plan.workingDirectory)}</span>
                   <small>
                     {plan.resumeSessionId
@@ -1130,6 +1155,9 @@ export function AgentsView({
                 </span>
                 <span className="agents-broadcast__target-label">
                   <strong>{session.label}</strong>
+                  {session.sandboxed && (
+                    <span className="agents-sandbox__badge">{t("agents.sandbox.badge")}</span>
+                  )}
                   <span className="mono">{displayPath(session.workingDirectory)}</span>
                   {session.queuedPrompts > 0 && (
                     <small className="field__optional">

@@ -859,6 +859,9 @@ export const en: Messages = {
   "agents.cwd.placeholder": "For example /home/me/project",
   "agents.cwd.hint":
     "The agent starts in this folder and may read or change its files according to the CLI's permissions.",
+  "agents.sandbox": "Sandbox: only the working directory may change",
+  "agents.sandbox.hint": "Launch through bubblewrap: the whole filesystem is read-only except the working directory, this tool's own login and state directories, and /tmp; network stays on. Offered only on Linux with bwrap installed.",
+  "agents.sandbox.badge": "Sandbox",
   "agents.launchNote": "Note (optional)",
   "agents.launchNote.placeholder": "e.g. this CLI handles the payments project",
   "agents.launchNote.hint":
