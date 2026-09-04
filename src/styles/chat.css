@@ -1105,3 +1105,10 @@ button.chat-chip:hover {
   margin: var(--space-1) 0 0;
   color: var(--warning, var(--text));
 }
+
+.automation-background-hint {
+  margin: var(--space-1) 0 0;
+  color: var(--text-faint);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}

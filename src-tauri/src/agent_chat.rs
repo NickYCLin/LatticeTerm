@@ -108,7 +108,7 @@ struct ChatAttachment {
     is_image: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatUsage {
     pub input_tokens: u64,
@@ -120,7 +120,7 @@ pub struct ChatUsage {
 
 /// One step of a turn, in the shape the interface renders. Item ids are
 /// stable within a turn so a later event can update the card it started.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",

@@ -6,6 +6,7 @@
 //! it exits by itself once it has had nothing to own and nobody attached for
 //! [`super::IDLE_EXIT`].
 
+use super::automations::{self, Scheduler};
 use super::{
     read_or_create_token, transport, DaemonPaths, Frame, HelloReply, Request, LOG_FILE,
     MAX_FRAME_BYTES, PROTOCOL_VERSION, SESSION_ID_PREFIX,
@@ -14,6 +15,7 @@ use crate::agent::{
     self, AgentLifecycle, AgentRegistry, AgentSessionSummary, AgentSink, AgentStateSource,
     AgentTokenUsage,
 };
+use crate::agent_chat::AgentChatRegistry;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::ffi::OsStr;
@@ -88,15 +90,22 @@ fn run(data_dir: &Path) -> i32 {
             return 1;
         }
     };
+    // Chat turns spawn onto Tauri's runtime handle; here that is ours.
+    tauri::async_runtime::set(runtime.handle().clone());
+    let scheduler = Arc::new(Scheduler::open(data_dir));
+    let chat = Arc::new(AgentChatRegistry::new());
     log.line("Lattice Agent daemon starting");
     let result = runtime.block_on(serve(
         paths.clone(),
         token,
         Arc::clone(&registry),
         Arc::clone(&sink),
+        Arc::clone(&scheduler),
+        Arc::clone(&chat),
         super::IDLE_EXIT,
         Arc::clone(&log),
     ));
+    chat.shutdown();
     registry.stop_all();
     #[cfg(unix)]
     let _ = std::fs::remove_file(&paths.socket);
@@ -116,6 +125,8 @@ fn run(data_dir: &Path) -> i32 {
 pub struct Context {
     pub registry: Arc<AgentRegistry>,
     pub sink: Arc<DaemonSink>,
+    pub scheduler: Arc<Scheduler>,
+    pub chat: Arc<AgentChatRegistry>,
     token: String,
     shutdown: Arc<Notify>,
     log: Arc<Logger>,
@@ -123,11 +134,14 @@ pub struct Context {
 
 /// Accepts clients until told to stop or left idle. Public so a test can run
 /// a daemon in-process on a temporary data directory.
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     paths: DaemonPaths,
     token: String,
     registry: Arc<AgentRegistry>,
     sink: Arc<DaemonSink>,
+    scheduler: Arc<Scheduler>,
+    chat: Arc<AgentChatRegistry>,
     idle_exit: Duration,
     log: Arc<Logger>,
 ) -> Result<(), String> {
@@ -137,6 +151,8 @@ pub async fn serve(
     let context = Arc::new(Context {
         registry,
         sink,
+        scheduler,
+        chat,
         token,
         shutdown: Arc::new(Notify::new()),
         log,
@@ -157,7 +173,21 @@ pub async fn serve(
                 }
             },
             _ = ticker.tick() => {
-                let idle = context.registry.list().is_empty() && context.sink.client_count() == 0;
+                // Automations fire here only while no window is attached;
+                // an attached window runs them itself and streams them.
+                let attached = context.sink.client_count() > 0;
+                for planned in context.scheduler.due(chrono::Utc::now().timestamp_millis(), attached) {
+                    let scheduler = Arc::clone(&context.scheduler);
+                    let chat = Arc::clone(&context.chat);
+                    let log = Arc::clone(&context.log);
+                    tokio::spawn(async move {
+                        automations::execute(scheduler, chat, planned, move |line| log.line(line)).await;
+                    });
+                }
+                let idle = context.registry.list().is_empty()
+                    && context.sink.client_count() == 0
+                    && !context.scheduler.has_enabled()
+                    && context.scheduler.running_count() == 0;
                 match (idle, idle_since) {
                     (true, None) => idle_since = Some(Instant::now()),
                     (true, Some(since)) if since.elapsed() >= idle_exit => {
@@ -392,6 +422,11 @@ pub fn dispatch(context: &Context, body: Request) -> Result<Value, String> {
             context.shutdown.notify_one();
             Ok(Value::Null)
         }
+        Request::AutomationsReplace { automations } => {
+            to_value(&context.scheduler.replace(automations))
+        }
+        Request::AutomationsState => to_value(&context.scheduler.status()),
+        Request::AutomationsTakeRuns => to_value(&context.scheduler.take_runs()),
     }
 }
 

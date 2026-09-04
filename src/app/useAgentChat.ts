@@ -22,6 +22,7 @@ import {
   saveStoredThreads,
   type ChatDefinitionId,
   type ChatAttachment,
+  type ChatEvent,
   type ChatEventEnvelope,
   type ChatModelChoice,
   type ChatModelList,
@@ -82,6 +83,18 @@ export interface AgentChatApi {
   /** CLIs the backend can drive in chat mode. */
   supported: readonly ChatDefinitionId[];
   createThread: (settings: ChatThreadCreation) => ChatThread;
+  /**
+   * A turn that already happened elsewhere (the background service ran an
+   * automation): the thread is created and the recorded events are folded
+   * in through the same reducer a live turn uses, then marked unread.
+   */
+  importRecordedTurn: (
+    settings: ChatThreadCreation,
+    turnId: string,
+    prompt: string,
+    events: readonly ChatEvent[],
+    startedAt: number,
+  ) => ChatThread;
   /** Flags a thread as having news the user has not seen. */
   markUnread: (id: string, unread: boolean) => void;
   updateThread: (id: string, patch: Partial<ChatThreadSettings>) => void;
@@ -204,6 +217,26 @@ export function useAgentChat(): AgentChatApi {
     if (settings.activate !== false) setActiveThreadId(thread.id);
     return thread;
   }, []);
+
+  const importRecordedTurn = useCallback(
+    (
+      settings: ChatThreadCreation,
+      turnId: string,
+      prompt: string,
+      events: readonly ChatEvent[],
+      startedAt: number,
+    ) => {
+      let thread = beginTurn(createThread({ ...settings }), prompt, turnId, startedAt, []);
+      for (const event of events) {
+        thread = applyChatEvent(thread, { threadId: thread.id, turnId, event }, startedAt);
+      }
+      thread = { ...thread, runningTurnId: null, unread: true };
+      threadsRef.current = [thread, ...threadsRef.current];
+      setThreads((current) => [thread, ...current]);
+      return thread;
+    },
+    [],
+  );
 
   const markUnread = useCallback((id: string, unread: boolean) => {
     setThreads((current) =>
@@ -402,6 +435,7 @@ export function useAgentChat(): AgentChatApi {
       setActiveThreadId: activate,
       supported,
       createThread: create,
+      importRecordedTurn,
       markUnread,
       updateThread: update,
       handoffThread: handoff,
@@ -425,6 +459,7 @@ export function useAgentChat(): AgentChatApi {
       activate,
       supported,
       create,
+      importRecordedTurn,
       markUnread,
       update,
       handoff,

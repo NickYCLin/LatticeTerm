@@ -14,6 +14,8 @@ import {
   updateAutomation,
   validateAutomationDraft,
   type AutomationDraft,
+  mergeBackgroundStatus,
+  recordBackgroundRun,
 } from "./agentAutomations";
 
 // 2026-09-02 is a Wednesday.
@@ -266,5 +268,66 @@ describe("storage", () => {
     const storage = memoryStorage();
     storage.setItem("latticeterm.agentAutomations.v1", JSON.stringify([{ id: 1 }, "x"]));
     expect(loadStoredAutomations(storage)).toEqual([]);
+  });
+});
+
+describe("background runs", () => {
+  const base = createAutomation(
+    {
+      name: "nightly",
+      instructions: "summarize",
+      definitionId: "codex",
+      workingDirectory: "/work",
+      permission: "readOnly",
+      model: "",
+      schedule: { kind: "interval", everyMinutes: 60 },
+    },
+    "a",
+    new Date(1_000),
+  );
+  const record = {
+    runId: "bg-run-1",
+    automationId: "a",
+    automationName: "nightly",
+    threadId: "bg-thread-1",
+    turnId: "bg-turn-1",
+    definitionId: "codex" as const,
+    workingDirectory: "/work",
+    permission: "readOnly" as const,
+    model: "",
+    instructions: "summarize",
+    startedAt: 5_000,
+    finishedAt: 6_000,
+    outcome: "ok" as const,
+    error: null,
+    events: [],
+  };
+
+  it("files a service run once, pointing at the imported thread", () => {
+    const once = recordBackgroundRun(base, record, "thread-x", 7_000);
+    expect(once.runs).toHaveLength(1);
+    expect(once.runs[0]).toMatchObject({ runId: "bg-run-1", threadId: "thread-x", outcome: "ok" });
+    expect(once.lastRunAt).toBe(5_000);
+    expect(recordBackgroundRun(once, record, "thread-y", 8_000)).toBe(once);
+  });
+
+  it("takes the service's marks only where it got further", () => {
+    const untouched = mergeBackgroundStatus(
+      [base],
+      [{ id: "a", nextRunAt: 999, lastRunAt: null, running: false }],
+    );
+    expect(untouched[0]).toBe(base);
+    const merged = mergeBackgroundStatus(
+      [base],
+      [{ id: "a", nextRunAt: 9_000, lastRunAt: 5_000, running: true }],
+    );
+    expect(merged[0].lastRunAt).toBe(5_000);
+    expect(merged[0].nextRunAt).toBe(9_000);
+    const chained = { ...base, id: "b", schedule: { kind: "after" as const, automationId: "a", onlyOnSuccess: false }, nextRunAt: null };
+    const due = mergeBackgroundStatus(
+      [chained],
+      [{ id: "b", nextRunAt: 6_000, lastRunAt: null, running: false }],
+    );
+    expect(due[0].nextRunAt).toBe(6_000);
   });
 });

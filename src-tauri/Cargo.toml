@@ -37,6 +37,7 @@ lattice-remote = { path = "../crates/lattice-remote" }
 keyring = "4.1.6"
 zeroize = "1.9.0"
 portable-pty = "0.9.0"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 libc = "0.2"
 getrandom = "0.4.3"
 argon2 = "0.6"

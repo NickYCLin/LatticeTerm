@@ -18,6 +18,7 @@
 //! `agent-daemon.token` (owner-only file in the application data directory);
 //! anything else closes the connection.
 
+pub mod automations;
 pub mod client;
 pub mod server;
 #[cfg(test)]
@@ -222,6 +223,13 @@ pub enum Request {
     },
     /// Ends every background session and the daemon itself.
     Shutdown,
+    /// The window's whole automation list, runtime marks included.
+    AutomationsReplace {
+        automations: Vec<Value>,
+    },
+    AutomationsState,
+    /// Finished background runs, handed over once.
+    AutomationsTakeRuns,
 }
 
 /// What `Hello` answers with: everything a fresh window needs to attach.

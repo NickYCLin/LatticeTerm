@@ -19,7 +19,7 @@
  * chat mode.
  */
 
-import type { ChatDefinitionId, ChatPermission } from "./agentChat";
+import type { ChatDefinitionId, ChatEvent, ChatPermission } from "./agentChat";
 
 export type AutomationSchedule =
   | {
@@ -67,6 +67,33 @@ export interface Automation {
   lastRunAt: number | null;
   /** Most recent runs, newest first. */
   runs: AutomationRun[];
+}
+
+/** A run the background service finished while no window was open. */
+export interface BackgroundRunRecord {
+  runId: string;
+  automationId: string;
+  automationName: string;
+  threadId: string;
+  turnId: string;
+  definitionId: ChatDefinitionId;
+  workingDirectory: string;
+  permission: ChatPermission;
+  model: string;
+  instructions: string;
+  startedAt: number;
+  finishedAt: number | null;
+  outcome: "running" | "ok" | "error";
+  error: string | null;
+  events: ChatEvent[];
+}
+
+/** The background service's clock marks for one automation. */
+export interface AutomationStatusRecord {
+  id: string;
+  nextRunAt: number | null;
+  lastRunAt: number | null;
+  running: boolean;
 }
 
 export type AutomationDraft = Pick<
@@ -373,6 +400,65 @@ export function finishAutomationRun(
     ),
     updatedAt: now.getTime(),
   };
+}
+
+/**
+ * Files a run the background service completed: it appears in the history
+ * like one the window ran, pointing at the thread the record was folded
+ * into. Handing the same record over twice changes nothing.
+ */
+export function recordBackgroundRun(
+  automation: Automation,
+  record: BackgroundRunRecord,
+  threadId: string,
+  now: number = Date.now(),
+): Automation {
+  if (automation.runs.some((run) => run.runId === record.runId)) return automation;
+  const entry: AutomationRun = {
+    runId: record.runId,
+    threadId,
+    startedAt: record.startedAt,
+    finishedAt: record.finishedAt ?? now,
+    outcome: record.outcome === "ok" ? "ok" : "error",
+    error: record.error,
+  };
+  return {
+    ...automation,
+    lastRunAt: Math.max(automation.lastRunAt ?? 0, record.startedAt),
+    runs: [entry, ...automation.runs]
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, automationLimits.runsKept),
+    updatedAt: now,
+  };
+}
+
+/**
+ * Takes the service's marks where it got further than the window: it ran
+ * the automation while the window was closed, or made a chained one due.
+ * Returns the same array when nothing changes, so callers can bail out.
+ */
+export function mergeBackgroundStatus(
+  automations: Automation[],
+  statuses: readonly AutomationStatusRecord[],
+): Automation[] {
+  let changed = false;
+  const merged = automations.map((automation) => {
+    const status = statuses.find((entry) => entry.id === automation.id);
+    if (!status) return automation;
+    const serviceIsNewer = (status.lastRunAt ?? 0) > (automation.lastRunAt ?? 0);
+    const chainedDue =
+      automation.schedule.kind === "after" &&
+      automation.nextRunAt === null &&
+      status.nextRunAt !== null;
+    if (!serviceIsNewer && !chainedDue) return automation;
+    changed = true;
+    return {
+      ...automation,
+      lastRunAt: serviceIsNewer ? status.lastRunAt : automation.lastRunAt,
+      nextRunAt: status.nextRunAt,
+    };
+  });
+  return changed ? merged : automations;
 }
 
 /** Whatever was "running" when the app last closed cannot still be. */

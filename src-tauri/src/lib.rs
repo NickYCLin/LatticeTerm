@@ -1025,6 +1025,59 @@ async fn agent_daemon_stop(daemon: State<'_, AppDaemon>) -> Result<bool, String>
     }
 }
 
+/// Hands the window's automation list to the background service, starting
+/// it when anything is enabled, and returns the service's runtime marks.
+#[tauri::command]
+async fn agent_automations_sync(
+    automations: Vec<serde_json::Value>,
+    daemon: State<'_, AppDaemon>,
+) -> Result<Vec<crate::agent_daemon::automations::AutomationStatus>, String> {
+    let any_enabled = automations.iter().any(|automation| {
+        automation
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    });
+    if !any_enabled && !daemon.is_running().await {
+        return Ok(Vec::new());
+    }
+    let value = daemon
+        .request(
+            any_enabled,
+            crate::agent_daemon::Request::AutomationsReplace { automations },
+        )
+        .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn agent_automations_state(
+    daemon: State<'_, AppDaemon>,
+) -> Result<Vec<crate::agent_daemon::automations::AutomationStatus>, String> {
+    match daemon
+        .request(false, crate::agent_daemon::Request::AutomationsState)
+        .await
+    {
+        Ok(value) => serde_json::from_value(value).map_err(|error| error.to_string()),
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Runs the background service finished while no window was open. Each is
+/// handed over exactly once; the window turns it into an unread thread.
+#[tauri::command]
+async fn agent_automations_take_runs(
+    daemon: State<'_, AppDaemon>,
+) -> Result<Vec<crate::agent_daemon::automations::RunRecord>, String> {
+    match daemon
+        .request(false, crate::agent_daemon::Request::AutomationsTakeRuns)
+        .await
+    {
+        Ok(value) => serde_json::from_value(value).map_err(|error| error.to_string()),
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentDaemonStatus {
@@ -2714,6 +2767,9 @@ pub fn run() {
             agent_output_snapshots,
             agent_daemon_status,
             agent_daemon_stop,
+            agent_automations_sync,
+            agent_automations_state,
+            agent_automations_take_runs,
             agent_shared_rules_inspect,
             agent_shared_rules_save,
             agent_plan_snapshot,

@@ -1136,6 +1136,7 @@ export const zhTW = {
   "automation.pause": "暫停",
   "automation.resume": "恢復",
   "automation.runNow": "立即執行",
+  "automation.background.hint": "LatticeTerm 開著時在這裡執行；關著時由背景服務準時執行，結果會在下次開啟時以未讀對話出現。",
   "automation.running": "執行中",
   "automation.runs": "執行紀錄",
   "automation.runs.none": "還沒跑過。",
