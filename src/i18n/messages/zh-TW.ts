@@ -14,11 +14,8 @@ export const zhTW = {
   "common.delete": "刪除",
   "common.edit": "編輯",
   "common.duplicate": "複製一份",
-  "common.reset": "重設",
-  "common.search": "搜尋",
   "common.export": "匯出",
   "common.import": "匯入",
-  "common.clear": "清除",
   "common.notSet": "未設定",
   "common.none": "無",
   "common.optional": "選填",
@@ -73,7 +70,6 @@ export const zhTW = {
   "connections.samplesFailed": "無法載入範例",
   "connections.samplesFailedBody": "範例連線無法寫入磁碟：{error}",
   "connections.importJson": "匯入檔案",
-  "connections.exportJson": "匯出",
   "connections.count": "{count} 個連線",
   "connections.countFiltered": "顯示 {visible} / {total} 個連線",
   "connections.sortBy": "排序",
@@ -101,7 +97,6 @@ export const zhTW = {
 
   // 連線卡片 --------------------------------------------------------------
   "row.connect": "連線",
-  "row.connectComingSoon": "連線功能開發中",
   "row.connectDesktopOnly": "桌面版限定",
   "row.connectDesktopOnlyHint": "這個連線可在行動裝置管理，但只能由 LatticeTerm 桌面版開啟。",
   "row.connectBackendRequired": "需要桌面應用程式",
@@ -225,22 +220,17 @@ export const zhTW = {
   "metrics.notSupported.body": "資源讀取需要 SSH 連線；這種連線類型目前不支援。",
   "metrics.cpu": "處理器",
   "metrics.memory": "記憶體",
-  "metrics.swap": "置換空間",
   "metrics.disk": "磁碟",
   "metrics.uptime": "已開機",
   "metrics.load": "系統負載",
   "metrics.cores": "{count} 核心",
   "metrics.usedOfTotal": "{used} / {total}",
   "metrics.percentUsed": "已使用 {percent}%",
-  "metrics.mountpoint": "掛載點",
-  "metrics.refresh": "重新整理",
   "metrics.lastUpdated": "更新於 {time}",
-  "metrics.autoRefresh": "自動更新",
   "metrics.uptimeValue": "{days} 天 {hours} 小時",
   "metrics.uptimeHours": "{hours} 小時 {minutes} 分",
 
   // 活動與操作紀錄 --------------------------------------------------------
-  "activity.title": "這次開啟的操作紀錄",
   "activity.note.title": "追蹤需要注意的 CLI 工作",
   "activity.note.body":
     "工作狀態會保留到下次開啟；只保存工作階段名稱、CLI、資料夾、狀態與時間，不會保存提示、終端輸出或認證資料。下方的連線操作紀錄仍只保留於本次開啟期間。",
@@ -391,7 +381,6 @@ export const zhTW = {
   "settings.density.comfortable": "舒適",
   "settings.density.compact": "緊湊",
   "settings.motion": "動態效果",
-  "settings.motionHint": "如果動畫讓你不舒服，可以直接關掉。",
   "settings.motionHint.reduced": "已關閉抽屜、對話框、浮層與滑鼠移入的轉場動畫。",
   "settings.motionHint.systemReduced": "Windows 目前也設定為減少動態，因此這兩個選項看起來會相同。",
   "settings.motionHint.systemActive": "目前依作業系統的設定保留抽屜、對話框與介面轉場。",
@@ -421,8 +410,6 @@ export const zhTW = {
     "視窗失去焦點或進入背景時立即上鎖；現有遠端與終端工作階段不會中斷。",
   "settings.security.background.enabled": "啟用",
   "settings.security.background.disabled": "停用",
-  "settings.security.hostKey": "主機金鑰驗證原則",
-  "settings.security.hostKeyDetail": "嚴格比對已知主機，第一次連線時由你明確決定是否信任。",
   "settings.security.clipboard": "剪貼簿清除",
   "settings.security.clipboardDetail":
     "Lattice Remote 配對碼複製後自動清除；若剪貼簿已換成其他內容，就不會覆蓋。",
@@ -492,7 +479,6 @@ export const zhTW = {
   "settings.about.license": "授權",
   "settings.updater": "軟體更新",
   "settings.updaterHint": "透過 GitHub Releases 檢查更新。下載完成後會自動安裝並重新啟動，不用自己跑安裝程式。",
-  "settings.updater.current": "目前版本",
   "settings.updater.status": "更新狀態",
   "settings.updater.desktopOnly": "請在桌面應用程式檢查與安裝更新",
   "settings.updater.check": "檢查更新",
@@ -574,7 +560,6 @@ export const zhTW = {
   // 狀態列 ----------------------------------------------------------------
   "status.connections": "{count} 個連線",
   "status.connectionsFiltered": "{visible} / {total} 個連線",
-  "status.inMemory": "資料只在記憶體，關閉即消失",
   "status.vault": "認證儲存區：{state}",
   "status.vault.locked": "尚未建立",
   "status.vault.ready": "可用",
@@ -601,36 +586,9 @@ export const zhTW = {
 
   // 規劃中的區域 ----------------------------------------------------------
   "planned.badge": "開發中",
-  "planned.notReady": "尚未開放",
-  "planned.whatItDoes": "這個區域會做什麼",
-  "planned.whatItDoesHint": "先把規劃寫清楚，不代表現在可以用。",
-  "planned.boundary": "安全性優先",
-  "planned.tunnels.summary":
-    "幫你管理連接埠轉送：本機、遠端與動態通道，並清楚顯示每一條通到哪裡、被哪個連線使用。",
-  "planned.tunnels.boundary":
-    "通道必須依附在已建立的 SSH 連線上，所以要等連線功能與安全儲存區完成後才會開放。在那之前不會啟動任何轉送。",
-  "planned.tunnels.cap1.title": "三種轉送方式一目了然",
-  "planned.tunnels.cap1.detail": "本機、遠端與動態轉送分別顯示來源、目的地與綁定範圍。",
-  "planned.tunnels.cap2.title": "每條通道的即時狀態",
-  "planned.tunnels.cap2.detail": "誰在使用、已經開了多久、目前是啟動中、監聽中還是已停止。",
-  "planned.tunnels.cap3.title": "看得懂的錯誤訊息",
-  "planned.tunnels.cap3.detail": "會直接說明是連接埠被占用、連線中斷，還是權限不足。",
-  "planned.vault.summary":
-    "把必須保密的東西集中管理：SSH 金鑰、儲存的密碼與配對碼、跳板機認證，以及你信任過的主機指紋。",
-  "planned.vault.boundary":
-    "機密資料會交給作業系統的認證儲存區，主機信任則採嚴格比對。這兩者都還沒完成，所以現在的版本不會向你要任何認證資料。",
-  "planned.vault.cap1.title": "鎖定狀態清清楚楚",
-  "planned.vault.cap1.detail": "已鎖定、解鎖中、已解鎖、即將自動鎖定與需要復原，都看得出來。",
-  "planned.vault.cap2.title": "知道哪些連線在用",
-  "planned.vault.cap2.detail": "每筆認證資料都會列出被哪些連線引用，不會誤刪。",
-  "planned.vault.cap3.title": "主機信任的判斷依據",
-  "planned.vault.cap3.detail": "顯示完整指紋、可複製比對，第一次連線與金鑰變更分開處理。",
-  "planned.vault.cap4.title": "加密的匯入與匯出",
-  "planned.vault.cap4.detail": "在不同電腦之間搬移保管庫，過程不會產生明文檔案。",
 
   // 連線流程 --------------------------------------------------------------
   "connect.title": "連線到 {name}",
-  "connect.target": "{user}@{host}:{port}",
   "connect.method": "登入方式",
   "connect.method.password": "密碼",
   "connect.method.privateKey": "SSH 金鑰",
@@ -660,7 +618,6 @@ export const zhTW = {
   "connect.stage.trust": "主機信任資料",
   "connect.stage.invoke": "呼叫後端",
   "connect.stage.credential": "系統安全儲存區",
-  "connect.trusted": "已記住這台主機的金鑰，正在重新連線…",
 
   // 終端機 ----------------------------------------------------------------
   "terminal.title": "工作階段",
@@ -793,10 +750,8 @@ export const zhTW = {
     "我剛從 {source} 把工作交接給你。先前的完整對話已存在這個檔案：{path}\n請先讀完它掌握脈絡，用兩三句話告訴我你理解到哪裡，然後等我下一個指示。",
   "terminal.handoff.frame":
     "以下是我和另一個 AI 助理先前的完整對話。請先讀懂脈絡，接著接手繼續協助我，我馬上會給你下一個指示。\n\n===== 先前對話開始 =====\n{transcript}\n===== 先前對話結束 =====",
-  "terminal.backToList": "回到連線清單",
   "terminal.closed": "工作階段已結束（{reason}）",
   "terminal.inputFailed": "這個工作階段已經結束，輸入送不出去。請關閉工作階段後重新連線。",
-  "terminal.reconnect": "重新連線",
   "terminal.empty.title": "目前沒有進行中的工作階段",
   "terminal.empty.body": "選擇本機專案資料夾並啟動 CLI，或在連線清單挑一台主機，工作階段就會在這裡開啟。",
   "terminal.empty.savedBody": "先前的工作目錄與資料夾位置仍在；按專案旁的加號即可重新開啟 CLI。",
@@ -815,7 +770,6 @@ export const zhTW = {
   "agents.security.body": "LatticeTerm 只啟動你選擇的本機程式與參數，不會讀取或保存模型 API 金鑰。CLI 仍以目前使用者權限執行，請只加入你信任的可執行檔。",
   "agents.backend.unavailable.title": "請在 LatticeTerm 桌面應用程式使用",
   "agents.backend.unavailable.body": "瀏覽器預覽沒有本機 PTY 權限，因此可查看介面，但不能啟動 CLI。",
-  "agents.launch.failed": "無法啟動 Agent",
   "agents.operation.failed": "Agent Fleet 操作失敗",
   "agents.directory.eyebrow": "啟動位置",
   "agents.directory.title": "選擇工作目錄與 CLI",
@@ -888,17 +842,12 @@ export const zhTW = {
   "agents.account.chooseProfileDirectory": "選擇此帳號專用的 CLI 設定目錄",
   "agents.account.chooseProfileDirectoryAction": "選擇設定目錄",
   "agents.account.changeProfileDirectory": "更換設定目錄",
-  "agents.account.noProfileDirectory": "尚未選擇設定目錄",
   "agents.account.autoDirectory": "由 LatticeTerm 自動建立",
   "agents.account.advancedDirectory": "進階：改用既有的設定目錄",
   "agents.account.existingDirectoryHint": "已經在別處登入過的設定目錄（例如另一個 CLAUDE_CONFIG_DIR 或 CODEX_HOME）可以直接指定；不選就由 LatticeTerm 建立。",
   "agents.account.saveProfile": "加入帳號設定檔",
   "agents.account.profileHint": "Claude Code 與 Codex 把登入資料存在各自的設定目錄裡，所以每個帳號要有自己的一個目錄，否則第二次登入會蓋掉第一個。LatticeTerm 只記名稱與目錄，登入資料由 CLI 自己保管。",
   "agents.account.profileFailed": "無法新增帳號設定檔：{detail}",
-  "agents.geminiMigration.title": "這是從 Gemini CLI 偵測到的 Google 帳號",
-  "agents.geminiMigration.toggle": "查看或收合帳號警告明細",
-  "agents.geminiMigration.body":
-    "帳號名稱只用來協助辨識，不代表 Antigravity 已完成登入。Google 已於 2026 年 6 月 18 日停止 Gemini CLI 的 consumer OAuth 服務，Google AI Pro／Ultra 也受影響；請在 Google Antigravity CLI 內完成登入。Gemini Code Assist Standard／Enterprise、API key 與 Vertex AI 不受此限制。",
   "agents.launching": "啟動中…",
   "agents.launch": "啟動",
   "agents.install": "安裝",
@@ -910,7 +859,6 @@ export const zhTW = {
   "agents.install.confirm.body": "LatticeTerm 會開啟一個看得到完整輸出的終端，執行這條固定安裝指令：{command}。過程會從網路下載程式並寫入你的使用者環境；若安裝程式更新 PATH，可能要重開 LatticeTerm 才會生效。",
   "agents.install.confirm.action": "開啟安裝終端",
   "agents.workspace.eyebrow": "跨重啟還原",
-  "agents.workspace.title": "保存啟動工作區",
   "agents.workspace.defaultName": "我的 Agent 工作區",
   "agents.workspace.editName": "編輯工作區名稱",
   "agents.workspace.nameLabel": "工作區名稱",
@@ -919,7 +867,6 @@ export const zhTW = {
   "agents.workspace.renamedTitle": "工作區已重新命名",
   "agents.workspace.renamedBody": "這份安全啟動工作區現在叫做「{name}」。",
   "agents.workspace.body": "每次啟動 CLI 都會自動記錄工作目錄與備註；下次開啟時仍由你確認才啟動。",
-  "agents.workspace.save": "保存啟動項目",
   "agents.workspace.saving": "保存中…",
   "agents.workspace.restore": "重新啟動",
   "agents.workspace.restoring": "恢復中…",
@@ -1027,7 +974,6 @@ export const zhTW = {
   "chat.none.title": "沒有可用的助理",
   "chat.none.body":
     "對話模式需要 Claude Code 或 OpenAI Codex。請先到 AI Agent Fleet 安裝並登入其中一個。",
-  "chat.cli": "助理",
   "chat.directory": "工作目錄",
   "chat.directory.choose": "選擇工作目錄",
   "chat.directory.none": "尚未選擇",
@@ -1045,7 +991,6 @@ export const zhTW = {
   "chat.permission.full.hint":
     "助理 會用你的帳號權限做任何事，不會再問你。只在完全信任這個工作目錄與提示內容時使用。",
   "chat.model": "模型",
-  "chat.model.placeholder": "留空使用預設模型",
   "chat.model.default": "預設",
   "chat.model.loading": "正在讀取可用模型…",
   "chat.model.handoff": "切換不同助理會建立新的原生對話，並安全轉交近期脈絡。",
@@ -1053,13 +998,6 @@ export const zhTW = {
   "chat.accountProfile.default": "預設帳號",
   "chat.accountProfile.handoff": "切換帳號會建立新的原生對話，並安全轉交近期脈絡。",
   "chat.accountProfile.hint": "帳號設定檔在 AI Agent Fleet 新增與管理；登入狀態與憑證由助理自己保管。",
-  "chat.skills": "可用 Skills",
-  "chat.skills.discover": "探索 Skills",
-  "chat.skills.loading": "正在探索…",
-  "chat.skills.count": "找到 {count} 個",
-  "chat.skills.empty": "此帳號設定檔與專案尚未找到可辨識的 Skill。",
-  "chat.skills.hint": "只讀取 SKILL.md 的名稱與說明；不會讀取帳號憑證、對話或 Skill 內容。",
-  "chat.skills.failed": "無法探索 Skills：{detail}",
   "chat.handoff.pending":
     "下一則訊息會交由 {assistant} 以新的原生對話接手；只會帶入近期的使用者訊息與文字回覆，工具輸出、推理內容和原生對話 ID 不會轉交。",
   "chat.attachment.images": "加入圖片",
@@ -1107,7 +1045,6 @@ export const zhTW = {
   "chat.delete.confirm.body": "只會移除這裡的紀錄；助理 自己保存的對話不受影響。",
   "chat.delete.confirm.action": "刪除",
   "chat.notInstalled": "{cli} 尚未安裝，請先到 AI Agent Fleet 安裝。",
-  "chat.session": "對話 ID：{id}",
   "chat.storage.note":
     "對話內容只保存在這台電腦的 LatticeTerm 裡；登入資料與 API 金鑰不會經過這裡。",
   "chat.stop.failed": "無法停止：{detail}",
@@ -1223,7 +1160,6 @@ export const zhTW = {
   "sftp.transfer.error": "傳輸失敗",
   "sftp.transfer.cancel": "取消傳輸",
   "sftp.transfer.dismiss": "清除紀錄",
-  "sftp.tooLarge": "這個檔案超過單次傳輸上限 {limit} MiB。",
   "sftp.column.name": "名稱",
   "sftp.column.size": "大小",
   "sftp.column.modified": "修改時間",
@@ -1495,9 +1431,6 @@ export const zhTW = {
   "vault.actionFailed.body": "桌面核心拒絕這次操作：{error}",
   "vault.activity.added": "已新增 {target} 的主機信任",
   "vault.activity.removed": "已移除 {target} 的主機信任",
-  "vault.credentials.title": "安全認證儲存已啟用",
-  "vault.credentials.body":
-    "這裡只列出哪些連線已有安全保存的認證資料，不會讀取或顯示內容。密碼與 Lattice Remote 配對碼可存於作業系統認證儲存區或主密碼加密保管庫；SSH 私鑰只使用你選擇的本機檔案，不保存私鑰或密語。",
   "vault.credentials.loading.title": "正在讀取系統認證儲存區",
   "vault.credentials.loading.body": "只檢查哪些連線有對應項目，不會把認證資料載入畫面。",
   "vault.credentials.ready.title": "{provider} 已連線",
@@ -1514,15 +1447,6 @@ export const zhTW = {
   "vault.credentials.remove.body":
     "刪除後不影響目前工作階段；下次連到 {target} 時必須重新輸入認證資料。",
   "vault.credentials.activity.removed": "已刪除「{name}」的安全認證資料",
-  "vault.credentials.systemStore": "作業系統認證儲存區",
-  "vault.credentials.systemStoreDetail":
-    "由 Windows Credential Manager、macOS Keychain、iOS Keychain 或 Linux Secret Service 保存使用者明確選擇的密碼與配對碼。",
-  "vault.credentials.stronghold": "主密碼加密保管庫",
-  "vault.credentials.strongholdDetail":
-    "以 Argon2id 與 XChaCha20-Poly1305 保護密碼與配對碼；不匯入 SSH 私鑰或 Passphrase。",
-  "vault.credentials.autoLock": "自動鎖定與閒置保護",
-  "vault.credentials.autoLockDetail":
-    "視窗進入背景或閒置逾時時清除解密狀態，之後必須以主密碼重新解鎖。",
 
   // 主機信任對話框 --------------------------------------------------------
   "security.verify.title": "請確認主機指紋",
@@ -1586,7 +1510,6 @@ export const zhTW = {
   "a11y.primaryNav": "主要導覽",
   "a11y.toggleSidebar.show": "顯示側欄",
   "a11y.toggleSidebar.hide": "隱藏側欄",
-  "a11y.switchTheme": "切換主題",
   "a11y.searchConnections": "搜尋連線",
 } as const;
 

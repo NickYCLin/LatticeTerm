@@ -17,11 +17,8 @@ export const en: Messages = {
   "common.delete": "Delete",
   "common.edit": "Edit",
   "common.duplicate": "Duplicate",
-  "common.reset": "Reset",
-  "common.search": "Search",
   "common.export": "Export",
   "common.import": "Import",
-  "common.clear": "Clear",
   "common.notSet": "Not set",
   "common.none": "None",
   "common.optional": "Optional",
@@ -76,7 +73,6 @@ export const en: Messages = {
   "connections.samplesFailed": "Could not load samples",
   "connections.samplesFailedBody": "The sample connections could not be written to disk: {error}",
   "connections.importJson": "Import file",
-  "connections.exportJson": "Export",
   "connections.count": "{count} connections",
   "connections.countFiltered": "Showing {visible} of {total} connections",
   "connections.sortBy": "Sort by",
@@ -106,7 +102,6 @@ export const en: Messages = {
 
   // Connection card -------------------------------------------------------
   "row.connect": "Connect",
-  "row.connectComingSoon": "Connecting is in development",
   "row.connectDesktopOnly": "Desktop only",
   "row.connectDesktopOnlyHint": "You can manage this connection on mobile, but only LatticeTerm desktop can open it.",
   "row.connectBackendRequired": "App required",
@@ -234,22 +229,17 @@ export const en: Messages = {
   "metrics.notSupported.body": "Resource readings need an SSH session; this connection type is not supported yet.",
   "metrics.cpu": "Processor",
   "metrics.memory": "Memory",
-  "metrics.swap": "Swap",
   "metrics.disk": "Disk",
   "metrics.uptime": "Uptime",
   "metrics.load": "Load average",
   "metrics.cores": "{count} cores",
   "metrics.usedOfTotal": "{used} of {total}",
   "metrics.percentUsed": "{percent}% used",
-  "metrics.mountpoint": "Mount point",
-  "metrics.refresh": "Refresh",
   "metrics.lastUpdated": "Updated {time}",
-  "metrics.autoRefresh": "Auto refresh",
   "metrics.uptimeValue": "{days}d {hours}h",
   "metrics.uptimeHours": "{hours}h {minutes}m",
 
   // Activity --------------------------------------------------------------
-  "activity.title": "Activity in this window",
   "activity.note.title": "Follow CLI work that needs attention",
   "activity.note.body":
     "Work status is kept across restarts. Only session names, CLIs, folders, status and time are stored; prompts, terminal output and credentials are never stored. The connection audit log below still lasts for this window only.",
@@ -405,7 +395,6 @@ export const en: Messages = {
   "settings.density.comfortable": "Comfortable",
   "settings.density.compact": "Compact",
   "settings.motion": "Motion",
-  "settings.motionHint": "Turn animation off if it bothers you.",
   "settings.motionHint.reduced": "Drawer, dialog, overlay and hover transitions are now disabled.",
   "settings.motionHint.systemReduced": "Your system already requests reduced motion, so both choices will look the same.",
   "settings.motionHint.systemActive": "Drawer, dialog and interface transitions currently follow your system setting.",
@@ -435,9 +424,6 @@ export const en: Messages = {
     "Lock immediately when the window loses focus or enters the background. Existing remote and terminal sessions stay connected.",
   "settings.security.background.enabled": "On",
   "settings.security.background.disabled": "Off",
-  "settings.security.hostKey": "Host key verification policy",
-  "settings.security.hostKeyDetail":
-    "Strict known-host checking, with an explicit trust decision on first connect.",
   "settings.security.clipboard": "Clipboard clearing",
   "settings.security.clipboardDetail":
     "Automatically clear copied Lattice Remote pairing codes without overwriting newer clipboard content.",
@@ -510,7 +496,6 @@ export const en: Messages = {
   "settings.about.license": "Licence",
   "settings.updater": "Software Updates",
   "settings.updaterHint": "Check for updates from GitHub Releases and update directly in-app without reinstalling.",
-  "settings.updater.current": "Current version",
   "settings.updater.status": "Update status",
   "settings.updater.desktopOnly": "Check and install updates in the desktop app",
   "settings.updater.check": "Check for updates",
@@ -592,7 +577,6 @@ export const en: Messages = {
   // Status bar ------------------------------------------------------------
   "status.connections": "{count} connections",
   "status.connectionsFiltered": "{visible} of {total} connections",
-  "status.inMemory": "In memory only, cleared when you close the app",
   "status.vault": "Credential store: {state}",
   "status.vault.locked": "Not built yet",
   "status.vault.ready": "Available",
@@ -620,44 +604,9 @@ export const en: Messages = {
 
   // Planned areas ---------------------------------------------------------
   "planned.badge": "In development",
-  "planned.notReady": "Not available yet",
-  "planned.whatItDoes": "What this area will do",
-  "planned.whatItDoesHint":
-    "Written down so the plan is clear — not a claim that it works today.",
-  "planned.boundary": "Security first",
-  "planned.tunnels.summary":
-    "Port forwarding for the hosts you already keep here: local, remote and dynamic tunnels, each showing where it goes and which connection uses it.",
-  "planned.tunnels.boundary":
-    "A tunnel rides on an established SSH connection, so this opens once connections and the secure store are done. Until then nothing is forwarded.",
-  "planned.tunnels.cap1.title": "All three kinds at a glance",
-  "planned.tunnels.cap1.detail":
-    "Local, remote and dynamic forwarding each show their source, destination and bind scope.",
-  "planned.tunnels.cap2.title": "Live state per tunnel",
-  "planned.tunnels.cap2.detail":
-    "Who is using it, how long it has been up, and whether it is starting, listening or stopped.",
-  "planned.tunnels.cap3.title": "Errors you can act on",
-  "planned.tunnels.cap3.detail":
-    "It says whether the port is taken, the connection dropped, or permission was denied.",
-  "planned.vault.summary":
-    "One place for what must stay secret: SSH keys, saved passwords and pairing codes, jump host credentials, and the host fingerprints you have trusted.",
-  "planned.vault.boundary":
-    "Secrets go to the operating system credential store and host trust uses strict checking. Neither exists yet, which is why nothing asks you for a credential today.",
-  "planned.vault.cap1.title": "Lock state you can see",
-  "planned.vault.cap1.detail":
-    "Locked, unlocking, unlocked, about to auto-lock and recovery required are all distinct.",
-  "planned.vault.cap2.title": "Know what uses each item",
-  "planned.vault.cap2.detail":
-    "Every credential lists the connections that reference it, so nothing is deleted blindly.",
-  "planned.vault.cap3.title": "Host trust you can verify",
-  "planned.vault.cap3.detail":
-    "Full, copyable fingerprints, with first connection and changed keys handled separately.",
-  "planned.vault.cap4.title": "Encrypted import and export",
-  "planned.vault.cap4.detail":
-    "Move a vault between machines without writing a plain-text file.",
 
   // Connect flow ----------------------------------------------------------
   "connect.title": "Connect to {name}",
-  "connect.target": "{user}@{host}:{port}",
   "connect.method": "Sign-in method",
   "connect.method.password": "Password",
   "connect.method.privateKey": "SSH key",
@@ -689,7 +638,6 @@ export const en: Messages = {
   "connect.stage.trust": "reading trusted host keys",
   "connect.stage.invoke": "calling the backend",
   "connect.stage.credential": "System credential storage",
-  "connect.trusted": "Key remembered. Reconnecting…",
 
   // Terminal --------------------------------------------------------------
   "terminal.title": "Sessions",
@@ -825,11 +773,9 @@ export const en: Messages = {
     "I just handed this work over to you from {source}. The full earlier conversation is in this file: {path}\nRead it first for context, tell me in two or three sentences what you understood, then wait for my next instruction.",
   "terminal.handoff.frame":
     "Below is my full earlier conversation with another AI assistant. Please read it for context, then take over and keep helping me — I'll give you my next instruction shortly.\n\n===== earlier conversation start =====\n{transcript}\n===== earlier conversation end =====",
-  "terminal.backToList": "Back to connections",
   "terminal.closed": "Session ended ({reason})",
   "terminal.inputFailed":
     "This session has ended, so input is going nowhere. Close the session and connect again.",
-  "terminal.reconnect": "Reconnect",
   "terminal.empty.title": "No session is open",
   "terminal.empty.body":
     "Choose a local project folder and launch a CLI, or pick a host to open its session here.",
@@ -853,7 +799,6 @@ export const en: Messages = {
   "agents.backend.unavailable.title": "Use the LatticeTerm desktop app",
   "agents.backend.unavailable.body":
     "The browser preview cannot access local PTYs. You can inspect this interface here, but it cannot launch a CLI.",
-  "agents.launch.failed": "Could not launch the agent",
   "agents.operation.failed": "Agent Fleet operation failed",
   "agents.directory.eyebrow": "Launch context",
   "agents.directory.title": "Choose a working directory and CLI",
@@ -939,18 +884,12 @@ export const en: Messages = {
   "agents.account.chooseProfileDirectory": "Choose this account's isolated CLI configuration directory",
   "agents.account.chooseProfileDirectoryAction": "Choose configuration directory",
   "agents.account.changeProfileDirectory": "Change configuration directory",
-  "agents.account.noProfileDirectory": "No configuration directory selected",
   "agents.account.autoDirectory": "Created by LatticeTerm",
   "agents.account.advancedDirectory": "Advanced: use an existing configuration directory",
   "agents.account.existingDirectoryHint": "A directory already signed in elsewhere (another CLAUDE_CONFIG_DIR or CODEX_HOME) can be pointed to directly; leave it and LatticeTerm creates one.",
   "agents.account.saveProfile": "Add account profile",
   "agents.account.profileHint": "Claude Code and Codex keep their login inside their configuration directory, so each account needs a directory of its own or the second login overwrites the first. LatticeTerm stores only the name and the directory; the CLI keeps the login.",
   "agents.account.profileFailed": "Could not add account profile: {detail}",
-  "agents.geminiMigration.title":
-    "Google account detected from Gemini CLI",
-  "agents.geminiMigration.toggle": "Show or hide account notice details",
-  "agents.geminiMigration.body":
-    "The account name is shown for identification and does not mean Antigravity is signed in. Google ended consumer OAuth service for Gemini CLI on June 18, 2026, including Google AI Pro and Ultra; complete sign-in inside Google Antigravity CLI. Gemini Code Assist Standard/Enterprise, API-key, and Vertex AI authentication are unaffected.",
   "agents.launching": "Launching…",
   "agents.launch": "Launch",
   "agents.install": "Install",
@@ -962,7 +901,6 @@ export const en: Messages = {
   "agents.install.confirm.body": "LatticeTerm will open a visible terminal and run this fixed installation command: {command}. It downloads software and writes to your user environment. If the installer changes PATH, restart LatticeTerm before refreshing detection.",
   "agents.install.confirm.action": "Open installer terminal",
   "agents.workspace.eyebrow": "Restart recovery",
-  "agents.workspace.title": "Save a launch workspace",
   "agents.workspace.defaultName": "My agent workspace",
   "agents.workspace.editName": "Edit workspace name",
   "agents.workspace.nameLabel": "Workspace name",
@@ -974,7 +912,6 @@ export const en: Messages = {
     "This safe launch workspace is now named “{name}”.",
   "agents.workspace.body":
     "Each CLI launch records its working directory and note automatically. You still confirm before anything launches next time.",
-  "agents.workspace.save": "Save launch item",
   "agents.workspace.saving": "Saving…",
   "agents.workspace.restore": "Launch again",
   "agents.workspace.restoring": "Restoring…",
@@ -1103,7 +1040,6 @@ export const en: Messages = {
   "chat.none.title": "No assistant available",
   "chat.none.body":
     "Chat mode needs Claude Code or OpenAI Codex. Install and sign in to one of them in AI Agent Fleet first.",
-  "chat.cli": "Assistant",
   "chat.directory": "Working directory",
   "chat.directory.choose": "Choose directory",
   "chat.directory.none": "Not chosen yet",
@@ -1121,7 +1057,6 @@ export const en: Messages = {
   "chat.permission.full.hint":
     "The assistant acts with your full account rights and never asks. Use only when you fully trust this directory and the prompt.",
   "chat.model": "Model",
-  "chat.model.placeholder": "Leave empty for the default model",
   "chat.model.default": "Default",
   "chat.model.loading": "Reading available models…",
   "chat.model.handoff": "Changing assistants starts a new native conversation and safely hands over recent context.",
@@ -1129,13 +1064,6 @@ export const en: Messages = {
   "chat.accountProfile.default": "Default account",
   "chat.accountProfile.handoff": "Switching accounts starts a new native conversation and safely carries recent context.",
   "chat.accountProfile.hint": "Account profiles are added and managed in AI Agent Fleet; the assistant keeps its own login and credentials.",
-  "chat.skills": "Available skills",
-  "chat.skills.discover": "Discover skills",
-  "chat.skills.loading": "Discovering…",
-  "chat.skills.count": "Found {count}",
-  "chat.skills.empty": "No recognizable skills were found in this account profile or project.",
-  "chat.skills.hint": "Reads only SKILL.md names and descriptions; it never reads account credentials, conversations, or skill bodies.",
-  "chat.skills.failed": "Could not discover skills: {detail}",
   "chat.handoff.pending":
     "Your next message starts a new {assistant} conversation. Only recent user messages and text replies transfer; tool output, reasoning, and native conversation IDs do not.",
   "chat.attachment.images": "Add images",
@@ -1184,7 +1112,6 @@ export const en: Messages = {
     "Only the copy kept here is removed; the assistant's own transcript is untouched.",
   "chat.delete.confirm.action": "Delete",
   "chat.notInstalled": "{cli} is not installed. Install it in AI Agent Fleet first.",
-  "chat.session": "Conversation id: {id}",
   "chat.storage.note":
     "Conversations are kept only in LatticeTerm on this computer; login data and API keys never pass through here.",
   "chat.stop.failed": "Cannot stop: {detail}",
@@ -1302,7 +1229,6 @@ export const en: Messages = {
   "sftp.transfer.error": "Transfer failed",
   "sftp.transfer.cancel": "Cancel transfer",
   "sftp.transfer.dismiss": "Clear entry",
-  "sftp.tooLarge": "This file exceeds the {limit} MiB transfer limit.",
   "sftp.column.name": "Name",
   "sftp.column.size": "Size",
   "sftp.column.modified": "Modified",
@@ -1591,9 +1517,6 @@ export const en: Messages = {
   "vault.actionFailed.body": "The desktop core refused the operation: {error}",
   "vault.activity.added": "Trusted host added for {target}",
   "vault.activity.removed": "Trusted host removed for {target}",
-  "vault.credentials.title": "Secure credential storage is active",
-  "vault.credentials.body":
-    "This tab lists which connections have a securely stored credential without reading or displaying it. Passwords and Lattice Remote pairing codes can use the operating-system credential store or the master-password vault; SSH keys stay in the local files you choose, without storing key material or passphrases.",
   "vault.credentials.loading.title": "Reading the system credential store",
   "vault.credentials.loading.body":
     "Only connection-to-entry associations are checked; credentials are never loaded into the view.",
@@ -1611,15 +1534,6 @@ export const en: Messages = {
   "vault.credentials.remove.body":
     "This does not affect the current session. You must enter the credential again next time you connect to {target}.",
   "vault.credentials.activity.removed": "Secure credential removed for {name}",
-  "vault.credentials.systemStore": "Operating-system credential store",
-  "vault.credentials.systemStoreDetail":
-    "Save user-approved passwords and pairing codes with Windows Credential Manager, macOS Keychain, iOS Keychain, or Linux Secret Service.",
-  "vault.credentials.stronghold": "Master-password encrypted vault",
-  "vault.credentials.strongholdDetail":
-    "Protect passwords and pairing codes with Argon2id and XChaCha20-Poly1305 without importing SSH keys or passphrases.",
-  "vault.credentials.autoLock": "Auto-lock and idle protection",
-  "vault.credentials.autoLockDetail":
-    "Clear decrypted state when the window enters the background or times out, then require the master password to unlock again.",
 
   // Host trust dialogs ----------------------------------------------------
   "security.verify.title": "Check the host fingerprint",
@@ -1688,6 +1602,5 @@ export const en: Messages = {
   "a11y.primaryNav": "Primary",
   "a11y.toggleSidebar.show": "Show sidebar",
   "a11y.toggleSidebar.hide": "Hide sidebar",
-  "a11y.switchTheme": "Switch theme",
   "a11y.searchConnections": "Search connections",
 };
