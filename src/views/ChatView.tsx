@@ -712,7 +712,6 @@ function ThreadPane({
                     ))}
                   </select>
                 </div>
-                <p className="chat-settings__hint">{t("chat.accountProfile.hint")}</p>
               </div>
             )}
             <div className="field field--grow">
@@ -753,7 +752,10 @@ function ThreadPane({
                 ))}
               </select>
             </label>
-            <p className="chat-settings__hint">{t(permissionHintKey[thread.permission])}</p>
+            <p className="chat-settings__hint">
+              {t(permissionHintKey[thread.permission])}
+              {profileCapable(thread.definitionId) ? ` ${t("chat.accountProfile.hint")}` : ""}
+            </p>
           </div>
         )}
         {thread.permission === "full" && (
@@ -1025,8 +1027,13 @@ function ChatItemView({
       return <p className="chat-notice">{item.text}</p>;
     case "turnEnd":
       if (item.error) {
+        // A headless turn cannot open the CLI's own login screen, so an
+        // expired login surfaces as a bare error. Say what to do about it.
+        const needsLogin =
+          /authenticat|oauth|logged in|log in|login|unauthori[sz]ed|\b401\b/i.test(item.error);
         return (
-          <Callout tone="danger" title={t("chat.turn.failed")}>
+          <Callout tone="danger" title={needsLogin ? t("chat.turn.needsLogin") : t("chat.turn.failed")}>
+            {needsLogin && <p className="chat-callout__lead">{t("chat.turn.needsLogin.body", { assistant })}</p>}
             {item.error}
           </Callout>
         );

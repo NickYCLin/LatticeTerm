@@ -11,7 +11,8 @@ export function AgentAccountProfileDialog({
   onCancel,
 }: {
   agentLabel: string;
-  onSave: (name: string, configDirectory: string) => void;
+  /** `configDirectory` is null when LatticeTerm should create one. */
+  onSave: (name: string, configDirectory: string | null) => void;
   onCancel: () => void;
 }) {
   const { t } = useI18n();
@@ -19,6 +20,7 @@ export function AgentAccountProfileDialog({
   const nameRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [configDirectory, setConfigDirectory] = useState("");
+  const [useExisting, setUseExisting] = useState(false);
   const [choosingDirectory, setChoosingDirectory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const trimmedName = name.trim();
@@ -109,28 +111,37 @@ export function AgentAccountProfileDialog({
             />
           </label>
 
-          <div className="field">
-            <span className="field__label">{t("agents.account.profileDirectory")}</span>
-            <div className="agent-account-profile-dialog__directory">
-              <button
-                type="button"
-                className="button button--secondary"
-                disabled={choosingDirectory}
-                onClick={() => void chooseDirectory()}
-              >
-                <FolderIcon size={14} />
-                {configDirectory
-                  ? t("agents.account.changeProfileDirectory")
-                  : t("agents.account.chooseProfileDirectoryAction")}
-              </button>
-              <span className="agent-account-profile-dialog__path" title={configDirectory}>
-                {configDirectory
-                  ? displayPath(configDirectory)
-                  : t("agents.account.noProfileDirectory")}
-              </span>
+          <p className="field__hint">{t("agents.account.profileHint")}</p>
+
+          <details
+            className="agent-account-profile-dialog__advanced"
+            open={useExisting}
+            onToggle={(event) => setUseExisting(event.currentTarget.open)}
+          >
+            <summary>{t("agents.account.advancedDirectory")}</summary>
+            <div className="field">
+              <span className="field__label">{t("agents.account.profileDirectory")}</span>
+              <div className="agent-account-profile-dialog__directory">
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  disabled={choosingDirectory}
+                  onClick={() => void chooseDirectory()}
+                >
+                  <FolderIcon size={14} />
+                  {configDirectory
+                    ? t("agents.account.changeProfileDirectory")
+                    : t("agents.account.chooseProfileDirectoryAction")}
+                </button>
+                <span className="agent-account-profile-dialog__path" title={configDirectory}>
+                  {configDirectory
+                    ? displayPath(configDirectory)
+                    : t("agents.account.autoDirectory")}
+                </span>
+              </div>
+              <p className="field__hint">{t("agents.account.existingDirectoryHint")}</p>
             </div>
-            <p className="field__hint">{t("agents.account.profileHint")}</p>
-          </div>
+          </details>
 
           {error && <p className="field__error" role="alert">{error}</p>}
         </div>
@@ -147,8 +158,8 @@ export function AgentAccountProfileDialog({
           <button
             type="button"
             className="button button--primary"
-            disabled={choosingDirectory || !trimmedName || !configDirectory}
-            onClick={() => onSave(trimmedName, configDirectory)}
+            disabled={choosingDirectory || !trimmedName}
+            onClick={() => onSave(trimmedName, useExisting && configDirectory ? configDirectory : null)}
           >
             {t("agents.account.saveProfile")}
           </button>
