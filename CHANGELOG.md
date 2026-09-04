@@ -4,6 +4,19 @@
 
 ---
 
+## [0.41.0](https://github.com/NickYCLin/lattice-term/compare/v0.40.0...v0.41.0) (2026-09-04)
+
+
+### 🚀 新增功能
+
+* **對話:** 排程可接在其他排程之後執行，並限制同時執行數 ([#141](https://github.com/NickYCLin/lattice-term/issues/141)) ([400f110](https://github.com/NickYCLin/lattice-term/commit/400f11069799e4c6c20445e6a402c18cedc2478c))
+
+
+### 🛠️ 問題修正
+
+* **對話:** 統一設定列高度與登入提示；Fleet 帳號目錄自動建立、燈號安靜判定 ([#142](https://github.com/NickYCLin/lattice-term/issues/142)) ([f180e94](https://github.com/NickYCLin/lattice-term/commit/f180e946df7b9f3db1b914294218f770c809db62))
+* **發行:** 累積夠就發版，不再等每天排程 ([#145](https://github.com/NickYCLin/lattice-term/issues/145)) ([633551f](https://github.com/NickYCLin/lattice-term/commit/633551fd3a6059740426f6f2211c7e989eaf2beb))
+
 ## [0.40.0](https://github.com/NickYCLin/lattice-term/compare/v0.39.0...v0.40.0) (2026-09-03)
 
 
