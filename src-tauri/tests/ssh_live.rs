@@ -4,11 +4,14 @@
 //! server — stays green. Run them deliberately after starting a container:
 //!
 //! ```text
-//! docker run -d --name latticeterm-sshtest -p 2222:2222 \
+//! docker run -d --name latticeterm-sshtest -p 127.0.0.1:2222:2222 \
 //!   -e PASSWORD_ACCESS=true -e USER_NAME=tester -e USER_PASSWORD=testpass123 \
 //!   linuxserver/openssh-server
 //! cargo test --test ssh_live -- --ignored --test-threads=1
 //! ```
+//!
+//! The example credentials are public and only for this disposable loopback
+//! fixture. Never expose it to a network or use it as an App Review server.
 //!
 //! What makes them worth having: they cover the parts that unit tests cannot
 //! reach — that an unknown host is actually refused, that trusting it actually

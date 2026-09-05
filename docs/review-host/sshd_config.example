@@ -1,0 +1,33 @@
+# Dedicated, disposable Linux review host only. See IOS_REVIEW_HOST.zh-TW.md.
+# Keep loopback binding until the host's network isolation is verified.
+# Run as a separate sshd with -f; do not replace the administrator's service.
+Port 2222
+ListenAddress 127.0.0.1
+HostKey /etc/ssh/latticeterm_review_host_ed25519_key
+PidFile /run/latticeterm-review-sshd.pid
+
+AllowUsers reviewer
+PermitRootLogin no
+PasswordAuthentication yes
+PubkeyAuthentication yes
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+UsePAM yes
+AuthorizedKeysFile /etc/ssh/latticeterm-review_authorized_keys
+StrictModes yes
+PermitUserEnvironment no
+PermitUserRC no
+
+DisableForwarding yes
+PermitTunnel no
+PermitTTY yes
+X11Forwarding no
+MaxAuthTries 3
+MaxSessions 4
+MaxStartups 3:30:10
+LoginGraceTime 30
+ClientAliveInterval 60
+ClientAliveCountMax 2
+UseDNS no
+LogLevel VERBOSE
+Subsystem sftp internal-sftp -u 0077

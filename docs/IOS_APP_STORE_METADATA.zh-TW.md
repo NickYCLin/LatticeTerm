@@ -43,6 +43,8 @@ LatticeTerm 讓你從 iPhone 與 iPad 連接自己的伺服器，使用 SSH 終�
 
 截圖建議依序呈現連線清單、SSH 終端機、SFTP 檔案傳輸與保管庫設定。只使用自有測試主機、示範帳號與無敏感內容的資料。模擬器啟動畫面可作為工作證據，但不等於完整商店截圖組。
 
+審查主機可依 [隔離環境準備與驗收清單](IOS_REVIEW_HOST.zh-TW.md) 建立；範本預設只監聽本機，不代表已提供可供 Apple 存取的服務。
+
 ## App Review Notes（英文草稿）
 
 LatticeTerm is an SSH/SFTP client for connecting to servers controlled by the user. It does not require a LatticeTerm account. Commands entered in the terminal run on the remote SSH server; the iOS app does not download or execute local CLI tools. The iOS package does not contain the desktop RDP/VNC sidecar engines and does not offer local AI CLI sessions.
