@@ -82,5 +82,24 @@ jobs:
               raise SystemExit(f'Expected one unsigned device app, found {len(apps)}')
           subprocess.run(['python3', 'scripts/verify-ios-app.py', str(apps[0]), '--build-number', '1', '--require-store-sdk'], check=True)
           PY
+      - name: Launch on clean iPhone and iPad simulators
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          apps = list(Path('src-tauri/gen/apple/build').glob('*/LatticeTerm.app'))
+          if len(apps) != 1:
+              raise SystemExit(f'Expected one simulator app, found {len(apps)}')
+          subprocess.run(['python3', 'scripts/ios-simulator-smoke.py', str(apps[0]), '--output', 'src-tauri/gen/apple/build/smoke'], check=True)
+          PY
+      - name: Save simulator launch evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-simulator-launch-evidence
+          path: src-tauri/gen/apple/build/smoke
+          if-no-files-found: ignore
+          retention-days: 14
       # This job deliberately creates no IPA, uses no Apple credentials,
       # and makes no TestFlight or App Store submission.

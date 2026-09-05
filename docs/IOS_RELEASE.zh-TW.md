@@ -40,7 +40,7 @@ npm run ios:simulator
 
 對產生的 `.app` 執行 `python3 scripts/verify-ios-app.py /實際路徑/LatticeTerm.app --check-api-symbols`，檢查 Bundle ID、行銷版本、執行檔、隱私清單、區網說明與桌面 sidecar 邊界，並輸出 C API 匯入盤點。再用 `xcrun simctl install booted /實際路徑/LatticeTerm.app` 與 `xcrun simctl launch booted io.github.nickyclin.latticeterm` 安裝、啟動；產物檢查本身不代表啟動已成功。
 
-`.github/workflows/ios-verify.yml` 會在相關 PR 或手動觸發時，使用 macOS runner 上的 Xcode 26 以上版本編譯無簽章的 Release 模擬器 App，再建立實機 archive，分別檢查 bundle。實機產物另檢查 iOS 26 以上 SDK，未宣告的 C API 類別會讓工作失敗。CI 不需要 Apple 密鑰；新增 workflow 尚不等於已跑過 CI。
+`.github/workflows/ios-verify.yml` 會在相關 PR 或手動觸發時，使用 macOS runner 上的 Xcode 26 以上版本編譯無簽章的 Release 模擬器 App，再建立實機 archive，分別檢查 bundle。模擬器另以新建的 iPhone／iPad 裝置安裝與啟動，檢查程序未在啟動後立即結束，並保留截圖 artifact 供檢閱；完成後刪除這次測試建立的裝置。這不是完整互動或實機測試。實機產物另檢查 iOS 26 以上 SDK，未宣告的 C API 類別會讓工作失敗。CI 不需要 Apple 密鑰；新增 workflow 尚不等於已跑過 CI。
 
 本機可執行 `npm run ios:device:unsigned` 建立 `src-tauri/gen/apple/build/lattice-term_iOS.xcarchive`，再對其中 `Products/Applications/LatticeTerm.app` 執行 `--require-store-sdk` 檢查。這是無簽章的實機 Release archive，供提早檢查 SDK 與隱私資源；不能直接安裝到 iPhone 或上傳 App Store Connect。正式發行仍走下面的簽章封裝流程。
 
@@ -70,7 +70,7 @@ npm run ios:build -- --build-number 1
 - `src-tauri/Info.ios.plist` 是區域網路用途說明的來源，Tauri 建置時會合併進 App。直接手改生成的 plist 不足以保證下次建置保留。
 - `PrivacyInfo.xcprivacy` 列出本機檔案中繼資料（容器與使用者選取檔案）、計時／逾時用途；宣告不做追蹤。Xcode 專案的 Resources 階段必須包含它。
 - 檔案 API 對應 `backup.rs`、`sftp_transfers.rs` 的 metadata 與安全寫入；計時對應 `tunnel.rs`、`remote.rs` 的 Tokio timeout。最終送件須再檢查 Xcode Privacy Report 與連結進入的 SDK，不能只檢查原始碼。批准理由見 [Apple Required Reason API 文件](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype)。
-- 已知待辦：2026-09-05 的 x86_64 Debug 模擬器 bundle 含 `fstatfs`、`fstatvfs`、`statvfs` 匯入與 `nix` 檔案系統符號，目前程式沒有磁碟剩餘容量檢查用途。須用正式 Release bundle 確認是否仍保留，若有則追查並移除不需要的連結／行動版依賴；不能直接填入與實際行為不符的 DiskSpace 理由。`--check-api-symbols` 會將未宣告類別列為 `needs_review`；`--require-store-sdk` 會自動盤點並拒絕含未宣告類別的產物。這是保守的 C API 檢查，未涵蓋所有 Objective-C／Swift API，也不取代 Apple 的報告。
+- 2026-09-05 的 x86_64 Debug 模擬器 bundle 含 `fstatfs`、`fstatvfs`、`statvfs` 匯入與 `nix` 檔案系統符號；[Release 模擬器 CI](https://github.com/NickYCLin/lattice-term/actions/runs/33957302485) 的最佳化產物已通過未宣告 API 檢查。實機 Release 仍須單獨驗證，不能直接填入與實際行為不符的 DiskSpace 理由。`--check-api-symbols` 會將未宣告類別列為 `needs_review`；`--require-store-sdk` 會自動盤點並拒絕含未宣告類別的產物。這是保守的 C API 檢查，未涵蓋所有 Objective-C／Swift API，也不取代 Apple 的報告。
 - App Store Connect 的 App Privacy 表單與 bundle 的 privacy manifest 是兩份不同資料。依最終產品與第三方服務行為填寫；若之後加入遙測、雲端帳號或代管中繼，需重新盤點。
 - App 含 SSH、`ring`、Argon2id 與 XChaCha20-Poly1305；不能因為有 HTTPS 就直接宣告「只用作業系統加密」。此變更刻意沒有填 `ITSAppUsesNonExemptEncryption=false`。由發行者完成 Apple 加密問卷，再依結果補上宣告／文件。[Apple 加密申報說明](https://developer.apple.com/help/app-store-connect/manage-app-information/overview-of-export-compliance/)
 
