@@ -48,6 +48,8 @@ npm run ios:simulator
 
 畫面驗證的總等待上限仍為 90 秒，涵蓋截圖與 OCR。大型 iPad 畫面的單次截圖指令最多等待 60 秒，且不能超過總上限的剩餘時間，避免圖檔已產出卻因指令稍晚結束而提前失敗。仍須辨識完整連線頁及新增按鈕，不能只憑圖檔存在便通過。
 
+若封裝已完成、僅模擬器階段失敗，可手動執行 `iOS existing bundle verification`，填入原本 `iOS verification` 的工作編號。它只接受同一 repo 主分支的既有工作，核對來源 commit、執行次數、架構及 SHA-256；只要 App 原始碼、依賴或建置設定有變更就拒絕重用。允許差異僅限文件與指定的驗證工具。解壓縮限制路徑、檔案類型、數量及大小，再重新檢查 bundle 並執行完整三種模擬器驗證。這能在沒有編譯工作的環境中重現啟動問題，不會略過失敗或自動重啟 App 來換取通過。新建裝置出錯時另限時擷取與 App 識別碼相關的系統日誌。
+
 本機可執行 `npm run ios:device:unsigned` 建立 `src-tauri/gen/apple/build/lattice-term_iOS.xcarchive`，再對其中 `Products/Applications/LatticeTerm.app` 執行 `--require-store-sdk` 檢查。這是無簽章的實機 Release archive，供提早檢查 SDK 與隱私資源；不能直接安裝到 iPhone 或上傳 App Store Connect。正式發行仍走下面的簽章封裝流程。
 
 ### 商店截圖候選素材

@@ -1,0 +1,62 @@
+name: iOS existing bundle verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: "已產出 unsigned bundle 的主分支 iOS verification 工作編號"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  smoke:
+    name: Verify existing simulator bundle
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Select an installed Xcode 26 or newer
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re, subprocess
+          from pathlib import Path
+          candidates = []
+          for app in Path('/Applications').glob('Xcode*.app'):
+              match = re.match(r'Xcode_(\d+)(?:\.(\d+))?(?:\.(\d+))?\.app$', app.name)
+              if match and int(match[1]) >= 26:
+                  candidates.append((tuple(int(part or 0) for part in match.groups()), app))
+          if not candidates:
+              raise SystemExit('Runner has no supported Xcode 26 installation')
+          subprocess.run(['sudo', 'xcode-select', '-s', str(max(candidates)[1])], check=True)
+          PY
+          xcodebuild -version
+      - name: Test artifact checks and startup verification
+        run: |
+          python3 scripts/test_reuse_ios_simulator.py
+          python3 scripts/test_ios_simulator_smoke.py
+      - name: Verify source and unpack simulator bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.source_run }}
+        run: python3 scripts/reuse-ios-simulator.py "$SOURCE_RUN" --output smoke-source
+      - name: Check the reused app bundle
+        run: python3 scripts/verify-ios-app.py smoke-source/extracted/LatticeTerm.app --build-number 1 --require-declared-api
+      - name: Verify startup and capture original screenshots
+        run: python3 scripts/ios-simulator-smoke.py smoke-source/extracted/LatticeTerm.app --output smoke --store-screenshots
+      - name: Save verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-existing-bundle-evidence
+          path: |
+            smoke-source/reuse-report.json
+            smoke
+          if-no-files-found: ignore
+          retention-days: 14

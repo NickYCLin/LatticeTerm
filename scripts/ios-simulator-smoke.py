@@ -115,6 +115,10 @@ def capture_failure(device_id, label, stage, error, directory):
     # best-effort capture, so even an unresponsive simulator leaves evidence.
     path = directory / f"{label}.failure.json"
     report = {"stage": stage, "errorType": type(error).__name__, "error": str(error)[:2048]}
+    for stream in ("stdout", "stderr"):
+        value = getattr(error, stream, None)
+        if value:
+            report[stream] = (value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value))[-8192:]
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     screenshot = directory / f"{label}.failure.png"
     try:
@@ -122,6 +126,14 @@ def capture_failure(device_id, label, stage, error, directory):
         report["screenshot"] = screenshot.name
     except Exception as capture_error:
         report["captureError"] = f"{type(capture_error).__name__}: {capture_error}"[:2048]
+    try:
+        logs = simctl("spawn", device_id, "log", "show", "--style", "compact", "--last", "3m",
+                      "--predicate", 'eventMessage CONTAINS[c] "io.github.nickyclin.latticeterm"', timeout=15)
+        log_path = directory / f"{label}.failure.log"
+        log_path.write_text(logs[-262144:])
+        report["systemLog"] = log_path.name
+    except Exception as log_error:
+        report["logError"] = f"{type(log_error).__name__}: {log_error}"[:2048]
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 
 
@@ -171,12 +183,15 @@ def check_simulators(args, runtime, devices, reader):
         device_id = simctl("create", f"LatticeTerm CI {label}", model["deviceTypeIdentifier"], runtime)
         stage = "boot"
         try:
+            print(f"{label}: 啟動新的 {model['name']} 模擬器", flush=True)
             simctl("boot", device_id)
             stage = "bootstatus"
             simctl("bootstatus", device_id, "-b", timeout=180)
             stage = "install"
+            print(f"{label}: 開機完成，安裝 App", flush=True)
             simctl("install", device_id, args.app.resolve(), timeout=120)
             stage = "launch"
+            print(f"{label}: 安裝完成，等待啟動指令", flush=True)
             output = simctl("launch", device_id, BUNDLE_ID)
             match = re.search(r": (\d+)\s*$", output)
             if match is None:
@@ -184,6 +199,7 @@ def check_simulators(args, runtime, devices, reader):
             pid = int(match[1])
             screenshot = args.output / f"{label}.png"
             stage = "frontend"
+            print(f"{label}: 已取得 PID，驗證實際連線頁", flush=True)
             visible = wait_for_frontend(device_id, pid, screenshot, reader)
             entry = {"family": family, "model": model["name"], "runtime": runtime, "survivedStartup": True, **visible, "screenshot": screenshot.name}
             if capture_store:
