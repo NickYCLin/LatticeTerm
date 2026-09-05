@@ -10,6 +10,7 @@ import { useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import type { Workspace } from "../app/useWorkspace";
 import { canConnectProtocol } from "../app/platformCapabilities";
+import { exportTextFile } from "../app/fileExport";
 import {
   UNGROUPED,
   type ConnectionProfile,
@@ -45,18 +46,6 @@ function timestamp(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Triggers a download without leaving the app or touching the filesystem API. */
-function downloadFile(content: string, filename: string, type: string) {
-  const url = URL.createObjectURL(new Blob([content], { type }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
 export function ConnectionsView({
   workspace,
   onCreate,
@@ -66,6 +55,7 @@ export function ConnectionsView({
   supportedProtocols,
   backendAvailable,
   mobile,
+  platform,
 }: {
   workspace: Workspace;
   onCreate: () => void;
@@ -75,6 +65,7 @@ export function ConnectionsView({
   supportedProtocols: readonly string[];
   backendAvailable: boolean;
   mobile: boolean;
+  platform?: string;
 }) {
   const { t } = useI18n();
   const {
@@ -95,6 +86,37 @@ export function ConnectionsView({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExport() {
+    if (exporting) return;
+    setExporting(true);
+    setNotice(null);
+    try {
+      const result = await exportTextFile(
+        serializeProfiles(profiles),
+        `latticeterm-connections-${timestamp()}.json`,
+        platform,
+      );
+      setNotice({
+        tone: "info",
+        title: t("common.export"),
+        body: result.destination === "ios-documents"
+          ? t("transfer.export.iosSaved", { filename: result.filename })
+          : t("transfer.export.started"),
+      });
+    } catch (reason) {
+      setNotice({
+        tone: "warn",
+        title: t("transfer.export.failed"),
+        body: t("transfer.export.failedBody", {
+          error: reason instanceof Error ? reason.message : String(reason),
+        }),
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   /** Renders one import problem, including its field-level reasons. */
   function describeIssue(issue: ImportIssue): string {
@@ -282,17 +304,12 @@ export function ConnectionsView({
           <button
             type="button"
             className="button button--ghost button--sm"
-            onClick={() =>
-              downloadFile(
-                serializeProfiles(profiles),
-                `latticeterm-connections-${timestamp()}.json`,
-                "application/json",
-              )
-            }
+            onClick={() => void handleExport()}
+            disabled={exporting}
             title={t("transfer.export.hint")}
           >
             <ExportIcon size={14} />
-            {t("common.export")}
+            {t(exporting ? "transfer.export.saving" : "common.export")}
           </button>
         </div>
       </div>

@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>UIFileSharingEnabled</key>
+  <true/>
+  <key>LSSupportsOpeningDocumentsInPlace</key>
+  <true/>
   <key>NSLocalNetworkUsageDescription</key>
   <string>LatticeTerm 需要連接你指定的區域網路主機，以使用 SSH 終端機、SFTP 檔案傳輸與遠端連線。</string>
 </dict>

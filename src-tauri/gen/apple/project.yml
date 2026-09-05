@@ -43,6 +43,8 @@ targets:
     info:
       path: lattice-term_iOS/Info.plist
       properties:
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]

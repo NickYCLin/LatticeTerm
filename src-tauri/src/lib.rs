@@ -7,6 +7,7 @@ pub mod backup;
 pub mod clipboard;
 pub mod credentials;
 pub mod domain;
+pub mod file_exports;
 pub mod hostkeys;
 #[cfg(target_os = "linux")]
 pub mod linux_webkit;
@@ -234,6 +235,31 @@ fn backup_trust_guard(
         TrustState::Unavailable(reason) => Err(format!(
             "Host trust data is unavailable and cannot be backed up: {reason}"
         )),
+    }
+}
+
+#[tauri::command]
+async fn ios_export_document(
+    app: AppHandle,
+    filename: String,
+    contents: String,
+) -> Result<String, String> {
+    #[cfg(target_os = "ios")]
+    {
+        let directory = app
+            .path()
+            .document_dir()
+            .map_err(|error| error.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::file_exports::save_document(&directory, &filename, &contents)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (app, filename, contents);
+        Err("This export destination is only available on iOS.".into())
     }
 }
 
@@ -1811,13 +1837,7 @@ async fn sftp_download_start(
     sessions: State<'_, Arc<SftpRegistry>>,
     transfers: State<'_, Arc<TransferRegistry>>,
 ) -> Result<TransferState, String> {
-    // Downloads land in the OS download folder: always writable, always where
-    // the user already looks for arriving files.
-    let target = app
-        .path()
-        .download_dir()
-        .or_else(|_| app.path().home_dir())
-        .map_err(|error| format!("no download folder is available: {error}"))?;
+    let target = user_download_directory(&app)?;
     crate::sftp_transfers::start_download(
         Arc::clone(transfers.inner()),
         sessions.inner(),
@@ -1827,6 +1847,27 @@ async fn sftp_download_start(
         target,
     )
     .await
+}
+
+pub(crate) fn user_download_directory(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    // iOS exposes Documents through Files; a desktop-style Downloads path
+    // is not a user-visible download destination inside an iOS sandbox.
+    #[cfg(target_os = "ios")]
+    let target = {
+        let directory = app
+            .path()
+            .document_dir()
+            .map_err(|error| error.to_string())?;
+        crate::file_exports::prepare_documents(&directory)?;
+        directory
+    };
+    #[cfg(not(target_os = "ios"))]
+    let target = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|error| format!("no download folder is available: {error}"))?;
+    Ok(target)
 }
 
 #[tauri::command]
@@ -2745,6 +2786,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             runtime_summary,
             play_notification_sound,
+            ios_export_document,
             encrypted_backup_export,
             encrypted_backup_restore,
             agent_catalog,

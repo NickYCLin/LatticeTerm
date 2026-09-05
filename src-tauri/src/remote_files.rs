@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
@@ -522,12 +522,7 @@ impl RemoteFilesClient {
 
     fn download_started(&self, transfer_id: u64, name: String, size: u64) {
         let result = (|| -> Result<RemoteFileTransfer, String> {
-            let download_dir = self
-                .app
-                .path()
-                .download_dir()
-                .or_else(|_| self.app.path().home_dir())
-                .map_err(|error| format!("No download folder is available: {error}"))?;
+            let download_dir = crate::user_download_directory(&self.app)?;
             std::fs::create_dir_all(&download_dir)
                 .map_err(|error| format!("Cannot create the download folder: {error}"))?;
             let final_path = unique_download_path(&download_dir, &name);

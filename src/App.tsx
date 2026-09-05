@@ -979,6 +979,7 @@ function Workspace({ preferences, update, activeTheme }: PreferencesValue) {
                   supportedProtocols={supportedProtocols}
                   backendAvailable={runtime.host === "tauri"}
                   mobile={onMobile}
+                  platform={platform}
                 />
               )}
             </Suspense>

@@ -2,6 +2,7 @@ import {
   sanitizePreferences,
   type Preferences,
 } from "./preferences";
+import { exportTextFile, type FileExportResult } from "./fileExport";
 
 export const BACKUP_EXTENSION = ".latticeterm-backup";
 export const BACKUP_LOCAL_STORAGE_KEYS = [
@@ -116,32 +117,22 @@ export function encryptedBackupFilename(createdAtSeconds: number): string {
   return `LatticeTerm-${timestamp}${BACKUP_EXTENSION}`;
 }
 
-export function downloadEncryptedBackup(contents: string, filename: string): void {
-  const blob = new Blob([contents], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-}
-
 export async function exportEncryptedBackup(
   password: string,
   preferences: Preferences,
-): Promise<EncryptedBackupExport> {
+  platform?: string,
+): Promise<EncryptedBackupExport & { delivery: FileExportResult }> {
   const { invoke } = await import("@tauri-apps/api/core");
   const result = await invoke<EncryptedBackupExport>("encrypted_backup_export", {
     password,
     localStorage: collectBackupLocalStorage(window.localStorage, preferences),
   });
-  downloadEncryptedBackup(
+  const delivery = await exportTextFile(
     result.contents,
     encryptedBackupFilename(result.createdAt),
+    platform,
   );
-  return result;
+  return { ...result, delivery };
 }
 
 export async function readEncryptedBackupFile(file: File): Promise<string> {

@@ -26,6 +26,8 @@ class BundleVerificationTests(unittest.TestCase):
             "CFBundleExecutable": "LatticeTerm",
             "DTSDKName": "iphoneos26.0",
             "NSLocalNetworkUsageDescription": "Connect to a selected host",
+            "UIFileSharingEnabled": True,
+            "LSSupportsOpeningDocumentsInPlace": True,
         }
         self.write_info()
         (self.app / "LatticeTerm").write_bytes(b"test fixture")
@@ -60,6 +62,14 @@ class BundleVerificationTests(unittest.TestCase):
         (self.app / "lattice-rdp-engine").write_bytes(b"test fixture")
         with self.assertRaises(ValueError):
             module.verify(self.app, "0.45.0")
+
+    def test_rejects_bundles_without_files_access_to_exports(self):
+        for key in ("UIFileSharingEnabled", "LSSupportsOpeningDocumentsInPlace"):
+            self.info[key] = False
+            self.write_info()
+            with self.assertRaisesRegex(ValueError, key):
+                module.verify(self.app, "0.45.0")
+            self.info[key] = True
 
     def test_reports_undeclared_imports_in_simulator_without_claiming_readiness(self):
         self.nm.return_value.stdout += "_fstatvfs\n"

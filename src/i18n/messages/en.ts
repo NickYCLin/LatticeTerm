@@ -1611,6 +1611,11 @@ export const en: Messages = {
     "The connections could not be written to disk, so the existing workspace was not changed: {error}",
   "transfer.import.readFailedBody":
     "The selected file could not be read. Make sure it still exists and is accessible.",
+  "transfer.export.iosSaved": "Saved “{filename}”. Open Files → Browse → On My iPhone/iPad → LatticeTerm to find it, share it, or move it to iCloud Drive.",
+  "transfer.export.started": "The export download has started. Check your download location for the file.",
+  "transfer.export.saving": "Saving…",
+  "transfer.export.failed": "Export failed",
+  "transfer.export.failedBody": "Could not save the export: {error}",
   "transfer.export.hint":
     "The exported file contains host details only, never secrets.",
   "transfer.error.json": "The file is not valid JSON.",

@@ -14,6 +14,8 @@ describe("iOS Tauri 設定", () => {
     const project = readFileSync(new URL("../src-tauri/gen/apple/lattice-term.xcodeproj/project.pbxproj", import.meta.url), "utf8");
     const privacy = readFileSync(new URL("../src-tauri/gen/apple/lattice-term_iOS/PrivacyInfo.xcprivacy", import.meta.url), "utf8");
     expect(info).toContain("NSLocalNetworkUsageDescription");
+    expect(info).toMatch(/<key>UIFileSharingEnabled<\/key>\s*<true\/>/);
+    expect(info).toMatch(/<key>LSSupportsOpeningDocumentsInPlace<\/key>\s*<true\/>/);
     expect(info).not.toContain("NSAllowsArbitraryLoads");
     // SSH uses bundled cryptography. Exemption must be assessed separately,
     // rather than declaring all encryption exempt just to bypass Apple's form.

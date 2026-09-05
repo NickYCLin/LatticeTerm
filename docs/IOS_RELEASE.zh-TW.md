@@ -44,6 +44,18 @@ npm run ios:simulator
 
 本機可執行 `npm run ios:device:unsigned` 建立 `src-tauri/gen/apple/build/lattice-term_iOS.xcarchive`，再對其中 `Products/Applications/LatticeTerm.app` 執行 `--require-store-sdk` 檢查。這是無簽章的實機 Release archive，供提早檢查 SDK 與隱私資源；不能直接安裝到 iPhone 或上傳 App Store Connect。正式發行仍走下面的簽章封裝流程。
 
+## iPhone／iPad 的檔案操作
+
+- 連線頁的「匯出」會將連線 JSON 儲存至 App 的 Documents。
+- 設定中的加密備份必須完成加密與檔案寫入，才會顯示匯出成功。同名檔案會自動加上編號，不會覆蓋舊備份。
+- SFTP 與 Lattice 遠端檔案下載使用同一個 Documents 位置。
+- 開啟 iOS「檔案」App →「瀏覽」→「我的 iPhone／iPad」→「LatticeTerm」，即可取得、分享或移動這些檔案。備份若要保留在移除 App 之後，請先移至 iCloud 雲碟或其他位置。
+- 連線 JSON 或加密備份的匯入仍由 App 內的檔案選擇器操作。選取 JSON 後會先驗證內容；還原備份需輸入備份密碼並確認。
+
+`UIFileSharingEnabled` 與 `LSSupportsOpeningDocumentsInPlace` 會合併進最終 Info.plist，bundle 檢查會拒絕缺少設定的產物。分享範圍為 Documents；連線資料庫、主機信任與 Vault 仍存於 Library/Application Support，Keychain 也不會因這個設定對外分享。參考 [Apple 檔案分享設定](https://developer.apple.com/documentation/bundleresources/information-property-list/uifilesharingenabled)。
+
+送測前請在實機完成：匯出連線 → 在「檔案」找到 → 再匯入；加密備份 → 移至 iCloud → 還原；SFTP 上傳／下載與重複檔名測試。程式測試與模擬器啟動檢查不代表這些實機互動已驗證。
+
 ## 正式封裝
 
 2026-09-05 查核：Apple 自 2026-04-28 起要求 App Store Connect 上傳版本使用 Xcode 26 以上及 iOS 26 SDK 以上。這是建置 SDK 要求，不是把 App 的最低支援系統改成 iOS 26。[官方要求](https://developer.apple.com/news/upcoming-requirements/)

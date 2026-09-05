@@ -38,6 +38,9 @@ def verify(app, version, build_number=None, require_store_sdk=False, check_api_s
         errors.append("建置號與指定值不一致")
     if not info.get("NSLocalNetworkUsageDescription"):
         errors.append("App 缺少區域網路用途說明")
+    for key in ("UIFileSharingEnabled", "LSSupportsOpeningDocumentsInPlace"):
+        if info.get(key) is not True:
+            errors.append(f"App 缺少檔案匯出存取設定：{key}")
     if privacy.get("NSPrivacyTracking") is not False:
         errors.append("隱私清單追蹤宣告不一致")
     reasons = {

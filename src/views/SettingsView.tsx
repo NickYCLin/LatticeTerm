@@ -494,6 +494,7 @@ export function SettingsView({
         <EncryptedBackupPanel
           preferences={preferences}
           backendAvailable={desktopBackendAvailable}
+          platform={runtime.summary?.platform}
           vaultUnlocked={vaultUnlocked}
           onRestored={onBackupRestored}
         />

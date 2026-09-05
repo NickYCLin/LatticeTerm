@@ -16,6 +16,7 @@ import { ConfirmDialog } from "../overlays/ConfirmDialog";
 interface EncryptedBackupPanelProps {
   preferences: Preferences;
   backendAvailable: boolean;
+  platform?: string;
   vaultUnlocked: boolean;
   onRestored: (
     result: EncryptedBackupRestore,
@@ -32,6 +33,7 @@ function reasonText(reason: unknown): string {
 export function EncryptedBackupPanel({
   preferences,
   backendAvailable,
+  platform,
   vaultUnlocked,
   onRestored,
 }: EncryptedBackupPanelProps) {
@@ -63,12 +65,12 @@ export function EncryptedBackupPanel({
     setBusy("export");
     setNotice(null);
     try {
-      const result = await exportEncryptedBackup(exportPassword, preferences);
+      const result = await exportEncryptedBackup(exportPassword, preferences, platform);
       setNotice({
         tone: "info",
-        message: t("settings.backup.exported", {
-          count: result.appFileCount,
-        }),
+        message: result.delivery.destination === "ios-documents"
+          ? t("transfer.export.iosSaved", { filename: result.delivery.filename })
+          : t("settings.backup.exported", { count: result.appFileCount }),
       });
       setExportPassword("");
       setExportConfirmation("");
