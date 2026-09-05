@@ -78,6 +78,14 @@ class BundleVerificationTests(unittest.TestCase):
         with self.assertRaises(module.subprocess.CalledProcessError):
             module.verify(self.app, "0.45.0", check_api_symbols=True)
 
+    def test_strict_api_check_also_applies_to_release_simulator(self):
+        self.info["DTSDKName"] = "iphonesimulator26.0"
+        self.write_info()
+        self.assertEqual(module.verify(self.app, "0.45.0", require_declared_api=True)["privacyAPIReview"]["status"], "declared_c_imports")
+        self.nm.return_value.stdout += "_statvfs\n"
+        with self.assertRaisesRegex(ValueError, "DiskSpace"):
+            module.verify(self.app, "0.45.0", require_declared_api=True)
+
 
 if __name__ == "__main__":
     unittest.main()

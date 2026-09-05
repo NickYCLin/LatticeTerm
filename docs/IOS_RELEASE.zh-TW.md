@@ -36,9 +36,11 @@ npm run ios:simulator
 
 `ios:simulator` 自動選擇主機架構，並在暫存目錄建立只供該子程序使用的 Xcode 呼叫入口，明確傳入 Simulator SDK 與 destination；避免 Tauri 2.11.4 封存時誤用實機 SDK。它仍執行 `xcrun --find xcodebuild` 找到的真正 Xcode 工具，不修改 Xcode 安裝或正式實機專案。預設測試建置號為 `1`，可用 `--build-number` 覆寫。
 
+使用 `npm run ios:simulator:release` 建置經最佳化的模擬器產物，再加上 `--require-declared-api` 執行下述 bundle 檢查，可及早發現 Release 仍保留的未宣告 C API。這個流程仍不需要 Apple 簽章；不能拿模擬器產物上傳商店。
+
 對產生的 `.app` 執行 `python3 scripts/verify-ios-app.py /實際路徑/LatticeTerm.app --check-api-symbols`，檢查 Bundle ID、行銷版本、執行檔、隱私清單、區網說明與桌面 sidecar 邊界，並輸出 C API 匯入盤點。再用 `xcrun simctl install booted /實際路徑/LatticeTerm.app` 與 `xcrun simctl launch booted io.github.nickyclin.latticeterm` 安裝、啟動；產物檢查本身不代表啟動已成功。
 
-`.github/workflows/ios-verify.yml` 會在相關 PR 或手動觸發時，使用 macOS runner 上的 Xcode 26 以上版本編譯無簽章的模擬器 App 並檢查 bundle。CI 不需要 Apple 密鑰；新增 workflow 尚不等於已跑過 CI。
+`.github/workflows/ios-verify.yml` 會在相關 PR 或手動觸發時，使用 macOS runner 上的 Xcode 26 以上版本編譯無簽章的 Release 模擬器 App 並檢查 bundle，未宣告的 C API 類別會讓工作失敗。CI 不需要 Apple 密鑰；新增 workflow 尚不等於已跑過 CI。
 
 ## 正式封裝
 

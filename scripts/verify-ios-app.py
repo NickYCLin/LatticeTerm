@@ -24,7 +24,7 @@ def inspect_required_reason_apis(executable):
     return {category: sorted(symbols & names) for category, names in categories.items() if symbols & names}
 
 
-def verify(app, version, build_number=None, require_store_sdk=False, check_api_symbols=False):
+def verify(app, version, build_number=None, require_store_sdk=False, check_api_symbols=False, require_declared_api=False):
     with (app / "Info.plist").open("rb") as source:
         info = plistlib.load(source)
     with (app / "PrivacyInfo.xcprivacy").open("rb") as source:
@@ -58,7 +58,7 @@ def verify(app, version, build_number=None, require_store_sdk=False, check_api_s
     if not executable.is_file():
         errors.append("找不到 App 執行檔")
     api_review = {"status": "not_run"}
-    if (check_api_symbols or require_store_sdk) and executable.is_file():
+    if (check_api_symbols or require_store_sdk or require_declared_api) and executable.is_file():
         imports = inspect_required_reason_apis(executable)
         missing = sorted(category for category in imports if not reasons.get(category))
         api_review = {
@@ -66,8 +66,8 @@ def verify(app, version, build_number=None, require_store_sdk=False, check_api_s
             "imports": imports, "missingManifestCategories": missing,
             "note": "僅盤點 C API 匯入；仍須 Xcode Privacy Report 與實際用途審查",
         }
-        if require_store_sdk and missing:
-            errors.append("正式產物包含未宣告用途的 API 類別，須先查明使用路徑：" + ", ".join(missing))
+        if (require_store_sdk or require_declared_api) and missing:
+            errors.append("產物包含未宣告用途的 API 類別，須先查明使用路徑：" + ", ".join(missing))
     for path in app.rglob("*"):
         if path.name.startswith(("lattice-rdp-engine", "lattice-vnc-engine", "lattice-agent", "lattice-remote")):
             errors.append(f"行動版包含桌面 sidecar：{path.name}")
@@ -88,10 +88,11 @@ if __name__ == "__main__":
     parser.add_argument("--build-number")
     parser.add_argument("--require-store-sdk", action="store_true")
     parser.add_argument("--check-api-symbols", action="store_true", help="使用 Xcode nm 盤點 C API 匯入；正式 SDK 檢查會自動啟用")
+    parser.add_argument("--require-declared-api", action="store_true", help="未宣告的 C API 類別視為錯誤，適用 Release 模擬器")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     version = json.loads((root / "package.json").read_text())["version"]
     try:
-        print(json.dumps(verify(args.app, version, args.build_number, args.require_store_sdk, args.check_api_symbols), ensure_ascii=False, indent=2))
+        print(json.dumps(verify(args.app, version, args.build_number, args.require_store_sdk, args.check_api_symbols, args.require_declared_api), ensure_ascii=False, indent=2))
     except (OSError, ValueError, KeyError, plistlib.InvalidFileException, subprocess.SubprocessError) as error:
         parser.exit(1, f"iOS 產物檢查失敗：{error}\n")

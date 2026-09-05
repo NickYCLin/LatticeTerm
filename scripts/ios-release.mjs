@@ -25,10 +25,10 @@ export function releaseArguments(configPath) {
   ];
 }
 
-export function simulatorArguments(configPath, architecture) {
+export function simulatorArguments(configPath, architecture, release = false) {
   const target = { arm64: "aarch64-sim", x64: "x86_64" }[architecture];
   if (!target) throw new Error(`不支援的模擬器主機架構：${architecture}`);
-  return ["run", "tauri", "--", "ios", "build", "--debug", "--ci", "--target", target, "--no-sign", "--config", configPath];
+  return ["run", "tauri", "--", "ios", "build", ...(release ? [] : ["--debug"]), "--ci", "--target", target, "--no-sign", "--config", configPath];
 }
 
 export function simulatorXcodebuildScript(executable) {
@@ -117,8 +117,8 @@ function syncVersions(version) {
 
 function main(args) {
   const [mode, ...options] = args;
-  if (!["sync", "prepare", "preflight", "build", "simulator"].includes(mode)) {
-    throw new Error("用法：node scripts/ios-release.mjs sync | preflight | simulator | prepare --build-number 1 | build --build-number 1");
+  if (!["sync", "prepare", "preflight", "build", "simulator", "simulator-release"].includes(mode)) {
+    throw new Error("用法：node scripts/ios-release.mjs sync | preflight | simulator | simulator-release | prepare --build-number 1 | build --build-number 1");
   }
   const parsed = {};
   for (let i = 0; i < options.length; i += 2) {
@@ -136,8 +136,9 @@ function main(args) {
     console.log(`iOS 原生版本已同步為 ${version}。正式封裝時會另外套用指定的建置號。`);
     return;
   }
-  if (mode === "simulator" && process.platform !== "darwin") throw new Error("iOS 模擬器建置需要 macOS。");
-  const buildNumber = parsed.buildNumber ?? (mode === "simulator" ? "1" : undefined);
+  const simulator = mode === "simulator" || mode === "simulator-release";
+  if (simulator && process.platform !== "darwin") throw new Error("iOS 模擬器建置需要 macOS。");
+  const buildNumber = parsed.buildNumber ?? (simulator ? "1" : undefined);
   const config = releaseConfig(version, buildNumber);
   if (mode === "build") preflight();
   syncVersions(version);
@@ -148,7 +149,6 @@ function main(args) {
   console.log(`已準備 ${version} (${buildNumber})：${configPath}`);
   if (mode === "prepare") return;
   // Export only: this command never uploads or submits the app for review.
-  const simulator = mode === "simulator";
   let childEnv = process.env;
   if (simulator) {
     // Tauri 2.11.4 drops XCODE_XCCONFIG_FILE from its Apple child environment
@@ -161,7 +161,7 @@ function main(args) {
     writeFileSync(join(bin, "xcodebuild"), simulatorXcodebuildScript(executable), { mode: 0o755, flag: "wx" });
     childEnv = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` };
   }
-  const result = spawnSync("npm", simulator ? simulatorArguments(configPath, process.arch) : releaseArguments(configPath), {
+  const result = spawnSync("npm", simulator ? simulatorArguments(configPath, process.arch, mode === "simulator-release") : releaseArguments(configPath), {
     cwd: root, stdio: "inherit",
     env: childEnv,
   });

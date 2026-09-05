@@ -30,6 +30,13 @@ describe("iOS 發布準備", () => {
     expect(simulatorArguments("config.json", "arm64")).not.toContain("aarch64");
     expect(() => simulatorArguments("config.json", "unknown")).toThrow();
   });
+  it("最佳化模擬器使用 Release 並保留無簽章邊界", () => {
+    const args = simulatorArguments("config.json", "arm64", true);
+    expect(args).not.toContain("--debug");
+    expect(args).toContain("--no-sign");
+    expect(args).toContain("aarch64-sim");
+    expect(simulatorArguments("config.json", "arm64")).toContain("--debug");
+  });
   it("同一行銷版本可以產生不同建置號，且不帶入帳號資料", () => {
     expect(releaseConfig("0.45.0", "2")).toEqual({ version: "0.45.0", bundle: { iOS: { bundleVersion: "2" } } });
     expect(releaseConfig("0.45.0", "3").bundle.iOS.bundleVersion).toBe("3");
