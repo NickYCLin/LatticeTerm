@@ -57,6 +57,41 @@ jobs:
           xcodebuild -version
       - run: npm ci
       - run: npm run ios:check
+      - name: Install the App Store provisioning profile for Xcode
+        env:
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, os, plistlib, re, subprocess, tempfile
+          from pathlib import Path
+          encoded = os.environ['IOS_MOBILE_PROVISION']
+          content = base64.b64decode(encoded, validate=True)
+          with tempfile.NamedTemporaryFile(suffix='.mobileprovision') as source:
+              source.write(content)
+              source.flush()
+              profile = plistlib.loads(subprocess.check_output(['security', 'cms', '-D', '-i', source.name]))
+          team = os.environ['APPLE_DEVELOPMENT_TEAM']
+          assert profile['TeamIdentifier'] == [team], 'Wrong profile team'
+          assert profile['Entitlements']['application-identifier'] == f'{team}.io.github.nickyclin.latticeterm', 'Wrong profile App ID'
+          identifier = profile['UUID']
+          assert re.fullmatch(r'[a-fA-F0-9-]{36}', identifier), 'Invalid profile UUID'
+          # Xcode 16+ uses this location; Tauri 2.11.4 only installs to MobileDevice.
+          destination = Path.home() / 'Library/Developer/Xcode/UserData/Provisioning Profiles'
+          destination.mkdir(parents=True, exist_ok=True)
+          target = destination / f'{identifier}.mobileprovision'
+          with target.open('xb') as output:
+              output.write(content)
+          target.chmod(0o600)
+          # Tauri silently ignores a failed profile UUID lookup. Bind the already
+          # validated profile explicitly in this disposable runner checkout too.
+          project = Path('src-tauri/gen/apple/lattice-term.xcodeproj/project.pbxproj')
+          source = project.read_text()
+          marker = 'CODE_SIGN_STYLE = Automatic;'
+          assert source.count(marker) == 2, 'Unexpected iOS signing configurations'
+          project.write_text(source.replace(marker, f'CODE_SIGN_STYLE = Manual;\n                PROVISIONING_PROFILE_SPECIFIER = "{identifier}";\n                "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "{identifier}";'))
+          print('Installed and bound the verified App Store provisioning profile.')
+          PY
       - name: Build a signed App Store Connect IPA
         env:
           IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
