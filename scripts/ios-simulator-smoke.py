@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -106,6 +107,21 @@ def simctl(*args, timeout=60):
     ).stdout.strip()
 
 
+def capture_failure(device_id, label, stage, error, directory):
+    # This device was created by this invocation. Write the cause before any
+    # best-effort capture, so even an unresponsive simulator leaves evidence.
+    path = directory / f"{label}.failure.json"
+    report = {"stage": stage, "errorType": type(error).__name__, "error": str(error)[:2048]}
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    screenshot = directory / f"{label}.failure.png"
+    try:
+        simctl("io", device_id, "screenshot", screenshot.resolve(), timeout=15)
+        report["screenshot"] = screenshot.name
+    except Exception as capture_error:
+        report["captureError"] = f"{type(capture_error).__name__}: {capture_error}"[:2048]
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("app", type=Path)
@@ -150,23 +166,37 @@ def check_simulators(args, runtime, devices, reader):
         # Create clean devices so no existing profiles, secrets or simulator
         # data are read, modified or included in the screenshots.
         device_id = simctl("create", f"LatticeTerm CI {label}", model["deviceTypeIdentifier"], runtime)
+        stage = "boot"
         try:
             simctl("boot", device_id)
+            stage = "bootstatus"
             simctl("bootstatus", device_id, "-b", timeout=180)
+            stage = "install"
             simctl("install", device_id, args.app.resolve(), timeout=120)
+            stage = "launch"
             output = simctl("launch", device_id, BUNDLE_ID)
             match = re.search(r": (\d+)\s*$", output)
             if match is None:
                 raise RuntimeError(f"無法讀取 App PID：{output}")
             pid = int(match[1])
             screenshot = args.output / f"{label}.png"
+            stage = "frontend"
             visible = wait_for_frontend(device_id, pid, screenshot, reader)
             entry = {"family": family, "model": model["name"], "runtime": runtime, "survivedStartup": True, **visible, "screenshot": screenshot.name}
             if capture_store:
+                stage = "store-screenshot"
                 entry["appStoreCandidate"] = capture_store_image(device_id, family, args.output)
+            stage = "report"
             report.append(entry)
             (args.output / "launch-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
             print(f"{label}: 已辨識連線頁內容，程序仍在執行，已保存 {screenshot}", flush=True)
+        except Exception as error:
+            try:
+                capture_failure(device_id, label, stage, error, args.output)
+            except Exception as evidence_error:
+                # Preserve the original failure if the output disk also fails.
+                print(f"無法保存失敗證據：{evidence_error}", file=sys.stderr, flush=True)
+            raise
         finally:
             # Cleanup is limited to this invocation's newly created device.
             try:

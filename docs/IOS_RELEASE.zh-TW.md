@@ -44,6 +44,8 @@ npm run ios:simulator
 
 通過 bundle 檢查後，CI 會保留 `ios-unsigned-release-<commit>` artifact 七天，包含模擬器 App、無簽章實機 archive、兩份 JSON 檢查報告與 `provenance.json`。封裝使用 tar 保留執行權限；provenance 記錄來源 commit、執行編號、模擬器架構及 SHA-256。請先對照來源及雜湊，再將模擬器 App 安裝到相容架構的模擬器。實機 archive 不能直接安裝到手機或上傳商店。iPhone／iPad 的啟動截圖另外存於 `ios-simulator-launch-evidence`，保留十四天；下載到封裝 artifact 不代表後續啟動步驟已成功，仍須確認該次 workflow 結果。
 
+若新建裝置在開機、安裝、啟動或畫面檢查期間失敗，流程會先保存 `*.failure.json` 的失敗階段與原因，再以最多 15 秒嘗試擷取該裝置畫面。即使模擬器無回應而截圖失敗，仍保留原本的失敗結果與紀錄，並清理這次建立的裝置；診斷資料不能當成通過證據。
+
 本機可執行 `npm run ios:device:unsigned` 建立 `src-tauri/gen/apple/build/lattice-term_iOS.xcarchive`，再對其中 `Products/Applications/LatticeTerm.app` 執行 `--require-store-sdk` 檢查。這是無簽章的實機 Release archive，供提早檢查 SDK 與隱私資源；不能直接安裝到 iPhone 或上傳 App Store Connect。正式發行仍走下面的簽章封裝流程。
 
 ### 商店截圖候選素材
