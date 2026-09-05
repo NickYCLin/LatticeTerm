@@ -12,6 +12,7 @@
 - Before editing, inspect the affected source, tests, configuration, current branch, upstream state, and relevant project documentation.
 - Create commits, push branches, open pull requests, or publish releases only when the user explicitly requests delivery.
 - Commit titles use `<type>(<scope>): <subject>` with natural Taiwan Traditional Chinese. Keep each commit focused on one meaningful change.
+- Follow https://ithelp.ithome.com.tw/articles/10228738 for commit messages: use Traditional Chinese, keep the subject within 50 characters without a final period, and explain both what changed and why in the body (wrap at 72 characters). Add actual issue references when available and describe incompatible changes with `BREAKING CHANGE:`; never invent an issue number.
 
 ## Verification
 
