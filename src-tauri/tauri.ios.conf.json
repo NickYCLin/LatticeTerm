@@ -3,9 +3,14 @@
   "identifier": "io.github.nickyclin.latticeterm",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run ios:sync && npm run build"
   },
   "bundle": {
-    "externalBin": []
+    "externalBin": [],
+    "iOS": {
+      "bundleVersion": "1",
+      "minimumSystemVersion": "14.0",
+      "infoPlist": "Info.ios.plist"
+    }
   }
 }

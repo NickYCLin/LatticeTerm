@@ -2,6 +2,29 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("iOS Tauri 設定", () => {
+  it("商店匯出不含過期的企業團隊或 In-House 描述檔", () => {
+    const source = readFileSync(new URL("../src-tauri/gen/apple/ExportOptions.plist", import.meta.url), "utf8");
+    expect(source).toContain("<string>app-store-connect</string>");
+    expect(source).toContain("<string>export</string>");
+    expect(source).not.toMatch(/enterprise|InHouse_|SQDAQK66UY|tw\.nickyclin|<key>teamID<\/key>/);
+  });
+
+  it("區域網路用途由 Tauri 合併，且隱私清單實際加入資源階段", () => {
+    const info = readFileSync(new URL("../src-tauri/Info.ios.plist", import.meta.url), "utf8");
+    const project = readFileSync(new URL("../src-tauri/gen/apple/lattice-term.xcodeproj/project.pbxproj", import.meta.url), "utf8");
+    const privacy = readFileSync(new URL("../src-tauri/gen/apple/lattice-term_iOS/PrivacyInfo.xcprivacy", import.meta.url), "utf8");
+    expect(info).toContain("NSLocalNetworkUsageDescription");
+    expect(info).not.toContain("NSAllowsArbitraryLoads");
+    // SSH uses bundled cryptography. Exemption must be assessed separately,
+    // rather than declaring all encryption exempt just to bypass Apple's form.
+    expect(info).not.toContain("ITSAppUsesNonExemptEncryption");
+    const resources = project.split("/* Begin PBXResourcesBuildPhase section */")[1].split("/* End PBXResourcesBuildPhase section */")[0];
+    expect(resources).toContain("PrivacyInfo.xcprivacy in Resources");
+    expect(privacy).toContain("NSPrivacyAccessedAPICategoryFileTimestamp");
+    expect(privacy).toContain("NSPrivacyAccessedAPICategorySystemBootTime");
+    expect(privacy).toMatch(/<key>NSPrivacyTracking<\/key>\s*<false\/>/);
+  });
+
   it("iOS 沿用個人識別且不硬編碼開發團隊", () => {
     const desktopConfig = JSON.parse(
       readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
@@ -16,7 +39,9 @@ describe("iOS Tauri 設定", () => {
     expect(desktopConfig.identifier).toBe("io.github.nickyclin.latticeterm");
     expect(desktopConfig.bundle.iOS).toBeUndefined();
     expect(iosConfig.identifier).toBe("io.github.nickyclin.latticeterm");
-    expect(iosConfig.bundle.iOS).toBeUndefined();
+    expect(iosConfig.bundle.iOS.developmentTeam).toBeUndefined();
+    expect(iosConfig.bundle.iOS.infoPlist).toBe("Info.ios.plist");
+    expect(iosConfig.bundle.iOS.bundleVersion).toBe("1");
   });
 
   it("Apple/Xcode 專案使用個人自動簽章設定", () => {

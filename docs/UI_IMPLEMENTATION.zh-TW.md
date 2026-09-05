@@ -242,9 +242,10 @@
 
 ## Android 與 iOS 行動版
 
-- **建置**：`npx tauri android init` 產生的專案在 `src-tauri/gen/android`；`npx tauri ios init` 產生的 Apple/Xcode 專案在 `src-tauri/gen/apple`（兩者皆入版控、排除 build 輸出）。`tauri.android.conf.json` 與 `tauri.ios.conf.json` 都覆寫 `externalBin` 為空——行動系統不能跑 sidecar，RDP／VNC／裝置分享引擎不隨行動版打包。iOS 可用 `npx tauri ios build --debug --target aarch64-sim` 產生 Simulator app；企業版則先用 `npx tauri ios build --archive-only --target aarch64` 建立 archive，再以 `src-tauri/gen/apple/ExportOptions.plist` 的 In-House 設定匯出 IPA。
+- **建置**：`npx tauri android init` 產生的專案在 `src-tauri/gen/android`；`npx tauri ios init` 產生的 Apple/Xcode 專案在 `src-tauri/gen/apple`（兩者皆入版控、排除 build 輸出）。`tauri.android.conf.json` 與 `tauri.ios.conf.json` 都覆寫 `externalBin` 為空，RDP／VNC／裝置分享引擎不隨行動版打包。iOS Simulator 可用 `npm run ios:simulator`，自動選擇 Intel／Apple silicon 架構並固定 Simulator SDK。正式版本改走 `npm run ios:build -- --build-number 1` 的 App Store Connect 匯出；工具／SDK／簽章條件不足時先停止。完整步驟見 [iOS 發布流程](IOS_RELEASE.zh-TW.md)。
 - **核心全數共用**：SSH 終端機、SFTP 與串流佇列、通道、主機資源、known_hosts、加密保管庫都是行程內純 Rust（russh 用 ring 後端正是為了行動交叉編譯），Android 與 iOS 上原樣可用。
 - **平台感知**：`runtime_summary` 回報 `platform`；行動平台上導覽自動隱藏 Agent Fleet，分享裝置按鈕消失，RDP/VNC 連線改顯示「桌面版限定」說明。憑證後端在 Android/iOS 預設為加密保管庫；iOS 使用者若明確選擇系統儲存區，則使用受保護的 iOS Keychain。
+- **更新與隱私**：iOS 設定頁顯示 TestFlight／App Store／Xcode 原安裝來源的更新說明，不把桌面 GitHub release 當成 iOS 可安裝版本。隱私權政策內嵌於 App，可離線閱讀；網站支援與隱私頁由既有 Pages 流程發布。`Info.ios.plist` 合併區網用途說明，原生 Resources 階段包含 `PrivacyInfo.xcprivacy`。
 - **行動佈局**：`.app--mobile` 把左側導覽列變成底部分頁列、單欄內容、隱藏桌面狀態列與資源側欄；系統狀態列以固定 fallback 避開（Android WebView 拿不到 safe-area inset）。
 - **終端機觸控鍵列**：Esc／Tab／方向鍵／管線符號等軟鍵盤沒有的鍵，加上黏性 Ctrl——按一下之後的下一個字元會轉成控制碼。粗指標裝置（`pointer: coarse`）與行動平台顯示。
 - **已實測**：Android 模擬器（API 36）安裝執行，主畫面、底部導覽、平台過濾皆如預期。iOS 已在 iPhone 17（iOS 26.5）Simulator 編譯、安裝及啟動，主畫面與底部分頁可正常顯示；也已匯出 `tw.nickyclin.latticeterm` 的 In-House IPA，並驗證其 Distribution 簽章、Team ID 與內嵌描述檔。尚未在實體裝置安裝驗證，亦未驗證 TestFlight 與 App Store 上架流程；In-House IPA 不可作為 TestFlight 上傳檔。

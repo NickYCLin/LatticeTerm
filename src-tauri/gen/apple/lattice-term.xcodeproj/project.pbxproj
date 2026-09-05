@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AABBCC001122334455667701 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AABBCC001122334455667702 /* PrivacyInfo.xcprivacy */; };
 		080C1781C37EB7B7714654B0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A623DBBAD42E7E69F33EFAEE /* Assets.xcassets */; };
 		1CD51BAF6B858BD7A631345D /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E56DBC029F9C57E74C244F2B /* QuartzCore.framework */; };
 		207191D75DABC07C23FCE588 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 00AD44390AE6DDBD631E6BDB /* UIKit.framework */; };
@@ -22,6 +23,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AABBCC001122334455667702 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		00AD44390AE6DDBD631E6BDB /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		03E544812A46C6CD4E7D0CFA /* agent_plans.rs */ = {isa = PBXFileReference; path = agent_plans.rs; sourceTree = "<group>"; };
 		0DC14BEA0863CB152F7363FB /* backup.rs */ = {isa = PBXFileReference; path = backup.rs; sourceTree = "<group>"; };
@@ -142,6 +144,7 @@
 		4E21F7FF5F9B5C1EB1971FC5 /* lattice-term_iOS */ = {
 			isa = PBXGroup;
 			children = (
+				AABBCC001122334455667702 /* PrivacyInfo.xcprivacy */,
 				8B419211E8CEDBB999956411 /* Info.plist */,
 				FC5884D85539F0380C3540C3 /* lattice-term_iOS.entitlements */,
 			);
@@ -263,6 +266,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AABBCC001122334455667701 /* PrivacyInfo.xcprivacy in Resources */,
 				080C1781C37EB7B7714654B0 /* Assets.xcassets in Resources */,
 				8CD55B8BC974D775CE580CA2 /* LaunchScreen.storyboard in Resources */,
 				A889922744ACECE1FC3F8118 /* assets in Resources */,

@@ -31,6 +31,12 @@
     "check": "npm run version:check && npm run actions:check && npm run test && npm run build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "ios:sync": "node scripts/ios-release.mjs sync",
+    "ios:simulator": "node scripts/ios-release.mjs simulator",
+    "ios:prepare": "node scripts/ios-release.mjs prepare",
+    "ios:preflight": "node scripts/ios-release.mjs preflight",
+    "ios:build": "node scripts/ios-release.mjs build",
+    "ios:check": "vitest run scripts/ios-config.test.mjs scripts/ios-release.test.mjs src/app/platformCapabilities.test.ts src/views/SettingsView.render.test.tsx",
     "build:vnc": "node scripts/build-vnc-engine.mjs",
     "build:vnc:release": "node scripts/build-vnc-engine.mjs --release"
   },

@@ -19,7 +19,7 @@ LatticeTerm 是一套現代、安全且跨平台的終端與遠端連線工作�
 | Lattice Remote | **基礎功能可用** | 已完成使用者主動啟動、Noise 端對端加密、主螢幕／純終端分享，以及由分享端分別授權的鍵盤／滑鼠或終端輸入與單一根目錄檔案瀏覽、上下載；另支援自架 lattice-relay 中繼、永久九位數裝置 ID、跨網路連線、裝置金鑰釘選與固定配對碼（無人值守）；以 ID 連線過的裝置會留在「我的連線」，中繼位址失效時可在連線對話框就地更正。目前仍是自架、小規模服務，NAT 直連穿透與多人租戶管理尚未加入。 |
 | 發行與更新 | **可用** | Windows x64、Linux x64／arm64、macOS Apple Silicon 安裝檔、更新簽章、Release PR 與應用程式內更新已自動化。 |
 | Android | **預覽** | 共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面可建置；需要桌面 sidecar 的 RDP、VNC 與 Agent Fleet 不提供。 |
-| iOS | **預覽** | 已在 iPhone 17 Simulator 編譯、安裝及啟動共用的純 Rust SSH／SFTP／Tunnel／Vault 核心與行動介面；已產出並驗證 In-House 企業版 IPA 簽章，實機安裝、TestFlight 與上架仍未驗證。 |
+| iOS | **預覽／上架準備中** | 已有 Simulator 驗證；提供 App Store 匯出、獨立建置號、區網權限說明、隱私清單與發布檢查。簽章實機安裝、TestFlight 與 App Store 審核仍待完成，詳見 [iOS 發布流程](docs/IOS_RELEASE.zh-TW.md)。 |
 | 進階 Agent 與行動能力 | **部分完成** | 排程任務、接續執行與同時執行上限、提示佇列，Linux 的 bubblewrap 檔案範圍沙箱，以及跨程序背景服務（勾選「留在背景」的工作階段在關閉 LatticeTerm 後繼續執行、下次開啟自動接回）已完成；遠端 Fleet、macOS／Windows 的沙箱與 iOS 上架仍待完成。 |
 
 ## 主要特色

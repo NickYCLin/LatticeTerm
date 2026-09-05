@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.36.0</string>
+	<string>0.45.0</string>
 	<key>CFBundleVersion</key>
-	<string>0.36.0</string>
+	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -40,5 +40,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>LatticeTerm 需要連接你指定的區域網路主機，以使用 SSH 終端機、SFTP 檔案傳輸與遠端連線。</string>
 </dict>
 </plist>

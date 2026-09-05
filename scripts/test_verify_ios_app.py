@@ -1,0 +1,83 @@
+import importlib.util
+import plistlib
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location("verify_ios_app", Path(__file__).with_name("verify-ios-app.py"))
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+class BundleVerificationTests(unittest.TestCase):
+    def setUp(self):
+        self.nm = patch.object(module.subprocess, "run").start()
+        self.addCleanup(patch.stopall)
+        self.nm.return_value.stdout = "_stat\n_fstat\n_mach_absolute_time\n"
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.app = Path(self.directory.name) / "LatticeTerm.app"
+        self.app.mkdir()
+        self.info = {
+            "CFBundleIdentifier": "io.github.nickyclin.latticeterm",
+            "CFBundleShortVersionString": "0.45.0",
+            "CFBundleVersion": "2",
+            "CFBundleExecutable": "LatticeTerm",
+            "DTSDKName": "iphoneos26.0",
+            "NSLocalNetworkUsageDescription": "Connect to a selected host",
+        }
+        self.write_info()
+        (self.app / "LatticeTerm").write_bytes(b"test fixture")
+        source = Path(__file__).resolve().parent.parent / "src-tauri/gen/apple/lattice-term_iOS/PrivacyInfo.xcprivacy"
+        (self.app / "PrivacyInfo.xcprivacy").write_bytes(source.read_bytes())
+
+    def write_info(self):
+        (self.app / "Info.plist").write_bytes(plistlib.dumps(self.info))
+
+    def test_store_bundle_metadata(self):
+        self.assertEqual(module.verify(self.app, "0.45.0", "2", True)["buildNumber"], "2")
+
+    def test_rejects_old_sdk_and_simulator_for_store(self):
+        for sdk in ("iphoneos18.5", "iphonesimulator26.0"):
+            self.info["DTSDKName"] = sdk
+            self.write_info()
+            with self.assertRaises(ValueError):
+                module.verify(self.app, "0.45.0", require_store_sdk=True)
+
+    def test_rejects_missing_bundled_privacy_manifest(self):
+        (self.app / "PrivacyInfo.xcprivacy").unlink()
+        with self.assertRaises(FileNotFoundError):
+            module.verify(self.app, "0.45.0")
+
+    def test_rejects_wrong_version_or_build(self):
+        with self.assertRaises(ValueError):
+            module.verify(self.app, "0.46.0", "2")
+        with self.assertRaises(ValueError):
+            module.verify(self.app, "0.45.0", "3")
+
+    def test_rejects_desktop_sidecar(self):
+        (self.app / "lattice-rdp-engine").write_bytes(b"test fixture")
+        with self.assertRaises(ValueError):
+            module.verify(self.app, "0.45.0")
+
+    def test_reports_undeclared_imports_in_simulator_without_claiming_readiness(self):
+        self.nm.return_value.stdout += "_fstatvfs\n"
+        result = module.verify(self.app, "0.45.0", check_api_symbols=True)
+        self.assertEqual(result["privacyAPIReview"]["status"], "needs_review")
+        self.assertEqual(result["privacyAPIReview"]["missingManifestCategories"], ["NSPrivacyAccessedAPICategoryDiskSpace"])
+        self.assertEqual(self.nm.call_args.args[0], ["xcrun", "nm", "-u", "-j", str(self.app / "LatticeTerm")])
+
+    def test_rejects_undeclared_imports_for_store(self):
+        self.nm.return_value.stdout += "_fstatfs\n"
+        with self.assertRaisesRegex(ValueError, "DiskSpace"):
+            module.verify(self.app, "0.45.0", require_store_sdk=True)
+
+    def test_symbol_inspection_failures_are_not_reported_as_success(self):
+        self.nm.side_effect = module.subprocess.CalledProcessError(1, "nm")
+        with self.assertRaises(module.subprocess.CalledProcessError):
+            module.verify(self.app, "0.45.0", check_api_symbols=True)
+
+
+if __name__ == "__main__":
+    unittest.main()

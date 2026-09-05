@@ -3,17 +3,14 @@
 <plist version="1.0">
 <dict>
 	<key>method</key>
-	<string>enterprise</string>
-	<key>provisioningProfiles</key>
-	<dict>
-		<key>tw.nickyclin.latticeterm</key>
-		<string>InHouse_nickyclinLatticeterm_2026_09_03</string>
-	</dict>
-	<key>signingCertificate</key>
-	<string>iPhone Distribution</string>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>export</string>
 	<key>signingStyle</key>
-	<string>manual</string>
-	<key>teamID</key>
-	<string>SQDAQK66UY</string>
+	<string>automatic</string>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+	<key>uploadSymbols</key>
+	<true/>
 </dict>
 </plist>

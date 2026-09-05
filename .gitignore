@@ -27,6 +27,7 @@ known_hosts
 # Local QA artifacts
 output/
 .playwright-cli/
+__pycache__/
 
 # Mobile icon sets are generated on demand; this project currently targets desktop.
 src-tauri/icons/android/

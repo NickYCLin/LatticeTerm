@@ -33,6 +33,9 @@ targets:
       - path: Sources
       - path: Assets.xcassets
       - path: lattice-term_iOS
+        excludes: [PrivacyInfo.xcprivacy]
+      - path: lattice-term_iOS/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: assets
         buildPhase: resources
         type: folder
@@ -52,8 +55,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.34.0
-        CFBundleVersion: "0.34.0"
+        CFBundleShortVersionString: 0.45.0
+        CFBundleVersion: "1"
     entitlements:
       path: lattice-term_iOS/lattice-term_iOS.entitlements
     scheme:
