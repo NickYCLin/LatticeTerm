@@ -34,7 +34,7 @@ rustup target add x86_64-apple-ios
 npm run ios:simulator
 ```
 
-`ios:simulator` 自動選擇主機架構，並在暫存目錄建立只供該子程序使用的 Xcode 呼叫入口，明確傳入 Simulator SDK 與 destination；避免 Tauri 2.11.4 封存時誤用實機 SDK。它仍執行 `xcrun --find xcodebuild` 找到的真正 Xcode 工具，不修改 Xcode 安裝或正式實機專案。預設測試建置號為 `1`，可用 `--build-number` 覆寫。
+`ios:simulator` 自動選擇主機架構，並在暫存目錄建立只供該子程序使用的 Xcode 呼叫入口，明確傳入 Simulator SDK、destination 與單一主機架構；避免 Tauri 2.11.4 封存時誤用實機 SDK，或 Xcode Release 同時連結兩種架構但 Tauri 只產生主機架構的 `libapp.a`。它仍執行 `xcrun --find xcodebuild` 找到的真正 Xcode 工具，不修改 Xcode 安裝或正式實機專案。預設測試建置號為 `1`，可用 `--build-number` 覆寫。
 
 使用 `npm run ios:simulator:release` 建置經最佳化的模擬器產物，再加上 `--require-declared-api` 執行下述 bundle 檢查，可及早發現 Release 仍保留的未宣告 C API。這個流程仍不需要 Apple 簽章；不能拿模擬器產物上傳商店。
 

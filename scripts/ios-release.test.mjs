@@ -12,15 +12,18 @@ describe("iOS 發布準備", () => {
       const realTool = join(directory, "Xcode's real tool");
       const wrapper = join(directory, "xcodebuild");
       writeFileSync(realTool, '#!/bin/sh\nprintf "%s\\n" "$@"\n', { mode: 0o755 });
-      writeFileSync(wrapper, simulatorXcodebuildScript(realTool), { mode: 0o755 });
+      writeFileSync(wrapper, simulatorXcodebuildScript(realTool, "arm64"), { mode: 0o755 });
       const run = (args) => execFileSync(wrapper, args, { encoding: "utf8" }).trim().split("\n");
       expect(run(["-version"])).toEqual(["-version"]);
       expect(run(["archive", "-archivePath", "/a path/archive"])).toEqual([
-        "archive", "-archivePath", "/a path/archive", "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator",
+        "archive", "-archivePath", "/a path/archive", "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator", "ARCHS=arm64",
       ]);
-      const explicit = ["archive", "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator"];
+      const explicit = ["archive", "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator", "ARCHS=arm64"];
       expect(run(explicit)).toEqual(explicit);
       expect(run(["archive", "-sdk", "iphoneos", "-destination", "generic/platform=iOS"])).toEqual(explicit);
+      expect(run(["archive", "-arch", "x86_64", "ARCHS=arm64 x86_64"])).toEqual(explicit);
+      writeFileSync(wrapper, simulatorXcodebuildScript(realTool, "x64"), { mode: 0o755 });
+      expect(run(["archive"]).at(-1)).toBe("ARCHS=x86_64");
     } finally { rmSync(directory, { recursive: true, force: true }); }
   }, 30_000);
   it("Intel 與 Apple silicon 模擬器都不使用實機 target 或簽章", () => {
@@ -36,6 +39,7 @@ describe("iOS 發布準備", () => {
     expect(args).toContain("--no-sign");
     expect(args).toContain("aarch64-sim");
     expect(simulatorArguments("config.json", "arm64")).toContain("--debug");
+    expect(() => simulatorXcodebuildScript("/xcodebuild", "unknown")).toThrow();
   });
   it("同一行銷版本可以產生不同建置號，且不帶入帳號資料", () => {
     expect(releaseConfig("0.45.0", "2")).toEqual({ version: "0.45.0", bundle: { iOS: { bundleVersion: "2" } } });

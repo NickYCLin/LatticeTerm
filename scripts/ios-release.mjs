@@ -31,7 +31,9 @@ export function simulatorArguments(configPath, architecture, release = false) {
   return ["run", "tauri", "--", "ios", "build", ...(release ? [] : ["--debug"]), "--ci", "--target", target, "--no-sign", "--config", configPath];
 }
 
-export function simulatorXcodebuildScript(executable) {
+export function simulatorXcodebuildScript(executable, architecture = process.arch) {
+  const nativeArch = { arm64: "arm64", x64: "x86_64" }[architecture];
+  if (!nativeArch) throw new Error(`不支援的模擬器主機架構：${architecture}`);
   // Pass arguments as an array to the real tool; never reinterpret paths as
   // shell code. Replace existing options too, since Xcode rejects two -sdk's.
   return `#!/usr/bin/env python3
@@ -43,12 +45,14 @@ if any(arg in ("archive", "build") for arg in args):
     normalized = []
     index = 0
     while index < len(args):
-        if args[index] in ("-sdk", "-destination"):
+        if args[index] in ("-sdk", "-destination", "-arch"):
             index += 2
+        elif args[index].startswith("ARCHS="):
+            index += 1
         else:
             normalized.append(args[index])
             index += 1
-    args = normalized + ["-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator"]
+    args = normalized + ["-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator", "ARCHS=${nativeArch}"]
 os.execv(executable, [executable] + args)
 `;
 }
@@ -154,6 +158,8 @@ function main(args) {
     // Tauri 2.11.4 drops XCODE_XCCONFIG_FILE from its Apple child environment
     // and can choose a device destination for a simulator archive. A process-local tool entry supplies those
     // arguments without changing Xcode, the native project or device builds.
+    // Release otherwise builds every simulator architecture, while Tauri's
+    // xcode-script emits libapp.a only for the host architecture.
     const executable = execFileSync("xcrun", ["--find", "xcodebuild"], { encoding: "utf8", timeout: 30_000 }).trim();
     if (!executable.startsWith("/")) throw new Error("找不到 Xcode 的 xcodebuild 絕對路徑。");
     const bin = join(dirname(configPath), "bin");
