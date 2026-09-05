@@ -20,6 +20,8 @@ pub mod remote_host;
 pub mod remote_pins;
 pub mod sftp;
 mod sftp_limits;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod sftp_test_server;
 pub mod sftp_transfers;
 pub mod shared_agent_rules;
 mod sidecar;

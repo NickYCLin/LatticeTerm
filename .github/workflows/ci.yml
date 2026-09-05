@@ -31,7 +31,7 @@ jobs:
       - name: Install Linux desktop dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev bubblewrap
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev bubblewrap openssh-sftp-server
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -89,6 +89,9 @@ jobs:
           cargo test --manifest-path crates/lattice-remote/Cargo.toml --features "agent client-cli relay-server"
           cargo test --manifest-path crates/lattice-rdp/Cargo.toml
           cargo test --manifest-path crates/lattice-vnc/Cargo.toml
+
+      - name: Verify SFTP against the real OpenSSH subsystem
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib openssh_ -- --ignored
 
       - name: Lint Rust
         run: |

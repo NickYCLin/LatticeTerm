@@ -107,6 +107,22 @@ npm run ios:build -- --build-number 1
 
 ## 上架前尚須完成的實測與帳號資料
 
+### OpenSSH 相容性回歸
+
+Linux CI 會安裝 `openssh-sftp-server`，並額外執行：
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --lib openssh_ -- --ignored
+```
+
+這 8 項測試直接連接系統 OpenSSH SFTP 子程序的標準輸入／輸出，使用新的臨時目錄與測試資料，不啟動 SSH 服務、不開放連接埠、不需要帳密，也不操作私人主機。macOS 使用系統的 `/usr/libexec/sftp-server`；Linux 使用 `/usr/lib/openssh/sftp-server`。缺少程式會失敗，不能把未執行當成通過。一般 `cargo test` 將它們標示為略過，CI 另行強制執行。
+
+測試涵蓋超過封包大小的大檔往返、上傳暫存與覆蓋權限、取消／未傳完時保留原檔、拒絕覆蓋後來出現的檔案與符號連結、伺服器拒絕權限修改時的清理，以及多批目錄列舉的 10,000 筆上限。測試使用與 App 相同的封包限制及傳輸函式，沒有將測試伺服器或示範帳密加入正式 App。
+
+這只驗證 SFTP 子系統及本機檔案行為，不涵蓋 SSH 握手／登入、同一 SSH 連線的多子通道、網路中斷或 iOS 檔案／Keychain／背景生命週期；下列真機項目仍需完成。子系統參數見 [OpenSSH sftp-server 文件](https://man.openbsd.org/sftp-server)。
+
+### 真機與送審資料
+
 - 用實機驗證首次區域網路允許／拒絕、SSH 密碼與私鑰登入、主機金鑰異動警告、SFTP 上下載／取消、通道關閉、背景／前景切換與 Keychain／保管庫鎖定。
 - 用同一 Bundle ID 做覆蓋更新，確認連線設定與保管庫仍可讀；刪除 App 後重裝不能當作資料保留測試。免費簽章與商店簽章的 Keychain 存取仍需實測。
 - 依 [送審資料草稿](IOS_APP_STORE_METADATA.zh-TW.md) 補好公開隱私權／支援 URL、真實 iPhone／iPad 截圖、審核連線環境與聯絡人。

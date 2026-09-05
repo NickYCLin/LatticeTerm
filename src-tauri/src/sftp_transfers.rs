@@ -1120,6 +1120,10 @@ pub async fn cancel_session(
     }
 }
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[path = "sftp_transfers/openssh_tests.rs"]
+mod openssh_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

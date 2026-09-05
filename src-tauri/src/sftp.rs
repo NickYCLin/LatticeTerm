@@ -637,6 +637,10 @@ pub async fn disconnect(registry: &SftpRegistry, session_id: &str) -> Result<(),
     entry.sftp.close().await.map_err(|error| error.to_string())
 }
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[path = "sftp/openssh_tests.rs"]
+mod openssh_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
