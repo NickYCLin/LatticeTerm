@@ -1,6 +1,6 @@
 name: lattice-term
 options:
-  bundleIdPrefix: tw.nickyclin.latticeterm
+  bundleIdPrefix: io.github.nickyclin.latticeterm
   deploymentTarget:
     iOS: 14.0
 fileGroups: [../../src]
@@ -11,11 +11,9 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: LatticeTerm
-      PRODUCT_BUNDLE_IDENTIFIER: tw.nickyclin.latticeterm
-      CODE_SIGN_IDENTITY: "iPhone Distribution"
-      CODE_SIGN_STYLE: Manual
-      DEVELOPMENT_TEAM: SQDAQK66UY
-      PROVISIONING_PROFILE_SPECIFIER: InHouse_nickyclinLatticeterm_2026_09_03
+      PRODUCT_BUNDLE_IDENTIFIER: io.github.nickyclin.latticeterm
+      CODE_SIGN_IDENTITY: "Apple Development"
+      CODE_SIGN_STYLE: Automatic
 targetTemplates:
   app:
     type: application
@@ -65,8 +63,7 @@ targets:
     settings:
       base:
         ENABLE_BITCODE: false
-        ARCHS: [arm64]
-        VALID_ARCHS: arm64
+        ARCHS[sdk=iphoneos*]: arm64
         LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
         LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
         ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true

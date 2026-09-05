@@ -2651,8 +2651,16 @@ fn tunnel_list(
     Ok(registry.list())
 }
 
+fn install_rustls_crypto_provider() {
+    // Another dependency may already have selected the same process-wide
+    // provider. Re-installation is harmless and must not prevent app startup.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_rustls_crypto_provider();
+
     #[cfg(desktop)]
     let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(
         |app, _arguments, _working_directory| {
@@ -2931,6 +2939,13 @@ mod tests {
             device_id: None,
             relay_address: None,
         }
+    }
+
+    #[test]
+    fn installs_a_crypto_provider_before_tauri_creates_http_clients() {
+        install_rustls_crypto_provider();
+
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
     }
 
     #[test]
