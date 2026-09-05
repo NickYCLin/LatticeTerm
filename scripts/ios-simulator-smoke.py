@@ -4,10 +4,54 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
 BUNDLE_ID = "io.github.nickyclin.latticeterm"
+
+
+def frontend_is_visible(texts):
+    # A live process, status bar or loading spinner is not a usable WebView.
+    # Match both independent pieces of the fresh connection page, in either
+    # supported language. Ignore OCR whitespace, not missing UI content.
+    normalized = ["".join(text.split()).casefold() for text in texts]
+    empty_page = ("還沒有任何連線", "noconnectionsyet")
+    add_action = ("新增連線", "addconnection")
+    return all(
+        any(label in text for label in labels for text in normalized)
+        for labels in (empty_page, add_action)
+    )
+
+
+def wait_for_frontend(device_id, pid, screenshot, reader, timeout=90):
+    started = time.monotonic()
+    deadline = started + timeout
+    texts = []
+    while time.monotonic() < deadline:
+        os.kill(pid, 0)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        simctl("io", device_id, "screenshot", screenshot.resolve(), timeout=min(20, remaining))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        result = subprocess.run(
+            [str(reader), str(screenshot.resolve())],
+            check=True, capture_output=True, text=True, timeout=min(45, remaining),
+        )
+        texts = json.loads(result.stdout)
+        if not isinstance(texts, list) or not all(isinstance(text, str) for text in texts):
+            raise RuntimeError("Invalid screenshot recognition result")
+        if frontend_is_visible(texts):
+            os.kill(pid, 0)
+            return {"renderedStartup": True, "renderWaitSeconds": round(time.monotonic() - started, 1)}
+        time.sleep(min(3, max(0, deadline - time.monotonic())))
+    # Keep the last screenshot and recognized text, so a spinner or render
+    # failure is reviewable even when the job fails.
+    screenshot.with_suffix(".ocr.json").write_text(json.dumps(texts, ensure_ascii=False) + "\n")
+    raise RuntimeError(f"{device_id}: 連線頁在 {timeout} 秒內未顯示，已保存 {screenshot}")
 
 
 def simctl(*args, timeout=60):
@@ -36,6 +80,16 @@ def main():
     if not runtimes:
         raise RuntimeError("CI 未安裝可用的 iOS 26 以上模擬器 runtime")
     _, runtime, devices = max(runtimes, key=lambda item: item[0])
+    with tempfile.TemporaryDirectory(prefix="latticeterm-screen-reader-") as directory:
+        reader = Path(directory) / "ios-screen-text"
+        subprocess.run(
+            ["xcrun", "swiftc", str(Path(__file__).with_name("ios-screen-text.swift")), "-o", str(reader)],
+            check=True, capture_output=True, text=True, timeout=180,
+        )
+        check_simulators(args, runtime, devices, reader)
+
+
+def check_simulators(args, runtime, devices, reader):
     report = []
     for family in ("iPhone", "iPad"):
         model = next((device for device in devices if device["name"].startswith(family) and device.get("deviceTypeIdentifier")), None)
@@ -53,15 +107,11 @@ def main():
             if match is None:
                 raise RuntimeError(f"無法讀取 App PID：{output}")
             pid = int(match[1])
-            time.sleep(8)
-            # Simulator app PIDs are host PIDs. A successful launch command
-            # alone does not prove the app survived startup.
-            os.kill(pid, 0)
             screenshot = args.output / f"{family}.png"
-            simctl("io", device_id, "screenshot", screenshot.resolve())
-            report.append({"family": family, "model": model["name"], "runtime": runtime, "survivedStartup": True, "screenshot": screenshot.name})
+            visible = wait_for_frontend(device_id, pid, screenshot, reader)
+            report.append({"family": family, "model": model["name"], "runtime": runtime, "survivedStartup": True, **visible, "screenshot": screenshot.name})
             (args.output / "launch-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-            print(f"{family}: 啟動後仍在執行，已保存 {screenshot}", flush=True)
+            print(f"{family}: 已辨識連線頁內容，程序仍在執行，已保存 {screenshot}", flush=True)
         finally:
             # Cleanup is limited to this invocation's newly created device.
             try:
