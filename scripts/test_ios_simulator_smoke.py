@@ -88,7 +88,7 @@ class FailureEvidenceTests(unittest.TestCase):
 
     def test_launch_timeout_is_preserved_when_capture_also_fails(self):
         commands = []
-        original = subprocess.TimeoutExpired(["xcrun", "simctl", "launch"], 60)
+        original = subprocess.TimeoutExpired(["xcrun", "simctl", "launch"], 330)
 
         def simctl(*args, **kwargs):
             commands.append((args, kwargs))

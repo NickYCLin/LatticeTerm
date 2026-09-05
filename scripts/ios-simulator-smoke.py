@@ -192,7 +192,14 @@ def check_simulators(args, runtime, devices, reader):
             simctl("install", device_id, args.app.resolve(), timeout=120)
             stage = "launch"
             print(f"{label}: 安裝完成，等待啟動指令", flush=True)
-            output = simctl("launch", device_id, BUNDLE_ID)
+            # CoreSimulatorBridge reports a 300-second launch/boot retry
+            # budget on a fresh iOS 26.2 device. A 60-second outer timeout
+            # aborted that request before the simulator returned a result.
+            # Leave a small IPC margin; the app's separate 90-second rendered
+            # startup deadline still starts only after a PID is returned.
+            launch_started = time.monotonic()
+            output = simctl("launch", device_id, BUNDLE_ID, timeout=330)
+            launch_seconds = round(time.monotonic() - launch_started, 1)
             match = re.search(r": (\d+)\s*$", output)
             if match is None:
                 raise RuntimeError(f"無法讀取 App PID：{output}")
@@ -201,7 +208,7 @@ def check_simulators(args, runtime, devices, reader):
             stage = "frontend"
             print(f"{label}: 已取得 PID，驗證實際連線頁", flush=True)
             visible = wait_for_frontend(device_id, pid, screenshot, reader)
-            entry = {"family": family, "model": model["name"], "runtime": runtime, "survivedStartup": True, **visible, "screenshot": screenshot.name}
+            entry = {"family": family, "model": model["name"], "runtime": runtime, "launchCommandSeconds": launch_seconds, "survivedStartup": True, **visible, "screenshot": screenshot.name}
             if capture_store:
                 stage = "store-screenshot"
                 entry["appStoreCandidate"] = capture_store_image(device_id, family, args.output)
