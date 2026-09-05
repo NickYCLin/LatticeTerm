@@ -4,6 +4,20 @@
 
 ---
 
+## [0.46.0](https://github.com/NickYCLin/lattice-term/compare/v0.45.0...v0.46.0) (2026-09-05)
+
+
+### 🚀 新增功能
+
+* **ios:** 加入隱私說明與 Apple 更新指引 ([9498051](https://github.com/NickYCLin/lattice-term/commit/9498051fafd017add1a2f006397c9e87ab982478))
+* **ios:** 補齊商店封裝與產物檢查 ([bfaef25](https://github.com/NickYCLin/lattice-term/commit/bfaef25075bdb8d2fdbb431e9e1b62227ef1b571))
+* **對話:** 背景服務在 LatticeTerm 關著時執行排程任務，結果變成未讀對話 ([#168](https://github.com/NickYCLin/lattice-term/issues/168)) ([ee84545](https://github.com/NickYCLin/lattice-term/commit/ee845450e1bcb22973bde36a7a937b60012bcce3))
+
+
+### 🛠️ 問題修正
+
+* **ios:** 修正模擬器啟動與個人簽章 ([8fb28d8](https://github.com/NickYCLin/lattice-term/commit/8fb28d86a5a798e19969f84afac29a450bb6cd9f))
+
 ## [0.45.0](https://github.com/NickYCLin/lattice-term/compare/v0.44.0...v0.45.0) (2026-09-04)
 
 
