@@ -28,13 +28,13 @@ LatticeTerm 讓你從 iPhone 與 iPad 連接自己的伺服器，使用 SSH 終�
 
 首次提供 iOS 版本，包含 SSH、SFTP、連線管理、觸控輔助鍵列及本機保管庫。
 
-## 必須由發行者補齊
+## 已備妥網址與尚需資料
 
-| 欄位 | 尚需資料 |
+| 欄位 | 內容／狀態 |
 | --- | --- |
 | 版權／銷售者 | 帳號持有人確認的真實姓名或公司名稱 |
-| 隱私權網址 | 發布 `web/privacy.html` 後，填入可公開存取的 HTTPS URL |
-| 支援網址 | 發布 `web/support.html` 後，填入可公開存取的 HTTPS URL |
+| 隱私權網址 | [公開隱私權政策](https://nickyclin.github.io/lattice-term/privacy.html)（2026-09-05 已部署並確認可公開存取） |
+| 支援網址 | [公開使用支援](https://nickyclin.github.io/lattice-term/support.html)（2026-09-05 已部署並確認可公開存取） |
 | 審核聯絡資訊 | 姓名、電話、電子郵件；只放 App Store Connect，不提交到公開 repo |
 | 價格與地區 | 帳號持有人決定 |
 | 年齡分級／加密問卷 | 依最終功能及 Apple 問卷回答，不能從 repo 推定 |
