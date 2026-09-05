@@ -4,6 +4,15 @@
 
 ---
 
+## [0.46.1](https://github.com/NickYCLin/lattice-term/compare/v0.46.0...v0.46.1) (2026-09-05)
+
+
+### 🛠️ 問題修正
+
+* **ios:** 修正 Release 模擬器函式庫連結 ([a75e649](https://github.com/NickYCLin/lattice-term/commit/a75e6499c9f66910ea68cd3408b25847e6cd60aa))
+* **ios:** 在正式建置中指定已驗證的描述檔 ([3fb8751](https://github.com/NickYCLin/lattice-term/commit/3fb8751bc8fce2f02e2bdf444447a8a638c70849))
+* **ios:** 補齊檔案匯出與下載的儲存位置 ([ad43719](https://github.com/NickYCLin/lattice-term/commit/ad43719149ffab418cff3f19cb41e1d65fcbfe6a))
+
 ## [0.46.0](https://github.com/NickYCLin/lattice-term/compare/v0.45.0...v0.46.0) (2026-09-05)
 
 
