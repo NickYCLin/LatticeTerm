@@ -56,6 +56,20 @@ function renderSettings(platform: string): string {
 }
 
 describe("Settings updater platform boundary", () => {
+  it("directs iOS users to their Apple installation channel", () => {
+    const markup = renderSettings("ios");
+
+    expect(markup).toContain("透過原安裝來源更新");
+    expect(markup).toContain("TestFlight");
+    expect(markup).toContain("App Store");
+    expect(markup).toContain("閱讀資料使用與隱私權說明");
+    expect(markup).toContain("不內建廣告、使用分析或跨 App 追蹤");
+    expect(markup).not.toContain("GitHub Releases");
+    expect(markup).not.toContain("請在桌面應用程式檢查與安裝更新");
+    expect(markup).not.toContain("啟動時檢查更新");
+    expect(markup).not.toMatch(/<button[^>]*>檢查更新<\/button>/);
+  });
+
   it("does not offer the unregistered updater plugin on Android", () => {
     const markup = renderSettings("android");
 

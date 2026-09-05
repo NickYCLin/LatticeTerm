@@ -28,6 +28,7 @@ import { APP_VERSION } from "../app/version";
 import type { EncryptedBackupRestore } from "../app/encryptedBackup";
 import { EncryptedBackupPanel } from "../components/settings/EncryptedBackupPanel";
 import { ChangelogPanel } from "../components/settings/ChangelogPanel";
+import { PrivacyNotice } from "../components/settings/PrivacyNotice";
 import {
   clearSensitiveClipboard,
   type SensitiveClipboardClearOutcome,
@@ -164,6 +165,7 @@ export function SettingsView({
   const { summary, host } = runtime;
   const desktopBackendAvailable = host === "tauri";
   const inAppUpdaterAvailable = canUseInAppUpdater(host, summary?.platform);
+  const usesAppleUpdates = host === "tauri" && summary?.platform === "ios";
   // A local instance keeps the panel working when rendered standalone; the
   // app passes its own so the panel and the startup prompt stay in sync.
   const localUpdater = useAppUpdater(summary?.version);
@@ -553,7 +555,9 @@ export function SettingsView({
         <header className="panel__head">
           <div>
             <h2 className="panel__title">{t("settings.updater")}</h2>
-            <p className="panel__hint">{t("settings.updaterHint")}</p>
+            <p className="panel__hint">
+              {t(usesAppleUpdates ? "settings.updater.iosHint" : "settings.updaterHint")}
+            </p>
           </div>
         </header>
 
@@ -565,7 +569,9 @@ export function SettingsView({
                 <Chip tone="info">{t("common.detecting")}</Chip>
               )}
               {host !== "unknown" && !inAppUpdaterAvailable && (
-                <Chip tone="planned">{t("settings.updater.desktopOnly")}</Chip>
+                <Chip tone="planned">
+                  {t(usesAppleUpdates ? "settings.updater.iosChannel" : "settings.updater.desktopOnly")}
+                </Chip>
               )}
               {inAppUpdaterAvailable && updater.status === "checking" && (
                 <Chip tone="info">{t("settings.updater.checking")}</Chip>
@@ -699,6 +705,8 @@ export function SettingsView({
 
         <ChangelogPanel currentVersion={summary?.version ?? APP_VERSION} />
       </section>
+
+      {usesAppleUpdates && <PrivacyNotice />}
 
       <section className="panel glass glass--sheen">
         <header className="panel__head">
