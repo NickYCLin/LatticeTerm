@@ -39,6 +39,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
           key: ios-signed-release
+          cache-on-failure: true
       - name: Select Xcode 26 or newer
         shell: bash
         run: |
@@ -131,7 +132,7 @@ jobs:
               assert not profile.get('ProvisionedDevices') and not profile.get('ProvisionsAllDevices'), 'Not an App Store profile'
               assert profile['ExpirationDate'].replace(tzinfo=datetime.timezone.utc) > datetime.datetime.now(datetime.timezone.utc), 'Expired provisioning profile'
               certificate_prefix = str(Path(directory) / 'signer-')
-              subprocess.run(['codesign', '-d', '--extract-certificates', certificate_prefix, str(app)], check=True)
+              subprocess.run(['codesign', '-d', f'--extract-certificates={certificate_prefix}', str(app)], check=True)
               assert Path(certificate_prefix + '0').read_bytes() in profile['DeveloperCertificates'], 'Signer is not in provisioning profile'
           shutil.copyfile(packages[0], output / 'LatticeTerm.ipa')
           (output / 'provenance.json').write_text(json.dumps({
