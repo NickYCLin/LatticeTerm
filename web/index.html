@@ -67,6 +67,12 @@
       }
       .hint { font-size: 0.85rem; }
       .hidden { display: none; }
+      .ios-guide { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); text-align: left; }
+      .ios-guide h2 { font-size: 1.1rem; margin: 0 0 12px; }
+      .ios-guide ol { padding-left: 22px; line-height: 1.8; color: var(--muted); }
+      .ios-guide li + li { margin-top: 8px; }
+      .ios-guide a:not(.btn) { color: var(--accent); }
+      .ios-guide summary { cursor: pointer; color: var(--text); margin-top: 16px; }
     </style>
   </head>
   <body>
@@ -80,6 +86,22 @@
       <div id="actions"></div>
 
       <p class="hint" id="hint"></p>
+      <section class="ios-guide" aria-labelledby="ios-heading">
+        <h2 id="ios-heading">iOS 正式版準備上架</h2>
+        <p id="ios-availability">我們正在準備 App Store 公開版本。完成 Apple 審核並上架後，大家都能從這裡前往下載，不需要測試邀請。</p>
+        <p class="hint">正式下載連結開放後會更新在這一頁，設定頁的 QR Code 可以繼續使用。</p>
+        <details>
+        <summary>已收到 TestFlight 測試邀請？</summary>
+        <ol>
+          <li>在要使用的 iPhone 或 iPad 安裝 Apple 的 TestFlight。</li>
+          <li>收到 LatticeTerm 測試邀請後，用手機開啟信件，點「View in TestFlight」。</li>
+          <li>在 TestFlight 接受邀請，選擇 LatticeTerm 並點「安裝」。</li>
+        </ol>
+        <a class="btn" href="https://apps.apple.com/us/app/testflight/id899247664">安裝 Apple TestFlight</a>
+        <p class="hint">需要 iOS／iPadOS 16 以上，不需要 USB 線。掃描這個 QR Code 只會開啟安裝說明，不會自動取得測試資格；目前沒有公開加入連結。</p>
+        <p class="hint">若 TestFlight 尚未顯示 LatticeTerm，請確認已接受邀請，且測試版本已提供給你的帳號。版本可用天數與更新狀態以 TestFlight 顯示為準。<a href="https://testflight.apple.com/">Apple 操作說明</a></p>
+        </details>
+      </section>
       <p class="hint"><a href="support.html" style="color: var(--accent)">使用支援</a> · <a href="privacy.html" style="color: var(--accent)">隱私權政策</a></p>
     </main>
 
@@ -141,14 +163,13 @@
           });
       } else if (isIOS) {
         stopSpinner();
-        statusEl.textContent = "iOS 版尚未發布";
+        statusEl.textContent = "iPhone／iPad 正式版準備中";
         hintEl.textContent =
-          "目前還沒有 iOS 版本可以安裝，之後上架後會在這裡提供。你可以先用桌面版。";
-        actionsEl.appendChild(button("看桌面版", RELEASES, true));
+          "App Store 公開上架後，這裡會提供免邀請的下載入口。";
       } else {
         stopSpinner();
-        statusEl.textContent = "在手機上掃描此頁的 QR，或直接下載桌面版";
-        hintEl.textContent = "這個頁面會自動把手機導向對應的 App。";
+        statusEl.textContent = "行動版安裝說明與桌面版下載";
+        hintEl.textContent = "iPhone／iPad 請查看下方上架進度；Android 請用手機開啟此頁取得安裝檔。";
         actionsEl.appendChild(button("桌面版下載", RELEASES));
       }
     </script>
