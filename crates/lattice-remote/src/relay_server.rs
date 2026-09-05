@@ -953,7 +953,9 @@ mod tests {
             .unwrap();
             let linked = read_server_message(&mut session).await.unwrap();
             assert!(matches!(linked, RelayServerMessage::Linked { .. }));
-            let mut secure = SecureConnection::accept(session, "12345678").await.unwrap();
+            let mut secure = SecureConnection::accept(session, "0123456789ABCDEF0123456789ABCDEF")
+                .await
+                .unwrap();
             secure
                 .send(&RemoteMessage::Hello(RemoteHello {
                     protocol_version: PROTOCOL_VERSION,
@@ -974,9 +976,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(agent_name, "Test host");
-        let mut viewer = SecureConnection::initiate(stream, "1234-5678")
-            .await
-            .unwrap();
+        let mut viewer =
+            SecureConnection::initiate(stream, "0123-4567-89AB-CDEF-0123-4567-89AB-CDEF")
+                .await
+                .unwrap();
         let hello = viewer.receive().await.unwrap();
         assert!(matches!(hello, RemoteMessage::Hello(_)));
         viewer.send(&RemoteMessage::KeepAlive).await.unwrap();
@@ -1027,16 +1030,19 @@ mod tests {
                 read_server_message(&mut session).await.unwrap(),
                 RelayServerMessage::Linked { .. }
             ));
-            let mut secure = SecureConnection::accept(session, "24681357").await.unwrap();
+            let mut secure = SecureConnection::accept(session, "24681357ABCDEF0124681357ABCDEF01")
+                .await
+                .unwrap();
             assert_eq!(secure.receive().await.unwrap(), RemoteMessage::KeepAlive);
             secure.send(&RemoteMessage::KeepAlive).await.unwrap();
         });
 
         let (stream, agent_name) = dial(&endpoint, &identity.device_id).await.unwrap();
         assert_eq!(agent_name, "WebSocket host");
-        let mut viewer = SecureConnection::initiate(stream, "2468-1357")
-            .await
-            .unwrap();
+        let mut viewer =
+            SecureConnection::initiate(stream, "2468-1357-ABCD-EF01-2468-1357-ABCD-EF01")
+                .await
+                .unwrap();
         viewer.send(&RemoteMessage::KeepAlive).await.unwrap();
         assert_eq!(viewer.receive().await.unwrap(), RemoteMessage::KeepAlive);
         agent.await.unwrap();

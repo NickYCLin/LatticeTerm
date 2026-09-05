@@ -10,12 +10,13 @@ use zeroize::Zeroizing;
 pub(crate) use crate::wire::{read_wire, write_wire};
 
 const NOISE_PATTERN: &str = "Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s";
-const PROLOGUE: &[u8] = b"Lattice Remote v2 direct encrypted workspace";
+const PROLOGUE: &[u8] = b"Lattice Remote v3 high-entropy pairing";
+pub const PAIRING_TOKEN_HEX_LENGTH: usize = 32;
 const MAX_PLAINTEXT: usize = crate::wire::MAX_WIRE_MESSAGE - 16;
 
 #[derive(Debug, Error)]
 pub enum RemoteError {
-    #[error("pairing code must contain exactly eight digits")]
+    #[error("pairing requires a generated 32-character hexadecimal token; update both devices and generate a new token instead of using an old eight-digit code")]
     InvalidPairingCode,
     #[error("connection closed")]
     ConnectionClosed,
@@ -34,8 +35,10 @@ pub fn normalize_pairing_code(input: &str) -> Result<String, RemoteError> {
         .chars()
         .filter(|character| *character != '-' && !character.is_ascii_whitespace())
         .collect();
-    if normalized.len() == 8 && normalized.bytes().all(|byte| byte.is_ascii_digit()) {
-        Ok(normalized)
+    if normalized.len() == PAIRING_TOKEN_HEX_LENGTH
+        && normalized.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        Ok(normalized.to_ascii_uppercase())
     } else {
         Err(RemoteError::InvalidPairingCode)
     }
@@ -44,20 +47,24 @@ pub fn normalize_pairing_code(input: &str) -> Result<String, RemoteError> {
 fn pairing_key(input: &str) -> Result<Zeroizing<[u8; 32]>, RemoteError> {
     let code = Zeroizing::new(normalize_pairing_code(input)?);
     let mut digest = Sha256::new();
-    digest.update(b"lattice-remote-pairing-v1:");
+    digest.update(b"lattice-remote-pairing-token-v2:");
     digest.update(code.as_bytes());
     Ok(Zeroizing::new(digest.finalize().into()))
 }
 
 pub fn generate_pairing_code() -> Result<String, RemoteError> {
-    let params: NoiseParams = NOISE_PATTERN.parse().map_err(|_| RemoteError::Pairing)?;
-    let keypair = Builder::new(params)
-        .generate_keypair()
-        .map_err(|_| RemoteError::Pairing)?;
-    let bytes: [u8; 4] = keypair.private[..4]
-        .try_into()
-        .map_err(|_| RemoteError::Pairing)?;
-    Ok(format!("{:08}", u32::from_be_bytes(bytes) % 100_000_000))
+    let mut bytes = Zeroizing::new([0u8; 16]);
+    getrandom::fill(bytes.as_mut()).map_err(|_| RemoteError::Pairing)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02X}")).collect())
+}
+
+/// Display only; callers validate or generate the token before formatting it.
+pub fn format_pairing_code(code: &str) -> String {
+    code.as_bytes()
+        .chunks(4)
+        .map(String::from_utf8_lossy)
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// An encrypted protocol channel over any byte stream. Direct connections use
@@ -267,17 +274,32 @@ mod tests {
 
     #[test]
     fn accepts_human_friendly_pairing_code() {
-        assert_eq!(normalize_pairing_code("1234-5678").unwrap(), "12345678");
-        assert_eq!(normalize_pairing_code(" 1234 5678 ").unwrap(), "12345678");
+        assert_eq!(
+            normalize_pairing_code("0123-4567-89AB-CDEF-0123-4567-89AB-CDEF").unwrap(),
+            "0123456789ABCDEF0123456789ABCDEF"
+        );
+        assert_eq!(
+            normalize_pairing_code(" 0123 4567 89ab cdef 0123 4567 89ab cdef ").unwrap(),
+            "0123456789ABCDEF0123456789ABCDEF"
+        );
+        assert!(normalize_pairing_code("12345678").is_err());
         assert!(normalize_pairing_code("1234567").is_err());
+        assert!(normalize_pairing_code(&"G".repeat(32)).is_err());
+        assert!(normalize_pairing_code(&"A".repeat(31)).is_err());
+        assert!(normalize_pairing_code(&"A".repeat(33)).is_err());
         assert!(normalize_pairing_code("1234abcd").is_err());
     }
 
     #[test]
-    fn generated_pairing_code_has_eight_digits() {
+    fn generated_pairing_token_uses_128_random_bits() {
         let code = generate_pairing_code().unwrap();
-        assert_eq!(code.len(), 8);
-        assert!(code.bytes().all(|byte| byte.is_ascii_digit()));
+        assert_eq!(code.len(), 32);
+        assert!(code.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(code, generate_pairing_code().unwrap());
+        assert_eq!(
+            normalize_pairing_code(&format_pairing_code(&code)).unwrap(),
+            code
+        );
     }
 
     #[tokio::test]
@@ -287,7 +309,9 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let mut secure = SecureConnection::accept(stream, "12345678").await.unwrap();
+            let mut secure = SecureConnection::accept(stream, "0123456789ABCDEF0123456789ABCDEF")
+                .await
+                .unwrap();
             secure
                 .send(&RemoteMessage::Hello(RemoteHello {
                     protocol_version: PROTOCOL_VERSION,
@@ -305,9 +329,10 @@ mod tests {
         });
 
         let stream = TcpStream::connect(address).await.unwrap();
-        let mut client = SecureConnection::initiate(stream, "1234-5678")
-            .await
-            .unwrap();
+        let mut client =
+            SecureConnection::initiate(stream, "0123-4567-89AB-CDEF-0123-4567-89AB-CDEF")
+                .await
+                .unwrap();
         let hello = client.receive().await.unwrap();
         assert!(matches!(hello, RemoteMessage::Hello(_)));
         client.send(&RemoteMessage::KeepAlive).await.unwrap();
@@ -323,7 +348,9 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let secure = SecureConnection::accept(stream, "12345678").await.unwrap();
+            let secure = SecureConnection::accept(stream, "0123456789ABCDEF0123456789ABCDEF")
+                .await
+                .unwrap();
             let (mut reader, mut writer) = secure.split();
             // Send frames from one task while the other consumes input.
             let sender = tokio::spawn(async move {
@@ -347,7 +374,7 @@ mod tests {
         });
 
         let stream = TcpStream::connect(address).await.unwrap();
-        let client = SecureConnection::initiate(stream, "1234-5678")
+        let client = SecureConnection::initiate(stream, "0123-4567-89AB-CDEF-0123-4567-89AB-CDEF")
             .await
             .unwrap();
         let (mut reader, mut writer) = client.split();
@@ -402,12 +429,16 @@ mod tests {
             let key = identity.noise_private_bytes().unwrap();
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
-                SecureConnection::accept_with_static_key(stream, "12345678", &key)
-                    .await
-                    .unwrap()
+                SecureConnection::accept_with_static_key(
+                    stream,
+                    "0123456789ABCDEF0123456789ABCDEF",
+                    &key,
+                )
+                .await
+                .unwrap()
             });
             let stream = TcpStream::connect(address).await.unwrap();
-            let client = SecureConnection::initiate(stream, "12345678")
+            let client = SecureConnection::initiate(stream, "0123456789ABCDEF0123456789ABCDEF")
                 .await
                 .unwrap();
             seen.push(
@@ -426,12 +457,16 @@ mod tests {
         let key = other.noise_private_bytes().unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            SecureConnection::accept_with_static_key(stream, "12345678", &key)
-                .await
-                .unwrap()
+            SecureConnection::accept_with_static_key(
+                stream,
+                "0123456789ABCDEF0123456789ABCDEF",
+                &key,
+            )
+            .await
+            .unwrap()
         });
         let stream = TcpStream::connect(address).await.unwrap();
-        let client = SecureConnection::initiate(stream, "12345678")
+        let client = SecureConnection::initiate(stream, "0123456789ABCDEF0123456789ABCDEF")
             .await
             .unwrap();
         assert_ne!(seen[0], client.remote_static_key().unwrap());
@@ -444,11 +479,12 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            SecureConnection::accept(stream, "11112222").await
+            SecureConnection::accept(stream, "11112222333344445555666677778888").await
         });
 
         let stream = TcpStream::connect(address).await.unwrap();
-        let initiator = SecureConnection::initiate(stream, "33334444").await;
+        let initiator =
+            SecureConnection::initiate(stream, "9999AAAABBBBCCCCDDDDEEEEFFFF0000").await;
         let responder = server.await.unwrap();
         assert!(initiator.is_ok());
         assert!(responder.is_err());

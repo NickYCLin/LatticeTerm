@@ -63,7 +63,7 @@ struct Cli {
     )]
     device: Option<String>,
 
-    /// Owner-only regular file containing the eight-digit pairing code.
+    /// Owner-only regular file containing the generated 32-character hexadecimal pairing token.
     #[arg(long, value_name = "FILE", global = true)]
     pair_code_file: Option<PathBuf>,
 
@@ -222,7 +222,7 @@ fn read_pairing_code(path: Option<&Path>) -> Result<PairingCode, String> {
             if !std::io::stdin().is_terminal() {
                 return Err("標準輸入不是互動終端；自動化時請使用 --pair-code-file。".to_string());
             }
-            rpassword::prompt_password("Lattice Remote 八位數配對碼：")
+            rpassword::prompt_password("Lattice Remote 32 位十六進位配對碼：")
                 .map_err(|error| format!("無法安全讀取配對碼：{error}"))?
         }
     };

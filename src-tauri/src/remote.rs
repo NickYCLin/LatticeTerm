@@ -1811,11 +1811,16 @@ mod tests {
         let key = identity.noise_private_bytes().unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            SecureConnection::accept_with_static_key(stream, "11112222", &key).await
+            SecureConnection::accept_with_static_key(
+                stream,
+                "11112222333344445555666677778888",
+                &key,
+            )
+            .await
         });
 
         let stream = TcpStream::connect(address).await.unwrap();
-        let mut viewer = SecureConnection::initiate(stream, "33334444")
+        let mut viewer = SecureConnection::initiate(stream, "9999AAAABBBBCCCCDDDDEEEEFFFF0000")
             .await
             .expect("the initiator finishes locally before PSK rejection is observed");
         assert!(server.await.unwrap().is_err());
@@ -1839,9 +1844,13 @@ mod tests {
         let key = identity.noise_private_bytes().unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let mut connection = SecureConnection::accept_with_static_key(stream, "12345678", &key)
-                .await
-                .unwrap();
+            let mut connection = SecureConnection::accept_with_static_key(
+                stream,
+                "0123456789ABCDEF0123456789ABCDEF",
+                &key,
+            )
+            .await
+            .unwrap();
             connection
                 .send(&RemoteMessage::Hello(hello(PROTOCOL_VERSION)))
                 .await
@@ -1849,7 +1858,7 @@ mod tests {
         });
 
         let stream = TcpStream::connect(address).await.unwrap();
-        let mut viewer = SecureConnection::initiate(stream, "12345678")
+        let mut viewer = SecureConnection::initiate(stream, "0123456789ABCDEF0123456789ABCDEF")
             .await
             .unwrap();
         let directory = tempfile::tempdir().unwrap();
@@ -1879,9 +1888,13 @@ mod tests {
         let key = identity.noise_private_bytes().unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let mut connection = SecureConnection::accept_with_static_key(stream, "12345678", &key)
-                .await
-                .unwrap();
+            let mut connection = SecureConnection::accept_with_static_key(
+                stream,
+                "0123456789ABCDEF0123456789ABCDEF",
+                &key,
+            )
+            .await
+            .unwrap();
             connection
                 .send(&RemoteMessage::Hello(hello(announced)))
                 .await
@@ -1889,7 +1902,7 @@ mod tests {
         });
 
         let stream = TcpStream::connect(address).await.unwrap();
-        let mut viewer = SecureConnection::initiate(stream, "12345678")
+        let mut viewer = SecureConnection::initiate(stream, "0123456789ABCDEF0123456789ABCDEF")
             .await
             .unwrap();
         let outcome = receive_authenticated_hello(&mut viewer, None).await;
@@ -1934,9 +1947,13 @@ mod tests {
         let key = identity.noise_private_bytes().unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let mut connection = SecureConnection::accept_with_static_key(stream, "12345678", &key)
-                .await
-                .unwrap();
+            let mut connection = SecureConnection::accept_with_static_key(
+                stream,
+                "0123456789ABCDEF0123456789ABCDEF",
+                &key,
+            )
+            .await
+            .unwrap();
             connection
                 .send(&RemoteMessage::Hello(hello(PROTOCOL_VERSION + 1)))
                 .await
@@ -1944,7 +1961,7 @@ mod tests {
         });
 
         let stream = TcpStream::connect(address).await.unwrap();
-        let mut viewer = SecureConnection::initiate(stream, "12345678")
+        let mut viewer = SecureConnection::initiate(stream, "0123456789ABCDEF0123456789ABCDEF")
             .await
             .unwrap();
         let directory = tempfile::tempdir().unwrap();

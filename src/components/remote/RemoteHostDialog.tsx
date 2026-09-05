@@ -461,8 +461,10 @@ export function RemoteHostDialog({
                       className="input mono"
                       value={fixedCode}
                       disabled={busy}
-                      inputMode="numeric"
-                      maxLength={9}
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      maxLength={256}
                       placeholder={t("remote.host.fixedCodePlaceholder")}
                       onChange={(event) => setFixedCode(event.currentTarget.value)}
                     />

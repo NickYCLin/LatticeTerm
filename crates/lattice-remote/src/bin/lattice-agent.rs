@@ -165,7 +165,7 @@ one folder; every remote path is then confined to that folder.\n\n\
 Terminal mode: --terminal shares an encrypted shell session instead of the\n\
 display, so a headless host (no desktop) works too. --allow-input lets the\n\
 viewer type; without it the terminal is watch-only. --fps is ignored.\n\n\
-Unattended access: a fixed eight-digit code lets a trusted viewer reconnect\n\
+Unattended access: a generated 128-bit pairing token lets a trusted viewer reconnect\n\
 any time (all modes). Prefer --pair-code-file with an owner-only file, or pipe\n\
 the code to --pair-code-stdin, so it does not appear in the process list.\n\
 --pair-code remains available for interactive use. Without any of these a\n\
@@ -233,9 +233,9 @@ fn parse_options() -> Result<Options, String> {
                     .map_err(|_| "--bind must be a valid IP_ADDRESS:PORT".to_string())?;
             }
             "--pair-code" => {
-                let input = arguments
-                    .next()
-                    .ok_or_else(|| "--pair-code needs eight digits".to_string())?;
+                let input = arguments.next().ok_or_else(|| {
+                    "--pair-code needs a generated 32-character hexadecimal token".to_string()
+                })?;
                 set_pairing_code(&mut pairing_code, &input)?;
             }
             "--pair-code-file" => {
@@ -2458,11 +2458,7 @@ async fn run_relay(options: &Options) -> String {
         }
     };
 
-    let formatted_code = format!(
-        "{}-{}",
-        &options.pairing_code[..4],
-        &options.pairing_code[4..]
-    );
+    let formatted_code = lattice_remote::format_pairing_code(&options.pairing_code);
     let mut failed_pairings = 0u32;
     let mut announced = false;
     let mut link_up = false;
@@ -2690,11 +2686,7 @@ async fn main() {
         }
     };
 
-    let formatted_code = format!(
-        "{}-{}",
-        &options.pairing_code[..4],
-        &options.pairing_code[4..]
-    );
+    let formatted_code = lattice_remote::format_pairing_code(&options.pairing_code);
     emit_event(
         options.json,
         &AgentEvent::Ready {
@@ -3764,7 +3756,7 @@ mod tests {
     fn ready_event_is_machine_readable() {
         let event = AgentEvent::Ready {
             address: "127.0.0.1:44900".to_string(),
-            pairing_code: "1234-5678".to_string(),
+            pairing_code: "0123-4567-89AB-CDEF-0123-4567-89AB-CDEF".to_string(),
             expires_in_seconds: 300,
             view_only: true,
             file_transfer: false,
@@ -3775,7 +3767,10 @@ mod tests {
         };
         let json = serde_json::to_value(event).expect("serialize agent event");
         assert_eq!(json["kind"], "ready");
-        assert_eq!(json["pairingCode"], "1234-5678");
+        assert_eq!(
+            json["pairingCode"],
+            "0123-4567-89AB-CDEF-0123-4567-89AB-CDEF"
+        );
         assert_eq!(json["deviceId"], "123456789");
         assert_eq!(json["persistent"], true);
     }
@@ -3783,9 +3778,9 @@ mod tests {
     #[test]
     fn pairing_code_sources_cannot_override_each_other() {
         let mut code = None;
-        set_pairing_code(&mut code, "1234-5678").unwrap();
-        assert_eq!(code.as_deref(), Some("12345678"));
-        assert!(set_pairing_code(&mut code, "87654321").is_err());
+        set_pairing_code(&mut code, "0123-4567-89AB-CDEF-0123-4567-89AB-CDEF").unwrap();
+        assert_eq!(code.as_deref(), Some("0123456789ABCDEF0123456789ABCDEF"));
+        assert!(set_pairing_code(&mut code, "87654321FEDCBA0987654321FEDCBA09").is_err());
     }
 
     #[cfg(unix)]
@@ -3795,9 +3790,12 @@ mod tests {
 
         let path =
             std::env::temp_dir().join(format!("lattice-agent-pair-code-{}", std::process::id()));
-        std::fs::write(&path, "12345678\n").unwrap();
+        std::fs::write(&path, "0123456789ABCDEF0123456789ABCDEF\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert_eq!(read_pairing_code_file(&path).unwrap(), "12345678");
+        assert_eq!(
+            read_pairing_code_file(&path).unwrap(),
+            "0123456789ABCDEF0123456789ABCDEF"
+        );
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(read_pairing_code_file(&path).is_err());

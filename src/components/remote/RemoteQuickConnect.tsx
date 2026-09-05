@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { normalizePairingToken } from "../../app/pairingToken";
 import {
   formatDeviceId,
   loadRelayAddress,
@@ -56,10 +57,7 @@ export function RemoteQuickConnect({
     if (busy) dialogRef.current?.focus();
   }, [busy]);
 
-  const formattedCode =
-    pairingCode.length > 4
-      ? `${pairingCode.slice(0, 4)}-${pairingCode.slice(4)}`
-      : pairingCode;
+  const normalizedToken = normalizePairingToken(pairingCode);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -68,7 +66,7 @@ export function RemoteQuickConnect({
       setProblem(t("remote.quick.idInvalid"));
       return;
     }
-    if (pairingCode.length !== 8) {
+    if (!normalizedToken) {
       setProblem(t("remote.connect.codeInvalid"));
       return;
     }
@@ -82,7 +80,7 @@ export function RemoteQuickConnect({
       profileId: `relay:${normalizedId}`,
       hostname: "",
       port: 0,
-      pairingCode,
+      pairingCode: normalizedToken,
       deviceId: normalizedId,
       relayAddress: relayAddress.trim(),
     });
@@ -181,15 +179,14 @@ export function RemoteQuickConnect({
               <input
                 id="remote-quick-code"
                 className="input mono"
-                value={formattedCode}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                placeholder="0000-0000"
+                value={pairingCode}
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={256}
                 disabled={busy}
                 onChange={(event) =>
-                  setPairingCode(
-                    event.currentTarget.value.replace(/\D/g, "").slice(0, 8),
-                  )
+                  setPairingCode(event.currentTarget.value)
                 }
               />
             </div>

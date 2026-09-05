@@ -87,8 +87,11 @@ mod tests {
                 .set_permissions(std::fs::Permissions::from_mode(0o600))
                 .unwrap();
         }
-        writeln!(file, "1234-5678").unwrap();
-        assert_eq!(read_pairing_code_file(file.path()).unwrap(), "12345678");
+        writeln!(file, "0123-4567-89AB-CDEF-0123-4567-89AB-CDEF").unwrap();
+        assert_eq!(
+            read_pairing_code_file(file.path()).unwrap(),
+            "0123456789ABCDEF0123456789ABCDEF"
+        );
     }
 
     #[test]
@@ -113,7 +116,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        writeln!(file, "12345678").unwrap();
+        writeln!(file, "0123456789ABCDEF0123456789ABCDEF").unwrap();
         file.as_file()
             .set_permissions(std::fs::Permissions::from_mode(0o640))
             .unwrap();
@@ -130,7 +133,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("target");
         let link = directory.path().join("pair-code");
-        std::fs::write(&target, "12345678\n").unwrap();
+        std::fs::write(&target, "0123456789ABCDEF0123456789ABCDEF\n").unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
         symlink(&target, &link).unwrap();
         assert!(read_pairing_code_file(&link)

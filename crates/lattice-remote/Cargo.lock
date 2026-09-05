@@ -1004,6 +1004,7 @@ dependencies = [
  "enigo",
  "fs2",
  "futures-util",
+ "getrandom 0.4.3",
  "image 0.25.10",
  "libc",
  "portable-pty",

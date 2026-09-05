@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { normalizePairingToken } from "../../app/pairingToken";
 import { relayConnectFollowUp } from "../../app/relayAddressRecovery";
 import type { RemoteApi } from "../../app/useRemoteSessions";
 import { useSavedCredential } from "../../app/useSavedCredential";
@@ -80,14 +81,11 @@ export function RemoteConnectFlow({
     if (relayUnreachable) relayRef.current?.focus();
   }, [relayUnreachable]);
 
-  const formatted =
-    pairingCode.length > 4
-      ? `${pairingCode.slice(0, 4)}-${pairingCode.slice(4)}`
-      : pairingCode;
+  const normalizedToken = normalizePairingToken(pairingCode);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!useSavedPairingCode && pairingCode.length !== 8) {
+    if (!useSavedPairingCode && !normalizedToken) {
       setProblem(t("remote.connect.codeInvalid"));
       return;
     }
@@ -98,7 +96,7 @@ export function RemoteConnectFlow({
       profileId: profile.id,
       hostname: profile.hostname,
       port: profile.port,
-      pairingCode: useSavedPairingCode ? "" : pairingCode,
+      pairingCode: useSavedPairingCode ? "" : normalizedToken!,
       useSavedPairingCode,
       rememberPairingCode:
         relay && !useSavedPairingCode && rememberPairingCode,
@@ -278,17 +276,14 @@ export function RemoteConnectFlow({
                   id="remote-pairing-code"
                   ref={codeRef}
                   className="input mono"
-                  value={formatted}
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  placeholder="0000-0000"
+                  value={pairingCode}
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={256}
                   disabled={busy}
                   onChange={(event) =>
-                    setPairingCode(
-                      event.currentTarget.value
-                        .replace(/\D/g, "")
-                        .slice(0, 8),
-                    )
+                    setPairingCode(event.currentTarget.value)
                   }
                 />
               </div>
@@ -303,7 +298,7 @@ export function RemoteConnectFlow({
                 <input
                   type="checkbox"
                   checked={rememberPairingCode}
-                  disabled={busy || pairingCode.length !== 8}
+                  disabled={busy || !normalizedToken}
                   onChange={(event) =>
                     setRememberPairingCode(event.currentTarget.checked)
                   }
