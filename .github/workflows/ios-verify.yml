@@ -143,7 +143,7 @@ jobs:
           path: src-tauri/gen/apple/build/reports
           if-no-files-found: error
           retention-days: 7
-      - name: Launch on clean iPhone and iPad simulators
+      - name: Verify startup and capture original App Store screenshot candidates
         shell: bash
         run: |
           python3 - <<'PY'
@@ -152,7 +152,7 @@ jobs:
           apps = list(Path('src-tauri/gen/apple/build').glob('*/LatticeTerm.app'))
           if len(apps) != 1:
               raise SystemExit(f'Expected one simulator app, found {len(apps)}')
-          subprocess.run(['python3', 'scripts/ios-simulator-smoke.py', str(apps[0]), '--output', 'src-tauri/gen/apple/build/smoke'], check=True)
+          subprocess.run(['python3', 'scripts/ios-simulator-smoke.py', str(apps[0]), '--output', 'src-tauri/gen/apple/build/smoke', '--store-screenshots'], check=True)
           PY
       - name: Save simulator launch evidence
         if: always()
