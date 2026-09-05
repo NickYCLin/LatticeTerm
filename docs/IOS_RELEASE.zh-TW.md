@@ -46,6 +46,8 @@ npm run ios:simulator
 
 若新建裝置在開機、安裝、啟動或畫面檢查期間失敗，流程會先保存 `*.failure.json` 的失敗階段與原因，再以最多 15 秒嘗試擷取該裝置畫面。即使模擬器無回應而截圖失敗，仍保留原本的失敗結果與紀錄，並清理這次建立的裝置；診斷資料不能當成通過證據。
 
+畫面驗證的總等待上限仍為 90 秒，涵蓋截圖與 OCR。大型 iPad 畫面的單次截圖指令最多等待 60 秒，且不能超過總上限的剩餘時間，避免圖檔已產出卻因指令稍晚結束而提前失敗。仍須辨識完整連線頁及新增按鈕，不能只憑圖檔存在便通過。
+
 本機可執行 `npm run ios:device:unsigned` 建立 `src-tauri/gen/apple/build/lattice-term_iOS.xcarchive`，再對其中 `Products/Applications/LatticeTerm.app` 執行 `--require-store-sdk` 檢查。這是無簽章的實機 Release archive，供提早檢查 SDK 與隱私資源；不能直接安裝到 iPhone 或上傳 App Store Connect。正式發行仍走下面的簽章封裝流程。
 
 ### 商店截圖候選素材

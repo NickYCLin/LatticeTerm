@@ -79,7 +79,10 @@ def wait_for_frontend(device_id, pid, screenshot, reader, timeout=90):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        simctl("io", device_id, "screenshot", screenshot.resolve(), timeout=min(20, remaining))
+        # Large iPad captures can finish writing before simctl exits on a
+        # loaded runner. Keep the shared readiness deadline, but do not impose
+        # a shorter 20-second cutoff on a capture that is still completing.
+        simctl("io", device_id, "screenshot", screenshot.resolve(), timeout=min(60, remaining))
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break

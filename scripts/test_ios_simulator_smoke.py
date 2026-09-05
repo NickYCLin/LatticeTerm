@@ -64,6 +64,28 @@ class StoreScreenshotTests(unittest.TestCase):
 
 
 class FailureEvidenceTests(unittest.TestCase):
+    def test_slow_capture_can_finish_within_the_shared_readiness_deadline(self):
+        now = [100.0]
+
+        def capture(*args, **kwargs):
+            if kwargs["timeout"] < 25:
+                raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+            now[0] += 25
+            return ""
+
+        def recognize(*args, **kwargs):
+            self.assertLessEqual(kwargs["timeout"], 90 - (now[0] - 100))
+            now[0] += 2
+            return subprocess.CompletedProcess(args, 0, stdout='["還沒有任何連線", "新增連線"]')
+
+        with patch.object(smoke.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(smoke.os, "kill"), \
+                patch.object(smoke, "simctl", side_effect=capture), \
+                patch.object(smoke.subprocess, "run", side_effect=recognize):
+            result = smoke.wait_for_frontend("owned-device", 123, Path("capture.png"), Path("reader"))
+        self.assertTrue(result["renderedStartup"])
+        self.assertEqual(result["renderWaitSeconds"], 27)
+
     def test_launch_timeout_is_preserved_when_capture_also_fails(self):
         commands = []
         original = subprocess.TimeoutExpired(["xcrun", "simctl", "launch"], 60)
