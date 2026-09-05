@@ -4,6 +4,19 @@
 
 ---
 
+## [1.0.0](https://github.com/NickYCLin/lattice-term/compare/v0.46.1...v1.0.0) (2026-09-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **remote:** 遠端分享與連線兩端須一起更新並重新產生配對碼。
+
+### 🛠️ 問題修正
+
+* **agent:** 補齊沙盒與本機程序的安全邊界 ([a121033](https://github.com/NickYCLin/lattice-term/commit/a121033c4fd6b32518d20243c9bbbbddfee2e838))
+* **remote:** 改用高熵配對碼抵禦離線猜測 ([2804fe1](https://github.com/NickYCLin/lattice-term/commit/2804fe102cfebd2fc46e7ec2507ddcfb09b2fe49))
+* **sftp:** 限制回應資源並保護傳輸檔案 ([69a5073](https://github.com/NickYCLin/lattice-term/commit/69a50739f1e0feb253eb16e7c0cebd26c809707c))
+
 ## [0.46.1](https://github.com/NickYCLin/lattice-term/compare/v0.46.0...v0.46.1) (2026-09-05)
 
 
