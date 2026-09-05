@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   simulator:
-    name: iOS Release simulator (no signing)
+    name: iOS Release bundles (no signing)
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -31,7 +31,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
-          targets: aarch64-apple-ios-sim,x86_64-apple-ios
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
@@ -68,6 +68,19 @@ jobs:
               raise SystemExit('No simulator app was produced')
           for app in apps:
               subprocess.run(['python3', 'scripts/verify-ios-app.py', str(app), '--build-number', '1', '--require-declared-api'], check=True)
+          PY
+      - name: Build an unsigned device archive
+        run: npm run ios:device:unsigned
+      - name: Check the device SDK and bundled privacy declarations
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          apps = list(Path('src-tauri/gen/apple/build').glob('*.xcarchive/Products/Applications/LatticeTerm.app'))
+          if len(apps) != 1:
+              raise SystemExit(f'Expected one unsigned device app, found {len(apps)}')
+          subprocess.run(['python3', 'scripts/verify-ios-app.py', str(apps[0]), '--build-number', '1', '--require-store-sdk'], check=True)
           PY
       # This job deliberately creates no IPA, uses no Apple credentials,
       # and makes no TestFlight or App Store submission.

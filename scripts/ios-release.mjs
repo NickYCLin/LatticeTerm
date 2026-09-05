@@ -25,6 +25,10 @@ export function releaseArguments(configPath) {
   ];
 }
 
+export function unsignedDeviceArguments(configPath) {
+  return ["run", "tauri", "--", "ios", "build", "--ci", "--target", "aarch64", "--no-sign", "--archive-only", "--config", configPath];
+}
+
 export function simulatorArguments(configPath, architecture, release = false) {
   const target = { arm64: "aarch64-sim", x64: "x86_64" }[architecture];
   if (!target) throw new Error(`不支援的模擬器主機架構：${architecture}`);
@@ -121,8 +125,8 @@ function syncVersions(version) {
 
 function main(args) {
   const [mode, ...options] = args;
-  if (!["sync", "prepare", "preflight", "build", "simulator", "simulator-release"].includes(mode)) {
-    throw new Error("用法：node scripts/ios-release.mjs sync | preflight | simulator | simulator-release | prepare --build-number 1 | build --build-number 1");
+  if (!["sync", "prepare", "preflight", "build", "simulator", "simulator-release", "device-unsigned"].includes(mode)) {
+    throw new Error("用法：node scripts/ios-release.mjs sync | preflight | simulator | simulator-release | device-unsigned | prepare --build-number 1 | build --build-number 1");
   }
   const parsed = {};
   for (let i = 0; i < options.length; i += 2) {
@@ -141,8 +145,9 @@ function main(args) {
     return;
   }
   const simulator = mode === "simulator" || mode === "simulator-release";
-  if (simulator && process.platform !== "darwin") throw new Error("iOS 模擬器建置需要 macOS。");
-  const buildNumber = parsed.buildNumber ?? (simulator ? "1" : undefined);
+  const unsignedDevice = mode === "device-unsigned";
+  if ((simulator || unsignedDevice) && process.platform !== "darwin") throw new Error("iOS 原生建置需要 macOS。");
+  const buildNumber = parsed.buildNumber ?? (simulator || unsignedDevice ? "1" : undefined);
   const config = releaseConfig(version, buildNumber);
   if (mode === "build") preflight();
   syncVersions(version);
@@ -167,13 +172,18 @@ function main(args) {
     writeFileSync(join(bin, "xcodebuild"), simulatorXcodebuildScript(executable), { mode: 0o755, flag: "wx" });
     childEnv = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` };
   }
-  const result = spawnSync("npm", simulator ? simulatorArguments(configPath, process.arch, mode === "simulator-release") : releaseArguments(configPath), {
+  const buildArguments = simulator
+    ? simulatorArguments(configPath, process.arch, mode === "simulator-release")
+    : unsignedDevice ? unsignedDeviceArguments(configPath) : releaseArguments(configPath);
+  const result = spawnSync("npm", buildArguments, {
     cwd: root, stdio: "inherit",
     env: childEnv,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`iOS 封裝失敗（${result.status ?? result.signal}）。`);
-  console.log(simulator ? "Simulator App 已產生；請檢查 bundle 後安裝至模擬器。" : "IPA 已匯出至 src-tauri/gen/apple/build/arm64；尚未上傳 App Store Connect。");
+  console.log(simulator ? "Simulator App 已產生；請檢查 bundle 後安裝至模擬器。"
+    : unsignedDevice ? "未簽章實機 archive 已產生，僅供 SDK 與產物檢查；不能直接安裝或上傳商店。"
+    : "IPA 已匯出至 src-tauri/gen/apple/build/arm64；尚未上傳 App Store Connect。");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

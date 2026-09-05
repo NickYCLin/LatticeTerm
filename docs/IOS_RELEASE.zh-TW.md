@@ -40,7 +40,9 @@ npm run ios:simulator
 
 對產生的 `.app` 執行 `python3 scripts/verify-ios-app.py /實際路徑/LatticeTerm.app --check-api-symbols`，檢查 Bundle ID、行銷版本、執行檔、隱私清單、區網說明與桌面 sidecar 邊界，並輸出 C API 匯入盤點。再用 `xcrun simctl install booted /實際路徑/LatticeTerm.app` 與 `xcrun simctl launch booted io.github.nickyclin.latticeterm` 安裝、啟動；產物檢查本身不代表啟動已成功。
 
-`.github/workflows/ios-verify.yml` 會在相關 PR 或手動觸發時，使用 macOS runner 上的 Xcode 26 以上版本編譯無簽章的 Release 模擬器 App 並檢查 bundle，未宣告的 C API 類別會讓工作失敗。CI 不需要 Apple 密鑰；新增 workflow 尚不等於已跑過 CI。
+`.github/workflows/ios-verify.yml` 會在相關 PR 或手動觸發時，使用 macOS runner 上的 Xcode 26 以上版本編譯無簽章的 Release 模擬器 App，再建立實機 archive，分別檢查 bundle。實機產物另檢查 iOS 26 以上 SDK，未宣告的 C API 類別會讓工作失敗。CI 不需要 Apple 密鑰；新增 workflow 尚不等於已跑過 CI。
+
+本機可執行 `npm run ios:device:unsigned` 建立 `src-tauri/gen/apple/build/lattice-term_iOS.xcarchive`，再對其中 `Products/Applications/LatticeTerm.app` 執行 `--require-store-sdk` 檢查。這是無簽章的實機 Release archive，供提早檢查 SDK 與隱私資源；不能直接安裝到 iPhone 或上傳 App Store Connect。正式發行仍走下面的簽章封裝流程。
 
 ## 正式封裝
 

@@ -34,6 +34,7 @@
     "ios:sync": "node scripts/ios-release.mjs sync",
     "ios:simulator": "node scripts/ios-release.mjs simulator",
     "ios:simulator:release": "node scripts/ios-release.mjs simulator-release",
+    "ios:device:unsigned": "node scripts/ios-release.mjs device-unsigned",
     "ios:prepare": "node scripts/ios-release.mjs prepare",
     "ios:preflight": "node scripts/ios-release.mjs preflight",
     "ios:build": "node scripts/ios-release.mjs build",

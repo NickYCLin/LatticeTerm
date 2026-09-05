@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { environmentProblems, releaseArguments, releaseConfig, simulatorArguments, simulatorXcodebuildScript, synchronizeNativeVersions } from "./ios-release.mjs";
+import { environmentProblems, releaseArguments, releaseConfig, simulatorArguments, simulatorXcodebuildScript, synchronizeNativeVersions, unsignedDeviceArguments } from "./ios-release.mjs";
 
 describe("iOS 發布準備", () => {
   it.skipIf(process.platform === "win32")("只對模擬器建置指定 SDK，且原樣傳遞含空白的路徑", () => {
@@ -40,6 +40,15 @@ describe("iOS 發布準備", () => {
     expect(args).toContain("aarch64-sim");
     expect(simulatorArguments("config.json", "arm64")).toContain("--debug");
     expect(() => simulatorXcodebuildScript("/xcodebuild", "unknown")).toThrow();
+  });
+  it("無簽章實機驗證只建立 Release archive，不匯出商店 IPA", () => {
+    const args = unsignedDeviceArguments("/a path/config.json");
+    expect(args).toContain("aarch64");
+    expect(args).toContain("--no-sign");
+    expect(args).toContain("--archive-only");
+    expect(args).not.toContain("--debug");
+    expect(args).not.toContain("--export-method");
+    expect(args.at(-1)).toBe("/a path/config.json");
   });
   it("同一行銷版本可以產生不同建置號，且不帶入帳號資料", () => {
     expect(releaseConfig("0.45.0", "2")).toEqual({ version: "0.45.0", bundle: { iOS: { bundleVersion: "2" } } });
