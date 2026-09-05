@@ -794,9 +794,8 @@ export function SessionsView({
     const workingDirectory = group.members[0]?.workingDirectory ?? "";
     let seedInput: string | null = null;
     if (carryContext) {
-      // Read the CLI being left. Only targets with a documented editable
-      // memory format receive a direct write; all other CLIs get the existing
-      // one-time terminal handoff.
+      // Read the source transcript and hand it to the new CLI once through
+      // a LatticeTerm-owned brief, without rewriting its memory directory.
       const sourceId = activeMemberId(group);
       const source = group.members.find(
         (member) => member.sessionId === sourceId,
@@ -810,31 +809,14 @@ export function SessionsView({
           });
           return;
         }
-        let imported = false;
         try {
-          imported = await agents.importMemoryHandoff({
-            targetDefinitionId: definition.id,
-            workingDirectory,
-            sourceLabel: source?.label ?? "",
-            transcript,
+          const path = await agents.writeHandoffFile(source?.label ?? "", transcript);
+          seedInput = t("terminal.handoff.filePointer", {
+            path,
+            source: source?.label ?? t("terminal.handoff.anotherAssistant"),
           });
         } catch {
-          // A direct-memory failure must not lose the transfer.
-        }
-        if (!imported) {
-          // A file and a one-line pointer instead of pasting the whole
-          // transcript: terminal UIs ingest a large paste one keystroke at a
-          // time, and the new CLI is usable only once the model has read it
-          // all. Pointing at a file makes it interactive immediately.
-          try {
-            const path = await agents.writeHandoffFile(source?.label ?? "", transcript);
-            seedInput = t("terminal.handoff.filePointer", {
-              path,
-              source: source?.label ?? t("terminal.handoff.anotherAssistant"),
-            });
-          } catch {
-            seedInput = t("terminal.handoff.frame", { transcript });
-          }
+          seedInput = t("terminal.handoff.frame", { transcript });
         }
       } catch {
         setAddCliError({

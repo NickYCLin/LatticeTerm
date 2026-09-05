@@ -1765,11 +1765,28 @@ impl AgentRegistry {
             ..Self::default()
         });
         let thread_registry = Arc::clone(&registry);
+        let active_reports = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         std::thread::Builder::new()
             .name("latticeterm-agent-reporter".to_string())
             .spawn(move || {
                 for stream in listener.incoming().flatten() {
-                    handle_report_connection(stream, &thread_registry, sink.as_ref());
+                    if active_reports
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                            (active < 8).then_some(active + 1)
+                        })
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    let permit = ReporterPermit(Arc::clone(&active_reports));
+                    let registry = Arc::clone(&thread_registry);
+                    let sink = Arc::clone(&sink);
+                    let _ = std::thread::Builder::new()
+                        .name("latticeterm-report-client".to_string())
+                        .spawn(move || {
+                            let _permit = permit;
+                            handle_report_connection(stream, &registry, sink.as_ref());
+                        });
                 }
             })
             .map_err(|error| format!("Cannot run the local agent reporter: {error}"))?;
@@ -2328,19 +2345,49 @@ fn write_report_response(stream: &mut TcpStream, accepted: bool) {
     let _ = stream.flush();
 }
 
-fn handle_report_connection(mut stream: TcpStream, registry: &AgentRegistry, sink: &dyn AgentSink) {
-    let _ = stream.set_read_timeout(Some(REPORT_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(REPORT_TIMEOUT));
-    let mut payload = Vec::new();
-    if std::io::Read::by_ref(&mut stream)
-        .take(MAX_REPORT_BYTES + 1)
-        .read_to_end(&mut payload)
-        .is_err()
-        || payload.len() as u64 > MAX_REPORT_BYTES
-    {
-        write_report_response(&mut stream, false);
-        return;
+struct ReporterPermit(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for ReporterPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
+}
+
+fn read_report_payload(stream: &mut TcpStream, timeout: Duration) -> std::io::Result<Vec<u8>> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut payload = Vec::new();
+    loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "report deadline exceeded")
+            })?;
+        stream.set_read_timeout(Some(remaining))?;
+        let mut buffer = [0; 512];
+        let read = std::io::Read::read(stream, &mut buffer)?;
+        if read == 0 {
+            return Ok(payload);
+        }
+        if payload.len() + read > MAX_REPORT_BYTES as usize {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "report too large",
+            ));
+        }
+        payload.extend_from_slice(&buffer[..read]);
+    }
+}
+
+fn handle_report_connection(mut stream: TcpStream, registry: &AgentRegistry, sink: &dyn AgentSink) {
+    let _ = stream.set_write_timeout(Some(REPORT_TIMEOUT));
+    let payload = match read_report_payload(&mut stream, REPORT_TIMEOUT) {
+        Ok(payload) => payload,
+        Err(_) => {
+            write_report_response(&mut stream, false);
+            return;
+        }
+    };
     let Ok(message) = serde_json::from_slice::<ReporterMessage>(&payload) else {
         write_report_response(&mut stream, false);
         return;
@@ -3969,6 +4016,77 @@ pub fn prepare_sandbox_state(definition_id: &str, home: &Path) -> std::io::Resul
             std::fs::create_dir_all(&path)?;
         }
     }
+    for relative in sandbox_home_readonly_paths(definition_id) {
+        prepare_sandbox_policy_path(&home.join(relative))?;
+    }
+    Ok(())
+}
+
+/// A missing policy must also be mounted read-only; otherwise a sandboxed
+/// process can create it for the next unsandboxed launch. Empty JSON/TOML
+/// and rules directories preserve the CLI's default configuration.
+fn prepare_sandbox_policy_path(path: &Path) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "missing policy parent"))?;
+    let parent_metadata = std::fs::symlink_metadata(parent)?;
+    if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "sandbox policy root must be a real directory",
+        ));
+    }
+    let directory = path.file_name() == Some(OsStr::new("rules"));
+    if directory {
+        if let Err(error) = std::fs::create_dir(path) {
+            if error.kind() != ErrorKind::AlreadyExists {
+                return Err(error);
+            }
+        }
+    } else {
+        write_private_file(
+            path,
+            if path.extension() == Some(OsStr::new("json")) {
+                b"{}\n"
+            } else {
+                b""
+            },
+        )?;
+    }
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || (if directory {
+            !metadata.is_dir()
+        } else {
+            !metadata.is_file()
+        })
+    {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "sandbox policy must not be a link or special file",
+        ));
+    }
+    Ok(())
+}
+
+fn sandbox_profile_readonly_paths(definition_id: &str, root: &Path) -> Vec<PathBuf> {
+    sandbox_home_readonly_paths(definition_id)
+        .into_iter()
+        .filter_map(|relative| {
+            // These paths all have one CLI directory followed by the policy name.
+            Path::new(relative)
+                .components()
+                .nth(1)
+                .map(|name| root.join(name))
+        })
+        .collect()
+}
+
+fn prepare_sandbox_profile(definition_id: &str, root: &Path) -> std::io::Result<()> {
+    for path in sandbox_profile_readonly_paths(definition_id, root) {
+        prepare_sandbox_policy_path(&path)?;
+    }
     Ok(())
 }
 
@@ -4036,11 +4154,18 @@ pub fn sandbox_arguments(
         // writable state root.
         for relative in sandbox_home_readonly_paths(definition_id) {
             let path = home.join(relative);
-            if exists(&path) {
-                args.push("--ro-bind".into());
-                args.push(path.as_os_str().to_os_string());
-                args.push(path.as_os_str().to_os_string());
-            }
+            args.push("--ro-bind".into());
+            args.push(path.as_os_str().to_os_string());
+            args.push(path.as_os_str().to_os_string());
+        }
+    }
+    for root in extra_writable {
+        for path in sandbox_profile_readonly_paths(definition_id, root) {
+            // Preparation must have created every policy path. Do not skip a
+            // missing path here: let bwrap fail closed if it disappeared.
+            args.push("--ro-bind".into());
+            args.push(path.as_os_str().to_os_string());
+            args.push(path.as_os_str().to_os_string());
         }
     }
     args.extend(["--unshare-pid", "--die-with-parent", "--chdir"].map(OsString::from));
@@ -5545,7 +5670,31 @@ pub fn launch_with_replay(
                 format!("Cannot prepare the CLI state directory for the sandbox: {error}")
             })?;
         }
-        let extra: Vec<&Path> = profile_config_path.iter().map(PathBuf::as_path).collect();
+        let override_root = if profile_config_path.is_none() {
+            let variable = match definition_id.as_str() {
+                "codex" => Some("CODEX_HOME"),
+                "claude" => Some("CLAUDE_CONFIG_DIR"),
+                _ => None,
+            };
+            variable.and_then(std::env::var_os).map(PathBuf::from)
+        } else {
+            None
+        };
+        if override_root
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err("Sandbox configuration directory must be an absolute path.".to_string());
+        }
+        let extra: Vec<&Path> = profile_config_path
+            .iter()
+            .chain(override_root.iter())
+            .map(PathBuf::as_path)
+            .collect();
+        for root in &extra {
+            prepare_sandbox_profile(&definition_id, root)
+                .map_err(|error| format!("Cannot protect the account profile policy: {error}"))?;
+        }
         let mut wrapped = sandbox_arguments(
             &working_directory,
             &definition_id,
@@ -6131,6 +6280,28 @@ pub fn disconnect(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_dripping_report_cannot_extend_the_message_deadline() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = std::thread::spawn(move || {
+            let mut stream = std::net::TcpStream::connect(address).unwrap();
+            for _ in 0..20 {
+                if std::io::Write::write_all(&mut stream, b"x").is_err() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        let (mut stream, _) = listener.accept().unwrap();
+        let result = super::read_report_payload(&mut stream, std::time::Duration::from_millis(100));
+        assert!(
+            result.is_err(),
+            "partial reads must not restart the message deadline"
+        );
+        drop(stream);
+        peer.join().unwrap();
+    }
 
     #[test]
     fn a_saved_plan_keeps_its_background_choice_through_restore() {
@@ -6237,6 +6408,10 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap(),
             "{\"kept\":true}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(".claude/settings.local.json")).unwrap(),
+            "{}\n"
         );
         assert!(home.path().join(".cache").is_dir());
         assert!(home.path().join(".local/state").is_dir());
@@ -7398,8 +7573,86 @@ model = "gpt-5.3-codex"
             .map(|a| a.to_string_lossy())
             .collect::<Vec<_>>()
             .join(" ");
-        assert!(joined.contains("--bind /data/profiles/x /data/profiles/x"));
+        let profile_bind = joined
+            .find("--bind /data/profiles/x /data/profiles/x")
+            .unwrap();
+        assert!(
+            joined
+                .find("--ro-bind /data/profiles/x/config.toml /data/profiles/x/config.toml")
+                .unwrap()
+                > profile_bind
+        );
+        assert!(
+            joined
+                .find("--ro-bind /data/profiles/x/rules /data/profiles/x/rules")
+                .unwrap()
+                > profile_bind
+        );
         assert!(!joined.contains(".codex"), "no home, no home binds");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sandbox_policy_preparation_rejects_links_and_preserves_settings() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let profile = directory.path().join("profile");
+        std::fs::create_dir(&profile).unwrap();
+        prepare_sandbox_profile("codex", &profile).unwrap();
+        assert_eq!(std::fs::read(profile.join("config.toml")).unwrap(), b"");
+        assert!(profile.join("rules").is_dir());
+        std::fs::write(profile.join("config.toml"), "model = 'kept'\n").unwrap();
+        prepare_sandbox_profile("codex", &profile).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(profile.join("config.toml")).unwrap(),
+            "model = 'kept'\n"
+        );
+        let outside = directory.path().join("outside");
+        std::fs::write(&outside, "unchanged").unwrap();
+        std::fs::remove_file(profile.join("config.toml")).unwrap();
+        symlink(&outside, profile.join("config.toml")).unwrap();
+        assert!(prepare_sandbox_profile("codex", &profile).is_err());
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "unchanged");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_real_sandbox_cannot_plant_default_or_profile_policy() {
+        let Some(bwrap) = sandbox_tool() else {
+            assert!(
+                std::env::var_os("LATTICETERM_REQUIRE_SANDBOX_TEST").is_none(),
+                "required bwrap probe failed"
+            );
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let profile = root.path().join("profile");
+        let work = root.path().join("work");
+        for path in [&home, &profile, &work] {
+            std::fs::create_dir(path).unwrap();
+        }
+        for definition in ["claude", "codex"] {
+            prepare_sandbox_state(definition, &home).unwrap();
+            prepare_sandbox_profile(definition, &profile).unwrap();
+            let mut args =
+                sandbox_arguments(&work, definition, Some(&home), &[&profile], &|path| {
+                    path.exists()
+                });
+            args.extend(["/bin/sh", "-c", r#"touch "$1/session-state" || exit 1; shift; for target do if echo planted > "$target" 2>/dev/null; then exit 2; fi; if rm -rf "$target" 2>/dev/null; then exit 3; fi; done"#, "sandbox-test"].map(OsString::from));
+            args.push(profile.as_os_str().to_os_string());
+            for relative in sandbox_home_readonly_paths(definition) {
+                args.push(home.join(relative).into_os_string());
+            }
+            for path in sandbox_profile_readonly_paths(definition, &profile) {
+                args.push(path.into_os_string());
+            }
+            assert!(std::process::Command::new(&bwrap)
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
     }
 
     /// Runs bubblewrap for real when it is installed: the sandbox must stop

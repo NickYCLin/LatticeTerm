@@ -31,7 +31,7 @@ jobs:
       - name: Install Linux desktop dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev bubblewrap
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -80,6 +80,8 @@ jobs:
           cargo fmt --manifest-path crates/lattice-vnc/Cargo.toml --check
 
       - name: Test Rust
+        env:
+          LATTICETERM_REQUIRE_SANDBOX_TEST: "1"
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml
           # Exercises the optimized code path affected by RUSTSEC-2024-0429.

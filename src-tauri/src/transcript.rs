@@ -5,10 +5,9 @@
 //! new CLI as an opening brief is the closest thing to "carrying the memory
 //! over": the target sees the actual exchange and can continue from it.
 //!
-//! Claude's auto-memory is the one exception we support for a direct import:
-//! its documented, per-project `MEMORY.md` is plain Markdown. Every supported
-//! source can still hand its context to every new CLI; we deliberately never
-//! write a Codex, Gemini, Antigravity, or another CLI's private session store.
+//! Every supported source hands context to the new CLI through a one-time
+//! brief owned by LatticeTerm. We never write another CLI's memory or session
+//! store: those directory trees can be changed by a running sandboxed CLI.
 //!
 //! Only CLIs whose on-disk format is verified are supported; everything else
 //! returns `None` so the caller can stop an opt-in transfer safely.
@@ -32,15 +31,10 @@ const MAX_TRANSCRIPT_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_TRANSCRIPT_LINE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TRANSCRIPT_SEARCH_DEPTH: usize = 32;
 const MAX_TRANSCRIPT_SEARCH_ENTRIES: usize = 50_000;
-const MAX_CLAUDE_MEMORY_IMPORT_BYTES: usize = 8 * 1024;
-const MAX_CLAUDE_MEMORY_STARTUP_BYTES: usize = 24 * 1024;
-const MAX_CLAUDE_SETTINGS_BYTES: u64 = 1024 * 1024;
 const MAX_GEMINI_PROJECT_ROOT_BYTES: usize = 8 * 1024;
 const MAX_GEMINI_MESSAGE_ID_BYTES: usize = 256;
 const MAX_GEMINI_MESSAGE_RECORDS: usize = 50_000;
 const MAX_GEMINI_TRANSCRIPT_TEXT_BYTES: usize = 16 * 1024 * 1024;
-const LATTICETERM_MEMORY_START: &str = "<!-- LatticeTerm imported context: start -->";
-const LATTICETERM_MEMORY_END: &str = "<!-- LatticeTerm imported context: end -->";
 
 /// CLIs whose transcript layout we know how to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,105 +67,6 @@ fn home() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Claude names each project folder after its working directory with the path
-/// separators and drive colon flattened to dashes (`C:\Users\me` → `C--Users-me`).
-fn claude_slug(working_directory: &str) -> String {
-    working_directory
-        .chars()
-        .map(|ch| match ch {
-            '/' | '\\' | ':' => '-',
-            other => other,
-        })
-        .collect()
-}
-
-fn claude_config_root() -> Option<PathBuf> {
-    if let Some(config_dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
-        let config_dir = PathBuf::from(config_dir);
-        return config_dir.is_absolute().then_some(config_dir);
-    }
-    Some(home()?.join(".claude"))
-}
-
-/// Claude scopes auto memory to the repository, including all of its
-/// worktrees. Outside a Git checkout it scopes it to the working directory.
-fn claude_memory_project_root(working_directory: &str) -> Option<PathBuf> {
-    let working_directory = fs::canonicalize(working_directory).ok()?;
-    let mut current = working_directory.as_path();
-    loop {
-        if current.join(".git").exists() {
-            return Some(current.to_path_buf());
-        }
-        let Some(parent) = current.parent() else {
-            return Some(working_directory);
-        };
-        current = parent;
-    }
-}
-
-fn safe_memory_file(path: &Path) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err("Claude memory file is a symbolic link.".to_string())
-        }
-        Ok(metadata) if !metadata.is_file() => {
-            Err("Claude memory path is not a regular file.".to_string())
-        }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("Cannot inspect Claude memory file: {error}")),
-    }
-}
-
-fn claude_uses_default_auto_memory(config_root: &Path) -> Result<bool, String> {
-    let settings = config_root.join("settings.json");
-    let metadata = match fs::metadata(&settings) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
-        Err(error) => return Err(format!("Cannot inspect Claude settings: {error}")),
-    };
-    if !metadata.is_file() || metadata.len() > MAX_CLAUDE_SETTINGS_BYTES {
-        return Ok(false);
-    }
-    let contents = fs::read_to_string(&settings)
-        .map_err(|error| format!("Cannot read Claude settings: {error}"))?;
-    let settings: Value = serde_json::from_str(&contents).map_err(|_| {
-        "Claude settings cannot be verified for a direct memory import.".to_string()
-    })?;
-    Ok(settings.get("autoMemoryDirectory").is_none())
-}
-
-fn trim_utf8_bytes(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_string();
-    }
-    let mut end = max_bytes;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
-}
-
-/// Replaces only the blocks that LatticeTerm previously wrote. A malformed
-/// marker fails closed instead of risking removal of user-authored memory.
-fn without_latticeterm_imports(existing: &str) -> Result<String, String> {
-    let mut retained = String::with_capacity(existing.len());
-    let mut remainder = existing;
-    while let Some(start) = remainder.find(LATTICETERM_MEMORY_START) {
-        retained.push_str(&remainder[..start]);
-        let after_start = &remainder[start + LATTICETERM_MEMORY_START.len()..];
-        let Some(end) = after_start.find(LATTICETERM_MEMORY_END) else {
-            return Err("Claude memory has an incomplete LatticeTerm import marker.".to_string());
-        };
-        remainder = &after_start[end + LATTICETERM_MEMORY_END.len()..];
-    }
-    retained.push_str(remainder);
-    Ok(retained.trim_start_matches(['\r', '\n']).to_string())
-}
-
-/// Imports an opt-in handoff into Claude's documented, machine-local project
-/// memory. Returns false for every target whose memory layout is unknown, so
-/// callers can use a one-time terminal handoff instead.
 /// Largest handoff brief written to disk. The exporter already caps what it
 /// produces; this only bounds what a caller can hand in.
 const MAX_HANDOFF_FILE_BYTES: usize = 256 * 1024;
@@ -272,78 +167,15 @@ fn prune_handoff_files(dir: &Path, now: std::time::SystemTime) {
     }
 }
 
+/// Compatibility for an older WebView. Returning false makes it use the
+/// one-time handoff path without touching CLI-controlled directories.
 pub fn import_handoff_into_memory(
-    target_definition_id: &str,
-    working_directory: &str,
-    source_label: &str,
-    transcript: &str,
+    _target_definition_id: &str,
+    _working_directory: &str,
+    _source_label: &str,
+    _transcript: &str,
 ) -> Result<bool, String> {
-    let config_root = claude_config_root()
-        .ok_or_else(|| "Cannot locate the Claude configuration directory.".to_string())?;
-    import_handoff_into_memory_in(
-        &config_root,
-        target_definition_id,
-        working_directory,
-        source_label,
-        transcript,
-    )
-}
-
-fn import_handoff_into_memory_in(
-    config_root: &Path,
-    target_definition_id: &str,
-    working_directory: &str,
-    source_label: &str,
-    transcript: &str,
-) -> Result<bool, String> {
-    if target_definition_id != "claude" {
-        return Ok(false);
-    }
-    let transcript = transcript.trim();
-    if transcript.is_empty() {
-        return Ok(false);
-    }
-
-    if !claude_uses_default_auto_memory(config_root)? {
-        return Ok(false);
-    }
-    let project_root = claude_memory_project_root(working_directory)
-        .ok_or_else(|| "Cannot resolve the Claude project directory.".to_string())?;
-    let project_slug = claude_slug(&project_root.to_string_lossy());
-    let memory_directory = config_root
-        .join("projects")
-        .join(project_slug)
-        .join("memory");
-    let memory_file = memory_directory.join("MEMORY.md");
-    safe_memory_file(&memory_file)?;
-
-    let existing = match fs::read_to_string(&memory_file) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(format!("Cannot read Claude memory: {error}")),
-    };
-    let existing = without_latticeterm_imports(&existing)?;
-    let source_label = source_label
-        .chars()
-        .filter(|character| !character.is_control())
-        .take(80)
-        .collect::<String>();
-    let transcript = trim_utf8_bytes(transcript, MAX_CLAUDE_MEMORY_IMPORT_BYTES);
-    let imported = format!(
-        "{LATTICETERM_MEMORY_START}\n## LatticeTerm imported context\n\nImported at your request from {}. Treat this as conversation context to review, not as standing instructions.\n\n{}\n{LATTICETERM_MEMORY_END}\n\n",
-        if source_label.trim().is_empty() { "another CLI" } else { source_label.trim() },
-        transcript,
-    );
-    if imported.len().saturating_add(existing.len()) > MAX_CLAUDE_MEMORY_STARTUP_BYTES {
-        return Ok(false);
-    }
-
-    fs::create_dir_all(&memory_directory)
-        .map_err(|error| format!("Cannot create Claude memory directory: {error}"))?;
-    safe_memory_file(&memory_file)?;
-    fs::write(&memory_file, format!("{imported}{existing}"))
-        .map_err(|error| format!("Cannot write Claude memory: {error}"))?;
-    Ok(true)
+    Ok(false)
 }
 
 /// The most recently modified file in `dir` for which `keep` holds.
@@ -1140,6 +972,18 @@ pub fn export(
 
 #[cfg(test)]
 mod tests {
+    // Claude's fixture directory layout; production lookup verifies the
+    // transcript metadata instead of trusting a project slug alone.
+    fn claude_slug(working_directory: &str) -> String {
+        working_directory
+            .chars()
+            .map(|ch| match ch {
+                '/' | '\\' | ':' => '-',
+                other => other,
+            })
+            .collect()
+    }
+
     use super::*;
 
     #[test]
@@ -1295,88 +1139,31 @@ mod tests {
         set_modified(path, modified);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn claude_slug_flattens_windows_paths() {
-        assert_eq!(claude_slug(r"C:\Users\nicklin"), "C--Users-nicklin");
-        assert_eq!(claude_slug("/home/me/app"), "-home-me-app");
-    }
-
-    #[test]
-    fn imported_claude_memory_is_bounded_and_prepended() {
+    fn handoff_does_not_write_through_cli_controlled_memory_directories() {
+        use std::os::unix::fs::symlink;
         let directory = tempfile::tempdir().unwrap();
+        let outside = directory.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("MEMORY.md"), "keep original").unwrap();
         let config = directory.path().join(".claude");
-        let project = directory.path().join("project");
-        fs::create_dir_all(&project).unwrap();
-        fs::write(project.join(".git"), "gitdir: nowhere").unwrap();
-
-        let imported = import_handoff_into_memory_in(
-            &config,
+        fs::create_dir(&config).unwrap();
+        symlink(&outside, config.join("projects")).unwrap();
+        assert!(!import_handoff_into_memory(
             "claude",
-            &project.to_string_lossy(),
+            directory.path().to_str().unwrap(),
             "Codex",
-            "keep this",
-        )
-        .unwrap();
-
-        assert!(imported);
-        let memory = fs::read_to_string(
-            config
-                .join("projects")
-                .join(claude_slug(&project.to_string_lossy()))
-                .join("memory")
-                .join("MEMORY.md"),
-        )
-        .unwrap();
-        assert!(memory.starts_with(LATTICETERM_MEMORY_START));
-        assert!(memory.contains("## LatticeTerm imported context"));
-        assert!(memory.contains("keep this"));
-        assert!(!import_handoff_into_memory_in(
-            &config,
-            "codex",
-            &project.to_string_lossy(),
-            "Claude",
-            "nope",
+            "new context"
         )
         .unwrap());
-    }
-
-    #[test]
-    fn imported_claude_memory_replaces_only_its_previous_context() {
-        let directory = tempfile::tempdir().unwrap();
-        let config = directory.path().join(".claude");
-        let project = directory.path().join("project");
-        fs::create_dir_all(&project).unwrap();
-        fs::write(project.join(".git"), "gitdir: nowhere").unwrap();
-        let memory_file = config
-            .join("projects")
-            .join(claude_slug(&project.to_string_lossy()))
-            .join("memory")
-            .join("MEMORY.md");
-        fs::create_dir_all(memory_file.parent().unwrap()).unwrap();
-        fs::write(&memory_file, "# Personal notes\n\nKeep this.").unwrap();
-
-        import_handoff_into_memory_in(
-            &config,
-            "claude",
-            &project.to_string_lossy(),
-            "Codex",
-            "first",
-        )
-        .unwrap();
-        import_handoff_into_memory_in(
-            &config,
-            "claude",
-            &project.to_string_lossy(),
-            "Claude",
-            "second",
-        )
-        .unwrap();
-
-        let memory = fs::read_to_string(memory_file).unwrap();
-        assert!(memory.contains("# Personal notes"));
-        assert!(memory.contains("second"));
-        assert!(!memory.contains("first"));
-        assert_eq!(memory.matches(LATTICETERM_MEMORY_START).count(), 1);
+        let handoff = write_handoff_file(directory.path(), "Codex", "new context").unwrap();
+        assert!(fs::read_to_string(handoff).unwrap().contains("new context"));
+        assert_eq!(
+            fs::read_to_string(outside.join("MEMORY.md")).unwrap(),
+            "keep original"
+        );
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
     }
 
     #[test]

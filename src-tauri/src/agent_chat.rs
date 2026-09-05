@@ -1740,6 +1740,20 @@ fn parse_claude(state: &mut TurnState, value: &Value) -> Vec<ChatEvent> {
                 .unwrap_or("tool")
                 .to_string();
             let input = request.get("input").cloned().unwrap_or(Value::Null);
+            let complete_input = serde_json::to_string_pretty(&input).unwrap_or_default();
+            if complete_input.len() > MAX_TOOL_OUTPUT_BYTES {
+                let reason = "The complete tool input exceeds the approval display limit. Split this operation into smaller requests so the user can inspect every argument.";
+                state.pending_writes.push(control_response_line(
+                    request_id,
+                    false,
+                    None,
+                    Some(reason),
+                ));
+                events.push(ChatEvent::Notice {
+                    message: reason.to_string(),
+                });
+                return events;
+            }
             let summary = str_field(request, "description")
                 .map(|text| truncate(text, 200))
                 .filter(|text| !text.is_empty())
@@ -1749,7 +1763,7 @@ fn parse_claude(state: &mut TurnState, value: &Value) -> Vec<ChatEvent> {
                 tool_use_id: str_field(request, "tool_use_id").map(str::to_string),
                 name,
                 summary,
-                input: bounded_output(&serde_json::to_string_pretty(&input).unwrap_or_default()),
+                input: complete_input,
             });
             state.pending_inputs.push((request_id.to_string(), input));
         }
@@ -2280,6 +2294,28 @@ mod tests {
             state.pending_inputs[0].0,
             "576cb46b-e252-44d9-b1ae-593998a16fdd"
         );
+        assert!(!state.turn_complete);
+    }
+
+    #[test]
+    fn claude_does_not_authorize_a_tool_input_that_cannot_be_fully_shown() {
+        let request = serde_json::json!({
+            "type": "control_request",
+            "request_id": "oversized-tool",
+            "request": {
+                "subtype": "can_use_tool", "tool_name": "Bash",
+                "input": { "command": format!("echo visible{}; sensitive-action", " ".repeat(MAX_TOOL_OUTPUT_BYTES)) }
+            }
+        });
+        let (state, events) = lines(Dialect::Claude, &request.to_string());
+        assert!(state.pending_inputs.is_empty());
+        assert!(matches!(events.as_slice(), [ChatEvent::Notice { .. }]));
+        let response: Value = serde_json::from_str(&state.pending_writes[0]).unwrap();
+        assert_eq!(response["response"]["request_id"], "oversized-tool");
+        assert_eq!(response["response"]["response"]["behavior"], "deny");
+        assert!(response["response"]["response"]
+            .get("updatedInput")
+            .is_none());
         assert!(!state.turn_complete);
     }
 

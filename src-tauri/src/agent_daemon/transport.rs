@@ -1,6 +1,6 @@
 //! The user-private local socket under the daemon protocol.
 //!
-//! Unix: a socket file in the application data directory, mode 0600. The
+//! Unix: a socket file in a user-private runtime directory, mode 0600. The
 //! directory is the user's own, and a stale file left by a crashed daemon is
 //! replaced only after a connect attempt proves nobody is listening.
 //! Windows: a named pipe whose name is derived from the data directory; the
@@ -74,7 +74,63 @@ mod unix {
     }
 
     pub async fn connect(paths: &DaemonPaths) -> io::Result<Stream> {
-        UnixStream::connect(&paths.socket).await
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+        let directory = paths.socket.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "missing daemon socket directory",
+            )
+        })?;
+        prepare_private_dir(directory)?;
+        let metadata = std::fs::symlink_metadata(&paths.socket)?;
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        if !metadata.file_type().is_socket()
+            || metadata.uid() != uid
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the daemon socket is not private to this user",
+            ));
+        }
+        let stream = UnixStream::connect(&paths.socket).await?;
+        if stream.peer_cred()?.uid() != uid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the daemon peer belongs to another user",
+            ));
+        }
+        Ok(stream)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        #[tokio::test]
+        async fn daemon_attachment_rejects_untrusted_path_shapes_before_connecting() {
+            let directory = tempfile::tempdir().unwrap();
+            let mut paths = DaemonPaths::new(directory.path());
+            let private = directory.path().join("private");
+            std::fs::create_dir(&private).unwrap();
+            std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+            paths.socket = private.join("daemon.sock");
+            let listener = UnixListener::bind(&paths.socket).unwrap();
+            std::fs::set_permissions(&paths.socket, std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+            let stream = connect(&paths).await.unwrap();
+            drop(stream);
+            std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(connect(&paths).await.is_err());
+            std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let link = private.join("redirect.sock");
+            symlink(&paths.socket, &link).unwrap();
+            paths.socket = link;
+            assert!(connect(&paths).await.is_err());
+            drop(listener);
+        }
     }
 }
 

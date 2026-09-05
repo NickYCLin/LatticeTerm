@@ -772,7 +772,7 @@ export const en: Messages = {
   "terminal.cliSummary": "{count} CLIs · {running} running",
   "terminal.empty.quickChat": "Or start chatting without picking a folder:",
   "terminal.handoff.carry": "Bring current memory to the new CLI",
-  "terminal.handoff.directOrBrief": "Every supported CLI receives the handoff; when its settings can be verified, Claude also uses its documented project memory.",
+  "terminal.handoff.directOrBrief": "Every supported CLI receives context through a one-time brief, preserving its existing memory and settings.",
   "terminal.handoff.unsupported": "This CLI's conversation can't be exported",
   "terminal.handoff.closed": "This session has ended. You can still open a new CLI.",
   "terminal.handoff.exportFailedTitle": "Could not carry the current memory",

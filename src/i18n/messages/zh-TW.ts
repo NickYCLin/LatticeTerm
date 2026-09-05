@@ -749,7 +749,7 @@ export const zhTW = {
   "terminal.cliSummary": "{count} 個 CLI · {running} 個執行中",
   "terminal.empty.quickChat": "或不選資料夾，直接開始對話：",
   "terminal.handoff.carry": "將目前記憶帶到新 CLI",
-  "terminal.handoff.directOrBrief": "所有支援的 CLI 都會收到交接內容；Claude 設定可確認時另會寫入其已知的專案記憶。",
+  "terminal.handoff.directOrBrief": "所有支援的 CLI 都會透過一次性交接檔收到脈絡，保留各自原有的記憶與設定。",
   "terminal.handoff.unsupported": "目前這個 CLI 無法匯出對話",
   "terminal.handoff.closed": "這個工作階段已結束，仍可直接加開新的 CLI。",
   "terminal.handoff.exportFailedTitle": "無法帶入目前記憶",
