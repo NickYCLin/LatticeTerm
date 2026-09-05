@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createPrivateKey } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,7 +62,31 @@ os.execv(executable, [executable] + args)
 `;
 }
 
-export function environmentProblems({ platform, xcode, sdk, team, identities }) {
+export function apiSigningProblems({ key, issuer, path }) {
+  const problems = [];
+  if (!/^[A-Z0-9]{10}$/.test(key ?? "")) problems.push("APPLE_API_KEY 必須是 10 碼 Key ID。");
+  if (!/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(issuer ?? "")) problems.push("APPLE_API_ISSUER 必須是 Issuer ID 的 UUID。");
+  try {
+    const privateKey = createPrivateKey(readFileSync(path));
+    if (privateKey.asymmetricKeyType !== "ec" || privateKey.asymmetricKeyDetails?.namedCurve !== "prime256v1") throw new Error("Invalid key");
+  } catch {
+    // Never include file contents or crypto errors in CI output.
+    problems.push("APPLE_API_KEY_PATH 必須指向可讀取的 App Store Connect P-256 私密金鑰。");
+  }
+  return problems;
+}
+
+export function manualSigningProblems({ certificate, password, profile }) {
+  const problems = [];
+  // Tauri parses PKCS#12 and CMS after this input check. Do not log secrets.
+  const isBase64 = (value) => typeof value === "string" && value.length > 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value) && Buffer.from(value, "base64").toString("base64") === value;
+  if (!isBase64(certificate)) problems.push("IOS_CERTIFICATE 必須是 P12 憑證的完整 Base64。");
+  if (typeof password !== "string") problems.push("請提供 IOS_CERTIFICATE_PASSWORD。");
+  if (!isBase64(profile)) problems.push("IOS_MOBILE_PROVISION 必須是描述檔的完整 Base64。");
+  return problems;
+}
+
+export function environmentProblems({ platform, xcode, sdk, team, identities, api, manual }) {
   const problems = [];
   if (platform !== "darwin") problems.push("iOS 封裝需要 macOS。");
   const xcodeMajor = Number(/^Xcode (\d+)/m.exec(xcode)?.[1]);
@@ -71,7 +96,11 @@ export function environmentProblems({ platform, xcode, sdk, team, identities }) 
   if (!/^[A-Z0-9]{10}$/.test(team ?? "")) {
     problems.push("請設定 APPLE_DEVELOPMENT_TEAM（付費 Developer Program 的 10 碼 Team ID）。");
   }
-  if (!/"(?:Apple Development|Apple Distribution|iPhone Developer|iPhone Distribution):/.test(identities)) {
+  if (manual) {
+    problems.push(...manualSigningProblems(manual));
+  } else if (api) {
+    problems.push(...apiSigningProblems(api));
+  } else if (!/"(?:Apple Development|Apple Distribution|iPhone Developer|iPhone Distribution):/.test(identities)) {
     problems.push("鑰匙圈中找不到可用的 Apple 開發或發行簽章憑證。");
   }
   return problems;
@@ -86,15 +115,19 @@ function commandOutput(command, args) {
 }
 
 function preflight() {
+  const apiValues = [process.env.APPLE_API_KEY, process.env.APPLE_API_ISSUER, process.env.APPLE_API_KEY_PATH];
+  const manualValues = [process.env.IOS_CERTIFICATE, process.env.IOS_CERTIFICATE_PASSWORD, process.env.IOS_MOBILE_PROVISION];
   const problems = environmentProblems({
     platform: process.platform,
     xcode: commandOutput("xcodebuild", ["-version"]),
     sdk: commandOutput("xcrun", ["--sdk", "iphoneos", "--show-sdk-version"]),
     team: process.env.APPLE_DEVELOPMENT_TEAM,
     identities: commandOutput("security", ["find-identity", "-v", "-p", "codesigning"]),
+    api: apiValues.some((value) => value !== undefined) ? { key: apiValues[0], issuer: apiValues[1], path: apiValues[2] } : undefined,
+    manual: manualValues.some((value) => value !== undefined) ? { certificate: manualValues[0], password: manualValues[1], profile: manualValues[2] } : undefined,
   });
   if (problems.length) throw new Error(problems.map((p) => `- ${p}`).join("\n"));
-  console.log("本機工具與簽章前置檢查通過；會員資格、Bundle ID 權限與描述檔仍由 Apple 在封裝時驗證。");
+  console.log("工具與簽章輸入檢查通過；金鑰權限、會員資格、Bundle ID 與描述檔仍由 Apple 在封裝時驗證。");
 }
 
 export function synchronizeNativeVersions(project, plist, version, buildNumber = "1") {

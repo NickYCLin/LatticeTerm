@@ -1,11 +1,40 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { environmentProblems, releaseArguments, releaseConfig, simulatorArguments, simulatorXcodebuildScript, synchronizeNativeVersions, unsignedDeviceArguments } from "./ios-release.mjs";
+import { apiSigningProblems, manualSigningProblems, environmentProblems, releaseArguments, releaseConfig, simulatorArguments, simulatorXcodebuildScript, synchronizeNativeVersions, unsignedDeviceArguments } from "./ios-release.mjs";
 
 describe("iOS 發布準備", () => {
+  it("CI 的手動簽章輸入可取代本機憑證，但不能缺少任何一項", () => {
+    const manual = { certificate: Buffer.from("PKCS12 fixture").toString("base64"), password: "", profile: Buffer.from("CMS fixture").toString("base64") };
+    expect(environmentProblems({ platform: "darwin", xcode: "Xcode 26.3", sdk: "26.2", team: "ABCDEFGHIJ", identities: "0 valid identities found", manual })).toEqual([]);
+    for (const field of Object.keys(manual)) expect(manualSigningProblems({ ...manual, [field]: undefined })).toHaveLength(1);
+    expect(manualSigningProblems({ ...manual, certificate: "secret-not-base64" }).join()).not.toContain("secret-not-base64");
+    expect(manualSigningProblems({ ...manual, profile: "a==" })).toHaveLength(1);
+  });
+  it("CI 可使用有效 API 金鑰交由 Xcode 簽章，拒絕不完整或錯誤輸入且不洩漏內容", () => {
+    const directory = mkdtempSync(join(tmpdir(), "ios-api-"));
+    try {
+      const path = join(directory, "AuthKey.p8");
+      const api = { key: "ABCDEFGHIJ", issuer: "11111111-2222-3333-4444-555555555555", path };
+      const environment = { platform: "darwin", xcode: "Xcode 26.3", sdk: "26.2", team: "ABCDEFGHIJ", identities: "0 valid identities found", api };
+      expect(apiSigningProblems(api)).toHaveLength(1);
+      writeFileSync(path, "sensitive-but-invalid-private-key");
+      expect(apiSigningProblems(api).join()).not.toContain("sensitive-but-invalid");
+      const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+      writeFileSync(path, privateKey.export({ type: "pkcs8", format: "pem" }));
+      expect(environmentProblems(environment)).toEqual([]);
+      expect(apiSigningProblems({ ...api, issuer: undefined })).toHaveLength(1);
+      expect(apiSigningProblems({ ...api, key: "../key" })).toHaveLength(1);
+      expect(apiSigningProblems({ ...api, path: directory })).toHaveLength(1);
+      expect(environmentProblems({ ...environment, api: {} })).toHaveLength(3);
+      const other = generateKeyPairSync("ec", { namedCurve: "secp384r1" });
+      writeFileSync(path, other.privateKey.export({ type: "pkcs8", format: "pem" }));
+      expect(apiSigningProblems(api)).toHaveLength(1);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
   it.skipIf(process.platform === "win32")("只對模擬器建置指定 SDK，且原樣傳遞含空白的路徑", () => {
     const directory = mkdtempSync(join(tmpdir(), "ios-xcode-"));
     try {

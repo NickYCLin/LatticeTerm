@@ -79,6 +79,23 @@ npm run ios:build -- --build-number 1
 
 用 `python3 scripts/verify-ios-app.py /解開IPA後/Payload/LatticeTerm.app --build-number 1 --require-store-sdk` 檢查正式產物；再由 Xcode Organizer／Transporter 驗證與上傳。Tauri CLI 的封裝方式可參考[官方 App Store 文件](https://v2.tauri.app/distribute/app-store/)。
 
+### GitHub 的正式簽章封裝
+
+`.github/workflows/ios-release.yml` 提供手動觸發的 `iOS signed release` 工作，只接受 `main`，以 Xcode 26 以上版本建置 IPA。它使用 `ios-app-store` environment；設定時將允許的部署分支限制為 `main`，不要將簽章 secrets 放在 PR 工作中。
+
+在該 environment 設定：
+
+- Variable `APPLE_DEVELOPMENT_TEAM`：付費個人或組織團隊的 Team ID。
+- Secret `IOS_CERTIFICATE`：含私密金鑰的 Apple Distribution P12，轉成不含換行的 Base64。
+- Secret `IOS_CERTIFICATE_PASSWORD`：匯出 P12 時使用的密碼。
+- Secret `IOS_MOBILE_PROVISION`：對應同一 Team、Bundle ID 與憑證的 App Store Connect 描述檔，轉成不含換行的 Base64。
+
+憑證、私密金鑰與描述檔只存於受保護的本機目錄或 GitHub 加密 secrets，不能提交 repo。Tauri 會在建置時載入手動簽章資料；前置檢查只確認輸入完整，憑證有效性及配對仍須由實際封装與簽章檢查驗證。[Tauri 簽章設定](https://v2.tauri.app/distribute/sign/ios/)
+
+若使用 Tauri 的 API 自動簽章，前置檢查也接受完整的 `APPLE_API_KEY`、`APPLE_API_ISSUER`、`APPLE_API_KEY_PATH`，會檢查 Key ID、Issuer UUID 與 P-256 私密金鑰格式。這不代表金鑰已獲 Apple 授權；目前的 workflow 使用上面的手動簽章，不需要 API 金鑰來匯出 IPA。
+
+執行工作時填入未使用的建置號。工作會解開匯出的 IPA，檢查 SDK、隱私宣告、簽章、Team、App ID、憑證與描述檔配對、到期日及禁止除錯，再保留 `ios-signed-release-<commit>-<build>` artifact 七天。產物包含 IPA、bundle 報告及 SHA-256／來源 commit；不含 P12 或私密金鑰。這個工作只完成封裝，不上傳 Apple、不寄送 TestFlight 邀請，也不提交 App Review。
+
 ## 隱私與加密
 
 - `src-tauri/Info.ios.plist` 是區域網路用途說明的來源，Tauri 建置時會合併進 App。直接手改生成的 plist 不足以保證下次建置保留。
