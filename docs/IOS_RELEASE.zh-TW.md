@@ -40,7 +40,9 @@ npm run ios:simulator
 
 對產生的 `.app` 執行 `python3 scripts/verify-ios-app.py /實際路徑/LatticeTerm.app --check-api-symbols`，檢查 Bundle ID、行銷版本、執行檔、隱私清單、區網說明與桌面 sidecar 邊界，並輸出 C API 匯入盤點。再用 `xcrun simctl install booted /實際路徑/LatticeTerm.app` 與 `xcrun simctl launch booted io.github.nickyclin.latticeterm` 安裝、啟動；產物檢查本身不代表啟動已成功。
 
-`.github/workflows/ios-verify.yml` 會在相關 PR 或手動觸發時，使用 macOS runner 上的 Xcode 26 以上版本編譯無簽章的 Release 模擬器 App，再建立實機 archive，分別檢查 bundle。模擬器另以新建的 iPhone／iPad 裝置安裝與啟動，檢查程序未在啟動後立即結束，並保留截圖 artifact 供檢閱；完成後刪除這次測試建立的裝置。這不是完整互動或實機測試。實機產物另檢查 iOS 26 以上 SDK，未宣告的 C API 類別會讓工作失敗。CI 不需要 Apple 密鑰；新增 workflow 尚不等於已跑過 CI。
+`.github/workflows/ios-verify.yml` 會在相關變更推至 `main`、建立 PR 或手動觸發時，使用 macOS runner 上的 Xcode 26 以上版本編譯無簽章的 Release 模擬器 App，再建立實機 archive，分別檢查 bundle。模擬器另以新建的 iPhone／iPad 裝置安裝與啟動，檢查程序未在啟動後立即結束，並保留截圖 artifact 供檢閱；完成後刪除這次測試建立的裝置。這不是完整互動或實機測試。實機產物另檢查 iOS 26 以上 SDK，未宣告的 C API 類別會讓工作失敗。CI 不需要 Apple 密鑰。
+
+通過 bundle 檢查後，CI 會保留 `ios-unsigned-release-<commit>` artifact 七天，包含模擬器 App、無簽章實機 archive、兩份 JSON 檢查報告與 `provenance.json`。封裝使用 tar 保留執行權限；provenance 記錄來源 commit、執行編號、模擬器架構及 SHA-256。請先對照來源及雜湊，再將模擬器 App 安裝到相容架構的模擬器。實機 archive 不能直接安裝到手機或上傳商店。iPhone／iPad 的啟動截圖另外存於 `ios-simulator-launch-evidence`，保留十四天；下載到封裝 artifact 不代表後續啟動步驟已成功，仍須確認該次 workflow 結果。
 
 本機可執行 `npm run ios:device:unsigned` 建立 `src-tauri/gen/apple/build/lattice-term_iOS.xcarchive`，再對其中 `Products/Applications/LatticeTerm.app` 執行 `--require-store-sdk` 檢查。這是無簽章的實機 Release archive，供提早檢查 SDK 與隱私資源；不能直接安裝到 iPhone 或上傳 App Store Connect。正式發行仍走下面的簽章封裝流程。
 

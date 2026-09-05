@@ -2,6 +2,15 @@ name: iOS verification
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "crates/lattice-remote/**"
+      - "scripts/*ios*"
+      - "package*.json"
+      - ".github/workflows/ios-verify.yml"
   pull_request:
     paths:
       - "src/**"
@@ -63,11 +72,14 @@ jobs:
           python3 - <<'PY'
           import subprocess
           from pathlib import Path
-          apps = list(Path('src-tauri/gen/apple/build').rglob('LatticeTerm.app'))
-          if not apps:
-              raise SystemExit('No simulator app was produced')
-          for app in apps:
-              subprocess.run(['python3', 'scripts/verify-ios-app.py', str(app), '--build-number', '1', '--require-declared-api'], check=True)
+          apps = list(Path('src-tauri/gen/apple/build').glob('*/LatticeTerm.app'))
+          if len(apps) != 1:
+              raise SystemExit(f'Expected one simulator app, found {len(apps)}')
+          result = subprocess.run(['python3', 'scripts/verify-ios-app.py', str(apps[0]), '--build-number', '1', '--require-declared-api'], check=True, stdout=subprocess.PIPE, text=True)
+          print(result.stdout)
+          reports = Path('src-tauri/gen/apple/build/reports')
+          reports.mkdir(exist_ok=True)
+          (reports / 'simulator.json').write_text(result.stdout)
           PY
       - name: Build an unsigned device archive
         run: npm run ios:device:unsigned
@@ -80,8 +92,56 @@ jobs:
           apps = list(Path('src-tauri/gen/apple/build').glob('*.xcarchive/Products/Applications/LatticeTerm.app'))
           if len(apps) != 1:
               raise SystemExit(f'Expected one unsigned device app, found {len(apps)}')
-          subprocess.run(['python3', 'scripts/verify-ios-app.py', str(apps[0]), '--build-number', '1', '--require-store-sdk'], check=True)
+          result = subprocess.run(['python3', 'scripts/verify-ios-app.py', str(apps[0]), '--build-number', '1', '--require-store-sdk'], check=True, stdout=subprocess.PIPE, text=True)
+          print(result.stdout)
+          Path('src-tauri/gen/apple/build/reports/device.json').write_text(result.stdout)
           PY
+      - name: Package verified unsigned bundles
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, platform, tarfile
+          from pathlib import Path
+          build = Path('src-tauri/gen/apple/build')
+          output = build / 'reports'
+          sources = {
+              'ios-simulator.tar.gz': list(build.glob('*/LatticeTerm.app')),
+              'ios-device-unsigned.tar.gz': list(build.glob('*.xcarchive')),
+          }
+          checksums = {}
+          for name, paths in sources.items():
+              if len(paths) != 1:
+                  raise SystemExit(f'Expected one source for {name}, found {len(paths)}')
+              artifact = output / name
+              with tarfile.open(artifact, 'w:gz') as archive:
+                  archive.add(paths[0], arcname=paths[0].name)
+              with artifact.open('rb') as source:
+                  digest = hashlib.sha256()
+                  for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                      digest.update(chunk)
+                  checksums[name] = digest.hexdigest()
+          provenance = {
+              'commit': os.environ['GITHUB_SHA'],
+              'runId': os.environ['GITHUB_RUN_ID'],
+              'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'simulatorArchitecture': platform.machine(),
+              'signedForDeviceInstallation': False,
+              'sha256': checksums,
+          }
+          (output / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
+          (output / 'README.txt').write_text(
+              '模擬器 App 可安裝到相容架構的 iOS 模擬器。\n'
+              '實機 archive 尚未簽章，不能直接安裝到 iPhone 或上傳 App Store Connect。\n'
+              '請以 provenance.json 的 commit 與 SHA-256 對照來源及產物。\n'
+          )
+          PY
+      - name: Save verified bundles and reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-unsigned-release-${{ github.sha }}
+          path: src-tauri/gen/apple/build/reports
+          if-no-files-found: error
+          retention-days: 7
       - name: Launch on clean iPhone and iPad simulators
         shell: bash
         run: |
