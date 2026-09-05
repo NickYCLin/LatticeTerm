@@ -13,6 +13,7 @@
 use crate::sftp::{join_path, validate_name, validate_path, SftpRegistry};
 use base64::Engine;
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -165,7 +166,7 @@ impl TransferEntry {
 }
 
 /// Strips what a local filesystem cannot take, keeping the name recognisable.
-fn safe_local_name(remote_name: &str) -> String {
+pub(crate) fn safe_local_name(remote_name: &str) -> String {
     let cleaned: String = remote_name
         .chars()
         .map(|character| {
@@ -182,8 +183,21 @@ fn safe_local_name(remote_name: &str) -> String {
         })
         .collect();
     let trimmed = cleaned.trim_matches(|c: char| c == ' ' || c == '.');
+    let stem = trimmed
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix).is_some_and(|number| {
+                matches!(number, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+            })
+        });
     if trimmed.is_empty() {
         "download".to_string()
+    } else if reserved {
+        format!("_{trimmed}")
     } else {
         trimmed.to_string()
     }
@@ -428,6 +442,38 @@ async fn promote_upload(entry: &TransferEntry) -> Result<Option<String>, String>
         return Ok(None);
     }
 
+    let original = session
+        .symlink_metadata(target_path.clone())
+        .await
+        .map_err(|error| format!("could not inspect the existing remote file: {error}"))?;
+    if !original.file_type().is_file() {
+        return Err("only an existing regular file can be replaced safely".to_string());
+    }
+    let original_mode = original
+        .permissions
+        .ok_or_else(|| "the server did not report the original file permissions".to_string())?;
+    // SFTP v3 cannot carry arbitrary ACLs or safely transfer their ownership.
+    // Preserve the owner's access, but never inherit new group/other readers.
+    let private_mode = original_mode & 0o700;
+    session
+        .set_metadata(
+            staging_path.clone(),
+            FileAttributes {
+                permissions: Some(private_mode),
+                ..FileAttributes::empty()
+            },
+        )
+        .await
+        .map_err(|error| format!("could not restrict the replacement file: {error}"))?;
+    let confirmed = session
+        .symlink_metadata(staging_path.clone())
+        .await
+        .map_err(|error| format!("could not verify replacement permissions: {error}"))?;
+    require_upload_permissions(&confirmed, private_mode)?;
+    let permission_notice = (original_mode & 0o077 != 0).then(||
+        "The replacement retains owner permissions; group and other access was removed for privacy. Reapply shared access explicitly if needed.".to_string()
+    );
+
     let parent = target_path
         .rsplit_once('/')
         .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
@@ -453,11 +499,53 @@ async fn promote_upload(entry: &TransferEntry) -> Result<Option<String>, String>
     }
 
     match session.remove_file(backup_path.clone()).await {
-        Ok(()) => Ok(None),
+        Ok(()) => Ok(permission_notice),
         Err(error) => Ok(Some(format!(
-            "upload completed, but the protected previous copy could not be removed from '{backup_path}': {error}"
+            "{}upload completed, but the protected previous copy could not be removed from '{backup_path}': {error}",
+            permission_notice.map(|notice| format!("{notice} ")).unwrap_or_default()
         ))),
     }
+}
+
+fn require_upload_permissions(attributes: &FileAttributes, expected: u32) -> Result<(), String> {
+    match attributes.permissions {
+        Some(mode) if mode & 0o777 == expected => Ok(()),
+        _ => Err(
+            "the server could not establish the required owner-only upload permissions".to_string(),
+        ),
+    }
+}
+
+async fn create_private_upload(
+    session: &SftpSession,
+    path: &str,
+) -> Result<russh_sftp::client::fs::File, String> {
+    // EXCLUDE refuses an existing entry, including a pre-existing symlink.
+    let mut file = session
+        .open_with_flags_and_attributes(
+            path,
+            OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+            FileAttributes {
+                permissions: Some(0o600),
+                ..FileAttributes::empty()
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let checked = match file.metadata().await {
+        Ok(attributes) => require_upload_permissions(&attributes, 0o600),
+        Err(error) => Err(format!("could not verify upload permissions: {error}")),
+    };
+    if let Err(error) = checked {
+        let _ = file.shutdown().await;
+        return match session.remove_file(path).await {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(format!(
+                "{error}; could not remove empty staging file '{path}': {cleanup}"
+            )),
+        };
+    }
+    Ok(file)
 }
 
 /// Starts a download that streams the remote file into `target_dir`.
@@ -673,10 +761,7 @@ pub async fn start_upload_from_path(
     }
 
     let staging_path = temporary_remote_path(&parent, "upload")?;
-    let remote_file = session
-        .create(staging_path.clone())
-        .await
-        .map_err(|error| error.to_string())?;
+    let remote_file = create_private_upload(&session, &staging_path).await?;
 
     let entry = Arc::new(TransferEntry {
         state: Mutex::new(TransferState {
@@ -792,6 +877,26 @@ pub struct UploadPlan {
     pub overwrite: bool,
 }
 
+/// Legacy small-file IPC uses the same private staging and promotion path
+/// as streaming uploads, including no-clobber and symlink checks.
+pub(crate) async fn write_small_upload(
+    sessions: &SftpRegistry,
+    plan: UploadPlan,
+    bytes: &[u8],
+) -> Result<(), String> {
+    struct QuietSink;
+    impl TransferSink for QuietSink {
+        fn update(&self, _: &TransferState) {}
+    }
+    let transfers = Arc::new(TransferRegistry::new());
+    let state = begin_upload(Arc::clone(&transfers), sessions, &QuietSink, plan).await?;
+    for chunk in bytes.chunks(MAX_UPLOAD_CHUNK) {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(chunk);
+        upload_chunk(&transfers, &QuietSink, &state.transfer_id, &encoded).await?;
+    }
+    finish_upload(&transfers, &QuietSink, &state.transfer_id).await
+}
+
 /// Opens the remote file an upload will stream into.
 pub async fn begin_upload(
     transfers: Arc<TransferRegistry>,
@@ -817,10 +922,7 @@ pub async fn begin_upload(
     }
 
     let staging_path = temporary_remote_path(&parent, "upload")?;
-    let file = session
-        .create(staging_path.clone())
-        .await
-        .map_err(|error| error.to_string())?;
+    let file = create_private_upload(&session, &staging_path).await?;
 
     let entry = Arc::new(TransferEntry {
         state: Mutex::new(TransferState {
@@ -1021,6 +1123,279 @@ pub async fn cancel_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct UploadPermissionServer {
+        mode: Option<u32>,
+        collision: bool,
+        operations: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl russh_sftp::server::Handler for UploadPermissionServer {
+        type Error = russh_sftp::protocol::StatusCode;
+        fn unimplemented(&self) -> Self::Error {
+            Self::Error::OpUnsupported
+        }
+        async fn open(
+            &mut self,
+            id: u32,
+            _filename: String,
+            flags: OpenFlags,
+            attrs: FileAttributes,
+        ) -> Result<russh_sftp::protocol::Handle, Self::Error> {
+            assert!(flags.contains(OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE));
+            assert!(!flags.contains(OpenFlags::TRUNCATE));
+            assert_eq!(attrs.permissions, Some(0o600));
+            self.operations.lock().unwrap().push("open");
+            if self.collision {
+                return Err(Self::Error::Failure);
+            }
+            Ok(russh_sftp::protocol::Handle {
+                id,
+                handle: "upload".to_string(),
+            })
+        }
+        async fn fstat(
+            &mut self,
+            id: u32,
+            _handle: String,
+        ) -> Result<russh_sftp::protocol::Attrs, Self::Error> {
+            self.operations.lock().unwrap().push("fstat");
+            Ok(russh_sftp::protocol::Attrs {
+                id,
+                attrs: FileAttributes {
+                    permissions: self.mode,
+                    ..FileAttributes::empty()
+                },
+            })
+        }
+        async fn close(
+            &mut self,
+            id: u32,
+            _handle: String,
+        ) -> Result<russh_sftp::protocol::Status, Self::Error> {
+            self.operations.lock().unwrap().push("close");
+            Ok(russh_sftp::protocol::Status {
+                id,
+                status_code: Self::Error::Ok,
+                error_message: String::new(),
+                language_tag: String::new(),
+            })
+        }
+        async fn remove(
+            &mut self,
+            id: u32,
+            _filename: String,
+        ) -> Result<russh_sftp::protocol::Status, Self::Error> {
+            self.operations.lock().unwrap().push("remove");
+            Ok(russh_sftp::protocol::Status {
+                id,
+                status_code: Self::Error::Ok,
+                error_message: String::new(),
+                language_tag: String::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn uploads_require_private_creation_and_preserve_colliding_paths() {
+        for (mode, collision) in [
+            (Some(0o100600), false),
+            (Some(0o100644), false),
+            (Some(0o100400), false),
+            (Some(0o100700), false),
+            (None, false),
+            (Some(0o100600), true),
+        ] {
+            let operations = Arc::new(Mutex::new(Vec::new()));
+            let (client, server) = tokio::io::duplex(8192);
+            let peer = tokio::spawn(russh_sftp::server::run(
+                server,
+                UploadPermissionServer {
+                    mode,
+                    collision,
+                    operations: Arc::clone(&operations),
+                },
+            ));
+            let session = SftpSession::new(crate::sftp_limits::BoundedSftpStream::new(client))
+                .await
+                .unwrap();
+            let result = create_private_upload(&session, "/srv/.upload.part").await;
+            if mode == Some(0o100600) && !collision {
+                result.unwrap().shutdown().await.unwrap();
+                assert_eq!(*operations.lock().unwrap(), ["open", "fstat", "close"]);
+            } else {
+                assert!(result.is_err());
+                let observed = operations.lock().unwrap();
+                if collision {
+                    assert_eq!(*observed, ["open"]);
+                } else {
+                    assert_eq!(*observed, ["open", "fstat", "close", "remove"]);
+                }
+            }
+            drop(session);
+            tokio::time::timeout(std::time::Duration::from_secs(1), peer)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    struct PromotionServer(Arc<Mutex<HashMap<String, FileAttributes>>>);
+
+    impl russh_sftp::server::Handler for PromotionServer {
+        type Error = russh_sftp::protocol::StatusCode;
+        fn unimplemented(&self) -> Self::Error {
+            Self::Error::OpUnsupported
+        }
+        async fn stat(
+            &mut self,
+            id: u32,
+            path: String,
+        ) -> Result<russh_sftp::protocol::Attrs, Self::Error> {
+            let attrs = self
+                .0
+                .lock()
+                .unwrap()
+                .get(&path)
+                .cloned()
+                .ok_or(Self::Error::NoSuchFile)?;
+            Ok(russh_sftp::protocol::Attrs { id, attrs })
+        }
+        async fn lstat(
+            &mut self,
+            id: u32,
+            path: String,
+        ) -> Result<russh_sftp::protocol::Attrs, Self::Error> {
+            self.stat(id, path).await
+        }
+        async fn setstat(
+            &mut self,
+            id: u32,
+            path: String,
+            attrs: FileAttributes,
+        ) -> Result<russh_sftp::protocol::Status, Self::Error> {
+            let mut files = self.0.lock().unwrap();
+            let file = files.get_mut(&path).ok_or(Self::Error::NoSuchFile)?;
+            file.permissions = attrs.permissions.map(|mode| 0o100000 | mode);
+            Ok(sftp_ok(id))
+        }
+        async fn rename(
+            &mut self,
+            id: u32,
+            old: String,
+            new: String,
+        ) -> Result<russh_sftp::protocol::Status, Self::Error> {
+            let mut files = self.0.lock().unwrap();
+            if files.contains_key(&new) {
+                return Err(Self::Error::Failure);
+            }
+            let attrs = files.remove(&old).ok_or(Self::Error::NoSuchFile)?;
+            files.insert(new, attrs);
+            Ok(sftp_ok(id))
+        }
+        async fn remove(
+            &mut self,
+            id: u32,
+            path: String,
+        ) -> Result<russh_sftp::protocol::Status, Self::Error> {
+            self.0
+                .lock()
+                .unwrap()
+                .remove(&path)
+                .ok_or(Self::Error::NoSuchFile)?;
+            Ok(sftp_ok(id))
+        }
+    }
+
+    fn sftp_ok(id: u32) -> russh_sftp::protocol::Status {
+        russh_sftp::protocol::Status {
+            id,
+            status_code: russh_sftp::protocol::StatusCode::Ok,
+            error_message: String::new(),
+            language_tag: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn replacements_keep_owner_access_without_widening_permissions() {
+        for (mode, overwrite) in [
+            (0o100600, true),
+            (0o100644, true),
+            (0o100755, true),
+            (0o120777, true),
+            (0o100600, false),
+        ] {
+            let original = FileAttributes {
+                permissions: Some(mode),
+                size: Some(123),
+                ..FileAttributes::empty()
+            };
+            let staged = FileAttributes {
+                permissions: Some(0o100600),
+                size: Some(456),
+                ..FileAttributes::empty()
+            };
+            let files = Arc::new(Mutex::new(HashMap::from([
+                ("/srv/report".to_string(), original),
+                ("/srv/.upload".to_string(), staged),
+            ])));
+            let (client, server) = tokio::io::duplex(8192);
+            let peer = tokio::spawn(russh_sftp::server::run(
+                server,
+                PromotionServer(Arc::clone(&files)),
+            ));
+            let session = Arc::new(
+                SftpSession::new(crate::sftp_limits::BoundedSftpStream::new(client))
+                    .await
+                    .unwrap(),
+            );
+            let entry = TransferEntry {
+                state: Mutex::new(TransferState {
+                    transfer_id: "test".into(),
+                    session_id: "test".into(),
+                    kind: "upload",
+                    name: "report".into(),
+                    remote_path: "/srv/report".into(),
+                    local_path: None,
+                    bytes_done: 456,
+                    total_bytes: Some(456),
+                    state: "running",
+                    detail: None,
+                }),
+                cancel: AtomicBool::new(false),
+                upload: AsyncMutex::new(None),
+                upload_session: Some(Arc::clone(&session)),
+                staging_path: Some("/srv/.upload".into()),
+                overwrite,
+            };
+            let result = promote_upload(&entry).await;
+            let success = mode != 0o120777 && overwrite;
+            assert_eq!(result.is_ok(), success);
+            {
+                let snapshot = files.lock().unwrap();
+                let target = &snapshot["/srv/report"];
+                assert_eq!(target.size, Some(if success { 456 } else { 123 }));
+                assert_eq!(
+                    target.permissions,
+                    Some(if success {
+                        0o100000 | (mode & 0o700)
+                    } else {
+                        mode
+                    })
+                );
+                assert_eq!(snapshot.len(), if success { 1 } else { 2 });
+            }
+            if success {
+                assert_eq!(result.unwrap().is_some(), mode & 0o077 != 0);
+            }
+            drop(entry);
+            drop(session);
+            tokio::time::timeout(std::time::Duration::from_secs(1), peer)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
 
     #[derive(Default)]
     struct RecordingSink(Mutex<Vec<TransferState>>);

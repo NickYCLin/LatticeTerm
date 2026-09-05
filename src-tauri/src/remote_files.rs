@@ -815,6 +815,8 @@ fn entry_summary(entry: RemoteFileEntry) -> RemoteFileEntrySummary {
 }
 
 fn unique_download_path(directory: &Path, name: &str) -> PathBuf {
+    let safe_name = crate::sftp_transfers::safe_local_name(name);
+    let name = safe_name.as_str();
     let direct = directory.join(name);
     if !direct.exists() {
         return direct;
@@ -840,6 +842,21 @@ fn unique_download_path(directory: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_download_names_cannot_supply_a_windows_prefix_or_device_name() {
+        let directory = tempfile::tempdir().unwrap();
+        for (remote, local) in [
+            ("C:payload.txt", "C_payload.txt"),
+            ("CON.txt", "_CON.txt"),
+            ("LPT1", "_LPT1"),
+            ("../outside", "_outside"),
+        ] {
+            let result = unique_download_path(directory.path(), remote);
+            assert_eq!(result, directory.path().join(local));
+            assert_eq!(result.parent(), Some(directory.path()));
+        }
+    }
 
     #[test]
     fn joins_only_safe_virtual_upload_names() {

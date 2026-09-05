@@ -5,20 +5,25 @@
 //! upload or download and each operation is capped to protect WebView memory.
 
 use crate::hostkeys::{HostKeyRecord, TrustVerdict};
+use crate::sftp_limits::BoundedSftpStream;
 use crate::ssh::{authenticate, AuthAttempt, AuthMethod, SessionSummary, TrustingHandler};
 use base64::Engine;
 use russh::client;
-use russh_sftp::client::SftpSession;
+use russh_sftp::client::error::Error as SftpError;
+use russh_sftp::client::{RawSftpSession, SftpSession};
+use russh_sftp::protocol::{File as DirectoryEntry, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 pub const MAX_TRANSFER_BYTES: usize = 32 * 1024 * 1024;
 const MAX_PATH_LENGTH: usize = 4096;
 const MAX_DIRECTORY_ENTRIES: usize = 10_000;
+const MAX_DIRECTORY_BYTES: usize = 16 * 1024 * 1024;
+const DIRECTORY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +104,7 @@ struct SftpSessionEntry {
     // Holding the transport keeps the SSH session alive with the SFTP channel.
     // An Arc so a browser paired to a terminal can share that session's handle.
     _transport: Arc<client::Handle<TrustingHandler>>,
+    listing: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Default)]
@@ -237,7 +243,7 @@ pub async fn connect(
     if let Err(error) = channel.request_subsystem(true, "sftp").await {
         return failed("subsystem", error);
     }
-    let sftp = match SftpSession::new(channel.into_stream()).await {
+    let sftp = match SftpSession::new(BoundedSftpStream::new(channel.into_stream())).await {
         Ok(sftp) => Arc::new(sftp),
         Err(error) => return failed("subsystem", error),
     };
@@ -259,6 +265,7 @@ pub async fn connect(
         summary: summary.clone(),
         sftp,
         _transport: Arc::new(transport),
+        listing: Arc::default(),
     }) {
         return failed("registry", error);
     }
@@ -284,7 +291,7 @@ pub(crate) async fn attach_to_ssh(
     if let Err(error) = channel.request_subsystem(true, "sftp").await {
         return failed("subsystem", error);
     }
-    let sftp = match SftpSession::new(channel.into_stream()).await {
+    let sftp = match SftpSession::new(BoundedSftpStream::new(channel.into_stream())).await {
         Ok(sftp) => Arc::new(sftp),
         Err(error) => return failed("subsystem", error),
     };
@@ -306,6 +313,7 @@ pub(crate) async fn attach_to_ssh(
         summary: summary.clone(),
         sftp,
         _transport: transport,
+        listing: Arc::default(),
     }) {
         return failed("registry", error);
     }
@@ -351,45 +359,133 @@ pub async fn list_directory(
     session_id: &str,
     path: &str,
 ) -> Result<SftpDirectory, String> {
-    let session = registry.session(session_id)?;
-    let canonical = session
-        .canonicalize(validate_path(path)?)
-        .await
-        .map_err(|error| error.to_string())?;
-    let directory = session
-        .read_dir(canonical.clone())
-        .await
-        .map_err(|error| error.to_string())?;
+    let path = validate_path(path)?;
+    let (transport, listing) = {
+        let sessions = registry
+            .sessions
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let entry = sessions
+            .get(session_id)
+            .ok_or_else(|| format!("no SFTP session called '{session_id}'"))?;
+        (Arc::clone(&entry._transport), Arc::clone(&entry.listing))
+    };
+    let _permit = listing
+        .try_lock_owned()
+        .map_err(|_| "A directory listing is already running for this session.".to_string())?;
+    // A short-lived channel on the already authenticated SSH connection avoids
+    // the high-level read_dir API, which buffers every entry before returning.
+    tokio::time::timeout(DIRECTORY_TIMEOUT, async {
+        let channel = transport
+            .channel_open_session()
+            .await
+            .map_err(|error| error.to_string())?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|error| error.to_string())?;
+        let raw = RawSftpSession::new(BoundedSftpStream::new(channel.into_stream()));
+        raw.init().await.map_err(|error| error.to_string())?;
+        let canonical = raw
+            .realpath(path)
+            .await
+            .map_err(|error| error.to_string())?
+            .files
+            .into_iter()
+            .next()
+            .ok_or_else(|| "The server returned no directory path.".to_string())?
+            .filename;
+        let canonical = validate_path(&canonical)?;
+        let handle = raw
+            .opendir(canonical.clone())
+            .await
+            .map_err(|error| error.to_string())?
+            .handle;
+        let result = collect_directory(&raw, &handle, &canonical).await;
+        // Drop also closes the dedicated subsystem on cancellation/deadline.
+        let close = raw.close(handle).await.map_err(|error| error.to_string());
+        let entries = result?;
+        close?;
+        Ok(SftpDirectory {
+            path: canonical,
+            entries,
+        })
+    })
+    .await
+    .map_err(|_| "The directory listing exceeded its 30-second deadline.".to_string())?
+}
 
-    let mut entries = directory
-        .take(MAX_DIRECTORY_ENTRIES + 1)
-        .map(|entry| {
-            let metadata = entry.metadata();
-            let kind = if metadata.is_dir() {
+#[derive(Default)]
+struct DirectoryBudget {
+    entries: usize,
+    bytes: usize,
+}
+
+impl DirectoryBudget {
+    fn accept(&mut self, batch: &[DirectoryEntry]) -> Result<(), String> {
+        if batch.is_empty() {
+            return Err("The server returned an empty directory batch without EOF.".to_string());
+        }
+        self.entries = self.entries.saturating_add(batch.len());
+        self.bytes = batch.iter().fold(self.bytes, |bytes, entry| {
+            bytes
+                .saturating_add(entry.filename.len())
+                .saturating_add(entry.longname.len())
+                .saturating_add(128)
+        });
+        if self.entries > MAX_DIRECTORY_ENTRIES + 2 || self.bytes > MAX_DIRECTORY_BYTES {
+            return Err(
+                "This directory exceeds the entry or size limit; narrow the remote path."
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+async fn collect_directory(
+    raw: &RawSftpSession,
+    handle: &str,
+    canonical: &str,
+) -> Result<Vec<SftpEntry>, String> {
+    let mut budget = DirectoryBudget::default();
+    let mut entries = Vec::new();
+    loop {
+        let batch = match raw.readdir(handle).await {
+            Ok(batch) => batch.files,
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => break,
+            Err(error) => return Err(error.to_string()),
+        };
+        budget.accept(&batch)?;
+        for entry in batch {
+            if entry.filename == "." || entry.filename == ".." {
+                continue;
+            }
+            let name = validate_name(&entry.filename)?;
+            let metadata = entry.attrs;
+            let kind = if metadata.file_type().is_dir() {
                 "directory"
-            } else if metadata.is_symlink() {
+            } else if metadata.file_type().is_symlink() {
                 "symlink"
-            } else if metadata.is_regular() {
+            } else if metadata.file_type().is_file() {
                 "file"
             } else {
                 "other"
             };
-            SftpEntry {
-                name: entry.file_name(),
-                path: entry.path(),
+            entries.push(SftpEntry {
+                path: join_path(canonical, &name),
+                name,
                 kind,
                 size: metadata.len(),
                 modified_at: metadata.mtime.map(u64::from),
                 permissions: metadata.permissions().to_string(),
-            }
-        })
-        .collect::<Vec<_>>();
-
-    if entries.len() > MAX_DIRECTORY_ENTRIES {
-        return Err(format!(
-            "This directory has more than {MAX_DIRECTORY_ENTRIES} entries; narrow the remote path."
-        ));
+            });
+        }
+        if entries.len() > MAX_DIRECTORY_ENTRIES {
+            return Err(format!("This directory has more than {MAX_DIRECTORY_ENTRIES} entries; narrow the remote path."));
+        }
     }
+
     entries.sort_by(|left, right| {
         let left_group = if left.kind == "directory" { 0 } else { 1 };
         let right_group = if right.kind == "directory" { 0 } else { 1 };
@@ -398,10 +494,7 @@ pub async fn list_directory(
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
 
-    Ok(SftpDirectory {
-        path: canonical,
-        entries,
-    })
+    Ok(entries)
 }
 
 pub async fn create_directory(
@@ -523,25 +616,18 @@ pub async fn write_file(
             MAX_TRANSFER_BYTES / 1024 / 1024
         ));
     }
-    let session = registry.session(session_id)?;
-    let remote_path = join_path(&parent, &name);
-    if session
-        .try_exists(remote_path.clone())
-        .await
-        .map_err(|error| error.to_string())?
-        && !overwrite
-    {
-        return Err("The remote file already exists; confirm overwrite first.".to_string());
-    }
-    let mut file = session
-        .create(remote_path)
-        .await
-        .map_err(|error| error.to_string())?;
-    file.write_all(&bytes)
-        .await
-        .map_err(|error| error.to_string())?;
-    file.flush().await.map_err(|error| error.to_string())?;
-    file.shutdown().await.map_err(|error| error.to_string())
+    crate::sftp_transfers::write_small_upload(
+        registry,
+        crate::sftp_transfers::UploadPlan {
+            session_id: session_id.to_string(),
+            parent,
+            name,
+            total_bytes: bytes.len() as u64,
+            overwrite,
+        },
+        &bytes,
+    )
+    .await
 }
 
 pub async fn disconnect(registry: &SftpRegistry, session_id: &str) -> Result<(), String> {
@@ -554,6 +640,90 @@ pub async fn disconnect(registry: &SftpRegistry, session_id: &str) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ListingServer {
+        calls: Arc<AtomicU64>,
+        endless: bool,
+    }
+
+    impl russh_sftp::server::Handler for ListingServer {
+        type Error = StatusCode;
+        fn unimplemented(&self) -> Self::Error {
+            StatusCode::OpUnsupported
+        }
+        async fn readdir(
+            &mut self,
+            id: u32,
+            _handle: String,
+        ) -> Result<russh_sftp::protocol::Name, Self::Error> {
+            let call = self.calls.fetch_add(1, Ordering::Relaxed);
+            if !self.endless && call > 0 {
+                return Err(StatusCode::Eof);
+            }
+            let files = if self.endless {
+                (0..500)
+                    .map(|index| DirectoryEntry::dummy(format!("file-{call}-{index}")))
+                    .collect()
+            } else {
+                vec![
+                    DirectoryEntry::dummy("."),
+                    DirectoryEntry::dummy(".."),
+                    DirectoryEntry::dummy("report.txt"),
+                ]
+            };
+            Ok(russh_sftp::protocol::Name { id, files })
+        }
+    }
+
+    #[tokio::test]
+    async fn directory_collection_stops_an_endless_peer_before_more_requests() {
+        for endless in [false, true] {
+            let (client, server) = tokio::io::duplex(64 * 1024);
+            let calls = Arc::new(AtomicU64::new(0));
+            let peer = tokio::spawn(russh_sftp::server::run(
+                server,
+                ListingServer {
+                    calls: Arc::clone(&calls),
+                    endless,
+                },
+            ));
+            let raw = RawSftpSession::new(BoundedSftpStream::new(client));
+            raw.init().await.unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                collect_directory(&raw, "directory", "/srv"),
+            )
+            .await
+            .unwrap();
+            if endless {
+                assert!(result.unwrap_err().contains("limit"));
+                assert_eq!(calls.load(Ordering::Relaxed), 21);
+            } else {
+                let entries = result.unwrap();
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].path, "/srv/report.txt");
+                assert_eq!(calls.load(Ordering::Relaxed), 2);
+            }
+            drop(raw);
+            tokio::time::timeout(Duration::from_secs(1), peer)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn directory_budgets_include_longnames_and_reject_empty_batches() {
+        let mut budget = DirectoryBudget::default();
+        assert!(budget.accept(&[]).is_err());
+        budget.bytes = MAX_DIRECTORY_BYTES - 100;
+        assert!(budget.accept(&[DirectoryEntry::dummy("a")]).is_err());
+        let mut budget = DirectoryBudget::default();
+        let mut entry = DirectoryEntry::dummy("a");
+        entry.longname = "x".repeat(256);
+        budget.accept(&[entry]).unwrap();
+        assert_eq!(budget.bytes, 1 + 256 + 128);
+    }
 
     #[test]
     fn paths_reject_control_characters_and_invalid_names() {

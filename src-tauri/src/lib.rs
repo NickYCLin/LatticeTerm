@@ -19,6 +19,7 @@ pub mod remote_files;
 pub mod remote_host;
 pub mod remote_pins;
 pub mod sftp;
+mod sftp_limits;
 pub mod sftp_transfers;
 pub mod shared_agent_rules;
 mod sidecar;
